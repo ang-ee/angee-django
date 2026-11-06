@@ -1314,6 +1314,11 @@ class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits=
 class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
     """Owns the wikilink edge set derived from page bodies."""
 
+    def backlinks_to(self, page: Any) -> models.QuerySet[LinkT]:
+        """Resolved links into ``page`` from untrashed source pages the actor reads."""
+
+        return self.filter(target_page_id=page.pk, is_resolved=True, source_page__is_trashed=False).scoped()
+
     def rebuild_for(self, markdown: Any) -> None:
         """Replace the source page's outgoing links from its current body.
 

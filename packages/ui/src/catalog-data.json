@@ -7065,15 +7065,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "relatedCount",
-    "source": "packages/ui/src/communication/related-count.ts",
-    "kind": "surface",
-    "owner": "@angee/ui:RelatedPane",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "relationFieldInfoForResource",
     "source": "packages/ui/src/views/resource/model-metadata-defaults.ts",
     "kind": null,

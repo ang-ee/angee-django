@@ -9,6 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
+from rebac import generic_target
 from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -22,6 +23,7 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
     with_filter_aliases,
 )
+from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
@@ -152,6 +154,24 @@ class DecisionQuery:
             .order_by("-answered_at", "-pk")[: max(1, min(limit, 100))]
         )
         return list(optimize(DecisionType.get_queryset(queryset, info), info))
+
+
+def _readable_concerns(decision: Any) -> Any:
+    """The decision's records the actor reads, as its Concerns group lists them."""
+
+    links = with_record_reference_access(DecisionRecord.objects.filter(decision=decision))
+    return links.filter(_angee_record_readable=True)
+
+
+def record_edges() -> tuple[RecordEdge, ...]:
+    """The decisions concerning a record and the readable records a decision concerns."""
+
+    return (
+        RecordEdge("decisions.decisions", lambda record: DecisionRecord.objects.filter(
+            **generic_target(record).lookups(DecisionRecord, "record"),
+        )),
+        RecordEdge("decisions.concerns", _readable_concerns, target="decisions.Decision"),
+    )
 
 
 schemas = {"console": {

@@ -7,6 +7,7 @@ import strawberry
 from django.apps import apps
 from rebac.graphql.strawberry_django import optimize
 
+from angee.graphql.edges import RecordEdge
 from angee.integrate.schema import IntegrationType
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_groups import InboxGroupScope
@@ -477,3 +478,15 @@ class NexusInboxQuery:
                 oldest=oldest,
             ),
         )
+
+
+def record_edges() -> tuple[RecordEdge, ...]:
+    """The readable messages using a file, as its Message backlinks group counts them."""
+
+    return (
+        RecordEdge(
+            "nexus.messages",
+            lambda file: Message.objects.all().explorer().uses(f"file:{file.sqid}"),
+            target="storage.File",
+        ),
+    )

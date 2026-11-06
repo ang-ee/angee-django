@@ -228,7 +228,7 @@ describe("Chatter", () => {
       return <button onClick={() => setCollapsed(false)}>Expand links</button>;
     }
     renderChatter({ containers: aside({ "related#groups": {
-      files: tab({ label: "Files", useCount: count, render: () => null }),
+      files: group({ label: "Files", usePaneCount: count, render: () => null }),
     } }, { examples: false }) }, { defaultCollapsed: true, defaultTab: "related", children: <Expand /> });
     expect(await screen.findByRole("tab", { name: "Links" })).toBeTruthy();
     expect(count).not.toHaveBeenCalled();
@@ -236,23 +236,21 @@ describe("Chatter", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: /Links\s*2/ })).toBeTruthy());
   });
 
-  test("a visited Links panel keeps its badge without returning to aggregate reads", async () => {
-    const aggregate = vi.fn(() => 2);
+  test("a visited Links panel keeps its row-counted badge after switching tabs", async () => {
     const rows = vi.fn(() => 2);
     renderChatter({ containers: aside({ "related#groups": {
-      counted: group({ label: "Counted", useCount: aggregate, usePaneCount: rows,
+      counted: group({ label: "Counted", usePaneCount: rows,
         render: (_, label) => <>{label()}<li>Counted rows</li></> }),
       lazy: group({ label: "Lazy", usePaneCount: () => 3,
         render: (_, label) => <>{label()}<li>Lazy rows</li></> }),
     } }) }, { defaultTab: "notes.comments" });
     expect(await screen.findByRole("tab", { name: "Links" })).toBeTruthy();
-    expect(aggregate).not.toHaveBeenCalled();
+    expect(rows).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "Links" }));
     await waitFor(() => expect(screen.getByRole("tab", { name: /Links\s*5/ })).toBeTruthy());
     expect(rows).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "Comments" }));
     expect(screen.getByRole("tab", { name: /Links\s*5/ })).toBeTruthy();
-    expect(aggregate).not.toHaveBeenCalled();
   });
 
   test("a visited panel keeps its draft through collapse and expansion", async () => {

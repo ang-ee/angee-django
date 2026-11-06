@@ -1,25 +1,13 @@
 import { useMemo } from "react";
 import { MessagePaneRow } from "@angee/messaging";
-import { ListView, ResourceViewProvider, relatedCount, useRouteHref, type ChatterViewContext } from "@angee/ui";
-import { InboxConnectionsCount } from "./documents";
+import { ListView, ResourceViewProvider, useRouteHref, type ChatterViewContext } from "@angee/ui";
 import { relatedSource } from "./sources";
-import { COLLECTION_INITIAL, INBOX_MODELS } from "./state";
+import { COLLECTION_INITIAL } from "./state";
 import { useNexusT } from "../i18n";
 
 function fileTarget(context: ChatterViewContext): string {
   return context.view.kind === "record" && context.view.sqid ? `file:${context.view.sqid}` : "";
 }
-
-function fileMessageScope(context: ChatterViewContext) {
-  const target = fileTarget(context);
-  return { variables: { target, text: "", oldest: false, page: 1, size: 1 }, options: {
-    models: INBOX_MODELS, enabled: Boolean(target), errorNotification: false as const,
-  } };
-}
-
-/** The same authorized, distinct message backlinks as the explorer's Links pane. */
-export const useFileMessageCount = relatedCount(InboxConnectionsCount, fileMessageScope,
-  (data) => data.inbox_connections.message_count);
 
 /** Files link into the explorer at the exact message part, with the file pinned. */
 export function FileMessages({ context }: { context: ChatterViewContext }) {

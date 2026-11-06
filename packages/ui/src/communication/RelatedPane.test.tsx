@@ -4,13 +4,22 @@ import * as React from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
+const query = vi.hoisted(() => vi.fn());
+vi.mock("@angee/refine", async (original) => ({
+  ...(await original<typeof import("@angee/refine")>()), useAuthoredQuery: query,
+}));
+
 import { AppRuntimeProvider, containersFromChildren, type ChatterViewContext, type RelatedGroupContent, type RelatedGroupLabel } from "../runtime";
 import { Popover } from "../ui/popover";
 import { CHATTER_CONTAINERS } from "./chatter-containers";
 import { PaneLabelPopover, PaneRow, PaneRows } from "./pane-list";
 import { RelatedPane, RelatedCountProbe } from "./RelatedPane";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); query.mockReset(); });
+
+const edgeCounts = (counts: Record<string, number>) => ({
+  data: { record_edge_counts: Object.entries(counts).map(([edge, count]) => ({ edge, count })) },
+});
 
 const context: ChatterViewContext = {
   pathname: "/records/rec_1", params: { id: "rec_1" },
@@ -31,17 +40,36 @@ function Count() {
   return <><RelatedCountProbe id="related" context={context} onCount={publish} /><span>Related {count}</span></>;
 }
 
+test("one read counts every edge-counted group and the badge sums them", () => {
+  query.mockReturnValue(edgeCounts({ "example.files": 2, "example.pages": 3 }));
+  const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": {
+    files: { content: { label: "Files", countEdge: { id: "example.files", models: ["example.File"] }, render: () => null } },
+    pages: { content: { label: "Pages", countEdge: { id: "example.pages", models: ["example.Page"] }, render: () => null } },
+  } });
+  const onCount = vi.fn();
+  render(<AppRuntimeProvider runtime={{ containers }}>
+    <RelatedCountProbe id="related" context={context} onCount={onCount} />
+  </AppRuntimeProvider>);
+  expect(onCount).toHaveBeenLastCalledWith("related", 5);
+  expect(query).toHaveBeenCalled();
+  for (const [, variables, options] of query.mock.calls) {
+    expect(variables).toEqual({ model: "example.Record", id: "rec_1", edges: ["example.files", "example.pages"] });
+    expect(options).toEqual({ enabled: true, models: ["example.File", "example.Page"] });
+  }
+});
+
 test("changing eligible groups preserves independent count-hook lifetimes", () => {
   const groups = {
     first: { content: { label: "First", edge: { model: "example.Edge" },
-      useCount: () => React.useMemo(() => 2, []), render: () => null } },
+      usePaneCount: () => React.useMemo(() => 2, []), render: () => null } },
     second: { content: { label: "Second", edge: { model: "other.Edge" },
-      useCount: () => React.useState(3)[0], render: () => null } },
+      usePaneCount: () => React.useState(3)[0], render: () => null } },
   };
   const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": groups });
   const onCount = vi.fn();
   const view = (edges: string[]) => <AppRuntimeProvider runtime={{ containers }}>
-    <RelatedCountProbe id="related" context={{ ...context, route: { ...context.route!, recordEdges: edges } }} onCount={onCount} />
+    <RelatedCountProbe id="related" context={{ ...context, route: { ...context.route!, recordEdges: edges } }}
+      onCount={onCount} includePaneCounts />
   </AppRuntimeProvider>;
   const rendered = render(view(["example.Edge", "other.Edge"]));
   expect(onCount).toHaveBeenLastCalledWith("related", 5);
@@ -65,35 +93,33 @@ test("row-derived counts stay dormant until the Links pane is active", () => {
   expect(onCount).toHaveBeenLastCalledWith("related", 3);
 });
 
-test("an incomplete badge mounts no aggregate beside a lazy group", () => {
-  const aggregate = vi.fn(() => 2);
+test("an incomplete badge requests no edge counts beside a lazy group", () => {
   const rows = vi.fn(() => 3);
   const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": {
-    aggregate: { content: { label: "Aggregate", useCount: aggregate, render: () => null } },
+    counted: { content: { label: "Counted", countEdge: { id: "example.counted", models: [] }, render: () => null } },
     lazy: { content: { label: "Lazy", usePaneCount: rows, render: () => null } },
   } });
   const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers }}>
     <RelatedCountProbe id="related" context={context} onCount={onCount} />
   </AppRuntimeProvider>);
-  expect(aggregate).not.toHaveBeenCalled();
+  expect(query).not.toHaveBeenCalled();
   expect(rows).not.toHaveBeenCalled();
   expect(onCount).toHaveBeenLastCalledWith("related", undefined);
 });
 
-test("active Links reuses row counts instead of also requesting aggregate counts", () => {
-  const aggregate = vi.fn(() => 3);
+test("active Links reuses a partitioning group's row count instead of also requesting its edge", () => {
   const rows = vi.fn(() => 3);
   const containers = containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { example: { content: { label: "Example", useCount: aggregate, usePaneCount: rows,
-      render: () => null } } },
+    "related#groups": { example: { content: { label: "Example", countEdge: { id: "example.edge", models: [] },
+      usePaneCount: rows, render: () => null } } },
   });
   render(<AppRuntimeProvider runtime={{ containers }}>
     <RelatedCountProbe id="related" context={context} onCount={vi.fn()} includePaneCounts />
     <RelatedPane context={context} />
   </AppRuntimeProvider>);
   expect(rows).toHaveBeenCalled();
-  expect(aggregate).not.toHaveBeenCalled();
+  expect(query).not.toHaveBeenCalled();
 });
 
 test("one group component owns the label popover and rows across popover lifetimes", async () => {
@@ -110,7 +136,7 @@ test("one group component owns the label popover and rows across popover lifetim
     </>;
   }
   render(<Example content={{
-    label: "Files", useCount: () => 0, useVerb: () => true,
+    label: "Files", usePaneCount: () => 0, useVerb: () => true,
     render: (_, label) => <Group label={label} />,
   }} />);
   const trigger = screen.getByRole("button", { name: "Add" });
@@ -128,20 +154,21 @@ test("one group component owns the label popover and rows across popover lifetim
 
 test("useVerb controls the label action and empty-group presence", () => {
   const content: RelatedGroupContent = {
-    label: "Files", useCount: () => 1, useVerb: () => false,
+    label: "Files", usePaneCount: () => 1, useVerb: () => false,
     render: (_, label) => <>{label(<button>Add</button>)}<li>One file</li></>,
   };
   const view = render(<Example content={content} />);
   expect(screen.getByText("One file")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
   expect(screen.getByText("Files").closest("li")?.textContent).toBe("Files· 1");
-  view.rerender(<Example content={{ ...content, useCount: () => 0 }} />);
+  view.rerender(<Example content={{ ...content, usePaneCount: () => 0 }} />);
   expect(screen.queryByText("Files")).toBeNull();
 });
 
 test("count probes never mount the group's action or write state", () => {
+  query.mockReturnValue(edgeCounts({ "example.files": 3 }));
   const group = vi.fn(() => <li>Rows</li>);
-  render(<Example probe content={{ label: "Files", useCount: () => 3, render: group }} />);
+  render(<Example probe content={{ label: "Files", countEdge: { id: "example.files", models: [] }, render: group }} />);
   expect(screen.getByText("Related 3")).toBeTruthy();
   expect(group).not.toHaveBeenCalled();
 });
@@ -150,7 +177,7 @@ test("edge eligibility precedes probes and custom narrowing", () => {
   const count = vi.fn(() => 2);
   const when = vi.fn(() => true);
   const group = vi.fn((_: ChatterViewContext, label: RelatedGroupLabel) => <>{label()}<li>Rows</li></>);
-  const content = { label: "References", edge: { model: "unsupported.Edge" }, when, useCount: count, render: group };
+  const content = { label: "References", edge: { model: "unsupported.Edge" }, when, usePaneCount: count, render: group };
   const view = render(<Example content={content} />);
   expect(count).not.toHaveBeenCalled();
   expect(when).not.toHaveBeenCalled();

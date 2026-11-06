@@ -1,11 +1,11 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
   AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, StatusBadge, useEnumOptions, useRouteHref,
-  useResourceRecordHrefLookup, relatedCount, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
+  useResourceRecordHrefLookup, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
-import { DecisionRunCountDocument, DecisionStepsDocument, RecordRelatedRunsDocument, RunDecisionsCountDocument, RUN_MODEL, RUN_MODELS, RunRelatedDocument, STEP_RUN_MODEL } from "./documents.console";
+import { DecisionStepsDocument, RecordRelatedRunsDocument, RUN_MODEL, RUN_MODELS, RunRelatedDocument, STEP_RUN_MODEL } from "./documents.console";
 import { enWorkflowsMessages, useWorkflowsT } from "./i18n";
 
 const DECISION_MODEL = "decisions.Decision";
@@ -21,15 +21,11 @@ function recordId(context: ChatterViewContext): string {
   return context.view.kind === "record" ? context.view.sqid ?? "" : "";
 }
 
-function runRelatedScope(runId: string) {
-  return { variables: { run: runId }, options: {
-    enabled: Boolean(runId), models: RELATED_MODELS, records: [{ model: RUN_MODEL, id: runId }],
-  } };
-}
-
 function useRunRelated(runId: string) {
-  const { variables, options } = runRelatedScope(runId);
-  return useAuthoredQuery(RunRelatedDocument, variables, options);
+  const variables = useMemo(() => ({ run: runId }), [runId]);
+  return useAuthoredQuery(RunRelatedDocument, variables, {
+    enabled: Boolean(runId), models: RELATED_MODELS, records: [{ model: RUN_MODEL, id: runId }],
+  });
 }
 
 export interface RunRecord {
@@ -96,9 +92,7 @@ export const runDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.decisions"]!,
-    useCount: relatedCount(RunDecisionsCountDocument, (context) => runRelatedScope(recordId(context)),
-      (data) => data.steprun_aggregate.aggregate?.count),
-    usePaneCount: (context) => useRunRelated(recordId(context)).data?.steprun?.filter((step) => step.decision).length,
+    countEdge: { id: "workflows.decisions", models: RELATED_MODELS },
     render: (context, label) => <RunDecisionsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -144,10 +138,7 @@ export const recordRunsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enWorkflowsMessages["related.runs"]!,
     when: hasRuns,
-    usePaneCount: (context) => {
-      const query = useRecordRuns(context);
-      return query.data ? query.data.record_timeline.records.flatMap((entry) => entry.runs).length : undefined;
-    },
+    countEdge: { id: "workflows.runs", models: RUN_MODELS },
     render: (context, label) => <RecordRunsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -172,16 +163,12 @@ function RecordRunsGroup({ context, label }: { context: ChatterViewContext; labe
   </li></>;
 }
 
-function decisionStepsScope(decisionId: string) {
-  return { variables: { decision: decisionId }, options: {
+function useDecisionSteps(decisionId: string) {
+  const variables = useMemo(() => ({ decision: decisionId }), [decisionId]);
+  return useAuthoredQuery(DecisionStepsDocument, variables, {
     enabled: Boolean(decisionId), models: [DECISION_MODEL, STEP_RUN_MODEL],
     records: [{ model: DECISION_MODEL, id: decisionId }], relatedModels: [STEP_RUN_MODEL],
-  } };
-}
-
-function useDecisionSteps(decisionId: string) {
-  const { variables, options } = decisionStepsScope(decisionId);
-  return useAuthoredQuery(DecisionStepsDocument, variables, options);
+  });
 }
 
 /** The run and step that asked a decision, as a Related group of the decision's page. */
@@ -189,9 +176,7 @@ export const decisionRunGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.run"]!,
-    useCount: relatedCount(DecisionRunCountDocument, (context) => decisionStepsScope(recordId(context)),
-      (data) => data.steprun_aggregate.aggregate?.count),
-    usePaneCount: (context) => useDecisionSteps(recordId(context)).data?.steprun.filter((step) => step.run).length,
+    countEdge: { id: "workflows.run", models: [DECISION_MODEL, STEP_RUN_MODEL] },
     render: (context, label) => <DecisionRunGroup key={context.view.sqid} context={context} label={label} />,
   },
 };

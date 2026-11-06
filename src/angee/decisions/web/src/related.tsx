@@ -1,13 +1,13 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, relatedCount, useRouteHref,
+  AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, useRouteHref,
   type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 import * as v from "valibot";
 
 import { DecisionContextSchema } from "./DecisionContext";
-import { DECISION_MODEL, DECISION_MODELS, DecisionDocument, RecordDecisionsCountDocument, RecordDecisionsDocument } from "./documents.console";
+import { DECISION_MODEL, DECISION_MODELS, DecisionDocument, RecordDecisionsDocument } from "./documents.console";
 import { enDecisionsMessages, useDecisionsT } from "./i18n";
 
 const RECORD_MODEL = "decisions.DecisionRecord";
@@ -27,10 +27,7 @@ export const decisionConcernsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: enDecisionsMessages["related.concerns"]!,
-    usePaneCount: (context) => {
-      const query = useDecisionRead(recordId(context));
-      return query.data ? query.data.decisions_by_pk?.records.filter((record) => record.record_model && record.record_id).length ?? 0 : undefined;
-    },
+    countEdge: { id: "decisions.concerns", models: DECISION_MODELS },
     render: (context, label) => <DecisionConcernsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -53,17 +50,13 @@ function DecisionConcernsGroup({ context, label }: { context: ChatterViewContext
   </li></>;
 }
 
-function recordDecisionsScope(context: ChatterViewContext) {
+function useRecordDecisions(context: ChatterViewContext) {
   const model = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
   const id = recordId(context);
-  return { variables: { model, id }, options: {
+  const variables = useMemo(() => ({ model, id }), [model, id]);
+  return useAuthoredQuery(RecordDecisionsDocument, variables, {
     enabled: Boolean(model && id), models: DECISION_MODELS, records: [{ model, id }], relatedModels: [DECISION_MODEL, RECORD_MODEL],
-  } };
-}
-
-function useRecordDecisions(context: ChatterViewContext) {
-  const { variables, options } = recordDecisionsScope(context);
-  return useAuthoredQuery(RecordDecisionsDocument, variables, options);
+  });
 }
 
 function recordDecisions(data: ReturnType<typeof useRecordDecisions>["data"]) {
@@ -85,12 +78,7 @@ export const recordDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enDecisionsMessages["related.decisions"]!,
     when: concernsRecords,
-    useCount: relatedCount(RecordDecisionsCountDocument, recordDecisionsScope,
-      (data) => data.decision_records_aggregate.aggregate?.count),
-    usePaneCount: (context) => {
-      const query = useRecordDecisions(context);
-      return query.data ? recordDecisions(query.data).length : undefined;
-    },
+    countEdge: { id: "decisions.decisions", models: DECISION_MODELS },
     render: (context, label) => <RecordDecisionsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };

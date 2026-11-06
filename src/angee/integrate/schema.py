@@ -25,7 +25,7 @@ from django.db.models import Count, Prefetch
 from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
-from rebac import PermissionDenied, check_new, system_context, to_subject_ref
+from rebac import PermissionDenied, check_new, generic_target, system_context, to_subject_ref
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -51,6 +51,7 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
+from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
@@ -1936,6 +1937,15 @@ _CONSOLE_TYPES: list[object] = [
     *_EXTERNAL_ACCOUNT_RESOURCE.types,
     *_CREDENTIAL_RESOURCE.types,
 ]
+
+
+def record_edges() -> tuple[RecordEdge, ...]:
+    """A record's retained sources, read like the record_links rows the Sources group lists."""
+
+    return (RecordEdge("integrate.sources", lambda record: RecordLink._default_manager.filter(
+        **generic_target(record).lookups(RecordLink, "target"),
+    )),)
+
 
 schemas = {
     "public": {

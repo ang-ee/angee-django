@@ -4,6 +4,7 @@ from __future__ import annotations
 
 SETTINGS = {
     "ANGEE_TIMELINE_KINDS:append": ["angee.nexus.timeline.timeline_kinds"],
+    "ANGEE_GRAPHQL_RECORD_EDGES:append": ["angee.nexus.inbox_schema.record_edges"],
     # Three linear deliberate-interaction passes keep the derived pair graph
     # current without per-message write amplification.
     "CELERY_BEAT_SCHEDULE:append": {

@@ -45,6 +45,7 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
+from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import (
@@ -2080,6 +2081,12 @@ _MESSAGING_SCHEMA_BUCKET = {
     ],
     "type_extensions": ([] if _CHANNEL_WEBFORM_EXTENSION is None else [_CHANNEL_WEBFORM_EXTENSION]),
 }
+
+
+def record_edges() -> tuple[RecordEdge, ...]:
+    """The source conversations a record came from, as the Conversations group lists them."""
+
+    return (RecordEdge("messaging.conversations", ThreadAttachment.objects.source_threads_for_record),)
 
 
 schemas = {

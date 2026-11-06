@@ -22,8 +22,6 @@ const read = vi.hoisted(() => ({
 vi.mock("../documents", () => ({
   IntegrationSyncStream: {},
   IntegrationRecordRedirectDocument: {},
-  RecordSourcesCountDocument: {},
-  RecordSourcesDocument: {},
 }));
 vi.mock("../connect/credential-form", async () => {
   const { registerForm } = await import("@angee/ui");

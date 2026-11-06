@@ -10,7 +10,7 @@ from sentry_sdk.integrations.logging import ignore_logger
 
 from angee.base.hooks import check_hooks
 
-check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS",))
+check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS", "ANGEE_GRAPHQL_RECORD_EDGES"))
 
 
 class GraphQLConfig(AppConfig):

@@ -8,6 +8,7 @@ _Settings = TypedDict(
     "_Settings",
     {
         "ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES": dict[str, str],
+        "ANGEE_GRAPHQL_RECORD_EDGES:append": list[str],
     },
 )
 
@@ -19,5 +20,6 @@ SETTINGS: _Settings = {
     "ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES": {
         "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",
     },
+    "ANGEE_GRAPHQL_RECORD_EDGES:append": ["angee.knowledge.schema.record_edges"],
 }
 """Django settings contributed when the knowledge addon is installed."""
