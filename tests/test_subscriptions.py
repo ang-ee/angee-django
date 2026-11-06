@@ -431,29 +431,26 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("debug", "broker", "eager", "allow", "safe"),
+    ("debug", "broker", "allow", "safe"),
     [
-        (True, "redis://localhost:6379/0", False, False, False),
-        (False, "redis://localhost:6379/0", False, False, False),
-        (True, "redis://localhost:6379/0", True, False, True),
-        (False, "redis://localhost:6379/0", True, False, False),
-        (True, "redis://localhost:6379/0", False, True, True),
-        (True, None, False, False, True),
-        (True, "amqp://guest:guest@localhost//", False, False, False),
+        (True, "redis://localhost:6379/0", False, False),
+        (False, "redis://localhost:6379/0", False, False),
+        (True, "redis://localhost:6379/0", True, True),
+        (True, None, False, True),
+        (False, None, False, False),
+        (True, "amqp://guest:guest@localhost//", False, False),
     ],
 )
-def test_inmemory_channel_layer_requires_eager_dev_or_test_opt_in(
+def test_inmemory_channel_layer_requires_brokerless_dev_or_test_opt_in(
     debug: bool,
     broker: str | None,
-    eager: bool,
     allow: bool,
     safe: bool,
 ) -> None:
-    """A non-eager worker cannot share an in-memory subscription transport."""
+    """A host with a Celery broker cannot share an in-memory subscription transport."""
 
     with override_settings(
         DEBUG=debug,
-        CELERY_TASK_ALWAYS_EAGER=eager,
         CELERY_BROKER_URL=broker,
         ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER=allow,
         CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},

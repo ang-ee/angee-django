@@ -28,25 +28,23 @@ def test_graphql_check_reports_discovery_failure(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.parametrize(
-    ("broker", "eager", "allow", "expected"),
+    ("broker", "allow", "expected"),
     [
-        ("redis://localhost:6379/0", False, False, True),
-        ("amqp://guest:guest@localhost//", False, False, True),
-        (None, False, False, False),
-        ("memory://", True, False, False),
-        ("memory://", False, True, False),
+        ("redis://localhost:6379/0", False, True),
+        ("amqp://guest:guest@localhost//", False, True),
+        ("memory://", False, True),
+        (None, False, False),
+        ("memory://", True, False),
     ],
 )
 def test_graphql_channel_layer_check_matches_publishing_guard(
     broker: str | None,
-    eager: bool,
     allow: bool,
     expected: bool,
 ) -> None:
     with override_settings(
         DEBUG=True,
         CELERY_BROKER_URL=broker,
-        CELERY_TASK_ALWAYS_EAGER=eager,
         ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER=allow,
         CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
     ):
@@ -54,8 +52,8 @@ def test_graphql_channel_layer_check_matches_publishing_guard(
 
     assert [error.id for error in errors] == (["angee.graphql.E003"] if expected else [])
     if errors:
-        assert "when Celery tasks are not eager" in errors[0].msg
+        assert "when a Celery broker is configured" in errors[0].msg
         assert "channels_redis.core.RedisChannelLayer" in errors[0].msg
         assert errors[0].hint == (
-            "Configure Redis-backed CHANNEL_LAYERS for worker broadcasts, or use eager tasks in DEBUG."
+            "Configure Redis-backed CHANNEL_LAYERS for worker broadcasts, or run DEBUG without a Celery broker."
         )

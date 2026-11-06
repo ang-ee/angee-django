@@ -1564,10 +1564,11 @@ open fresh evaluator scopes for authorization and change-feed reads.
   ASGI WebSocket routing at application boot and the `schema` command also demand
   schema construction; MCP's resource-tool check validates its console contract.
   The same addon's `angee.graphql.E003` check refuses a process-local Channels layer
-  when Celery tasks are not eager; a worker's broadcasts require Redis to reach
-  web subscribers even with `DEBUG=True`. A host without a Celery broker may
-  use the in-memory layer in DEBUG. Set `CHANNEL_REDIS_URL` in project settings,
-  or use the stack's `REDIS_URL` or Redis broker URL. The
+  when a Celery broker is configured: `enqueue_task` sends through `send_task`,
+  which Celery never runs eagerly, so a broker means a worker's broadcasts need
+  Redis to reach web subscribers even with `DEBUG=True`. A host without a Celery
+  broker may use the in-memory layer in DEBUG. Set `CHANNEL_REDIS_URL` in project
+  settings, or use the stack's `REDIS_URL` or Redis broker URL. The
   `ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER` escape is for isolated tests.
   Bare app population and `manage.py --help` stay build-free. Writer-only processes that call `django.setup()` without running
   checks deliberately retain lazy construction: their first observable partial

@@ -23,7 +23,7 @@ def check_graphql_channel_layer(
     except ImproperlyConfigured as error:
         return [checks.Error(
             str(error),
-            hint="Configure Redis-backed CHANNEL_LAYERS for worker broadcasts, or use eager tasks in DEBUG.",
+            hint="Configure Redis-backed CHANNEL_LAYERS for worker broadcasts, or run DEBUG without a Celery broker.",
             id="angee.graphql.E003",
         )]
     return []
