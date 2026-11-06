@@ -4,10 +4,10 @@ import { useResourceListQuery } from "./resource-list-query";
 import { errorFromUnknown } from "../../../data/errors";
 import { DEFAULT_TEXT_FILTER_FIELD } from "../resource-view-model";
 import { useBoardLaneState } from "../resource-view-board-lanes";
-import { leafTableRows, modelRowId } from "../resource-view-codecs";
+import { modelRowId, recordTableRows } from "../resource-view-codecs";
 import { useResourceViewPresentationSurface } from "./presentation";
 import { CLIENT_ROW_MODEL_FETCH_CAP } from "./resource-surface";
-import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts } from "./table-state";
+import { listResultFromTable, tableRecordFacts, useResourceRowsSnapshot, useResourceViewQueryFacts, useSettledPageClamp } from "./table-state";
 import type { ResourceListResult, ResourceViewSurface, RowRecord, RowsResourceViewSurface, StringIdRow, UseResourceViewSurfaceProps, UseRowsResourceViewSurfaceProps } from "./types";
 /**
  * Surface a **client row-model** resource: fetch the whole set once (up to
@@ -92,11 +92,14 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     filter: mergedFilter,
   });
   const pageRows = React.useMemo(
-    () => leafTableRows(presentation.rowModels).map((row) => row.original),
+    () => recordTableRows(presentation.rowModels).map((row) => row.original),
     [presentation.rowModels],
   );
-  const filteredTotal = presentation.table.getFilteredRowModel().rows.length;
+  // The table pages top-level rows (records flat, root groups grouped), so its row
+  // count is the pager's total.
+  const total = presentation.table.getRowCount();
   const pageCount = Math.max(1, presentation.table.getPageCount());
+  useSettledPageClamp(resourceView, pageCount, active && run.query.isSuccess && !run.query.isFetching);
   const list = React.useMemo<ResourceListResult>(
     () =>
       listResultFromTable(presentation.table, {
@@ -104,12 +107,12 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
         fetching,
         refetch,
         rows: pageRows,
-        total: filteredTotal,
+        total,
       }),
     [
       error,
       fetching,
-      filteredTotal,
+      total,
       pageCount,
       pageRows,
       refetch,
@@ -159,11 +162,13 @@ export function useRowsResourceViewSurface<
     getRowId: (row, index) => modelRowId(row, index, query ? { query: query.contract } : modelMetadata?.resource),
   });
   const pageRows = React.useMemo(
-    () => leafTableRows(presentation.rowModels).map((row) => row.original),
+    () => recordTableRows(presentation.rowModels).map((row) => row.original),
     [presentation.rowModels],
   );
-  const total = presentation.table.getFilteredRowModel().rows.length;
+  const total = presentation.table.getRowCount();
   const pageCount = Math.max(1, presentation.table.getPageCount());
+  useSettledPageClamp(resourceView, pageCount, !fetching && !error);
+  const records = tableRecordFacts(presentation.table);
 
   const listState = useResourceRowsSnapshot<TRow>({
     rows: pageRows,
@@ -173,6 +178,7 @@ export function useRowsResourceViewSurface<
     pageCount,
     hasNext: (resourceView.state.pagination.pageIndex + 1) < pageCount,
     hasPrev: (resourceView.state.pagination.pageIndex + 1) > 1,
+    ...(records ? { records } : {}),
     fetching,
     error,
   }, { onListStateChange });
