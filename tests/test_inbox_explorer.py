@@ -236,6 +236,20 @@ def test_conversation_groups_page_before_bounded_leaf_pages():
         leaf = results.page(scope=InboxGroupScope(axis="conversation", value=first.rows[1].value), size=3)
         assert (len(leaf.rows), leaf.count) == (3, 8)
         assert {row.value for row in first.rows}.isdisjoint(row.value for row in second.rows)
+        # Each header carries exactly its own leaf page, read in one window over every header.
+        carried = results.group_page("conversation", size=2, leaf_size=3)
+        assert [row.value for row in carried.rows] == [row.value for row in first.rows]
+        for row in carried.rows:
+            expected = results.page(scope=InboxGroupScope(axis="conversation", value=row.value), size=3)
+            assert [result.id for result in row.rows] == [result.id for result in expected.rows]
+        assert sorted(str(message.sqid) for message in carried.messages) == sorted(
+            result.message_id for row in carried.rows for result in row.rows
+        )
+        with CaptureQueriesContext(connection) as two_groups:
+            results.group_page("conversation", size=2, leaf_size=3)
+        with CaptureQueriesContext(connection) as five_groups:
+            results.group_page("conversation", size=5, leaf_size=3)
+        assert len(five_groups) == len(two_groups)
 
 
 def test_confirmed_senders_consolidate_but_suggestions_do_not():
@@ -604,6 +618,8 @@ def test_merged_threads_group_under_their_readable_survivor():
         assert groups.message_count == 4
         survivor_scope = InboxGroupScope(axis="conversation", value=f"thread:{survivor.sqid}")
         assert results.page(scope=survivor_scope).count == 3
+        carried = results.group_page("conversation", leaf_size=5)
+        assert [len(row.rows) for row in carried.rows] == [1, 3]
         stranded_scope = InboxGroupScope(axis="conversation", value=f"thread:{stranded.sqid}")
         assert results.page(scope=stranded_scope).count == 1
         # A redirect under a readable survivor is not a conversation key of its own.
@@ -631,6 +647,10 @@ def test_live_schema_projects_sections_and_independent_message():
       inbox_navigator_groups(axis: "platform") { count record_count rows { value label count } }
       inbox_results { count message_count rows { id latest message_id } messages { id } }
       inbox_result_groups(axis: "day") { count record_count rows { value label count } }
+      carried_results: inbox_result_groups(axis: "conversation", leaf_size: 3) {
+        rows { value rows { message_id } } messages { id }
+      }
+      carried_navigator: inbox_navigator_groups(axis: "platform", leaf_size: 2) { rows { value rows { id } } }
       inbox_message(id: $id, coverage: {platforms: ["slack"]}) {
         matches message { id starred } uses { part_id target count }
       }
@@ -641,6 +661,9 @@ def test_live_schema_projects_sections_and_independent_message():
     data = result_data(result)
     assert data["inbox_results"]["rows"][0]["message_id"] == str(message.sqid)
     assert data["inbox_results"]["messages"] == [{"id": str(message.sqid)}]
+    assert data["carried_results"]["rows"][0]["rows"] == [{"message_id": str(message.sqid)}]
+    assert data["carried_results"]["messages"] == [{"id": str(message.sqid)}]
+    assert data["carried_navigator"]["rows"][0]["rows"] == [{"id": f"handle:{handle.sqid}"}]
     assert data["inbox_senders"]["count"] == 1
     assert data["inbox_navigator"]["rows"][0]["label"] == "sender@example.com"
     assert data["inbox_navigator_groups"]["record_count"] == 1
@@ -656,6 +679,44 @@ def test_live_schema_projects_sections_and_independent_message():
         )
     )
     assert starred["set_inbox_message_starred"]["starred"] is True
+
+
+def test_day_content_and_navigator_group_pages_carry_their_first_pages():
+    owner = User.objects.create_user(username="explorer-carried-pages")
+    channel = make_integration(owner.username, model=Channel, owner=owner)
+    with system_context(reason="seed carried group pages"):
+        handle = Handle._base_manager.create(created_by=owner, value="sender@example.com", platform="email")
+        fragment = Fragment.objects.upsert(text="shared carried text", created_by_id=owner.pk)
+        for index, (platform, sent_at) in enumerate(
+            (("email", T0), ("email", T0 + timedelta(hours=1)), ("slack", T0 + timedelta(days=1)))
+        ):
+            message = Message._base_manager.create(
+                channel=channel, created_by=owner, sender=handle, status="synced", direction="inbound",
+                platform=platform, sent_at=sent_at,
+            )
+            Part._base_manager.create(created_by=owner, message=message, role="body", fragment=fragment, position=index)
+    with actor_context(owner):
+        inbox = Message.objects.all().explorer()
+        for options, axis in (
+            (InboxResultOptions(lens="timeline"), "day"),
+            (InboxResultOptions(lens="timeline"), "platform"),
+            (InboxResultOptions(lens="text"), "platform"),
+        ):
+            results = InboxResults(inbox, inbox.messages, options)
+            carried = results.group_page(axis, leaf_size=1)
+            assert carried.rows
+            for row in carried.rows:
+                expected = results.page(scope=InboxGroupScope(axis=axis, value=row.value), size=1)
+                assert [result.id for result in row.rows] == [result.id for result in expected.rows]
+            named = {result.message_id for row in carried.rows for result in row.rows}
+            assert {str(message.sqid) for message in carried.messages} == named
+        assert InboxResults(inbox, inbox.messages, InboxResultOptions()).group_page("platform").messages.count() == 0
+        navigator = InboxNavigator(Message.objects.all(), InboxCoverage(), InboxNavigatorOptions())
+        groups = navigator.group_page("platform", leaf_size=2)
+        assert [row.value for row in groups.rows] == ["email", "slack"]
+        for row in groups.rows:
+            expected = navigator.page(scope=InboxGroupScope(axis="platform", value=row.value), size=2)
+            assert [identity.id for identity in row.rows] == [identity.id for identity in expected.rows]
 
 
 def test_result_page_loads_each_message_relation_once():
