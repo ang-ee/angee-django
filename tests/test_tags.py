@@ -413,14 +413,17 @@ def test_a_tag_reader_who_cannot_read_the_record_sees_none_of_its_edges(party_ed
 
 
 @pytest.fixture()
-def curated_vocabulary(party_edge: SimpleNamespace) -> SimpleNamespace:
+def curated_vocabulary(party_edge: SimpleNamespace, tmp_path: Path) -> SimpleNamespace:
     """Narrow tag reads to tag administrators, so a record's reader can lack its tag's read."""
 
-    schema = Path(apps.get_app_config("tags").rebac_schema)
+    config = apps.get_app_config("tags")
+    schema = Path(config.rebac_schema)
     source = schema.read_text(encoding="utf-8")
     shared = "permission read = ((authenticated + admin->member) + manager->effective_member)"
     assert source.count(shared) == 1
-    schema.write_text(source.replace(shared, "permission read = (admin->member + manager->effective_member)"))
+    variant = tmp_path / "tags-curated.zed"
+    variant.write_text(source.replace(shared, "permission read = (admin->member + manager->effective_member)"))
+    bind_rebac_schema(config, variant)
     call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
     return party_edge
 
@@ -612,6 +615,9 @@ def test_the_check_reports_a_taggable_model_without_a_relation() -> None:
     def forbid_query(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Django model checks must read schema declarations without SQL")
 
+    # The session fixture binds the composed schema after the first DB test; this
+    # check's stated premise is the authored declaration, read through its native
+    # source, and the composed binding is restored afterwards.
     config = apps.get_app_config("tags")
     effective = Path(config.rebac_schema)
     assert declared_schema_path(config) is not None
@@ -625,15 +631,18 @@ def test_the_check_reports_a_taggable_model_without_a_relation() -> None:
     assert {error.obj for error in errors} == _taggable_test_models()
 
 
-def test_the_check_reports_a_relation_without_a_taggable_model(composed_permissions: None) -> None:
+def test_the_check_reports_a_relation_without_a_taggable_model(composed_permissions: None, tmp_path: Path) -> None:
     """A relation on a type that does not compose TaggedModel fails the check."""
 
     del composed_permissions
-    schema = Path(apps.get_app_config("tags").rebac_schema)
+    config = apps.get_app_config("tags")
+    schema = Path(config.rebac_schema)
     source = schema.read_text(encoding="utf-8")
     edge = "relation tag: tags/tag // rebac:field=tag\n"
     assert source.count(edge) == 1
-    schema.write_text(source.replace(edge, edge + "    relation stray: mtidemo/parent // rebac:field=target\n"))
+    variant = tmp_path / "tags-stray.zed"
+    variant.write_text(source.replace(edge, edge + "    relation stray: mtidemo/parent // rebac:field=target\n"))
+    bind_rebac_schema(config, variant)
 
     [error] = _tag_errors(TagAssignment.check())
     assert (error.id, error.obj) == ("tags.E003", TagAssignment)

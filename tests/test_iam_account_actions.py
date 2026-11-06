@@ -334,8 +334,10 @@ def test_single_account_action_fallback_reads_without_audit(iam_admin):
         actions = stored.account_actions_for(to_subject_ref(iam_admin))
     assert actions == ["set_active", "rename", "issue_password"]
     assert sum(is_permission_audit_insert(query["sql"], connection) for query in captured) == 0
-    # A direct call opens one REBAC evaluator scope for all four verb expressions.
-    assert len(captured) == 16
+    # A direct call shares one evaluator scope across all four verb expressions.
+    # The session schema composes tests/extcontrib, whose const manager role on
+    # iam/protected adds one fixed actor-set read.
+    assert len(captured) == 17
     assert sum(len(query["sql"].encode("utf-8")) for query in captured) <= 65_000
 
 

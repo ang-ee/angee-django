@@ -266,10 +266,14 @@ def test_ingest_batch_write_cost_and_events(
                 landed = Message.objects.ingest(messages, channel=channel, quote_edges=True)
             assert len(landed) == count
             samples.append(len(queries))
+            # The message read can embed the merged chatter permission arm as a
+            # subquery. Count every other statement that reads chatter attachments.
             chatter_reads.append(sum(
                 query["sql"].lstrip().upper().startswith("SELECT")
                 and ThreadAttachment._meta.db_table in query["sql"]
-                and "'chatter'" in query["sql"] for query in queries
+                and "'chatter'" in query["sql"]
+                and not query["sql"].partition(" FROM ")[2].startswith(f'"{Message._meta.db_table}"')
+                for query in queries
             ))
     finally:
         message_ingested.disconnect(dispatch_uid="tests.write_path.ingest_batch_pin")

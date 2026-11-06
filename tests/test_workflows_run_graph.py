@@ -258,7 +258,7 @@ def test_run_reader_gets_graph_without_workflow_or_version_read(schema, executio
         visible = read_graph(schema, run, reader)
     assert sum(is_permission_audit_insert(query["sql"], connection) for query in queries) == 0
     # One admitted run batches its pinned execution policy without exposing version.
-    assert len(queries) == 21
+    assert len(queries) == 13
     assert sum(len(query["sql"].encode("utf-8")) for query in queries) <= 180_000
     assert visible["version"] is None
     node = visible["graph"]["nodes"][0]

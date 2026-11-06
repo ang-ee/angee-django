@@ -36,7 +36,9 @@ def campaign_schema():
     return _schema()
 
 
-def test_message_only_reader_gets_null_for_every_private_to_one_relation(composed_tables, campaign_schema, tmp_path):
+def test_message_only_reader_gets_private_relations_redacted_and_attached_file(
+    composed_tables, campaign_schema, tmp_path,
+):
     viewer, owner = make_user("message-viewer"), make_user("private-owner")
     with system_context(reason="test.messaging.graphql.relations"):
         vendor = Vendor.objects.create(slug="private-relations", display_name="Private")
@@ -64,7 +66,9 @@ def test_message_only_reader_gets_null_for_every_private_to_one_relation(compose
         "id": message.sqid, "thread": None, "channel": None, "parent": None, "sender": None,
         "participants": [{"handle": None}],
     }
-    assert result["parts"] == [{"parent": None, "file": None}]
+    # A readable part implies its attached file's read. The live arm is
+    # messaging/permissions.extends.zed: storage/file.read_granted = message_part->read.
+    assert result["parts"] == [{"parent": None, "file": {"id": private_file.sqid}}]
 
 
 def test_fragment_counts_include_only_readable_messages_and_parts(composed_tables, campaign_schema):

@@ -17,6 +17,7 @@ from angee.iam.graphql.access import ChangeReadGate
 from angee.knowledge.models import bindings as binding_owner
 from angee.knowledge.schema import schemas
 from angee.provenance.context import changeset, changeset_model
+from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import (
     MarkdownPage,
     Page,
@@ -294,7 +295,11 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
     author = create_user("binding-author")
     viewer = create_platform_admin("binding-admin") if seat == "administrator" else create_user("binding-reader")
     knowledge = vault_for(author, name="Knowledge end")
-    record = vault_for(author, name="Record end without a contributed binding arm")
+    # extcontrib deliberately contributes a knowledge/vault record arm to the
+    # session schema. ChatterDoc has no binding arm, preserving this no-arm case.
+    with system_context(reason="test.binding.undeclared_record"):
+        record = ChatterDoc.objects.create(title="Record end without a contributed binding arm")
+    _grant(record, "manager", author)
     with actor_context(author):
         page = Page.objects.create_in(knowledge, title="Bound page")
         # Writable on both ends, but no relation names the record's type.
@@ -304,7 +309,7 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
         page_binding = RecordBinding.objects.upsert(page=page, target=record)
         vault_binding = RecordBinding.objects.upsert(vault=knowledge, target=record)
     if seat in {"record", "both"}:
-        _grant(record, "viewer", viewer)
+        _grant(record, "reader", viewer)
     if seat in {"knowledge", "both"}:
         _grant(knowledge, "viewer", viewer)
 
@@ -325,7 +330,7 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
     record_result = result_data(execute_schema(
         schema,
         """query ($id: ID!) {
-          record_knowledge_bindings(model_label: "knowledge.Vault", record_id: $id) { id page vault }
+          record_knowledge_bindings(model_label: "chatterdemo.ChatterDoc", record_id: $id) { id page vault }
         }""",
         {"id": str(record.sqid)}, user=viewer,
     ))

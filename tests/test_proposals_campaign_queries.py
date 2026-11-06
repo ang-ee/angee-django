@@ -52,7 +52,7 @@ def test_round_delete_preview_checks_collected_proposals_without_rechecking_them
     assert query_counts[0] == query_counts[1], query_counts
 
 
-def _list_statement_categories(queries, model, *, roster=False, projection=None, audits=None) -> Counter[str]:
+def _list_statement_categories(queries, model, *, roster=False, projection=None) -> Counter[str]:
     """Separate native list projections from the permission compiler's reads."""
 
     categories: Counter[str] = Counter()
@@ -85,7 +85,8 @@ def _list_statement_categories(queries, model, *, roster=False, projection=None,
         categories[category] += 1
     assert categories["application"] == 1, categories
     assert categories["roster"] == int(roster), categories
-    assert categories["bypass_audit"] == (int(roster) if audits is None else audits), categories
+    # Admitted list projections write no read-side bypass audits.
+    assert categories["bypass_audit"] == 0, categories
     return categories
 
 
@@ -220,7 +221,6 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
                         queries,
                         Task,
                         projection="_clarification_waiting",
-                        audits=0,
                     )
                 )
                 assert len(waiting) == limit
@@ -276,7 +276,7 @@ def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipie
         # Recovery REBAC decides the actor sets when the expression is built (before
         # this capture) and compiles the arrow decisions into the one application
         # SELECT; SQL execution reads one revision without a bypass audit.
-        assert _list_statement_categories(queries, Task, projection="waiting", audits=0) == Counter(
+        assert _list_statement_categories(queries, Task, projection="waiting") == Counter(
             application=1,
             schema_revision=1,
         )
@@ -366,12 +366,12 @@ def test_task_audience_list_projection_has_constant_query_count(campaign: Propos
             with CaptureQueriesContext(connection) as queries:
                 rows = read(limit)
             assert len(rows) == limit
-            categories.append(_list_statement_categories(queries, Task, audits=1))
+            categories.append(_list_statement_categories(queries, Task))
         # Recovery REBAC compiles task arrows into the row SELECT. The list read
         # and widen/narrow annotations are three scopes, each reading one
         # revision and the same actor sets. Field visibility adds one held
         # statement for read__clarification_asker over the returned ids.
         assert categories[0] == categories[1], categories
         assert categories[0] == Counter(
-            application=1, decided_rows=1, bypass_audit=1, schema_revision=3, actor_sets=3
+            application=1, decided_rows=1, schema_revision=3, actor_sets=3
         ), categories
