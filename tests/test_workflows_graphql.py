@@ -373,6 +373,14 @@ def test_duplicate_retry_action_records_requesting_operator(schema, callers, reg
             "step_runs": [{"can_retry": True, "requires_duplicate_acknowledgement": True}],
         }
     ]
+    graph = result_data(execute_schema(
+        schema,
+        """query($id: String!) { workflowrun_by_pk(id: $id) {
+          graph { nodes { step_run { can_retry requires_duplicate_acknowledgement } } }
+        } }""",
+        {"id": run.sqid}, user=operator,
+    ))["workflowrun_by_pk"]["graph"]
+    assert graph["nodes"][0]["step_run"] == {"can_retry": True, "requires_duplicate_acknowledgement": True}
     assert not result_data(action(schema, "retry_step", step, operator))["retry_step"]["ok"]
     acknowledged = result_data(action(schema, "retry_step_accepting_duplicate", step, operator))
     assert acknowledged["retry_step_accepting_duplicate"]["ok"]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -353,17 +353,56 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
             ).only("status", "output")
             return next((reason for row in rows if (reason := row.failure_reason)), None)
 
-    def graph(self, actor: Any) -> RunGraph:
-        """Read this run's frozen topology with two actor-scoped execution queries."""
+    def graph(
+        self,
+        actor: Any,
+        *,
+        step_fields: frozenset[str] = frozenset(),
+        map_fields: frozenset[str] = frozenset(),
+        related: Sequence[models.Prefetch] = (),
+    ) -> RunGraph:
+        """Read this run's frozen topology, batching only the step details a reader selects.
+
+        ``step_fields`` and ``map_fields`` name the details selected on node rows and
+        on their map item rows; ``related`` prefetches the selected relations. Each
+        selected detail costs at most one statement per graph, never one per step.
+        """
         if actor is None:
             raise PermissionDenied("A run graph requires a reader.")
         self.require_access("read", actor)
         definition = self.policy_version.definition
         topology = definition.topology()
         steps = cast(Any, self.step_runs.model.objects.with_actor(actor)).filter(run_id=self.pk)
-        rows = {row.node_key: row for row in steps.nodes()}
-        for row in rows.values():
+        subject = to_subject_ref(actor)
+        rows: dict[str, Any] = {}
+        items: dict[str, list[Any]] = {}
+        if "map_steps" in step_fields:
+            selected = step_fields | map_fields
+            payload = sorted({"input", "output", "state"} - selected)
+            for row in self._graph_details(steps.defer(*payload).graph_rows(), selected, related):
+                if row.is_mapped:
+                    items.setdefault(row.node_key.removesuffix(MAP_BODY_SUFFIX), []).append(row)
+                else:
+                    rows[row.node_key] = row
+            for key, row in rows.items():
+                row._graph_map_steps = (subject, sorted(items.get(key, ()), key=lambda item: item.map_index))
+        else:
+            selected = step_fields
+            rows = {row.node_key: row for row in self._graph_details(steps.nodes(), selected, related)}
+        graph_rows = (*rows.values(), *(item for group in items.values() for item in group))
+        for row in graph_rows:
             row.run = self
+        if "can_retry" in selected:
+            writable = self.with_actor(actor).has_access("write")
+            failures = tuple(
+                (pk, key) for pk, key in self.step_runs.model.system_queryset()
+                .filter(run_id=self.pk, status=StepRunStatus.FAILED).values_list("pk", "node_key")
+                if definition.retry_allowed(key)
+            ) if writable else None
+            for row in graph_rows:
+                row._graph_retry_permission = (subject, writable)
+                if failures is not None:
+                    row._graph_unrouted_failures = failures
         plan = definition.plan(
             rows.values(), terminal=self.stopped_at is not None or self.is_terminal and self.status != RunStatus.FAILED,
         )
@@ -384,6 +423,13 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 taken=edge.source in rows and definition.edge_live(rows[edge.source], {edge.outcome}),
             ) for edge in topology.edges),
         )
+
+    @staticmethod
+    def _graph_details(rows: Any, fields: frozenset[str], related: Sequence[models.Prefetch]) -> Any:
+        """Read the selected effect marker and relations in the step rows' own batch."""
+        if "requires_duplicate_acknowledgement" in fields:
+            rows = rows.annotate(_effect_started=rows.model.effect_started_expression())
+        return rows.prefetch_related(*related) if related else rows
 
     def can_cancel(self, actor: Any) -> bool:
         """A writer may cancel active execution or clean up a terminal run's open rows."""
@@ -629,6 +675,13 @@ class StepRun(AngeeDataModel, concrete=True):
         """Select this map's body rows; ordinary nodes have no matching items."""
         return self.run.step_runs.for_map(self.run_id, self.node_key)
 
+    def map_steps_for(self, actor: Any) -> Any:
+        """This map's item rows readable by ``actor``, reusing a graph read's batch."""
+        batched = self.__dict__.get("_graph_map_steps")
+        if batched is not None and actor is not None and batched[0] == to_subject_ref(actor):
+            return batched[1]
+        return self.map_rows().with_actor(actor).order_by("map_index")
+
     @property
     def map_total(self) -> int:
         """Count admitted items for a map, including after its wait has ended."""
@@ -666,15 +719,33 @@ class StepRun(AngeeDataModel, concrete=True):
 
     @property
     def requires_duplicate_acknowledgement(self) -> bool:
-        """Whether any attempt on this page may have made a non-idempotent effect."""
+        """Whether any attempt on this page may have made a non-idempotent effect.
+
+        A projected marker answers first, so the implementation is resolved only
+        once an effect started on this page.
+        """
+        if "_effect_started" in self.__dict__:
+            return bool(self.__dict__["_effect_started"]) and not self.step.effect_idempotent
         with system_context(reason="workflows.effect_policy"):
             return not self.step.effect_idempotent and self.attempts.filter(
                 page_index=self.page_index, effect_started_at__isnull=False,
             ).exists()
 
+    @classmethod
+    def effect_started_expression(cls) -> models.Exists:
+        """Project the current page's effect marker with the step rows."""
+        attempts = apps.get_model("workflows", "StepAttempt").objects.system_context(reason="workflows.effect_policy")
+        return models.Exists(attempts.filter(
+            step_run_id=models.OuterRef("pk"), page_index=models.OuterRef("page_index"),
+            effect_started_at__isnull=False,
+        ))
+
     @property
     def retry_blocker(self) -> str | None:
-        """State-only retry eligibility, shared by the locked action and read surface."""
+        """State-only retry eligibility, shared by the locked action and read surface.
+
+        A graph read seeds its run's retryable failures once for every row it returns.
+        """
         run = self.run
         definition = run.policy_version.definition
         if (
@@ -685,13 +756,26 @@ class StepRun(AngeeDataModel, concrete=True):
             or self.status == StepRunStatus.FAILED and not definition.retry_allowed(self.node_key)
         ):
             return "This step cannot be retried in place."
-        others = sorted(row.node_key for row in run.step_runs.all()
-                        if row.pk != self.pk and definition.unrouted_failure([row]))
+        failures = self.__dict__.get("_graph_unrouted_failures")
+        if failures is None:
+            failures = tuple(
+                (row.pk, row.node_key) for row in run.step_runs.all() if definition.unrouted_failure([row])
+            )
+        others = sorted(key for pk, key in failures if pk != self.pk)
         return f"Other unrouted failures remain: {', '.join(others)}." if others else None
 
     def can_retry(self, actor: Any) -> bool:
-        """Expose retry eligibility without granting generic writes to engine rows."""
-        if not self.run.with_actor(actor).has_access("write"):
+        """Expose retry eligibility without granting generic writes to engine rows.
+
+        A graph read seeds its run's write answer once for the reader; any other
+        actor, or an unseeded row, asks the run's policy directly.
+        """
+        seeded = self.__dict__.get("_graph_retry_permission")
+        if seeded is not None and actor is not None and seeded[0] == to_subject_ref(actor):
+            writable = seeded[1]
+        else:
+            writable = self.run.with_actor(actor).has_access("write")
+        if not writable:
             return False
         with system_context(reason="workflows.retry_policy"):
             return self.retry_blocker is None
