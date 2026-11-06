@@ -23,8 +23,8 @@ wires declarations only; the reference example throughout is `examples/src/examp
 | `django_compose.components`, native `EntryPoint`, `Distribution`, `packaging.Requirement` | Component identity, requirement closure and package metadata | [Composition owners](../../../docs/backend/guidelines.md#composition-owners) |
 | `angee.base.addons` | Packaged `[tool.angee.*]` tables and optional addon-module discovery | [Base adapter](../../../src/angee/base/addons.py) |
 | `apps.py` (optional) | `name`, pinned `label`, `ready()` hooks, check registration | `src/angee/money/apps.py:17`, `src/angee/base/apps.py:22` |
-| `autoconfig.py` | Settings fragments merged by native `django_compose.conf` in dependency order | `examples/src/example/notes/autoconfig.py:5`, `src/angee/base/autoconfig.py:23,42` |
-| `testing/models.py`, `tests/settings.py`, `tests/conftest.py` | Concrete models and roster of the bare test host | `src/angee/tags/testing/models.py`, `tests/settings.py:29,144`, `tests/conftest.py:645` |
+| `autoconfig.py` | Settings fragments merged by native `django_compose.conf` in dependency order | `examples/src/example/notes/autoconfig.py:5`, `src/angee/base/autoconfig.py:33,64` |
+| `testing/models.py`, `tests/settings.py`, `tests/conftest.py` | Concrete models and roster of the bare test host | `src/angee/tags/testing/models.py`, `tests/settings.py:29,147`, `tests/conftest.py:645` |
 | `web/package.json`, `web/src/{index.tsx,i18n.ts,index.test.ts}` | The rendered fragment and its namespace | `examples/src/example/notes/web/`, `templates/addons/web/template/` |
 | `src/angee/web/build.py` (`WebRuntime`), stack `pnpm-workspace.yaml` | Fragment discovery and `runtime/web/manifest.json`; which `web/` folders the JS install links | `src/angee/web/build.py:77,242`, `templates/stacks/dev/template/pnpm-workspace.yaml.jinja` |
 
@@ -126,8 +126,8 @@ wires declarations only; the reference example throughout is `examples/src/examp
 
    Implementation contributors add to the base's named setting; bound fields validate their mapping.
    A rowless contract owner registers a stable native Django system check using `check_impl_registry`. If a value derives from the host → a `settings(namespace)` hook reading only
-   its namespace (`src/angee/base/autoconfig.py:42`). Contribute only what the addon owns: `angee.base`
-   already appends `PermissionIntegration` (`src/angee/base/autoconfig.py:24`); a second registration is refused
+   its namespace (`src/angee/base/autoconfig.py:64`). Contribute only what the addon owns: `angee.base`
+   already appends `PermissionIntegration` (`src/angee/base/autoconfig.py:34`); a second registration is refused
    (`django_compose.declarations.resolve_integrations`). **Owner rule:**
    [Autoconfig](../../../docs/composer.md#autoconfig) owns merge semantics; settings loading never imports models.
 
@@ -174,7 +174,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
 
 - A package fact (requirements, capability paths, a label that merely repeats the folder name) mirrored on `AppConfig`: the manifest owns it and installed entry points establish identity (native installed index); `label` belongs on `AppConfig` only to pin an already persisted label (`src/angee/base/apps.py:22`) ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
 - An addon-local registry, loader or settings parser for a fact native `django_compose.conf` or the manifest readers already read: the existing owner takes one explicit line instead ([keep policy above detail](../../../docs/guidelines.md#keep-policy-above-detail)).
-- A second registration of a framework-owned integration such as `PermissionIntegration` when the base already appends it (`src/angee/base/autoconfig.py:24`; duplicates refused at `django_compose.declarations.resolve_integrations`).
+- A second registration of a framework-owned integration such as `PermissionIntegration` when the base already appends it (`src/angee/base/autoconfig.py:34`; duplicates refused at `django_compose.declarations.resolve_integrations`).
 - Model or `django.conf.settings` imports at `apps.py`/`autoconfig.py` module scope: settings merge runs before apps are ready, so only `ready()` and `settings(namespace)` may import ([Autoconfig](../../../docs/composer.md#autoconfig)).
 - A module named for a noun (`statements.py`) when the concern already has an owning module (`models.py`, `managers.py`, a verb module) ([Naming](../../../docs/backend/guidelines.md#naming)).
 - Customer, deployment or product names in framework-level code or fixtures; a consumer addon names its own product ([naming](../../../docs/guidelines.md#name-so-code-can-be-found-not-guessed)).

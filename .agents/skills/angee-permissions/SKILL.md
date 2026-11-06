@@ -31,7 +31,7 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 | `src/angee/base/apps.py` | REBAC synchronization contribution to upstream provisioning | `BaseConfig.compose_provision`; explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting |
 
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
-`django-zed-rebac` (`docs/stack.md#backend`, line 76); `composed_tables`
+`django-zed-rebac` (`docs/stack.md#backend`, line 75); `composed_tables`
 (`src/angee/base/testing/fixtures.py:58`) and `composed_permissions`
 (`src/angee/base/testing/permissions.py:41`) sync it into the test database.
 
@@ -44,7 +44,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 - Row-dependent sharing: `rebac:field={"path":…,"filters":{…}}` (notes extends `storage/file`), `rebac:const={"target_id":"shared","filters":{…}}` + `shared_reader = authenticated` (money/rate, dashboards).
 - Live user facts: `rebac:attribute={"field":…,"value":…}` on `iam/kind`; compose `iam/kind:person#active_member`, never a copy.
 - Edge seams other addons already own: `tags/tag_assignment`, `storage/file_attachment`, `knowledge/record_binding`, `messaging/thread_attachment`, `projects/task`, `decisions/decision` — each declares `target_*`/`subject_*` arms for you to union into (notes extends file).
-- Native API: `.with_actor(user)`, `.as_user(user)`, `.with_action(perm)`, `.for_write()`, `.readable(field)`, `.sudo(reason=…)`, `.system_context(reason=…)` (rebac `managers.py:719-858`), `has_access` (rebac `mixins.py:1079`), `check_new` (rebac `preflight.py:147`); Angee adds `AngeeModel.require_access` (`base.py:312`) and `rebac_grantable` + `angee.graphql.sharing` for shares.
+- Native API: `.with_actor(user)`, `.as_user(user)`, `.with_action(perm)`, `.for_write()`, `.readable(field)`, `.sudo(reason=…)`, `.system_context(reason=…)` (rebac `managers.py:871-1016`), `has_access` (rebac `mixins.py:1157`), `check_new` (rebac `preflight.py:131`); Angee adds `AngeeModel.require_access` (`base.py:312`) and `rebac_grantable` + `angee.graphql.sharing` for shares.
 
 ## Steps
 
@@ -127,7 +127,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 5. **Declare direct sharing and field gates on the model.** `rebac_grantable` maps a stored (unbacked) relation to the permission that manages it; `angee.E015-E017` (`base.py:373-406`) validate it against the effective definition. Field gates are `read__<field>` / `write__<field>` permissions in the zed (`write__<field>` is enforced on update only; keep protected creation values out of insert inputs).
    - Gates in the owning zed: any permission. Gates in a fragment: only on a concrete column *your* package's donor (`extends` model) contributes to that target; `_id` attnames, base and many-to-many fields are refused and a second package cannot extend your gate (`_merge_definition`, `build.py:267-318`).
    - A materialized MTI child inherits no `rebac_grantable` from its concrete parent (`build.py:474-476`, `composed_grants` `:494`); declare the child's own surface or it has none.
-   - Gated fields project as `None` under the default `REBAC_FIELD_READ_MODE="redact"` (`src/angee/base/autoconfig.py:31`); they are never filterable or sortable. Filter on `queryset.readable(field)` (`src/angee/iam/models.py:227`); write targets load with `.for_write()`.
+   - Gated fields project as `None` under the default `REBAC_FIELD_READ_MODE="redact"` (`src/angee/base/autoconfig.py:48`); they are never filterable or sortable. Filter on `queryset.readable(field)` (`src/angee/iam/models.py:227`); write targets load with `.for_write()`.
    **Owner rule:** `rebac_grantable` is the one share declaration; `grant_record_access`/`revoke_record_access`/`direct_record_access` and `validate_record_access_target/subject` (`base.py:160-301`) own the policy and GraphQL sharing dispatches to them (`docs/backend/guidelines.md#direct-record-access`).
 
 6. **Delegate from resolvers and verbs.** Resolve the target through the exact permission and let the owner act:
@@ -145,7 +145,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    - Ordinary sync after a zed edit on a running stack: `rebac sync` (`docs/checks.md#composition-and-schema`), then restart Django through the operator (`docs/howto/getstarted.md#restart-the-running-stack`). `rebac sync --check` is the drift gate; `rebac check` validates without writing.
    - Retirement of removed definitions, packages or backings: provision's sync step runs `--skip-checks sync --prune-stale --yes` after `migrate` and before `check` (`provision.py:58`, `docs/backend/guidelines.md#rebac`, line 825). Run the same shape, in that order, when a type was renamed or removed.
    - Deliberate overwrite: `--force-overwrite` (explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting) replaces locally managed live policy. Use it only when that replacement is the decision (`docs/backend/guidelines.md#rebac`, line 829); it is not part of an ordinary sync.
-   If `rebac.E009` names a backing you just renamed, removed or added → the stored schema, not the source, is stale, and the check blocks the very sync that would fix it: run the retirement shape above with `--skip-checks` (`migrate --skip-checks` first when migrations are pending), then `check`. `rebac.E009` is the library's backing check (`rebac/checks.py:321-331`); a role or anchor type it cannot resolve needs its `role_anchor` (`roles.py:25`).
+   If `rebac.E009` names a backing you just renamed, removed or added → the stored schema, not the source, is stale, and the check blocks the very sync that would fix it: run the retirement shape above with `--skip-checks` (`migrate --skip-checks` first when migrations are pending), then `check`. `rebac.E009` is the library's backing check (`rebac/checks.py:293-303`); a role or anchor type it cannot resolve needs its `role_anchor` (`roles.py:25`).
 
    **Owner rule:** sync, prune and overwrite are the library's command options; Angee adds only the merged-file emission and path wiring (`build.py:20-24`) and provision's step order (`provision.py:49`).
 
@@ -188,7 +188,7 @@ Validator: the addon's focused test module plus the system checks; the loop is `
 - The stored schema gates every `rebac` subcommand and `check`; after a rename or retirement `rebac.E009` describes the store, not the source (`docs/backend/guidelines.md#rebac`, line 813; step 7).
 - `role_anchor` wrapped in a helper captures the helper's module and the composer fails at emission on the mis-capture; call it at module level or pass `module=__name__` (`src/angee/base/models/roles.py:39-45`).
 - A const-backed role target without its own `definition` + anchor makes a non-member check raise instead of deny (`docs/backend/guidelines.md#rebac`, "Const-backing", line 751).
-- SQLite's `REBAC_DEPTH_LIMIT` of 8 silently drops rows inherited through deeper hierarchies (`docs/backend/guidelines.md#rebac`, line 820; `src/angee/base/autoconfig.py:55`).
+- SQLite's `REBAC_DEPTH_LIMIT` of 8 silently drops rows inherited through deeper hierarchies (`docs/backend/guidelines.md#rebac`, line 820; `src/angee/base/autoconfig.py:87`).
 - `select_related` of a REBAC-guarded relation inside an actor-scoped queryset passes unit tests and fails live (`docs/backend/guidelines.md#rebac`, line 796).
 - Force-login in tests needs the IAM backend ([authorization pitfalls](references/pitfalls.md)).
 

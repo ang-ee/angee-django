@@ -139,7 +139,7 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
    `transaction.atomic()` (`tests/test_jobs.py:78-110`). For attribution, run eagerly with
    `celery_app.task(name=..., lazy=False, shared=False)` and `.apply(task_id=..., throw=True)`
    (`tests/test_changesets.py:238-262`). The bare host sets `CELERY_BROKER_URL = "memory://"`
-   (`tests/settings.py:145`); no worker runs in tests (`angee-tests`).
+   (`tests/settings.py:144`); no worker runs in tests (`angee-tests`).
 
 ## Do not
 

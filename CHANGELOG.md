@@ -8,6 +8,13 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — django-zed-rebac 0.31
+
+- The base addon requires `django-zed-rebac>=0.31,<0.32` (GraphQL its
+  `strawberry-django` extra, the dev group its `caveats` extra) instead of a git
+  pin. The library now ships only its local backend, so base autoconfig no
+  longer sets `REBAC_BACKEND`; the library's own default selects it.
+
 ## Unreleased — jj workspace slots in the templates
 
 - The `src` workspace template takes `slot_mode` (`worktree`, the default, or
