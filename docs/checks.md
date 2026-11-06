@@ -95,7 +95,7 @@ integrate steps, and the composed
 PostgreSQL test nodes because each also has SQLite-only tests; the PostgreSQL
 branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`
 also run by node. Every other listed file runs whole, which keeps the SQLite
-floor tests out of the PostgreSQL zero-skip gate. The four groups are assigned
+floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
 by pytest-split's `least_duration` algorithm over the
 [PostgreSQL timing map](../.test_durations_postgres); each runs with four xdist
 workers grouped by file, `--nomigrations`, a JUnit report, and a zero-skip
@@ -360,10 +360,11 @@ pushes to `main`. The current tiers are:
   campaigns, about 700 stored seconds each) set a floor near 25 minutes on CI.
   Their cost is per-test fixture setup, a `rebac sync` before every test; making
   that setup cheaper is how the limit comes down.
-- **PostgreSQL:** in four groups of its own beside the SQLite shards, assigned
+- **PostgreSQL:** in six groups of its own beside the SQLite shards, assigned
   by pytest-split's `least_duration` algorithm over the
-  [PostgreSQL timings](../.test_durations_postgres) and with a 40-minute limit,
-  the named PostgreSQL contract selection runs with
+  [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
+  limit (CI runs 1.9–2.6 times the local timings the map records; six groups
+  keep that margin), the named PostgreSQL contract selection runs with
   `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each shard writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
@@ -416,7 +417,7 @@ uv run --locked python -m pytest -q -n 0 --nomigrations --store-durations --dura
 The current map came from a local serial macOS arm64 run against PostgreSQL
 16.14; host load was not fixed. CI per-test durations have been 1.9–2.6 times
 the local measurements, so use the map for relative group balance and check
-actual CI wall times against the 40-minute limit.
+actual CI wall times against the 60-minute limit.
 
 Separate structural and downstream tiers are not implemented. Separate workflows
 enforce private-path exclusion and other repository policies. Executable jobs in

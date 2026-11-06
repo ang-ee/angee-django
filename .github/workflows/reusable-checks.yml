@@ -129,15 +129,17 @@ jobs:
   # The PostgreSQL selection is balanced over its own timing map
   # (.test_durations_postgres, least_duration): every worker flushes the
   # whole schema between transactional tests, so one job no longer fits.
+  # CI runs 1.9-2.6x the local timings the map records, so six groups under
+  # the SQLite shards' 60-minute limit keep the margin the map cannot predict.
   uv-postgres:
     name: uv postgres ${{ matrix.group }}/4
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3, 4]
+        group: [1, 2, 3, 4, 5, 6]
     services:
       postgres:
         image: postgres:17
@@ -174,7 +176,7 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
         run: |
           uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=workflow-concurrency.xml \
-            --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration \
+            --splits 6 --group ${{ matrix.group }} --splitting-algorithm least_duration \
             --durations-path .test_durations_postgres \
             tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
             tests/test_workflows_runtime.py tests/test_workflows_install.py \
