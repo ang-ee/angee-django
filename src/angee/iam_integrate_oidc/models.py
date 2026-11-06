@@ -48,7 +48,9 @@ class CredentialOidc(Composable, extends="integrate.Credential"):
             oauth_field.related_model._base_manager.using(using).filter(pk=credential.oauth_client_id).first()
         )
         if oauth_client is None or not type(oauth_client).login_picker_queryset(
-            type(oauth_client)._base_manager.using(using).filter(pk=oauth_client.pk),
+            type(oauth_client).objects.db_manager(using).system_context(
+                reason="iam_integrate_oidc.unlink.guard"
+            ).filter(pk=oauth_client.pk),
         ).exists():
             return
         user_field = type(credential).user.field

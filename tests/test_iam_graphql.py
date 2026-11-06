@@ -265,13 +265,13 @@ def test_login_complete_provisions_and_logs_in(
     )["login_start"]
 
     def complete_login(
-        selected_oauth_client: OAuthClient,
+        completion: oidc_identity.OidcLoginCompletion,
         *,
         code: str,
         state_token: str,
         redirect_uri: str,
     ) -> Any:
-        assert selected_oauth_client.pk == oauth_client.pk
+        assert completion.oauth_client.pk == oauth_client.pk
         assert code == "code"
         assert state_token == start["state"]
         assert redirect_uri == "https://app.example/callback"
@@ -281,7 +281,7 @@ def test_login_complete_provisions_and_logs_in(
             next_path="/after-login",
         )
 
-    monkeypatch.setattr(oidc_identity, "complete_login", complete_login)
+    monkeypatch.setattr(oidc_identity.OidcLoginCompletion, "complete_login", complete_login)
 
     completed = _data(
         _execute(
@@ -352,7 +352,7 @@ def test_login_complete_returns_oidc_flow_error_payload(
         del args, kwargs
         raise OAuthFlowError("invalid_id_token", 400, "bad token")
 
-    monkeypatch.setattr(oidc_identity, "complete_login", complete_login)
+    monkeypatch.setattr(oidc_identity.OidcLoginCompletion, "complete_login", complete_login)
 
     completed = _data(
         _execute(
@@ -521,13 +521,13 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
     )["link_account_start"]
 
     def complete_link(
-        selected_oauth_client: OAuthClient,
+        completion: oidc_identity.OidcLoginCompletion,
         *,
         code: str,
         state_token: str,
         redirect_uri: str,
     ) -> Any:
-        assert selected_oauth_client.pk == oauth_client.pk
+        assert completion.oauth_client.pk == oauth_client.pk
         assert code == "code"
         assert redirect_uri == "https://app.example/callback"
         record = state.consume(state_token)
@@ -539,7 +539,7 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
             next_path=record.next_path or "/",
         )
 
-    monkeypatch.setattr(oidc_identity, "complete_link", complete_link)
+    monkeypatch.setattr(oidc_identity.OidcLoginCompletion, "complete_link", complete_link)
 
     completed = _data(
         _execute(
@@ -1916,12 +1916,14 @@ def test_oidc_disconnect_policy_uses_the_persisted_credentials_database(tmp_path
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.db import models
 from angee.iam_integrate_oidc.models import CredentialOidc, OAuthClientOidc
+from angee.integrate.querysets import OAuthClientQuerySet
 
 class User(AbstractBaseUser):
     username = models.CharField(max_length=40, unique=True)
     USERNAME_FIELD = "username"
 
 class OAuthClient(OAuthClientOidc, models.Model):
+    objects = models.Manager.from_queryset(OAuthClientQuerySet)()
     is_enabled = models.BooleanField(default=True)
     client_id = models.CharField(max_length=40, default="native-client")
     authorize_endpoint = models.URLField(default="https://issuer.example/authorize")
@@ -1972,7 +1974,7 @@ for alias in ("default", "secondary"):
         for model in (User, OAuthClient, ExternalAccount, Credential, PermissionAuditEvent):
             editor.create_model(model)
     user = User.objects.using(alias).create(username="identity", password="usable" if alias == "default" else "!")
-    client = OAuthClient.objects.using(alias).create(login_enabled=alias == "secondary")
+    client = OAuthClient._base_manager.using(alias).create(login_enabled=alias == "secondary")
     for _ in range(3 if alias == "default" else 2):
         account = ExternalAccount.objects.using(alias).create(oauth_client=client)
         Credential.objects.using(alias).create(user=user, oauth_client=client, external_account=account)
