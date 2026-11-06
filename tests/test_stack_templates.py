@@ -2308,7 +2308,7 @@ def test_celery_queues_share_one_queue_worker_in_both_modes() -> None:
     dev = _render_dev_stack(celery_queues="whatsapp")
     dev_service = dev["services"]["celery-queues"]
     assert dev_service["runtime"] == "local"
-    assert dev_service["stop_grace_period"] == "30s"
+    assert dev_service["stop_grace_period"] == "10s"
     command = dev_service["command"]
     assert command[command.index("-Q") + 1] == "whatsapp"
     assert command[command.index("--pool") + 1] == "threads"
