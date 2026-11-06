@@ -13,7 +13,7 @@ from tests.extraction_models import Extraction as _Extraction  # noqa: F401 -- r
 from tests.queries import is_rebac_revision_read
 
 D1_POLICY_FAN_OUT = (
-    "D1 policy fan-out: the merged policy exceeds 32 KB until the REBAC compiler "
+    "Policy fan-out: the composed policy exceeds 32 KB until the REBAC compiler "
     "bounds extension arms (ledger lanes/analysis-pg-gate-c8e33fab5.md)"
 )
 

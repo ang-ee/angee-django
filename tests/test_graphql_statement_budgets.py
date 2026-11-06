@@ -777,7 +777,7 @@ def test_timeline_rail_sender_statement_budget(comment_record, capture_graphql_d
         assert 'FROM "test_parties_handle"' not in message_sql[0]
         assert 'FROM "test_parties_party"' not in message_sql[0]
         assert len(message_sql[0].encode("utf-8")) <= 5_000
-        # merged-schema pre-read per referenced type — D1 policy fan-out, tracked for the REBAC compiler.
+        # the composed policy pre-reads each referenced type (policy fan-out), tracked for the REBAC compiler.
         read.assert_statements(53)
         # session-merged schema (O 9aaaf82ca) measures the composed product policy.
         read.assert_bytes(total=575_000, largest=250_000, cause="timeline union plus structural sender join")
@@ -820,7 +820,7 @@ def test_related_permission_resource_list_budget(composed_tables: None, capture_
             largest=175_000,
             cause="shared actor-set proof for one and many rows; the related permission proof is shared",
         )
-        # merged-schema pre-read per referenced type — D1 policy fan-out, tracked for the REBAC compiler.
+        # the composed policy pre-reads each referenced type (policy fan-out), tracked for the REBAC compiler.
         assert read.statement_count == 5, (count, read.statement_count)
         read.assert_no_audit_writes()
     assert reads[5].statement_count == reads[1].statement_count == 5
@@ -887,7 +887,7 @@ def test_relation_sort_and_filter_aliases_have_no_bypass_audits(
     for read in (one, five):
         # session-merged schema (O 9aaaf82ca) measures the composed product policy.
         read.assert_bytes(total=265_000, largest=220_000)
-        # merged-schema pre-read per referenced type — D1 policy fan-out, tracked for the REBAC compiler.
+        # the composed policy pre-reads each referenced type (policy fan-out), tracked for the REBAC compiler.
         read.assert_statements(4)
         read.assert_no_audit_writes()
     five.assert_flat_from(one)
@@ -1212,7 +1212,7 @@ def test_four_related_permission_names_reuse_proven_read(composed_tables: None, 
     for count, read in reads.items():
         # session-merged schema (O 9aaaf82ca) measures the composed product policy.
         read.assert_bytes(total=190_000, largest=90_000, cause="native permission expressions after scope_cte removal")
-        # merged-schema pre-read per referenced type — D1 policy fan-out, tracked for the REBAC compiler.
+        # the composed policy pre-reads each referenced type (policy fan-out), tracked for the REBAC compiler.
         read.assert_statements(5)
         read.assert_no_audit_writes()
         assert len(read.data["four_permission_tasks"]) == count

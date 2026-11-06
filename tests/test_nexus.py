@@ -680,7 +680,7 @@ def test_party_network_applies_pair_intersection_to_every_edge(
     assert nodes[visible.sqid]["detail"] == "0 handles"
     assert nodes[visible.sqid]["meta"]["handle_count"] == 0
 
-    # D1b lets an admitted follower project party identity, but does not grant
+    # An admitted follower projects party identity, but is not granted
     # a Party root read through that follower. The graph keeps the Party gate.
     with actor_context(identity_reader):
         assert not Party.objects.with_actor(identity_reader).filter(pk=center.pk).exists()
