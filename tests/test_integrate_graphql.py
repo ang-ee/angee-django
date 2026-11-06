@@ -237,7 +237,8 @@ def test_bridge_status_fields_share_page_reads_at_one_five_ten_twenty(
         assert len(read.data["vcs_bridges"]) == size
         assert all(row["open_failure_count"] == 0 and row["is_syncing"] is False
                    for row in read.data["vcs_bridges"])
-        assert read.statement_count == (9 if connection.vendor == "postgresql" else 8), (size, read.statement_count)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        assert read.statement_count == (8 if connection.vendor == "postgresql" else 7), (size, read.statement_count)
         read.assert_no_audit_writes()
         read.assert_bytes(total=16_000, largest=4_000)
     for smaller, larger in ((1, 5), (5, 10), (10, 20)):
@@ -273,7 +274,8 @@ def test_live_bridge_stage_uses_one_postgresql_lock_snapshot(composed_tables: No
         assert read.data["vcs_bridges"][0]["sync_stage"] == "SYNCING"
         assert all(row["is_syncing"] is False and row["sync_stage"] == "FAILED"
                    for row in read.data["vcs_bridges"][1:])
-        assert read.statement_count == 6, (size, read.statement_count)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        assert read.statement_count == 5, (size, read.statement_count)
         read.assert_no_audit_writes()
         read.assert_bytes(total=18_000, largest=8_000)
     for smaller, larger in ((1, 5), (5, 10), (10, 20)):

@@ -13,6 +13,7 @@ from tests.knowledge_campaign import clone_template as clone_template
 
 pytestmark = [
     pytest.mark.postgresql,
+    pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL clone two-writer contract"),
 ]
 

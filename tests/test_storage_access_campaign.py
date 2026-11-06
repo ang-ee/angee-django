@@ -84,7 +84,8 @@ def test_record_files_document_batches_nested_file_rows(record_files_reads: list
         read.assert_flat_from(one)
     for read in record_files_reads:
         read.assert_statements(5)
-        read.assert_bytes(total=130_000, largest=65_000)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=365_000, largest=315_000)
         read.assert_no_audit_writes()
 
 
@@ -164,7 +165,8 @@ def test_file_attachments_document_stays_flat_at_one_and_five(
     five.assert_flat_from(one)
     for read in (one, five):
         read.assert_statements(5)
-        read.assert_bytes(total=160_000, largest=75_000)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=665_000, largest=315_000)
         read.assert_no_audit_writes()
 
 

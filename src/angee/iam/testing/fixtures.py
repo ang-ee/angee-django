@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db.models.signals import post_migrate
 from pytest_django.plugin import DjangoDbBlocker
@@ -26,24 +27,30 @@ def django_db_setup(
     """Install composed permission inputs and restore them after transaction flushes.
 
     Native Django database setup owns table creation. Emit and synchronize the
-    merged addon schema once, then restore it after each transactional flush.
+    merged addon schema once, then restore it and warm Django content types
+    after each transactional flush.
     """
 
-    rebac_app = apps.get_app_config("rebac")
     configs = tuple(apps.get_app_configs())
+    # Django emits post_migrate in app order. Later create_contenttypes handlers
+    # clear the cache, so resync and prime only after the final emitted signal.
+    final_migrated_app = next(config for config in reversed(configs) if config.models_module is not None)
     runtime = tmp_path_factory.mktemp("permissions")
 
     def sync_rebac_schema(**kwargs: Any) -> None:
         call_command("rebac", "sync", verbosity=0)
+        # Transactional flush emits post_migrate and clears Django's content-type
+        # cache. Warm it after resync so each document sees the same policy cost.
+        ContentType.objects.get_for_models(*apps.get_models(), for_concrete_models=False)
 
-    post_migrate.connect(sync_rebac_schema, sender=rebac_app, weak=False)
+    post_migrate.connect(sync_rebac_schema, sender=final_migrated_app, weak=False)
     try:
         with django_db_blocker.unblock():
             emit_permissions(configs, runtime)
             sync_rebac_schema()
         yield
     finally:
-        post_migrate.disconnect(sync_rebac_schema, sender=rebac_app)
+        post_migrate.disconnect(sync_rebac_schema, sender=final_migrated_app)
 
 
 @pytest.fixture(autouse=True)
