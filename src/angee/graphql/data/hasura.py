@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
+import json
+import operator
 import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
-from functools import cache, partial
+from functools import cache, partial, reduce
 from typing import TYPE_CHECKING, Any, cast
 
 import strawberry
@@ -37,11 +40,15 @@ from strawberry_django_aggregates import (
 )
 from strawberry_django_aggregates.granularity import NumberGranularity, TimeGranularity
 from strawberry_django_hasura import (
+    GroupField,
+    GroupFieldBatch,
     HasuraResource,
     NestedInsert,
     SortAlias,
     WriteBackend,
+    apply_ordering,
     input_to_dict,
+    prepare_sort_aliases,
 )
 from strawberry_django_hasura import (
     hasura_resource as build_hasura_resource,
@@ -1376,6 +1383,131 @@ def _resource_filter_projection(
     )
 
 
+GROUP_ROWS_MAX_LIMIT = 100
+"""Bound on one group's carried first page; the client declares the page size."""
+
+
+def group_rows_field(
+    node: type,
+    resolve: Callable[[GroupFieldBatch, int], Sequence[Sequence[Any]]],
+) -> GroupField:
+    """Declare ``<res>_group.rows``: every group's first page from one read per groups page.
+
+    ``limit`` is the client's declared per-group page size, required and bounded
+    by ``GROUP_ROWS_MAX_LIMIT``; ``order_by`` is the list root's own ordering.
+    ``resolve(batch, limit)`` returns one page per group in ``batch.groups`` order.
+    """
+
+    def pages(batch: GroupFieldBatch) -> Sequence[Sequence[Any]]:
+        limit = batch.arguments["limit"]
+        if not 1 <= limit <= GROUP_ROWS_MAX_LIMIT:
+            raise ValueError(f"Group rows limit must be between 1 and {GROUP_ROWS_MAX_LIMIT}.")
+        return resolve(batch, limit) if batch.groups else []
+
+    return GroupField(
+        type=list[node],  # type: ignore[valid-type]
+        arguments=lambda inputs: {"limit": int, "order_by": list[inputs.order_by] | None},  # type: ignore[name-defined]
+        defaults={"order_by": None},
+        resolve=pages,
+        description="The group's first page of rows, read for the whole groups page at once.",
+    )
+
+
+def _group_bucket_drills(
+    model: type[models.Model],
+    axes: Mapping[str, DataQueryAxis],
+    group_by: Sequence[tuple[str, Any]],
+) -> list[DataQueryDrill]:
+    """Return the drills that select one bucket of the translated ``group_by`` spec.
+
+    A selected relation's label axis rides on its relation's drill.
+    """
+
+    selected = {path for path, _ in group_by}
+    drills: list[DataQueryDrill] = []
+    for path, granularity in group_by:
+        axis = axes.get(path)
+        if axis is None:
+            raise ValueError(f"{model._meta.label} has no group axis {path!r}.")
+        if axis.kind != "relation" and any(
+            other != path and path.startswith(f"{other}__") and getattr(axes.get(other), "kind", None) == "relation"
+            for other in selected
+        ):
+            continue
+        drill = axis.drill if granularity is None else next(
+            (item.drill for item in axis.extractions if item.name == granularity.value), None,
+        )
+        if drill is None:
+            raise ValueError(f"{model._meta.label} group axis {path!r} has no drill, so its groups carry no rows.")
+        drills.append(drill)
+    return drills
+
+
+def _group_bucket(model: type[models.Model], drills: Sequence[DataQueryDrill], key: Any) -> models.Q:
+    """Select one group's rows by its drills over the list read's redacted values."""
+
+    bucket = models.Q()
+    for drill in drills:
+        value = getattr(key, drill.value_key)
+        if drill.kind == "json":
+            lookup = f"{drill.field}__{(drill.json_path or '').replace('.', '__')}"
+            condition = (
+                models.Q(**{f"{lookup}__isnull": True}) | models.Q(**{lookup: None})
+                if value is None else models.Q(**{lookup: value})
+            )
+        else:
+            field = require_field_for_path(model, drill.field)
+            # A relation compares its redacted key alias, as relation filters and groups do.
+            lookup = _relation_axis_alias(drill.field) if drill.kind == "identity" else drill.field
+            if value is None:
+                condition = models.Q(**{f"{lookup}__isnull": True})
+            elif drill.kind == "identity":
+                condition = models.Q(**{lookup: _public_pk(cast(Any, field).related_model, value)})
+            elif drill.kind == "range":
+                span = getattr(key, cast(str, drill.range_key))
+                start, end = span.from_, span.to
+                if isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
+                    start, end = start.date(), end.date()
+                condition = models.Q(**{f"{lookup}__gte": start, f"{lookup}__lt": end})
+            else:
+                if isinstance(value, enum.Enum):
+                    value = value.value
+                if drill.value_transform == "json" and isinstance(value, str):
+                    value = json.loads(value)
+                condition = models.Q(**{lookup: value})
+        bucket &= condition
+    return bucket
+
+
+def _first_rows_per_group(
+    queryset: models.QuerySet[Any],
+    buckets: Sequence[models.Q],
+    *,
+    info: strawberry.Info,
+    limit: int,
+) -> list[list[Any]]:
+    """Read every bucket's first ``limit`` rows in the queryset's order with one statement."""
+
+    if not hasattr(queryset, "first_per_group"):
+        raise ImproperlyConfigured(f"{queryset.model._meta.label} group rows need an Angee queryset.")
+    ordering = [*queryset.query.order_by] or ["pk"]
+    labelled = queryset.filter(reduce(operator.or_, buckets)).annotate(
+        _angee_group_bucket=models.Case(
+            *(models.When(bucket, then=models.Value(index)) for index, bucket in enumerate(buckets)),
+            output_field=models.IntegerField(),
+        ),
+    )
+    kept = labelled.first_per_group("_angee_group_bucket", order_by=ordering, limit=limit).order_by(
+        "_angee_group_bucket", *ordering,
+    )
+    active = optimizer.get()
+    kept = active.optimize(kept, info) if active is not None else strawberry_django.optimizer.optimize(kept, info)
+    pages: list[list[Any]] = [[] for _ in buckets]
+    for row in kept:
+        pages[row._angee_group_bucket].append(row)
+    return pages
+
+
 def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
     node: type,
     *,
@@ -1451,6 +1583,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     representation-field search.
     ``context_fields`` declares the readable fields whose native widgets render
     the compact record-header facts line.
+
+    A groupable resource's ``<res>_group`` carries ``rows(limit, order_by)``:
+    each group's first page read through the list root's own scoped read, filter
+    and ordering, keyed by each group's drill and windowed by
+    ``first_per_group`` in one statement per groups page.
 
     Model ``hasura_aliases`` mappings contribute named Django expression
     sorts automatically, including from extension bases. They use native lazy
@@ -1647,6 +1784,30 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     }
     active_json_paths = dict(json_paths or {})
     filter_lookups = resource_filter_lookups(model, model_filters)
+    group_fields: dict[str, GroupField] | None = None
+    if active_groupable:
+        group_axes = {
+            axis.field: axis
+            for axis in hasura_query_axes(model, active_groupable, tuple(filterable), json_paths=active_json_paths)
+        }
+
+        def group_rows(batch: GroupFieldBatch, limit: int) -> list[list[Any]]:
+            """Each group's first page through the list root's own read, filter and ordering."""
+            predicate = where_to_q(
+                batch.where, id_column=id_column, id_decode=id_decode,
+                field_decoders=field_id_decode, lookups=filter_lookups,
+            )
+            queryset = filter_queryset(read_queryset(batch.info), predicate, prepare_queryset=prepare_filters)
+            order_by = batch.arguments.get("order_by")
+            queryset = prepare_sort_aliases(
+                queryset, order_by, info=batch.info, id_column=id_column, sortable_aliases=sortable_aliases,
+            )
+            queryset = apply_ordering(queryset, order_by, id_column=id_column, sortable_aliases=sortable_aliases)
+            drills = _group_bucket_drills(model, group_axes, batch.group_by)
+            buckets = [_group_bucket(model, drills, group.key) for group in batch.groups]
+            return _first_rows_per_group(queryset, buckets, info=batch.info, limit=limit)
+
+        group_fields = {"rows": group_rows_field(node, group_rows)}
     resource = build_hasura_resource(
         node,
         model=model,
@@ -1659,6 +1820,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         json_paths=active_json_paths,
         group_key_encoders=_relation_group_key_encoders(model, active_groupable),
         get_group_by_expressions=_group_by_expression_provider,
+        group_fields=group_fields,
         filter_lookups=filter_lookups,
         writable=list(writable) if writable is not None else None,
         insertable=list(insertable) if insertable is not None else None,
