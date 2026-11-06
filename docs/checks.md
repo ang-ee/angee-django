@@ -90,7 +90,10 @@ also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
 knowledge, messaging, proposals, sequences, spaces, storage, the system
 queryset, work and task ordering locks, integrate streams and workflow
 integrate steps, and the composed
-[intake access decision](../tests/test_intake_access_decision.py).
+[intake access decision](../tests/test_intake_access_decision.py). It also runs
+[task ordering](../tests/test_task_rank_allocation.py),
+[record tasks](../tests/test_projects_record_tasks.py), and the
+[projects access campaign](../tests/test_projects_wave3_campaign.py).
 `test_connections.py` and `test_system_queryset.py` contribute only their
 PostgreSQL test nodes because each also has SQLite-only tests; the PostgreSQL
 branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`

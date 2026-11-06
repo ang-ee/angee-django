@@ -223,7 +223,8 @@ jobs:
             tests/test_storage.py tests/test_storage_upload_campaign.py \
             tests/test_system_queryset.py::test_system_queryset_emits_for_update_on_postgresql \
             tests/test_task_locks.py tests/test_task_project_ordering.py \
-            tests/test_timeline_concurrency.py \
+            tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \
+            tests/test_projects_wave3_campaign.py tests/test_timeline_concurrency.py \
             tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
             tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
