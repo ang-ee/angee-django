@@ -76,7 +76,10 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
       } } };
     }
     if (meta?.gqlQuery === InboxConnections) {
-      return { data: { inbox_connections: { rows: fileUses ? [{ id: "use-1", message: source, part: pdf(2) }] : [], count: fileUses ? 1 : 0, message_count: fileUses ? 1 : 0 } } };
+      return { data: { inbox_connections: {
+        rows: fileUses ? [{ id: "use-1", message_id: source.id, part: pdf(2), handle: null, src_id: null, dst_id: null }] : [],
+        messages: fileUses ? [source] : [], count: fileUses ? 1 : 0, message_count: fileUses ? 1 : 0,
+      } } };
     }
     if (meta?.gqlQuery === InboxConnectionsCount) {
       return { data: { inbox_connections: { message_count: fileUses ? 1 : 0 } } };

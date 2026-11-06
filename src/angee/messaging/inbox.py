@@ -1,23 +1,21 @@
 """Authorized personal-message exploration over the existing messaging corpus.
 
-Conversation sections are selected in SQL before their bounded previews. Every
-count and backlink is derived from readable eligible messages, never a global
-Fragment counter or a page of messages regrouped in the browser.
+Every count and backlink is derived from readable eligible messages, never a
+global Fragment counter or a page of messages regrouped in the browser.
+Conversation grouping belongs to :class:`~angee.messaging.inbox_results.InboxResults`.
 """
 
 from __future__ import annotations
 
 import shlex
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.apps import apps
-from django.db import connections, models
-from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, When, Window
-from django.db.models.functions import RowNumber
+from django.db import connections
+from django.db.models import Count, Exists, OuterRef, Q, Subquery
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
@@ -98,11 +96,16 @@ class InboxSearch(BaseModel):
 
 @dataclass(frozen=True)
 class InboxPage:
-    """A server-selected page; total rows and messages are independent facts."""
+    """A server-selected page; total rows and messages are independent facts.
+
+    Rows that name messages by public ID carry them once in ``messages``, a
+    readable queryset a projection loads with every relation it selects.
+    """
 
     rows: list[Any]
     count: int
     message_count: int = 0
+    messages: Any = None
 
     @staticmethod
     def window(page: int, size: int) -> slice:
@@ -111,18 +114,6 @@ class InboxPage:
         if page < 1 or size < 1 or size > 100:
             raise ValueError("Page must be positive and page size must be between 1 and 100.")
         return slice((page - 1) * size, page * size)
-
-
-@dataclass(frozen=True)
-class InboxConversation:
-    """One logical thread, or one standalone message, with bounded previews."""
-
-    id: str
-    thread: Any | None
-    latest: datetime
-    matching_count: int
-    total_count: int
-    messages: Any
 
 
 @dataclass(frozen=True)
@@ -356,74 +347,10 @@ class MessageInbox:
         scoped = self.scoped(self.coverage(coverage), sender=sender, circle=circle)
         return self.matching(scoped, search).canonical()
 
-    def _conversation_rows(self, rows: Any) -> Any:
-        # A conversation groups under the readable survivor of its thread's
-        # redirect. An unreadable thread is not an exposed grouping identity: its
-        # readable messages remain independently reachable as standalone sections.
-        # Redirects are flattened to one hop, so the survivor and the row's own thread
-        # are each one primary-key probe of the readable inbox threads.
-        return rows.alias(
-            _survivor_visible=Exists(self.threads.filter(pk=rows.survivor_id("thread__", ref=OuterRef))),
-            _thread_visible=Exists(self.threads.filter(pk=OuterRef("thread_id"))),
-        ).annotate(
-            _conversation=Case(
-                When(_survivor_visible=True, then=rows.survivor_id("thread__")),
-                When(_thread_visible=True, then=F("thread_id")),
-                default=-F("pk"),
-                output_field=models.BigIntegerField(),
-            ),
-        )
+    def page_messages(self, ids: Any) -> Any:
+        """The readable messages a page's rows name, with their list-scale title text."""
 
-    def conversations(self, rows: Any, *, page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
-        """Page logical sections, then select at most three matches in each using SQL windows."""
-
-        matches = self._conversation_rows(rows).scoped_for_aggregate().order_by()
-        groups = matches.values("_conversation").annotate(latest=Max("_order_at"), total=Count("pk", distinct=True))
-        count = groups.count()
-        selected = list(
-            groups.order_by("latest" if oldest else "-latest", "_conversation")[InboxPage.window(page, size)]
-        )
-        keys = [row["_conversation"] for row in selected]
-        ranked = (
-            matches.filter(_conversation__in=keys)
-            .annotate(
-                _preview_rank=Window(
-                    RowNumber(), partition_by=[F("_conversation")], order_by=[F("_order_at").desc(), F("pk").desc()]
-                )
-            )
-            .filter(_preview_rank__lte=3)
-        )
-        preview_ids: dict[int, list[int]] = defaultdict(list)
-        public_ids: dict[int, str] = {}
-        for row in ranked:
-            preview_ids[row._conversation].append(row.pk)
-            public_ids[row.pk] = str(row.sqid)
-        totals = dict(
-            self._conversation_rows(self.messages)
-            .scoped_for_aggregate()
-            .order_by()
-            .filter(_conversation__in=keys)
-            .values("_conversation")
-            .annotate(total=Count("pk", distinct=True))
-            .values_list("_conversation", "total")
-        )
-        threads = {row.pk: row for row in self.threads.filter(pk__in=[key for key in keys if key > 0])}
-        previews = self.messages.filter(pk__in=[pk for ids in preview_ids.values() for pk in ids])
-        # Keep querysets in the GraphQL projection so its native optimizer can
-        # batch only requested sender/part/file fields through their read gates.
-        result = [
-            InboxConversation(
-                id=f"thread:{threads[key].sqid}" if key in threads else f"message:{public_ids[-key]}",
-                thread=threads.get(key),
-                latest=row["latest"],
-                matching_count=row["total"],
-                total_count=totals.get(key, 0),
-                messages=previews.filter(pk__in=preview_ids[key]),
-            )
-            for row in selected
-            for key in [row["_conversation"]]
-        ]
-        return InboxPage(result, count, matches.count())
+        return self.messages.filter(pk__in=ids).with_title_text().order_by("pk")
 
     def message(self, public_id: str) -> Any:
         """Read a message independently of the current result filters."""
@@ -495,8 +422,11 @@ class MessageInbox:
         parts = self.target_parts(target)
         all_uses = self.messages.filter(pk__in=Subquery(parts.order_by().values("message_id")))
         rows = self.matching(all_uses, InboxSearch(text=text, quoted=True))
+        # A lazy page lets the GraphQL projection load the selected relations once.
         return InboxPage(
-            list(rows.order_by("_order_at" if oldest else "-_order_at", "pk")[InboxPage.window(page, size)]),
+            rows.with_title_text().order_by("_order_at" if oldest else "-_order_at", "pk")[
+                InboxPage.window(page, size)
+            ],
             rows.count(),
             all_uses.count(),
         )
