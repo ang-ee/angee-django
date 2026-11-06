@@ -62,10 +62,10 @@ DJANGO_READY = {
         "uv", "run", "--no-sync", "python", "-c",
         "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2).close()",
     ],
-    "interval": "5s",
+    "interval": "1s",
     "timeout": "3s",
-    "start_period": "30s",
-    "retries": 180,
+    "start_period": "1s",
+    "retries": 900,
 }
 # The slim node image has neither wget nor curl, so the container probes with node.
 FRONTEND_READY = {
@@ -75,10 +75,10 @@ FRONTEND_READY = {
         "require('net').connect(5173, '127.0.0.1')"
         ".on('connect', () => process.exit(0)).on('error', () => process.exit(1))",
     ],
-    "interval": "5s",
+    "interval": "1s",
     "timeout": "3s",
-    "start_period": "30s",
-    "retries": 180,
+    "start_period": "1s",
+    "retries": 900,
 }
 
 
@@ -1132,7 +1132,7 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
         assert jobs["py-sync"]["holds"] == ["django", "celery-worker", "celery-queues"]
         assert jobs["compose"]["holds"] == ["django", "celery-worker", "celery-queues"]
         assert jobs["py-sync"]["depends_on"] == ["deps"]
-        assert jobs["compose"]["command"] == ["uv", "run", "--no-sync", "python", "manage.py", "compose"]
+        assert jobs["compose"]["command"] == ["uv", "run", "--no-sync", "python", "manage.py", "compose", "--if-stale"]
         assert jobs["compose"]["depends_on"] == ["py-sync"]
         assert jobs["provision"]["command"] == [
             "uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60",
@@ -1960,7 +1960,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
         sync_command = stack["jobs"]["py-sync"]["command"][-1]
         assert "exec uv sync --locked" in sync_command
         assert ("--no-editable" in sync_command) == (serve_mode == "production")
-        assert stack["jobs"]["compose"]["command"][-1] == "compose"
+        assert stack["jobs"]["compose"]["command"][-2:] == ["compose", "--if-stale"]
         if serve_mode == "production":
             assert "manage.py serve" in command
             assert "--workers 0" in command
@@ -2282,7 +2282,7 @@ def test_celery_queues_share_one_queue_worker_in_both_modes() -> None:
     for render in (_render_dev_stack, _render_dev_docker_stack, _render_local_stack):
         stack = render()
         assert {name for name in stack["services"] if name.startswith("celery-")} == {"celery-worker"}
-        assert stack["services"]["celery-worker"]["stop_grace_period"] == "30s"
+        assert stack["services"]["celery-worker"]["stop_grace_period"] == "10s"
 
     dev = _render_dev_stack(celery_queues="whatsapp")
     dev_service = dev["services"]["celery-queues"]

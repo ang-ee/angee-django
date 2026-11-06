@@ -56,5 +56,11 @@ class Command(BaseCommand):
         if sdl is None:
             raise CommandError(f"operator daemon unreachable after {options['retries']} attempts; SDL not refreshed")
         path = sdl_path()
-        atomic_write(path, (sdl if sdl.endswith("\n") else f"{sdl}\n").encode("utf-8"))
+        content = (sdl if sdl.endswith("\n") else f"{sdl}\n").encode("utf-8")
+        # An unchanged SDL is not rewritten: the frontend's codegen watches this
+        # file, and a rewrite regenerates the client and reloads every open tab.
+        if path.exists() and path.read_bytes() == content:
+            self.stdout.write(self.style.SUCCESS(f"operator schema unchanged -> {path}"))
+            return
+        atomic_write(path, content)
         self.stdout.write(self.style.SUCCESS(f"operator schema -> {path}"))
