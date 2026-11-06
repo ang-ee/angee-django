@@ -10,7 +10,7 @@ from django.db import connection
 from django.db.models.query import EmptyQuerySet
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from django_cte import with_cte
+from django_cte import CTE, with_cte
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -31,7 +31,7 @@ from angee.decisions.timeline import DecisionKind
 from angee.graphql import publishing
 from angee.graphql.publishing import change_published
 from angee.provenance.context import changeset
-from angee.timeline.reading import Timeline
+from angee.timeline.reading import Timeline, _union
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
@@ -144,6 +144,48 @@ def test_requester_cte_stays_on_the_record_without_a_private_scope_or_run_audit(
     else:
         pytest.fail("Unclosed timeline_requesters CTE")
     assert '"rebac_' not in selection[opening:end + 1]
+
+
+def test_source_union_namespaces_equal_cte_names_from_distinct_kinds(execution) -> None:
+    """Two addon branches may use the same local CTE name without sharing its rows."""
+    first, _ = execution
+    second = create_user("timeline-second-cte")
+    rows = type(first)._base_manager.using(first._state.db)
+    left = CTE(rows.filter(pk=first.pk).values("pk"), name="timeline_local")
+    right = CTE(rows.filter(pk=second.pk).values("pk"), name="timeline_local")
+    source = _union([
+        with_cte(left, select=left.queryset().using(first._state.db)),
+        with_cte(right, select=right.queryset().using(first._state.db)),
+    ], "pk")
+    assert len({cte.name for cte in source.query._with_ctes}) == 2
+    assert set(source.values_list("pk", flat=True)) == {first.pk, second.pk}
+
+
+def test_source_union_retargets_sibling_cte_after_name_collision(execution) -> None:
+    """A dependent CTE reads its own branch's renamed base, not the first kind's base."""
+    first, _ = execution
+    second = create_user("timeline-dependent-cte")
+    rows = type(first)._base_manager.using(first._state.db)
+    left = CTE(rows.filter(pk=first.pk).values("pk"), name="base")
+    right_base = CTE(rows.filter(pk=second.pk).values("pk"), name="base")
+    right_dep = CTE(right_base.queryset().values("pk"), name="dep")
+    source = _union([
+        with_cte(left, select=left.queryset().using(first._state.db)),
+        with_cte(right_base, right_dep, select=right_dep.queryset().using(first._state.db)),
+    ], "pk")
+    assert sorted(source.values_list("pk", flat=True)) == sorted([first.pk, second.pk])
+
+
+def test_source_union_namespaces_nested_requester_references(review) -> None:
+    """A second decision-like kind keeps its own requester CTE in nested predicates."""
+    _, reviewers, _, question = review
+    _, step = start_review(review)
+    record, actor = question.review_subject, reviewers[0]
+    rows, _ = DecisionKind().source(record, actor)
+    other, _ = DecisionKind().source(record, actor)
+    source = _union([rows, other], "pk")
+    assert len({cte.name for cte in source.query._with_ctes}) == 2
+    assert list(source.values_list("pk", flat=True)) == [step.decision_id, step.decision_id]
 
 
 def test_waiting_run_folds_readable_children_and_computes_attention(review) -> None:

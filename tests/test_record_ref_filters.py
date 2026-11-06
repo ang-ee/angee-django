@@ -66,7 +66,10 @@ def content_type_discoveries(monkeypatch):
 
     def filter_types(queryset, *args, **kwargs):
         source = kwargs.get("pk__in")
-        if queryset.model is ContentType and isinstance(source, models.QuerySet) and source.model is DecisionRecord:
+        if queryset.model is ContentType and (
+            isinstance(source, dict)
+            or (isinstance(source, models.QuerySet) and source.model is DecisionRecord)
+        ):
             discoveries.append(source)
         return original(queryset, *args, **kwargs)
 
@@ -151,7 +154,9 @@ def test_record_model_filter_composes_with_identity_and_decision_filter(referenc
     }, user=owner)) == {"decision_records": []}
 
 
-def test_model_and_id_filter_uses_one_bounded_target_proof(referenced_decisions, content_type_discoveries):
+def test_model_and_id_filter_uses_one_bounded_target_proof(
+    referenced_decisions, content_type_discoveries,
+):
     owner, outsider, records, decisions = referenced_decisions
     schema = addon_schema(decision_schema.schemas, "console")
     query = """query($model: String!, $id: String!) {
@@ -180,6 +185,54 @@ def test_model_and_id_filter_uses_one_bounded_target_proof(referenced_decisions,
             assert f'FROM "{records[1]._meta.db_table}"' not in sql
             assert sql.count("_angee_reference_key") == 1
             assert len(sql.encode()) < 100_000
+
+
+def test_identity_filter_uses_only_the_decoded_target_proof(referenced_decisions):
+    owner, _outsider, records, decisions = referenced_decisions
+    schema = addon_schema(decision_schema.schemas, "console")
+    query = "query($id: String!) { decision_records(where: {record_id: {_eq: $id}}) { id } }"
+    with CaptureQueriesContext(connection) as captured:
+        data = result_data(execute_schema(schema, query, {"id": records[0].sqid}, user=owner))
+    assert data == {"decision_records": [{"id": decisions[0].sqid}]}
+    list_sql = [item["sql"] for item in captured if item["sql"].startswith(
+        f'SELECT "{DecisionRecord._meta.db_table}".'
+    )]
+    assert len(list_sql) == 1
+    assert len(list_sql[0].encode()) < 32_000
+
+
+def test_identity_filter_cost_is_flat_across_other_types_and_link_history(composed_tables, tmp_path):
+    """One public ID does not import the actor's unrelated concern history."""
+    owner = create_user("reference-history-owner")
+    schema = addon_schema(decision_schema.schemas, "console")
+    query = "query($id: String!) { decision_records(where: {record_id: {_eq: $id}}) { id } }"
+    with actor_context(owner):
+        vault = Vault.objects.create_for(owner, name="Selected vault")
+        page = Page.objects.create_in(vault, title="Other type")
+    selected = seed_decision(actor=owner, assignees=(owner,), reference=vault, requester=None)
+    selected_link = DecisionRecord.system_queryset().get(decision=selected)
+
+    def read() -> tuple[dict, int, int, int]:
+        with CaptureQueriesContext(connection) as captured:
+            payload = result_data(execute_schema(schema, query, {"id": vault.sqid}, user=owner))
+        sizes = [len(item["sql"].encode()) for item in captured]
+        return payload, len(sizes), sum(sizes), max(sizes)
+
+    read()  # Warm schema and content-type caches before both measurements.
+    one = read()
+    seed_decision(actor=owner, assignees=(owner,), reference=page, requester=None)
+    with actor_context(owner):
+        other_vaults = [Vault.objects.create_for(owner, name=f"Other vault {index}") for index in range(60)]
+    for other in other_vaults:
+        seed_decision(actor=owner, assignees=(owner,), reference=other, requester=None)
+    read()
+    many = read()
+    expected = {"decision_records": [{"id": selected_link.sqid}]}
+    assert one[0] == many[0] == expected
+    (tmp_path / "history-cost.json").write_text(json.dumps({"one": one[1:], "many": many[1:]}))
+    assert many[1] == one[1], (one, many)
+    assert abs(many[2] - one[2]) < 256, (one, many)
+    assert abs(many[3] - one[3]) < 256, (one, many)
 
 
 def test_display_list_statement_does_not_inline_target_policies(referenced_decisions):
@@ -506,6 +559,17 @@ def test_reference_projection_keeps_authored_actor_until_redeclared(composed_tab
         ]
     }
     assert json.dumps(payload, separators=(",", ":")) == json.dumps(expected, separators=(",", ":"))
+
+
+def test_prepared_reference_filter_rechecks_target_read_after_revocation(composed_tables):
+    owner, assignee = create_user("reference-revocation-owner"), create_user("reference-revocation-assignee")
+    record = vault_for(owner)
+    record.with_actor(owner).grant_record_access("viewer", assignee)
+    decision = seed_decision(actor=owner, assignees=(assignee,), reference=record, requester=None)
+    prepared = with_record_reference_access(DecisionRecord.objects.with_actor(assignee))
+    assert list(prepared.filter(decision=decision).values_list("_angee_record_readable", flat=True)) == [True]
+    record.with_actor(owner).revoke_record_access("viewer", assignee)
+    assert list(prepared.filter(decision=decision).values_list("_angee_record_readable", flat=True)) == [False]
 
 
 def test_selected_reference_readability_groups_by_boolean_not_target_identity(referenced_decisions):

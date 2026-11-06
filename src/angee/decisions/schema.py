@@ -8,6 +8,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models import Prefetch, prefetch_related_objects
 from rebac.graphql.strawberry_django import optimize
@@ -38,6 +39,7 @@ from angee.iam.schema import UserType
 
 Decision = apps.get_model("decisions", "Decision")
 DecisionRecord = apps.get_model("decisions", "DecisionRecord")
+_RECORDS_PREFETCH = Prefetch("records", queryset=DecisionRecord._base_manager.order_by("pk"))
 
 
 def _concern_links(info: strawberry.Info) -> Prefetch:
@@ -47,6 +49,19 @@ def _concern_links(info: strawberry.Info) -> Prefetch:
         DecisionRecord.objects.with_actor(actor).with_action("read"), select=False,
     ).filter(_angee_record_readable=True).prefetch_related("record")
     return Prefetch("records", queryset=links, to_attr="_concern_links")
+
+
+def _admitted_records(root: models.Model) -> list[Any]:
+    """Project concern links already bounded by their admitted decision."""
+    cached = getattr(root, "_prefetched_objects_cache", {}).get("records")
+    if cached is None:
+        # A direct to-one fallback has no page optimizer. Django fills the
+        # same declared cache in one read.
+        prefetch_related_objects([root], _RECORDS_PREFETCH)
+        cached = getattr(root, "_prefetched_objects_cache", {}).get("records")
+    if isinstance(cached, models.QuerySet) and cached._result_cache is not None:
+        return cached._result_cache
+    raise ImproperlyConfigured("DecisionType.records could not populate its declared prefetch.")
 
 
 @strawberry_django.type(DecisionRecord)
@@ -71,7 +86,11 @@ class DecisionType(ProtectedNode):
     assignees: list[UserType] = actor_scoped_to_many("assignees")
     context: JSON
     proposal: JSON
-    records: list[DecisionRecordType] = actor_scoped_to_many("records")
+    records: list[DecisionRecordType] = strawberry_django.field(
+        resolver=_admitted_records,
+        field_name="records",
+        prefetch_related=[_RECORDS_PREFETCH],
+    )
     verdict: JSON | None
     verdict_values: JSON | None
     verdict_label: str = strawberry_django.field(only=["verdict", "proposal"])
@@ -107,7 +126,8 @@ _DECISIONS = hasura_model_resource(
 _RECORDS = hasura_model_resource(
     DecisionRecordType, model=DecisionRecord, name="decision_records", filterable=["id", "decision"],
     sortable=["id"], aggregatable=["id"], insert=False, update=False, delete=False,
-    record_ref_filters=("record_model", "record_id"), record_ref_requires_read=True,
+    record_ref_filters=("record_model", "record_id"),
+    record_ref_requires_read=True,
 )
 
 

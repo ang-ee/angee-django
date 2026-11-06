@@ -1,6 +1,6 @@
 // @rebac_package: decisions
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 9
+// @rebac_schema_revision: 10
 
 definition decisions/decision {
     // A readable concerned record may display whether an open decision exists;
@@ -23,6 +23,8 @@ definition decisions/decision {
 }
 
 definition decisions/record {
+    // A readable decision implies its retained concern-link membership.
+    // Target identity filters and displayed target fields require target read.
     relation decision: decisions/decision // rebac:field=decision
     relation admin: angee/role // rebac:const=admin
     permission create = admin->member

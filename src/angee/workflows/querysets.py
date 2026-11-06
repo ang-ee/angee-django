@@ -101,6 +101,28 @@ def _prepare_retry_batch(queryset: QuerySet[Any], rows: list[Any]) -> None:
         apps.get_model("workflows", "WorkflowRun")._prepare_retry_page(tuple(rows), actor)
 
 
+def run_record_sources(
+    rows: QuerySet[Any], records: Any, *, operations: tuple[str, ...] | None = None,
+) -> tuple[Q, QuerySet[Any]]:
+    """Select subject and retained evidence identities without deciding run read access.
+
+    Callers choose the outer run queryset: standalone run reads use their actor
+    scope, while a timeline of an admitted record projects its linked runs.
+    """
+    if not isinstance(records, (list, tuple)):
+        records = (records,)
+    subject_filter = Q(pk__in=[])
+    targets = Q(pk__in=[])
+    evidence_model = apps.get_model("workflows", "StepRecord")
+    for record in records:
+        targets |= evidence_model.record_filter(record)
+        subject_filter |= rows.model.record_filter(record)
+    links = evidence_model._base_manager.using(rows.db).filter(targets)
+    if operations is not None:
+        links = links.filter(operation__in=operations)
+    return subject_filter, links
+
+
 class WorkflowRunQuerySet[T: WorkflowRun](ProtectedQuerySet[T]):
     """Own run locks and the delivery obligation every lock holder acquires."""
 
@@ -130,17 +152,7 @@ class WorkflowRunQuerySet[T: WorkflowRun](ProtectedQuerySet[T]):
 
         Evidence links select run identities; this queryset admits the rows.
         """
-        if not isinstance(records, (list, tuple)):
-            records = (records,)
-        subject_filter = Q(pk__in=[])
-        targets = Q(pk__in=[])
-        evidence_model = apps.get_model("workflows", "StepRecord")
-        for record in records:
-            targets |= evidence_model.record_filter(record)
-            subject_filter |= self.model.record_filter(record)
-        links = evidence_model._base_manager.using(self.db).filter(targets)
-        if operations is not None:
-            links = links.filter(operation__in=operations)
+        subject_filter, links = run_record_sources(self, records, operations=operations)
         link_runs = links.values("run_id")
         if not ancestors and limit is None:
             # Both membership arms use this queryset's final read scope.

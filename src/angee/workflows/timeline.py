@@ -14,6 +14,7 @@ from rebac import GenericTarget, generic_target
 from angee.decisions.querysets import DecisionQuerySet
 from angee.iam.graphql.relations import with_record_reference_access
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
+from angee.workflows.querysets import run_record_sources
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 
 KIND = "workflows.run"
@@ -82,15 +83,27 @@ class RunKind(TimelineKind):
         return True
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor)
-        rows = runs.about(record, ancestors=False)
+        # First bound run identities by the admitted record, then prove the
+        # actor's run read only for that small candidate set.
+        run_model = apps.get_model("workflows", "WorkflowRun")
+        runs = run_model._base_manager.db_manager(record._state.db, hints={"instance": record}).all()
+        subject_filter, links = run_record_sources(runs, record)
+        rows: models.QuerySet = runs.filter(subject_filter | models.Q(pk__in=links.values("run_id"))).distinct()
         if isinstance(record, rows.model):
             rows = (rows | runs.filter(parent_step__run=record).distinct()).exclude(pk=record.pk)
-        rows = rows.scoped()
+        candidate_ids = tuple(rows.order_by().values_list("pk", flat=True))
+        rows = (
+            run_model.objects.db_manager(record._state.db).with_actor(actor).with_action("read").filter(
+                pk__in=candidate_ids,
+            ).scoped()
+            if candidate_ids else runs.none()
+        )
         waiting = apps.get_model("workflows", "StepRun")._base_manager.filter(
             status=StepRunStatus.WAITING,
         ).defer("input", "output", "state", "notes").order_by("rank", "map_index")
-        return rows.select_related("version__workflow", "run_as").prefetch_related(
+        return rows.defer("input", "output", "error", "request_key").select_related(
+            "version__workflow", "run_as",
+        ).prefetch_related(
             models.Prefetch("step_runs", queryset=waiting, to_attr="timeline_waits"),
         )
 
@@ -102,8 +115,10 @@ class RunKind(TimelineKind):
         run_ids = tuple(rows.filter(status=RunStatus.WAITING).order_by().values_list("pk", flat=True))
         if not run_ids:
             return models.Value(False, output_field=models.BooleanField())
-        steps = apps.get_model("workflows", "StepRun").objects.using(rows.db).with_actor(actor)
-        pairs = tuple(steps.scoped_for_aggregate().filter(
+        # The actor-admitted run owns its waiting step; the decision still needs
+        # its own actor-bound read and act scope.
+        steps = apps.get_model("workflows", "StepRun")._base_manager.using(rows.db)
+        pairs = tuple(steps.filter(
             run_id__in=run_ids, status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
             decision_id__isnull=False,
         ).order_by().values_list("run_id", "decision_id"))

@@ -1905,6 +1905,8 @@ def hasura_model_resource(
         """Build only expressions referenced by the native, resolved predicate."""
         selected = predicate.referenced_base_fields
         target: tuple[type[models.Model], Any] | None = None
+        candidate_filter: models.Q | None = None
+        candidate_keys: dict[str, Any] | None = None
         if record_ref_requires_read and record_ref_filters is not None:
             model_name, id_name = record_ref_filters
             clauses = _positive_conjuncts(predicate)
@@ -1914,16 +1916,37 @@ def hasura_model_resource(
                 try:
                     target_model = model._meta.apps.get_model(models_equal[0])
                 except (LookupError, TypeError, ValueError):
-                    pass
+                    candidate_filter = models.Q(pk__in=())
                 else:
                     target = (target_model, ids_equal[0].key_for_model(target_model))
+            elif len(ids_equal) == 1 and isinstance(ids_equal[0], RecordPublicIDOperand):
+                # Keep ambiguous public IDs correct: discover only readable links
+                # matching this operand, then prove the decoded key per type.
+                reference = cast(type[RecordRefMixin], model).record_ref_field()
+                candidate_filter = models.Q(**{reference.fk_field: ids_equal[0]})
+                candidate_keys = ids_equal[0].keys
+            elif len(models_equal) == 1:
+                try:
+                    candidate_model = model._meta.apps.get_model(models_equal[0])
+                except (LookupError, TypeError, ValueError):
+                    candidate_filter = models.Q(pk__in=())
+                else:
+                    reference = cast(type[RecordRefMixin], model).record_ref_field()
+                    candidate_filter = models.Q(**{
+                        f"{reference.ct_field}__app_label": candidate_model._meta.app_label,
+                        f"{reference.ct_field}__model": candidate_model._meta.model_name,
+                    })
         if record_ref_requires_read and selected.intersection(record_ref_filters or ()):
             transform = resource_extensions(model).prepare_queryset
             if transform is None:
                 raise ImproperlyConfigured("A record-reference read guard requires a declared resource contributor.")
-            queryset = transform(queryset, node, True, target)
+            queryset = transform(
+                queryset, node, True, target,
+                candidate_filter=candidate_filter, candidate_keys=candidate_keys,
+            )
             if target is not None:
-                # The positive pair already implies this guard, so narrowing preserves filter results.
+                # A positive target identity already implies this guard;
+                # narrowing preserves the resolved filter results.
                 queryset = queryset.filter(_angee_record_readable=True)
         aliases: dict[str, BaseExpression] = {}
         for name, expression in expressions.items():

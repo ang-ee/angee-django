@@ -53,9 +53,12 @@ def _validate_fields(model, fields, owner, reason):
     assert_no_gated_read_fields(model, fields, owner, reason, definition_for=declared_rebac_definition)
 
 
-def _prepare_queryset(rows, node, required, target=None):
+def _prepare_queryset(rows, node, required, target=None, candidate_filter=None, candidate_keys=None):
     if required:
-        return with_record_reference_access(rows, select=False, target=target)
+        return with_record_reference_access(
+            rows, select=False, target=target,
+            candidate_filter=candidate_filter, candidate_keys=candidate_keys,
+        )
     return rows
 
 

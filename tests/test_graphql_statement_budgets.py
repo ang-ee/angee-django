@@ -54,6 +54,8 @@ from angee.storage import schema as storage_schema
 from angee.tags import schema as tags_schema
 from angee.tags.testing.models import Tag, TagAssignment
 from angee.timeline import schema as timeline_schema
+from angee.workflows.testing.drivers import load_workflow
+from angee.workflows.testing.models import WorkflowRun
 from tests import test_messaging as messaging_models
 from tests.conftest import (
     Backend,
@@ -67,6 +69,7 @@ from tests.conftest import (
     SchemaAddon,
     addon_schema,
     authored_graphql_document,
+    create_platform_admin,
     create_user,
     current_stream,
     make_integration,
@@ -77,6 +80,7 @@ from tests.messaging_campaign import comment_record as comment_record  # noqa: F
 from tests.messaging_campaign import make_user
 from tests.test_messaging_graphql import _storage_drive
 from tests.test_timeline import KINDS
+from tests.workflow_steps import document as workflow_document
 
 pytestmark = [pytest.mark.postgresql, pytest.mark.django_db(transaction=True)]
 
@@ -244,13 +248,13 @@ def record_decisions_reads(composed_tables: None, capture_graphql_document):
 
 def test_record_decisions_document_budget(record_decisions_reads) -> None:
     empty, open_one, answered = record_decisions_reads
-    empty.assert_bytes(total=43_000, largest=41_000, cause="bounded target proof in the empty record scope")
+    empty.assert_bytes(total=33_000, largest=31_000, cause="bounded target read protects concern identity")
     empty.assert_statements(4)
-    open_one.assert_bytes(total=47_000, largest=41_000, cause="bounded target proof")
+    open_one.assert_bytes(total=37_000, largest=31_000, cause="bounded target read protects concern identity")
     open_one.assert_statements(5)
     open_one.assert_no_audit_writes()
     for count, read in answered.items():
-        read.assert_bytes(total=55_000, largest=41_000, cause="candidate scope and held_many field gates")
+        read.assert_bytes(total=44_000, largest=31_000, cause="target read and held_many field gates")
         assert read.statement_count == 7, (count, read.statement_count)
         read.assert_no_audit_writes()
     empty.assert_no_audit_writes()
@@ -619,6 +623,44 @@ def test_timeline_rail_document_budget(timeline_rail_reads) -> None:
 def test_timeline_rail_document_statement_count(timeline_rail_reads) -> None:
     one, five = timeline_rail_reads
     five.assert_flat_from(one)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_timeline_run_document_requires_run_read_for_linked_status(
+    composed_tables: None, workflow_step_classes: None, capture_graphql_document,
+) -> None:
+    """The authored rail withholds linked runs until their own read gate admits them."""
+
+    del composed_tables, workflow_step_classes
+    owner = create_platform_admin("document-budget-run-owner")
+    viewer = create_user("document-budget-run-viewer")
+    record = vault_for(owner)
+    write_relationships([RelationshipTuple(
+        resource=to_object_ref(record), relation="viewer", subject=to_subject_ref(viewer),
+    )])
+    workflow = load_workflow(
+        workflow_document("entry"), key="rail-run-budget", actor=owner, subject_model=record._meta.label,
+    )
+    run = WorkflowRun.objects.start(workflow, actor=owner, subject=record)
+    assert not WorkflowRun.objects.with_actor(viewer).scoped().filter(pk=run.pk).exists()
+    with override_settings(ANGEE_TIMELINE_KINDS=["angee.workflows.timeline.timeline_kinds"]):
+        schema = addon_schema(timeline_schema.schemas, "console")
+        variables = {"model": record._meta.label, "id": public_id_of(record)}
+        capture_graphql_document(schema, TIMELINE, variables, actor=viewer)
+        hidden = capture_graphql_document(schema, TIMELINE, variables, actor=viewer)
+        write_relationships([RelationshipTuple(
+            resource=to_object_ref(run), relation="reader", subject=to_subject_ref(viewer),
+        )])
+        shown = capture_graphql_document(schema, TIMELINE, variables, actor=viewer)
+    assert hidden.data["timeline"]["entries"] == []
+    assert [entry["target_id"] for entry in shown.data["timeline"]["entries"]] == [public_id_of(run)]
+    hidden.assert_no_audit_writes()
+    hidden.assert_statements(5)
+    hidden.assert_bytes(total=130_000, largest=50_000, cause="record-bounded run read denies the outsider")
+    shown.assert_no_audit_writes()
+    # Hydrating the run through the redacting scope costs one field-scope read.
+    shown.assert_statements(9)
+    shown.assert_bytes(total=195_000, largest=50_000, cause="record-bounded redacting run read admits the shared run")
 
 
 def test_timeline_rail_sender_statement_budget(comment_record, capture_graphql_document) -> None:
