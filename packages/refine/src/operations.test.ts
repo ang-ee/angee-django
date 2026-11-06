@@ -391,6 +391,23 @@ describe("Hasura custom operations", () => {
       ],
     });
   });
+  test("a facet option takes the bucket's own label over its key", () => {
+    const facet = extractFacet(
+      {
+        notes_groups: [
+          { key: { owner_id: "usr_1" }, label: "Ada Lovelace", aggregate: { count: 3 } },
+          { key: { owner_id: "usr_2" }, label: null, aggregate: { count: 1 } },
+        ],
+        totalCount: 2,
+      },
+      "notes_groups",
+      { id: "owner", dimensions: [groupDimension("OWNER", "owner_id")] },
+    );
+    expect(facet.options.map(({ value, label }) => [value, label])).toEqual([
+      ["usr_1", "Ada Lovelace"],
+      ["usr_2", "usr_2"],
+    ]);
+  });
   test("retains blank and null facet buckets without admitting missing keys", () => {
     const facet = extractFacet({
       choices_groups: [

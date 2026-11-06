@@ -87,6 +87,10 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
   const [suggestionsOpen, setSuggestionsOpen] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const text = inputValue.trim();
+  // Server facets load while a filter control is in use: the panel, or typing in the box.
+  React.useEffect(() => {
+    activateFacets(panelOpen || Boolean(text));
+  }, [activateFacets, panelOpen, text]);
   const groups = suggestionsFor(search, text, remote, t);
   const suggestions = groups.flatMap((group) => group.items);
   const collapsed = box === "collapsed";
@@ -111,7 +115,6 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
   </Combobox.Chips>;
   return <PopoverRoot open={panelOpen} onOpenChange={(open) => {
     setPanelOpen(open);
-    activateFacets(open);
     setSuggestionsOpen(false);
     if (!open) setInputValue("");
   }}>

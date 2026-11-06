@@ -104,6 +104,11 @@ test("text defaults and shortcuts deduplicate and require iContains; null remove
   expect(searchTextFields(query, "owner.name", ["title", "owner.name", "amount"])).toEqual(["owner.name", "title"]);
   expect(searchTextFields(query, null, ["owner.name", "amount"])).toEqual(["owner.name"]);
   expect(searchTextFields(query, null)).toEqual([]);
+  // Every declared search field is offered; the page's text field comes first.
+  const searchable = ResourceQuery.from(testDataResource("notes.Note", { query: query.contract, recordSearchFields: ["title", "owner.name", "amount"] }));
+  expect(searchTextFields(searchable)).toEqual(["title", "owner.name"]);
+  expect(searchTextFields(searchable, "owner.name")).toEqual(["owner.name", "title"]);
+  expect(searchTextFields(searchable, null, ["title"])).toEqual(["title"]);
   expect(catalog({ textFilterField: "owner.name" }).text[0]?.field).toBe("owner.name");
   const search = { shortcuts: [{ kind: "text", field: "title" }, { kind: "text", field: "owner.name" }] } as const;
   expect(catalog({ textFilterField: "owner.name", search }).text.map((item) => item.field)).toEqual(["owner.name", "title"]);
