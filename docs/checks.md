@@ -171,7 +171,11 @@ read.assert_ceiling(statements=89, sql_kb=539)
 A ceiling is the measured cost: statements exact, SQL text rounded up to the next KB
 of 1,024 bytes. A change that lowers a cost lowers its ceiling in the same change; a
 rise is a regression to fix, never a reason to raise the ceiling. Assert the rows a
-read returns beside its ceiling, so a read that loses rows cannot pass.
+read returns beside its ceiling, so a read that loses rows cannot pass. The
+[console document ceilings](../tests/native_graphql_document_budgets.py) pin the
+console app's inbox, transcript, person, projects and current-user reads for a
+platform admin and a member, each after one warm execution, in the
+[composed query-budget host](../tests/test_composed_query_budgets.py) on SQLite.
 
 ### Owner Search
 
