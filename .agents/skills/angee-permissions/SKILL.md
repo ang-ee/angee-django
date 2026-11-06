@@ -45,7 +45,7 @@ addon fragments and forces their sync into the disposable test database.
 - Row-dependent sharing: `rebac:field={"path":…,"filters":{…}}` (notes extends `storage/file`), `rebac:const={"target_id":"shared","filters":{…}}` + `shared_reader = authenticated` (money/rate, dashboards).
 - Live user facts: `rebac:attribute={"field":…,"value":…}` on `iam/kind`; compose `iam/kind:person#active_member`, never a copy.
 - Edge seams other addons already own: `tags/tag_assignment`, `storage/file_attachment`, `knowledge/record_binding`, `messaging/thread_attachment`, `projects/task`, `decisions/decision` — each declares `target_*`/`subject_*` arms for you to union into (notes extends file).
-- Native API: `.with_actor(user)`, `.as_user(user)`, `.with_action(perm)`, `.for_write()`, `.readable(field)`, `.sudo(reason=…)`, `.system_context(reason=…)` (rebac `managers.py:719-858`), `has_access` (rebac `mixins.py:1079`), `check_new` (rebac `preflight.py:147`); Angee adds `AngeeModel.require_access` (`base.py:312`) and `rebac_grantable` + `angee.iam.graphql.sharing` for shares.
+- Native API: `.with_actor(user)`, `.with_action(perm)`, `.for_write()`, `.readable(field)`, `.sudo(reason=…)`, `.system_context(reason=…)` (rebac `managers.py:719-858`), `has_access` (rebac `mixins.py:1079`), `check_new` (rebac `preflight.py:147`); Angee adds `AngeeModel.require_access` (`base.py:312`) and `rebac_grantable` + `angee.iam.graphql.sharing` for shares.
 
 ## Steps
 
@@ -154,9 +154,9 @@ addon fragments and forces their sync into the disposable test database.
    ```python
    def test_reader_grant_redacts_owner_only_fields(self) -> None:
        self.welcome.with_actor(self.alice).grant_record_access("reader", self.bob)
-       bob_view = Note.objects.as_user(self.bob).get(sqid=self.welcome.sqid)
+       bob_view = Note.objects.with_actor(self.bob).get(sqid=self.welcome.sqid)
        self.assertIsNone(bob_view.is_starred)            # read__is_starred = owner
-       self.assertEqual(list(Note.objects.as_user(self.carol).filter(pk=self.welcome.pk)), [])
+       self.assertEqual(list(Note.objects.with_actor(self.carol).filter(pk=self.welcome.pk)), [])
    ```
    Composed host (`examples/src/example/notes/tests/test_rebac.py:23-28`): `TransactionTestCase`, `call_command("rebac", "sync")` in `setUp`, seed through `resources load`. Source-addon tests (`tests/test_scopedemo.py:34-39`): request `composed_tables` or `composed_permissions` (merges fragments, syncs with `--force-overwrite` into the disposable test database) and `backend().check_access(subject=…, action=…, resource=to_object_ref(row))`. Field-backed and const-backed reach leaves no tuples: assert `active_relationship_model().objects.filter(resource_type=…)` is empty when that is the design.
    **Owner rule:** tests exercise the composed runtime model and the schema the fixtures sync (`docs/checks.md#source-addon-test-models`); a test-local schema is justified only where no addon owns the definition, as `tests/scopedemo/permissions.zed` does.

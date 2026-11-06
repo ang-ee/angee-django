@@ -91,7 +91,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
            assert not TagAssignment.objects.for_record(party_edge.party).exists()
    ```
 
-   Include a non-admin reader and a platform admin (`create_platform_admin`, or `Note.objects.as_user(admin)` reaching every row through the const-backed role, `test_rebac.py:112-140`). **Owner rule:** `permissions.zed` owns the rule; the test proves outcomes per actor, never the zed text ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
+   Include a non-admin reader and a platform admin (`create_platform_admin`, or `Note.objects.with_actor(admin)` reaching every row through the const-backed role, `test_rebac.py:112-140`). **Owner rule:** `permissions.zed` owns the rule; the test proves outcomes per actor, never the zed text ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
 
 5. **Test verbs and querysets on their owner.** Call the manager verb, not a raw `create`, and assert idempotence, fail-fast denial and the constraint.
 
