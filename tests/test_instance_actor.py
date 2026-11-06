@@ -38,6 +38,17 @@ def test_plain_django_instance_uses_only_ambient_actor(ambient):
             assert instance_actor(instance) == ambient
 
 
+@pytest.mark.parametrize("pinned", [None, SubjectRef.of("auth/user", "17")])
+@pytest.mark.parametrize("ambient", [None, SubjectRef.of("auth/user", "29")])
+def test_queryset_actor_keeps_its_pin_or_ambient_requester_under_sudo(pinned, ambient):
+    rows = OwnedRow.objects.all()
+    rows = rows.with_actor(pinned) if pinned is not None else rows.sudo(reason="test.instance_actor.queryset")
+    with actor_context(ambient) if ambient is not None else nullcontext():
+        assert instance_actor(rows) == (pinned if pinned is not None else ambient)
+        with system_context(reason="test.instance_actor.ambient_sudo"):
+            assert instance_actor(rows) == (pinned if pinned is not None else ambient)
+
+
 @pytest.mark.usefixtures("ownership_tables")
 def test_pinned_actor_drives_both_audit_and_owner_defaults_under_elevation():
     pinned, ambient = create_user("pinned"), create_user("ambient")

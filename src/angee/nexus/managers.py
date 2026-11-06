@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any, Self
 from django.apps import apps
 from django.db import models, transaction
 from django.utils import timezone
-from rebac import current_actor
 
 from angee.iam.managers import ProtectedManager
+from angee.iam.permissions import instance_actor
 from angee.iam.querysets import ProtectedQuerySet
 from angee.messaging.managers import MessageQuerySet
 
@@ -94,7 +94,7 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
         return (
             apps.get_model("parties", "Party")
             .objects.all()
-            .with_actor(self.effective_actor()[0])
+            .with_actor(instance_actor(self))
             .filter(
                 models.Q(pk__in=models.Subquery(ties.values("party_a_id")))
                 | models.Q(pk__in=models.Subquery(ties.values("party_b_id")))
@@ -436,7 +436,7 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
             statement_model = party_model.statements.model
             statements = list(
                 party_model.objects.handle_statements()
-                .for_reader(current_actor())
+                .for_reader(instance_actor(self))
                 .members()
                 .filter(
                     subject_id__in=party_ids,
