@@ -21,7 +21,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/schema.py` | Strawberry types, resources, authored roots, the `schemas` mapping | `src/angee/tags/schema.py:44-72,205-261`, `src/angee/money/schema.py:62-109`, `examples/src/example/notes/schema.py:22-95` |
-| `<addon>/pyproject.toml` `[tool.angee.graphql] schema` | Only a non-default schema module reference; default is `schema.py` | `src/angee/graphql/schema.py:668` (`_raw_schemas`) |
+| `<addon>/pyproject.toml` `[tool.angee.graphql] schema` | Only a non-default schema module reference; default is `schema.py` | `src/angee/graphql/schema.py:636` (`_raw_schemas`) |
 | `src/angee/graphql/schema.py` | Buckets `SCHEMA_PART_KEYS:75`, merge/build per name and finalized metadata `GraphQLSchemas:306`, error sanitizer `AngeeSchema:90` | `:237` `SchemaParts`, `:650` `schema_parts_for` |
 | `src/angee/graphql/data/hasura.py` | `hasura_model_resource:1374`, `AngeeHasuraWriteBackend:201`, `HasuraLines:107`, `public_pk_decoder:644`, `declared_hasura_resource_fields:1005` | `:1796` writable-relation decode guard |
 | `src/angee/graphql/data/pydantic_resource.py` | `hasura_pydantic_resource:50` (computed, read-only rows) | `src/angee/iam/schema.py:692-709` |
