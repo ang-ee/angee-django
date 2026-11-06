@@ -364,10 +364,11 @@ def test_field_collection_groups_rows_by_model_and_kind(monkeypatch: Any) -> Non
             schema,
             f"""{{ platform_fields_grouped_rows(
               group_by: {{field: MODEL}}, pages: [{{key: "{line}", limit: 200}}]
-            ) {{ id }} }}""",
+            ) {{ key rows {{ id }} }} }}""",
         )
     )
-    assert {row["id"] for row in grouped_rows["platform_fields_grouped_rows"]} == {
+    assert grouped_rows["platform_fields_grouped_rows"][0]["key"] == line
+    assert {row["id"] for row in grouped_rows["platform_fields_grouped_rows"][0]["rows"]} == {
         row.id for row in rows if row.model == line
     }
 

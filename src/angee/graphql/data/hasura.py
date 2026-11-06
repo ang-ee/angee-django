@@ -33,6 +33,7 @@ from strawberry_django.fields.types import field_type_map
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django.optimizer import optimizer
 from strawberry_django.resolvers import django_resolver
+from strawberry_django.utils.gql_compat import get_sub_field_selections
 from strawberry_django_aggregates import (
     default_operators_for,
     group_by_alias,
@@ -104,6 +105,7 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.node import display_name_paths, node_display_name
 from angee.graphql.writes import write_queryset
+from graphql import GraphQLObjectType, get_named_type
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
@@ -1364,6 +1366,19 @@ def _positive_conjuncts(predicate: models.Q) -> list[tuple[str, Any]]:
     return clauses
 
 
+def grouped_rows_page_result_type(name: str, node: type) -> type:
+    """Describe a requested grouped page with its unchanged wire key and bounded nodes."""
+
+    return strawberry.type(
+        type(
+            f"{name}_grouped_rows_page_result",
+            (),
+            {"__annotations__": {"key": JSON | None, "rows": _types.GenericAlias(list, (node,))}},
+        ),
+        name=f"{name}_grouped_rows_page_result",
+    )
+
+
 def _attach_grouped_rows(
     resource: HasuraResource,
     *,
@@ -1405,6 +1420,8 @@ def _attach_grouped_rows(
         name=f"{resource.name}_grouped_row_page",
     )
     resource.types.append(page_type)
+    result_type = grouped_rows_page_result_type(resource.name, node)
+    resource.types.append(result_type)
 
     def resolve_grouped_rows(
         self: Any,
@@ -1413,7 +1430,7 @@ def _attach_grouped_rows(
         pages: list[Any],
         where: Any = None,
         order_by: Any = None,
-    ) -> models.QuerySet[Any]:
+    ) -> list[Any]:
         del self
         path = next((name for name in groupable if group_by_enum_member(name) == group_by.field.name), None)
         if path is None:
@@ -1466,7 +1483,7 @@ def _attach_grouped_rows(
                 value_expression = Trunc(value_expression, time_bucket.value)
                 value_expression = Cast(value_expression, output_field=models.DateField())
         if not pages:
-            return read_queryset(info).none()
+            return []
         if len(pages) > 50:
             raise ValueError("A grouped row read accepts at most 50 visible groups.")
         converted: list[tuple[Any, int, int]] = []
@@ -1543,12 +1560,36 @@ def _attach_grouped_rows(
                 _angee_group_rank__lte=offset + limit,
             )
         queryset = queryset.filter(scope & windows) if windows else queryset.none()
-        active = optimizer.get()
-        return (
-            active.optimize(queryset, info)
-            if active is not None
-            else strawberry_django.optimizer.optimize(queryset, info)
-        )
+        raw_info = info._raw_info
+        result_graphql_type = get_named_type(raw_info.return_type)
+        assert isinstance(result_graphql_type, GraphQLObjectType)
+        row_nodes = [
+            node
+            for nodes in get_sub_field_selections(raw_info, result_graphql_type).values()
+            if nodes[0].name.value == "rows"
+            for node in nodes
+        ]
+        if row_nodes:
+            row_info = raw_info._replace(
+                field_name="rows",
+                field_nodes=row_nodes,
+                return_type=result_graphql_type.fields["rows"].type,
+                parent_type=result_graphql_type,
+                path=raw_info.path.add_key(0).add_key("rows", result_graphql_type.name),
+            )
+            active = optimizer.get()
+            queryset = (
+                active.optimize(queryset, row_info)
+                if active is not None
+                else strawberry_django.optimizer.optimize(queryset, row_info)
+            )
+        matching: list[list[Any]] = [[] for _ in pages]
+        for row in queryset:
+            for index, (key, _, _) in enumerate(converted):
+                if row._angee_group_key == key:
+                    matching[index].append(row)
+                    break
+        return [result_type(key=page.key, rows=rows) for page, rows in zip(pages, matching, strict=True)]
 
     resolve_grouped_rows.__annotations__ = {
         "self": Any,
@@ -1557,7 +1598,7 @@ def _attach_grouped_rows(
         "pages": _types.GenericAlias(list, (page_type,)),
         "where": resource.filter_type | None,
         "order_by": _types.GenericAlias(list, (resource.order_by_type,)) | None,
-        "return": _types.GenericAlias(list, (node,)),
+        "return": _types.GenericAlias(list, (result_type,)),
     }
     root = f"{resource.name}_grouped_rows"
     resolve_grouped_rows.__name__ = root

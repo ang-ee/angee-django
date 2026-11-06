@@ -257,6 +257,7 @@ class DataResourceRoots:
     group_name: Annotated[str | None, Field(serialization_alias="groups")] = None
     group_count_name: Annotated[str | None, Field(serialization_alias="groupsCount")] = None
     grouped_rows_name: Annotated[str | None, Field(serialization_alias="groupedRows")] = None
+    """Root returning ordered ``{key: JSON, rows: [Node!]!}`` page results."""
     create_name: Annotated[str | None, Field(serialization_alias="create")] = None
     update_name: Annotated[str | None, Field(serialization_alias="update")] = None
     save_name: Annotated[str | None, Field(serialization_alias="save")] = None

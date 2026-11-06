@@ -103,8 +103,12 @@ live in code docstrings.
   group under one proof) and the group headers and counts through the
   `<resource>_groups` root, which now returns each relation group's `label`;
   the per-group row and aggregate aliases are gone. Date-bucket, JSON-path and
-  computed-resource axes use the same root. Fifty groups cost 2 statements
-  instead of 200.
+  computed-resource axes use the same root. The grouped-rows root returns one
+  `{ key, rows }` result per requested page in request order, including empty
+  pages; `key` is the exact requested JSON value and `rows` contains only that
+  page's bounded records. Clients must select `key` and `rows` and use this
+  page membership directly, including for local-time date buckets. Fifty
+  groups cost 2 statements instead of 200.
 - List columns that show a record reference select `record_label` and
   `record_id` through the list document; no list cell resolves a label with a
   per-row read, and a hidden target renders no label.

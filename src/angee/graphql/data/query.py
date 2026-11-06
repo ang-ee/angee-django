@@ -82,7 +82,11 @@ _QUERY_OPERATORS = (
 
 @dataclass(frozen=True)
 class ResourceQueryProjection:
-    """Schema-bound owner of final query field, identity and axis projections."""
+    """Schema-bound owner of final query field, identity and axis projections.
+
+    Server axes name bucket keys and predicates; the grouped-rows result in the
+    final schema carries page membership, so callers need no row-side bucket.
+    """
 
     schema: GraphQLSchema
     types: DataResourceTypeNames

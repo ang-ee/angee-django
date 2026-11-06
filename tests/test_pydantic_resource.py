@@ -231,14 +231,16 @@ def test_pydantic_grouped_rows_use_group_keys_and_one_source_read_per_request() 
           catalogue_entries_grouped_rows(
             group_by: {field: CREATED, granularity: MONTH}, pages: $pages,
             order_by: [{id: desc}]
-          ) { id }
+          ) { key rows { id } }
         }""",
         variable_values={
             "pages": [{"key": key, "limit": 1, "offset": 1 if index else 0} for index, key in enumerate(keys)]
         },
     )
     assert rows.errors is None, rows.errors
-    assert [row["id"] for row in rows.data["catalogue_entries_grouped_rows"]] == ["atlas", "hammer"]
+    result = rows.data["catalogue_entries_grouped_rows"]
+    assert [page["key"] for page in result] == keys
+    assert [[row["id"] for row in page["rows"]] for page in result] == [["atlas"], ["hammer"]]
     assert len(calls) == 1
     assert all(limit is None and offset is None for _, _, limit, offset in calls)
 
@@ -247,10 +249,14 @@ def test_pydantic_grouped_rows_use_group_keys_and_one_source_read_per_request() 
           group_by: {field: SHELF}, pages: [
             {key: null, limit: 2}, {key: "", limit: 2}, {key: "A", limit: 2}
           ], where: {active: {_eq: true}}
-        ) { id } }"""
+        ) { key rows { id } } }"""
     )
     assert blanks.errors is None, blanks.errors
-    assert [row["id"] for row in blanks.data["catalogue_entries_grouped_rows"]] == ["atlas", "hammer"]
+    assert blanks.data["catalogue_entries_grouped_rows"] == [
+        {"key": None, "rows": [{"id": "atlas"}]},
+        {"key": "", "rows": []},
+        {"key": "A", "rows": [{"id": "hammer"}]},
+    ]
 
 
 def test_pydantic_resource_groups_filtered_rows_with_distinct_blank_and_null() -> None:

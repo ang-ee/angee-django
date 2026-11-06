@@ -15,6 +15,7 @@ import strawberry_django
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models
 from django.db.models.functions import Coalesce, NullIf
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
@@ -435,14 +436,18 @@ def test_grouped_page_window_sql_budget(relation_grouping_case: Any) -> None:
         pages = ", ".join(f'{{key: "{label.sqid}", limit: 4}}' for label in labels[:count])
         document = f'''query GroupedResourceList {{
           group_parents_grouped_rows(group_by: {{field: TARGET}}, pages: [{pages}],
-            where: {{kind: {{_eq: "window"}}}}, order_by: [{{id: asc}}]) {{ id kind target {{ id display_name }} }}
+            where: {{kind: {{_eq: "window"}}}}, order_by: [{{id: asc}}]) {{
+              key rows {{ id kind target {{ id display_name }} }}
+            }}
         }}'''
         read = measure_graphql_document(case.schema, document, {}, actor=case.alice)
         read.assert_no_audit_writes()
         assert read.statement_count == 2
         read.assert_bytes(total=30_000, largest=25_000)
         assert sum("ROW_NUMBER" in sql.upper() for sql in read.statements) == 1
-        assert len(read.data["group_parents_grouped_rows"]) == count * 4
+        result = read.data["group_parents_grouped_rows"]
+        assert [page["key"] for page in result] == [label.sqid for label in labels[:count]]
+        assert [len(page["rows"]) for page in result] == [4] * count
         groups = measure_graphql_document(
             case.schema,
             """query GroupedResourceGroups($limit: Int) {
@@ -529,20 +534,24 @@ def test_extracted_group_pages_match_native_keys_at_flat_cost(
             case.schema,
             f'''query AxisRows($pages: [group_parents_grouped_row_page!]!) {{
               group_parents_grouped_rows(group_by: {{{spec}}}, pages: $pages,
-                where: {{kind: {{_eq: "axis"}}}}, order_by: [{{id: asc}}]) {{ id kind }}
+                where: {{kind: {{_eq: "axis"}}}}, order_by: [{{id: asc}}]) {{
+                  key rows {{ id kind }}
+                }}
             }}''',
             {"pages": pages}, actor=case.alice,
         )
         rows.assert_no_audit_writes()
         assert rows.statement_count == 1
         assert sum("ROW_NUMBER" in sql.upper() for sql in rows.statements) == 1
-        assert len(rows.data["group_parents_grouped_rows"]) == count * 2
+        result = rows.data["group_parents_grouped_rows"]
+        assert [page["key"] for page in result] == keys
+        assert [len(page["rows"]) for page in result] == [2] * count
         expected = {
             row_id
             for key in keys
             for row_id in seeded[key if granularity is None else key[:7]][1:3]
         }
-        assert {row["id"] for row in rows.data["group_parents_grouped_rows"]} == expected
+        assert {row["id"] for page in result for row in page["rows"]} == expected
         if prior_rows is not None and prior_groups is not None:
             rows.assert_flat_from(prior_rows)
             groups.assert_flat_from(prior_groups)
@@ -603,12 +612,63 @@ def test_date_buckets_round_trip_group_keys(
         case.schema,
         f'''query DateRows($pages: [group_parents_grouped_row_page!]!) {{
           group_parents_grouped_rows(group_by: {{field: {axis}, granularity: {granularity}}},
-            pages: $pages, where: {{kind: {{_eq: "date-grain"}}}}, order_by: [{{id: asc}}]) {{ id }}
+            pages: $pages, where: {{kind: {{_eq: "date-grain"}}}}, order_by: [{{id: asc}}]) {{
+              key rows {{ id }}
+            }}
         }}''',
         {"pages": pages}, actor=case.alice,
     )
     assert rows.statement_count == 1
-    assert {row["id"] for row in rows.data["group_parents_grouped_rows"]} == {parent.sqid for parent in parents}
+    result = rows.data["group_parents_grouped_rows"]
+    assert [page["key"] for page in result] == [page["key"] for page in pages]
+    assert {row["id"] for page in result for row in page["rows"]} == {parent.sqid for parent in parents}
+
+
+@override_settings(TIME_ZONE="America/Chicago")
+def test_grouped_page_keys_preserve_local_month_membership_and_empty_pages(
+    relation_grouping_case: Any,
+) -> None:
+    """UTC November can belong to October, and every requested page keeps its wire key."""
+
+    case = relation_grouping_case
+    with system_context(reason="test.grouped_page.local_month.seed"):
+        october = GroupParent.objects.create(
+            kind="local-month", occurred_at=datetime(2026, 11, 1, 3, tzinfo=UTC),
+        )
+        november = GroupParent.objects.create(
+            kind="local-month", occurred_at=datetime(2026, 11, 1, 8, tzinfo=UTC),
+        )
+    write_relationships([
+        RelationshipTuple(to_object_ref(row), "reader", case.alice)
+        for row in (october, november)
+    ])
+    groups = _query(case, case.alice, '''query {
+      group_parents_groups(group_by: [{field: OCCURRED_AT, granularity: MONTH}],
+        where: {kind: {_eq: "local-month"}}) { key { occurred_at_month } }
+    }''')["group_parents_groups"]
+    keys = {
+        datetime.fromisoformat(group["key"]["occurred_at_month"]).month:
+        group["key"]["occurred_at_month"]
+        for group in groups
+    }
+    requested = [keys[11], "2026-12-01T00:00:00-06:00", keys[10]]
+    read = measure_graphql_document(
+        case.schema,
+        '''query LocalMonthRows($pages: [group_parents_grouped_row_page!]!) {
+          group_parents_grouped_rows(
+            group_by: {field: OCCURRED_AT, granularity: MONTH}, pages: $pages,
+            where: {kind: {_eq: "local-month"}}, order_by: [{id: asc}]
+          ) { key rows { id } }
+        }''',
+        {"pages": [{"key": key, "limit": 1} for key in requested]},
+        actor=case.alice,
+    )
+    assert read.statement_count == 1
+    assert read.data["group_parents_grouped_rows"] == [
+        {"key": keys[11], "rows": [{"id": november.sqid}]},
+        {"key": requested[1], "rows": []},
+        {"key": keys[10], "rows": [{"id": october.sqid}]},
+    ]
 
 
 def test_json_boolean_group_headers_use_scalar_text(relation_grouping_case: Any) -> None:
@@ -639,17 +699,20 @@ def test_grouped_row_pages_keep_offsets_and_redacted_null_bucket(relation_groupi
             group_by: {{field: TARGET}},
             pages: [{{key: "{case.alpha.sqid}", limit: 1, offset: 1}}, {{key: null, limit: 2}}],
             where: {{kind: {{_eq: "target"}}}}, order_by: [{{id: asc}}]
-          ) {{ id target {{ id }} }}
+          ) {{ key rows {{ id target {{ id }} }} }}
           groups: group_parents_groups(
             group_by: [{{field: TARGET}}], where: {{kind: {{_eq: "target"}}}}
           ) {{ key {{ target_id }} label aggregate {{ count }} }}
         }}''',
     )
-    assert [row["id"] for row in result["rows"]] == [
-        case.parents[index].sqid for index in (1, 2, 5)
-    ]
-    assert [row["target"] for row in result["rows"]] == [
-        {"id": case.alpha.sqid}, None, None,
+    assert result["rows"] == [
+        {"key": case.alpha.sqid, "rows": [
+            {"id": case.parents[1].sqid, "target": {"id": case.alpha.sqid}},
+        ]},
+        {"key": None, "rows": [
+            {"id": case.parents[2].sqid, "target": None},
+            {"id": case.parents[5].sqid, "target": None},
+        ]},
     ]
     groups = {group["key"]["target_id"]: group for group in result["groups"]}
     assert groups[case.alpha.sqid]["label"] == "Alpha"

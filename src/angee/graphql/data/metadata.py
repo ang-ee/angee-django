@@ -216,6 +216,8 @@ def finalize_data_resources(
                 f"{native_resource.name}_grouped_rows" if native_resource.groups_root else None,
                 query_fields,
             )
+            # The root's final SDL owns its {key, rows} result shape; metadata
+            # supplies the root and request-page input names needed to select it.
             create_name = exposed(mutation, native_resource.insert_one_root, mutation_fields)
             update_name = exposed(mutation, native_resource.update_by_pk_root, mutation_fields)
             delete_name = exposed(mutation, native_resource.delete_by_pk_root, mutation_fields)

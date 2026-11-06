@@ -33,7 +33,7 @@ from strawberry_django_hasura import (
 )
 
 from angee.graphql.data.contracts import DataAggregateMeasureMetadata
-from angee.graphql.data.hasura import hasura_query_axes
+from angee.graphql.data.hasura import grouped_rows_page_result_type, hasura_query_axes
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
@@ -80,6 +80,8 @@ def _attach_grouped_rows(
         name=f"{resource.name}_grouped_row_page",
     )
     resource.types.append(page_type)
+    result_type = grouped_rows_page_result_type(resource.name, node)
+    resource.types.append(result_type)
     builder = AggregateBuilder(
         model=resource.row_model,
         name_prefix=resource.name,
@@ -111,7 +113,6 @@ def _attach_grouped_rows(
         assert isinstance(key_type, GraphQLObjectType)
         scalar = get_named_type(key_type.fields[alias].type)
         assert isinstance(scalar, (GraphQLScalarType, GraphQLEnumType))
-        result: list[Any] = []
         keys: list[Any] = []
         for page in pages:
             if page.limit < 0 or page.offset < 0:
@@ -131,9 +132,10 @@ def _attach_grouped_rows(
                 if key == page_key:
                     matching[index].append(row)
                     break
-        for page, matched in zip(pages, matching, strict=True):
-            result.extend(matched[page.offset : page.offset + page.limit])
-        return result
+        return [
+            result_type(key=page.key, rows=matched[page.offset : page.offset + page.limit])
+            for page, matched in zip(pages, matching, strict=True)
+        ]
 
     resolve_grouped_rows.__annotations__ = {
         "self": Any,
@@ -142,7 +144,7 @@ def _attach_grouped_rows(
         "pages": _types.GenericAlias(list, (page_type,)),
         "where": resource.filter_type | None,
         "order_by": _types.GenericAlias(list, (resource.order_by_type,)) | None,
-        "return": _types.GenericAlias(list, (node,)),
+        "return": _types.GenericAlias(list, (result_type,)),
     }
     root = f"{resource.name}_grouped_rows"
     resolve_grouped_rows.__name__ = root
