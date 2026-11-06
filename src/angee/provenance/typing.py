@@ -111,6 +111,8 @@ class ProvenancePlugin(Plugin):
             ctx.api.fail(f"Unavailable native history manager {manager_name}", ctx.context)
             return ctx.default_attr_type
         arguments: list[MypyType] = []
+        # Stock simple-history declares no row variable; ModelHistoryManager and
+        # ModelHistoricalQuerySet declare the one this binds.
         if len(selected.defn.type_vars) == 1:
             row = Instance(history_info, []) if history_info is not None else selected.defn.type_vars[0].upper_bound
             arguments = [row]

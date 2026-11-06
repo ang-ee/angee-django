@@ -4,16 +4,15 @@ from typing import Self, cast
 
 from django.db import models
 from django_compose.models import Composable
-from simple_history.manager import HistoricalQuerySet
 from simple_history.models import HistoricalChanges
 
 from angee.provenance.contrib.angee.history import ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
-from angee.provenance.history import ModelHistoryManager
+from angee.provenance.history import ModelHistoricalQuerySet, ModelHistoryManager
 from angee.provenance.statements import Aspect, PairAspect, StatementRecords
 
 
-class FixtureHistoricalQuerySet[T: HistoricalChanges](HistoricalQuerySet[T]):
+class FixtureHistoricalQuerySet[T: HistoricalChanges](ModelHistoricalQuerySet[T]):
     def tagged(self) -> Self:
         return self
 
