@@ -12,6 +12,7 @@ from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel, Field
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.models.base import record_display_label
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import schema as workflow_schema
 from angee.workflows.definition import Definition
@@ -219,6 +220,25 @@ def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schem
         "steprecord": [hidden],
         "steprun": [{"records": [hidden]}],
     }
+
+
+def test_run_subject_label_follows_the_record_reference_proof(schema, callers):
+    """A run reader who cannot read the subject sees no subject identity, its label included."""
+
+    admin, owner, reader = callers
+    workflow = load_workflow(document("entry"), key="subject_label", actor=admin, subject_model="knowledge.vault")
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    subject = vault_for(owner, name="Private subject")
+    run = start_run(workflow, actor=owner, subject=subject)
+    run.with_actor(owner).grant_record_access("reader", reader)
+    query = "{ workflowrun { subject_model subject_id subject_label } }"
+    assert result_data(execute_schema(schema, query, user=owner)) == {"workflowrun": [{
+        "subject_model": subject._meta.label, "subject_id": subject.sqid,
+        "subject_label": record_display_label(subject),
+    }]}
+    assert result_data(execute_schema(schema, query, user=reader)) == {"workflowrun": [{
+        "subject_model": None, "subject_id": None, "subject_label": None,
+    }]}
 
 
 def test_run_input_reads_declared_mti_sources_under_their_own_permission(schema, callers, register_step):
