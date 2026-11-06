@@ -895,6 +895,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         if adding and self.credential_id is not None and self.requires_connection_discovery:
             self.await_discovery()
 
+    display_label_fields: ClassVar[tuple[str, ...]] = ("display_name", "vendor", "lifecycle")
+    """Model fields needed to project the public integration label."""
+
     @property
     def display_label(self) -> str:
         """Return the operator label, or a vendor-derived one when none was given.

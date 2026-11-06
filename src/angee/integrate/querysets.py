@@ -177,7 +177,7 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
     """Chainable collection scopes for integration and bridge rows."""
 
     def with_vendor_label(self) -> Self:
-        """Carry the two public vendor-name columns used by Integration.display_label."""
+        """Annotate the public vendor fallback for Integration.display_label."""
 
         return self.annotate(
             _vendor_display_name=models.F("vendor__display_name"),
@@ -310,9 +310,9 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
                     setattr(row, row.concrete_child_cache_attr(child_type, authorized=scope), [found] if found else [])
 
     def with_concrete_children(self, *, actor: Any) -> Self:
-        """Prime child caches only for a selected concrete target or source label."""
+        """Project source-label fields and prime child caches for selected rows."""
 
-        return self.only("concrete_type_id").with_page_hook(
+        return self.only("concrete_type_id", *self.model.display_label_fields).with_page_hook(
             lambda queryset, rows: IntegrationQuerySet.prime_concrete_children(rows, actor=actor, using=queryset.db)
         )
 
