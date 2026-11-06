@@ -142,7 +142,7 @@ def test_group_drill_requires_a_selectable_row_identity_at_schema_build() -> Non
         "type Channel implements Node { id: ID!, display_name: String! }",
         "type Channel { display_name: String! }",
     ))
-    with pytest.raises(ImproperlyConfigured, match="Group axis 'channel' has a drill but no selectable row identity"):
+    with pytest.raises(ImproperlyConfigured, match=r"Relation group axes \['channel'\] have a drill but no selectable row identity"):
         replace(projection, schema=schema).build()
 
 
