@@ -263,6 +263,8 @@ jobs:
       - name: Verify PostgreSQL contracts execute without skips
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
+        # The four isolated-settings modules run in python-quality; collecting
+        # them under the full host settings records module-level skips here.
         # Review concurrency includes simultaneous all seats, a requester-less
         # first seat, and recovery after a settlement signal skips a busy run.
         env:
@@ -270,7 +272,8 @@ jobs:
         run: |
           uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --create-db --durations=25 --junitxml=workflow-concurrency.xml \
             --splits 6 --group ${{ matrix.group }} --splitting-algorithm least_duration \
-            --durations-path .test_durations_postgres -m postgresql tests
+            --durations-path .test_durations_postgres -m postgresql \
+            tests
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" and child.get("type") != "pytest.xfail" for child in case) for case in cases); assert len(cases) > 0 and skipped == 0, f"expected marked PostgreSQL tests, got marked={len(cases)}, skipped={skipped}"; print(f"PostgreSQL marked={len(cases)}, skipped={skipped}")'
       - name: Test the full provenance engine on PostgreSQL
         if: ${{ !cancelled() && matrix.group == 1 }}

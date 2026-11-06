@@ -19,6 +19,8 @@ from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Wor
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 class ReviewPrefix(Step[None, None, None]):
     key = "review_prefix"

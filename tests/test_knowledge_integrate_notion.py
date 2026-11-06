@@ -31,6 +31,8 @@ from tests.conftest import (
     make_integration,
 )
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 def node(number, title, *, parent=None, source=False):
     identity = str(UUID(int=number))

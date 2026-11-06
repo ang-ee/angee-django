@@ -12,7 +12,7 @@ from angee.integrate.errors import IntegrationError
 from angee.integrate.oauth.client import OAuthClientProtocol
 from tests.conftest import Credential, make_integration
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
 
 
 @pytest.mark.parametrize("refused", [False, True])

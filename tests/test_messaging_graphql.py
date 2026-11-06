@@ -840,6 +840,7 @@ def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(
     assert payload[0]["fragment"]["message_count"] == 2
 
 
+@pytest.mark.django_db(transaction=True)
 def test_fragment_counts_are_projected_at_one_five_ten_twenty_parts(composed_tables: None) -> None:
     """Nested fragment use counts are projected once in the paged Part query."""
 
@@ -872,6 +873,7 @@ def test_fragment_counts_are_projected_at_one_five_ten_twenty_parts(composed_tab
         reads[larger].assert_flat_from(reads[smaller])
 
 
+@pytest.mark.django_db(transaction=True)
 def test_message_needaction_is_projected_at_one_five_ten_twenty(composed_tables: None) -> None:
     """The inbox computes the owner-selected action predicate with the page."""
 
@@ -3749,6 +3751,7 @@ def test_narrow_record_messages_do_not_read_content_or_viewer_state(
 
 
 @pytest.mark.parametrize("root", ["record_thread", "record_message_feed", "record_message_feed_revalidate"])
+@pytest.mark.django_db(transaction=True)
 def test_selected_record_message_dependencies_have_constant_page_query_count(
     composed_tables: None, root: str, record_property: Any,
 ) -> None:

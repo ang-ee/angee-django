@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -26,7 +24,7 @@ from angee.iam.build import (
     merged_schemas,
     render_zed,
 )
-from angee.iam.testing.permissions import emit_permissions, installed_field_owners
+from angee.iam.testing.permissions import installed_field_owners
 from angee.messaging.testing.models import Party, Person, Thread
 from angee.projects.testing.models import Queue
 from angee.spaces.testing.models import Group, Membership
@@ -51,26 +49,10 @@ spaces_schema = importlib.import_module("angee.spaces.schema")
 
 
 @pytest.fixture()
-def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
-    """Load the composed spaces/messaging REBAC schema for native test tables."""
+def spaces_tables(transactional_db: Any, composed_permissions: None) -> None:
+    """Use the shared composed schema with committed rows for roster tests."""
 
-    del transactional_db
-    app_configs = list(apps.get_app_configs())
-    runtime_dir = tmp_path / "runtime"
-    source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
-    originals = {config: getattr(config, "rebac_schema", None) for config in app_configs}
-    emit_permissions(app_configs, runtime_dir, sources=source_map)
-
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        for config, original in originals.items():
-            if original is None:
-                if hasattr(config, "rebac_schema"):
-                    delattr(config, "rebac_schema")
-            else:
-                config.rebac_schema = original
+    del transactional_db, composed_permissions
 
 
 def _role_relations(group: Group, user: Any) -> set[str]:

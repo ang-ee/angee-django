@@ -288,6 +288,7 @@ def test_usage_limits_allow_a_multi_request_tool_turn(db: Any) -> None:
     assert isinstance(outcome.replay_state, list)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_view_context_persists_in_native_history_at_its_turn(
     composed_tables: None,
     capture_tasks: list[Any],
@@ -373,6 +374,7 @@ def test_view_context_persists_in_native_history_at_its_turn(
     ("poster_kind", "poster_can_read"),
     [("owner", True), ("owner", False), ("admin", True), ("unattributed", True)],
 )
+@pytest.mark.django_db(transaction=True)
 def test_view_context_uses_the_poster_read_scope_and_tools_stay_agent_scoped(
     composed_tables: None,
     capture_tasks: list[Any],

@@ -2155,6 +2155,7 @@ def test_oauth_helpers_map_refused_endpoint_to_transient_flow_error(operation: s
 
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("request_format", ["form", "json"])
+@pytest.mark.django_db(transaction=True)
 def test_blank_secret_public_client_refreshes_credential(monkeypatch: pytest.MonkeyPatch, request_format: str) -> None:
     with system_context(reason="test public refresh"):
         user = get_user_model().objects.create_user(username="public-refresh")

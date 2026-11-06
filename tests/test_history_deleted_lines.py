@@ -19,7 +19,7 @@ from angee.provenance.querysets import model_history
 from angee.provenance.schema import RecordHistory
 from tests.conftest import create_user
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
 
 Project = apps.get_model("projects", "Project")
 Milestone = apps.get_model("projects", "Milestone")

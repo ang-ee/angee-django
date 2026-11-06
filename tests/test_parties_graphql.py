@@ -588,6 +588,7 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
 
 
 @pytest.mark.parametrize("row_count", [2, 8])
+@pytest.mark.django_db(transaction=True)
 def test_statement_reference_reads_have_a_page_query_budget(
     composed_tables: None,
     django_assert_num_queries: Any,

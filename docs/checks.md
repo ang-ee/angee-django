@@ -161,10 +161,12 @@ compositions, including [`decisions`](../src/angee/decisions/testing/models.py)
 and [`messaging`](../src/angee/messaging/testing/models.py), register once
 through imports in the root conftest before database setup. The IAM-owned
 [`composed_tables`](../src/angee/iam/testing/fixtures.py) fixture uses
-pytest-django's savepoint isolation by default. The database setup fixture
-synchronizes REBAC once and again after a transactional test flush. Tests needing
-independent connections or commit visibility declare `django_db(transaction=True)`;
-`composed_permissions` resynchronizes a temporary schema for its test.
+pytest-django's savepoint isolation by default. Session database setup emits
+the merged addon permission schema and synchronizes REBAC once; it resynchronizes
+after each transactional test flush. `composed_permissions` is a compatibility
+alias for `composed_tables`. Tests needing autocommit, independent connections,
+or commit visibility declare `django_db(transaction=True)`. The GraphQL statement
+budget module uses that mark because its read costs are measured under autocommit.
 Composed hosts also install their schema during native database setup. Register
 `angee.iam.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
 that loads it explicitly must pass `-p django -p angee.iam.testing.fixtures` in that

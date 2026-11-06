@@ -49,6 +49,7 @@ from tests.conftest import create_platform_admin
 from tests.test_agents import _provider
 
 pytest_plugins = ("angee.agents.testing.drivers",)
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture

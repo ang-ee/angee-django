@@ -476,6 +476,7 @@ def test_append_and_prepend_grow_body(composed_tables: None) -> None:
     assert prepended.body == "header\n\nfirst line\n\nsecond line"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_mcp_body_write_updates_section(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A section patch driven through the MCP engine updates the body."""
 

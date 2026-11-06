@@ -68,6 +68,7 @@ def scopedemo_registration():
 
 
 @pytest.mark.usefixtures("identity_policy", "scopedemo_registration")
+@pytest.mark.django_db(transaction=True)
 def test_distinct_parent_identity_scopes_statements_and_inverse_without_colliding_children():
     class IdentityParent(StatementsMixin, HistoryMixin, ProtectedDataModel):
         title = models.CharField(max_length=80)

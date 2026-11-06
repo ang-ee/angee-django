@@ -101,6 +101,7 @@ def _ids(page: dict[str, Any]) -> list[str]:
 
 
 @pytest.mark.parametrize("projection", ["window", "revalidate", "posts_list"])
+@pytest.mark.django_db(transaction=True)
 def test_generic_reaction_handles_are_redacted_with_flat_page_cost(
     projection: str, record_property: Any,
 ) -> None:
