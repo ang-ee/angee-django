@@ -65,10 +65,10 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
    Then `"angee.tags"` in `tests/settings.py` `INSTALLED_APPS` (`:29-110`) and `from angee.tags.testing import models as tags_models  # noqa: F401` in `tests/conftest.py` after its FK targets (`:645`). If the addon is a consumer → no test models: its tests run on the composed host (step 3). **Owner rule:** Django owns static test-table lifecycle; one concrete model per resource type ([environment and checks](references/environment.md)).
 
-3. **Pick the database contract per module.** Framework modules take a fixture: `composed_tables` for savepoint isolation plus a session REBAC sync, `composed_permissions` when the module needs other addons' `permissions.extends.zed` fragments merged (tags, MTI, placeable fields), native `db` for pure model tests. Declare `pytest.mark.django_db(transaction=True)` only when separate connections or committed rows are required.
+3. **Pick the database contract per module.** Framework modules take `composed_tables` for savepoint isolation with the session-merged REBAC schema (`composed_permissions` remains an alias), or native `db` for pure model tests. Declare `pytest.mark.django_db(transaction=True)` when autocommit, separate connections, committed rows, or an autocommit-measured statement budget is required.
 
    ```python
-   pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_permissions")]
+   pytestmark = pytest.mark.usefixtures("composed_tables")
    ```
 
    Consumer modules are `TransactionTestCase` classes that `call_command("rebac", "sync")` and `call_command("resources", "load", include_demo=True, allow_non_dev=True)` in `setUp` and read `apps.get_model("notes", "Note")` (`examples/src/example/notes/tests/test_rebac.py:23-33`); the framework suite drives them through `tests/composed_host.py --action tests --test-label example.notes.tests.<module>`, consumer CI through `consumer-tests`. Mark PostgreSQL-only modules `pytest.mark.skipif(connection.vendor != "postgresql", …)` (`tests/test_messaging_delivery_concurrency.py:8`). **Owner rule:** pytest-django and the base plugin own setup and flush; `--nomigrations` and PostgreSQL settings belong to the CI selection, never to a module ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
@@ -205,8 +205,8 @@ Validators: the new modules run standalone, the owning guards (`tests/test_layer
 - An abstract model imported while its app is absent keeps `app_label=None` for the whole process; the roster comment at `tests/settings.py:85-92` exists for that reason.
 - Patch an inherited manager method on `type(manager)`, not the instance; `db_manager()` copies lose an instance patch ([environment and checks](references/environment.md)).
 - A page rendered through the router must `findBy*` past the lazy boundary; importing the page component directly needs no wait ([page pitfalls](../angee-pages/references/pitfalls.md)).
-- A shared pytest plugin must defer model discovery until the registry is populated (`src/angee/iam/testing/permissions.py:15-20`, called by `src/angee/iam/testing/fixtures.py:77-79`; [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
-- `composed_permissions` rewrites the synced schema with a forced overwrite into `tmp_path`; a module that edits a `.zed` on disk must do so under that fixture and never against the stack ([REBAC](../../../docs/backend/guidelines.md#rebac)).
+- A shared pytest plugin must defer model discovery until the registry is populated (`src/angee/iam/testing/permissions.py`, called by session `django_db_setup` in `src/angee/iam/testing/fixtures.py`; [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
+- Session database setup emits the merged addon schema once and resynchronizes it after transactional flushes. A test that edits a `.zed` on disk must bind and sync its temporary schema explicitly, then restore the binding; never edit the stack ([REBAC](../../../docs/backend/guidelines.md#rebac)).
 
 ## Read next
 

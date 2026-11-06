@@ -32,9 +32,9 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
 `django-zed-rebac` (`docs/stack.md#backend`). `src/angee/iam/testing/fixtures.py`
-owns `django_db_setup` (:22), `composed_tables` (:61), and `composed_permissions`
-(:73). The session fixture syncs the host schema; `composed_permissions` merges
-addon fragments and forces their sync into the disposable test database.
+owns the session `django_db_setup`, savepoint `composed_tables`, and the
+`composed_permissions` compatibility alias. Session setup emits the merged addon
+schema and synchronizes it once, then resynchronizes after transactional flushes.
 
 ## Reuse first
 
@@ -158,7 +158,7 @@ addon fragments and forces their sync into the disposable test database.
        self.assertIsNone(bob_view.is_starred)            # read__is_starred = owner
        self.assertEqual(list(Note.objects.with_actor(self.carol).filter(pk=self.welcome.pk)), [])
    ```
-   Composed host (`examples/src/example/notes/tests/test_rebac.py:23-28`): `TransactionTestCase`, `call_command("rebac", "sync")` in `setUp`, seed through `resources load`. Source-addon tests (`tests/test_scopedemo.py:34-39`): request `composed_tables` or `composed_permissions` (merges fragments, syncs with `--force-overwrite` into the disposable test database) and `backend().check_access(subject=…, action=…, resource=to_object_ref(row))`. Field-backed and const-backed reach leaves no tuples: assert `active_relationship_model().objects.filter(resource_type=…)` is empty when that is the design.
+   Composed host (`examples/src/example/notes/tests/test_rebac.py:23-28`): `TransactionTestCase`, `call_command("rebac", "sync")` in `setUp`, seed through `resources load`. Source-addon tests (`tests/test_scopedemo.py:34-39`): request `composed_tables` (`composed_permissions` is an alias); session setup has already merged addon fragments and synchronized them. Check `backend().check_access(subject=…, action=…, resource=to_object_ref(row))`. Field-backed and const-backed reach leaves no tuples: assert `active_relationship_model().objects.filter(resource_type=…)` is empty when that is the design.
    **Owner rule:** tests exercise the composed runtime model and the schema the fixtures sync (`docs/checks.md#source-addon-test-models`); a test-local schema is justified only where no addon owns the definition, as `tests/scopedemo/permissions.zed` does.
 
 ## Do not
