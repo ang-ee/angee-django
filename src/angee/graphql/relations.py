@@ -102,10 +102,12 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
         model = content_type.model_class()
         if model is None:
             continue
-        targets = require_rebac_queryset(model)
-        if actor is not None:
-            targets = targets.with_actor(actor)
-        keys = targets.with_action("read").order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
+        keys = (
+            require_rebac_queryset(model, actor=actor)
+            .with_action("read")
+            .order_by()
+            .annotate(_angee_reference_key=Cast("pk", output_field=key_field))
+        )
         readable |= models.Q(**{
             reference.ct_field_attname: content_type.pk,
             f"{reference.fk_field}__in": _ActorScopedSubquery(keys, "_angee_reference_key"),
@@ -199,10 +201,7 @@ def actor_scoped_relation_expression(
         if not model_resource_type(related_model):
             traversed.append(part)
             continue
-        related_queryset = require_rebac_queryset(related_model)
-        if actor is not None:
-            related_queryset = related_queryset.with_actor(actor)
-        related_queryset = related_queryset.with_action("read")
+        related_queryset = require_rebac_queryset(related_model, actor=actor).with_action("read")
 
         if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
             lookup = "__".join((*traversed, relation.attname))

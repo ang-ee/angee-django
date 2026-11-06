@@ -1060,7 +1060,11 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             .filter(content_type=content_type, object_id=object_id, role=role)
             .first()
         )
-        if attachment is not None and role == "chatter" and attachment.thread.merged_into_id is not None:
+        if (
+            attachment is not None
+            and role == record.thread_attachment_role
+            and attachment.thread.merged_into_id is not None
+        ):
             thread = attachment.thread.canonical()
             attachment = edges.select_related("thread").get(thread=thread, role=role)
             target = attachment.require_threaded_target()
@@ -1078,10 +1082,9 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         """
 
         attachment = self.for_record(record, role=role)
-        if attachment is not None and role != record.thread_attachment_role:
-            actor = current_actor()
-            if actor is None or not attachment.thread.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Reading this attachment requires thread read access.")
+        own_role = role == record.thread_attachment_role
+        if attachment is not None and not own_role and not attachment.thread.has_access("read"):
+            raise PermissionDenied("Reading this attachment requires thread read access.")
         return attachment
 
     def source_threads_for_record(self, record: Any) -> Any:
