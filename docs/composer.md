@@ -259,11 +259,11 @@ need no HTTP server. Ordinary Django URL settings remain valid.
 [`angee.server.urls`](../src/angee/server/urls.py) is the default `ROOT_URLCONF`:
 its readiness route, then each enabled addon's `urls` module through Django's
 `include()`, in installed app order; an addon's `app_name` selects its namespace.
-The registered `server.E001` check reports identical native matching chains.
+The registered `angee.server.E001` check reports identical native matching chains.
 After Django setup, [`angee.server.asgi`](../src/angee/server/asgi.py) serves
-Django's `ASGIHandler` with the `http_mounts()`, `protocols()` and `lifespans()`
-callables of enabled addons' `asgi` modules, rejects mount and protocol
-collisions, and owns async lifespan teardown. GraphQL contributes its Channels
+Django's `ASGIHandler` with the `http_mounts` and `lifespans` contributions and
+the `protocols()` mapping of enabled addons' `asgi` modules, rejects mount and
+protocol collisions, and owns async lifespan teardown. GraphQL contributes its Channels
 WebSocket protocol; MCP contributes its HTTP mount and fresh native lifespan.
 The rendered `manage.py` calls [`angee.server.management.execute`](../src/angee/server/management/__init__.py),
 which passes a `ManagementUtility` subclass to django-compose's launcher. It

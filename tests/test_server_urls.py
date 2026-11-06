@@ -122,7 +122,7 @@ match = resolve("/api/nested/23/")
 assert match.kwargs == {"pk": 23}
 assert match.namespaces == ["inside"]
 assert len(errors) == 1, errors
-assert errors[0].id == "server.E001"
+assert errors[0].id == "angee.server.E001"
 assert "first" in errors[0].msg and "second" in errors[0].msg
 """)
 
@@ -221,7 +221,7 @@ def test_identical_native_chains_collide_across_namespaces(expression):
         + """
 errors = contributions([first], [second])
 assert len(errors) == 1, errors
-assert errors[0].id == "server.E001"
+assert errors[0].id == "angee.server.E001"
 assert "first" in errors[0].msg and "second" in errors[0].msg
 """
     )
@@ -316,7 +316,7 @@ errors = contributions(
     [path("<custom:value>/", second_view)],
 )
 assert len(errors) == 1, errors
-assert errors[0].id == "server.E001"
+assert errors[0].id == "angee.server.E001"
 """
     )
 

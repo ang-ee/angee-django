@@ -6,9 +6,8 @@ from collections.abc import Iterator
 
 from django.apps import apps
 from django.urls import URLPattern, URLResolver, include, path
-from django_compose.components import installed_components
 
-from angee.base.addons import optional_addon_module
+from angee.base.addons import addon_modules
 from angee.server.views import readiness
 
 
@@ -24,12 +23,8 @@ def contributions() -> Iterator[tuple[str, URLPattern | URLResolver]]:
     if not apps.ready:
         raise RuntimeError("URL composition requires completed django.setup()")
     yield __package__, path("health/ready", readiness, name="angee-server-readiness")
-    index = installed_components("angee.addons")
-    for config in apps.get_app_configs():
-        if config.name == __package__:
-            continue
-        module = optional_addon_module(config, "urls", index=index)
-        if module is not None:
+    for config, module in addon_modules("urls"):
+        if config.name != __package__:
             yield config.name, path("", include(module))
 
 

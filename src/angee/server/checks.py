@@ -58,7 +58,7 @@ def check_url_collisions(**kwargs: object) -> list[Error]:
                     Error(
                         f"URL pattern chain {tuple(part[1] for part in route)!r} "
                         f"is claimed by {previous} and {owner}",
-                        id="server.E001",
+                        id="angee.server.E001",
                     )
                 )
     return errors
