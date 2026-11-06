@@ -525,7 +525,9 @@ class NeedAccessDecisionTests(IntakeAccessCase):
                     need.refresh_from_db()
                     self.assertEqual(need.revision, before + 1)
                     self.assertEqual(need.access_verdict, None)
-                    self.assertIsNone(need.access_decision_id)
+                    self.assertNotEqual(need.access_decision_id, previous_decision.pk)
+                    self.assertTrue(need.access_decision.is_open)
+                    self.assertIsNone(need.access_answered_by)
                     self.assertIsNone(need.access_answered_at)
                     previous_decision.refresh_from_db()
                     self.assertEqual(previous_decision.verdict, ["intake.approve"])
@@ -874,7 +876,7 @@ class NeedAccessTests(IntakeAccessCase):
         for candidate in (reader, writer):
             self.assertIsNone(candidate.access_decision_id)
             self.assertIsNone(candidate.access_verdict)
-            self.assertIsNone(candidate.access_decision_id)
+            self.assertIsNone(candidate.access_answered_by)
             self.assertIsNone(candidate.access_answered_at)
             with self.assertRaises(PermissionDenied):
                 candidate.decide_access("intake.deny")
@@ -1146,7 +1148,7 @@ class DenormalizedNeedResetAccessTests(NeedResetAccessTests):
 
 
 class NeedViewAsAdminOnlyTests(IntakeAccessCase):
-    def test_task_writers_read_requester_without_view_as(self):
+    def test_task_writers_see_requester_display_without_view_as(self):
         party = self.party(self.reader)
         need = self.need(party=party)
         with system_context(reason="test unrelated preview target"):
@@ -1156,7 +1158,17 @@ class NeedViewAsAdminOnlyTests(IntakeAccessCase):
             for target in (self.reader, unrelated, writer):
                 self.assertFalse(target.with_actor(to_subject_ref(writer)).has_access("view_as"))
                 self.assertIsNone(self.User.objects.admit_view_as(writer, str(target.sqid)))
-            self.assertTrue(self.Party.objects.with_actor(writer).filter(pk=party.pk).exists())
+            self.assertFalse(self.Party.objects.with_actor(writer).filter(pk=party.pk).exists())
+            self.assertFalse(
+                apps.get_model("parties", "Person").objects.with_actor(writer).filter(pk=party.pk).exists()
+            )
+            projected = self.graphql(
+                "{ intake_needs { id party { id display_name } } }", {}, user=writer,
+            )["intake_needs"]
+            self.assertEqual(
+                {row["id"]: row["party"] for row in projected}[need.sqid],
+                {"id": party.sqid, "display_name": party.display_name},
+            )
             self.assertEqual(
                 self.graphql(
                     "{ project_tasks { requester { display_name } } }",

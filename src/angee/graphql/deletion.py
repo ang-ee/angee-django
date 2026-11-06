@@ -358,7 +358,7 @@ def delete_by_public_id(
     else:
         database_scope = nullcontext()
         scope = nullcontext()
-    with context, database_scope, scope:
+    with context, database_scope, transaction.atomic(using=targets.db), scope:
         instance = require_instance_for_id(
             model,
             public_id,
@@ -380,7 +380,7 @@ def delete_by_public_id(
         if confirm and not preview.has_blockers:
             deleted_pk = instance.pk
             try:
-                with transaction.atomic():
+                with transaction.atomic(using=targets.db):
                     if before_delete is not None:
                         before_delete(instance)
                     instance.delete()
