@@ -388,7 +388,7 @@ class Runner:
         return self._each_candidate(candidates, self._wake)
 
     def wake_decisions(self, decision_id: Any = None) -> int:
-        """Signal and sweep share the run-lock owner and commit-time dispatch."""
+        """Worker delivery and the tick sweep share the run-lock owner."""
         candidates = self.step_model.objects.answered_decisions()
         if decision_id is not None:
             candidates = candidates.filter(decision_id=decision_id)

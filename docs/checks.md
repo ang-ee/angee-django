@@ -244,6 +244,11 @@ scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
 
+The optional Redis channel-layer cross-process test uses
+`ANGEE_TEST_CHANNEL_REDIS_URL` to select a disposable Redis database. It skips
+when the variable is unset or Redis is unreachable. Use a database separate
+from the running stack's channel layer and Celery broker.
+
 After a model change, run native compose and author
 required native history before provision. Compose emits GraphQL SDL through its
 capability integration. Vite dev and build await shared `@angee/app` generation

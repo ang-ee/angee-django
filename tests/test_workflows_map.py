@@ -19,7 +19,7 @@ from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem
 from angee.workflows.runner import runner
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode
-from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
 
@@ -361,7 +361,7 @@ def test_map_progress_and_body_identity_are_resource_owned(execution, map_steps,
 
 
 def test_decision_map_body_has_independent_questions_and_typed_outputs(execution, map_steps, register_step):
-    actor, _sent = execution
+    actor, sent = execution
     reviewer = create_user("map-reviewer")
     reference = vault_for(actor)
     write_relationships([RelationshipTuple(to_object_ref(reference), "viewer", to_subject_ref(reviewer))])
@@ -388,9 +388,11 @@ def test_decision_map_body_has_independent_questions_and_typed_outputs(execution
     decisions = [Decision.system_queryset().get(requesting_steps=row) for row in original]
     assert decisions[0].pk != decisions[1].pk
     decide(decisions[1], actor=reviewer, chosen=["accept"])
+    assert deliver_decision_wakes(sent, decisions[1].pk) == [1]
     run_until(run)
     assert applied == [1] and body_rows(run)[0].status == "waiting"
     decide(decisions[0], actor=reviewer, chosen=["accept"])
+    assert deliver_decision_wakes(sent, decisions[0].pk) == [1]
     run_until(run)
     assert run.status == "succeeded" and applied == [1, 0]
     assert [item["output"] for item in StepRun.system_queryset().get(run=run, node_key="items").output] == [
