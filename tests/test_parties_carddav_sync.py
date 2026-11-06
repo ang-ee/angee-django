@@ -79,6 +79,8 @@ from tests.conftest import Backend, Drive, File, MimeType, current_stream, make_
 from tests.stream_adapters import applied_history, failure_state
 from tests.test_storage import PNG_BYTES
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 _BASE = "https://dav.example/"
 _BOOK = f"{_BASE}books/contacts/"
 _HREF = f"{_BOOK}ada.vcf"

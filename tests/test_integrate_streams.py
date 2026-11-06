@@ -59,6 +59,8 @@ from angee.messaging.testing.models import Channel, Message
 from tests.conftest import current_stream, make_integration
 from tests.stream_adapters import applied_history, failure_state
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 class AppliedRecord(models.Model):
     """Domain-owned idempotent sink independent of the record protocol tables."""

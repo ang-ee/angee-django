@@ -300,6 +300,7 @@ def _paused_sample_channel(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[s
     return admin, channel, account
 
 
+@pytest.mark.django_db(transaction=True)
 def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,

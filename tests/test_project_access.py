@@ -27,10 +27,8 @@ from rebac.models import active_relationship_model
 
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.build import extension_source_map
 from angee.iam.graphql.capabilities import permissions_field
 from angee.iam.graphql.node import ProtectedNode
-from angee.iam.testing.permissions import emit_permissions, installed_field_owners
 from angee.messaging.testing.models import Channel, Message, Person, Thread, ThreadAttachment
 from angee.projects.testing.models import Project, ProjectBinding, Task
 from angee.spaces.testing.models import Group, Membership
@@ -172,24 +170,10 @@ def test_task_chatter_inherits_live_record_read(project_access_schema: Any, stor
 
 
 @pytest.fixture
-def project_access_schema(tmp_path: Path, transactional_db: None) -> Any:
-    """Load composed permission extensions and restore app schema paths afterward."""
+def project_access_schema(transactional_db: None, composed_permissions: None) -> None:
+    """Use the shared composed schema with committed project access rows."""
 
-    configs = list(apps.get_app_configs())
-    originals = {config: getattr(config, "rebac_schema", None) for config in configs}
-    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
-    runtime = tmp_path / "project-access-runtime"
-    emit_permissions(configs, runtime, sources=sources)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        for config, original in originals.items():
-            if original is None:
-                if hasattr(config, "rebac_schema"):
-                    delattr(config, "rebac_schema")
-            else:
-                config.rebac_schema = original
+    del transactional_db, composed_permissions
 
 
 @pytest.mark.parametrize("storage", ("denormalized", "registry"))

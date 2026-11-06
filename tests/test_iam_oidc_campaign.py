@@ -19,6 +19,7 @@ User = get_user_model()
 
 @pytest.mark.parametrize("link_on_email_match", [False, True])
 @pytest.mark.parametrize("create_on_login", [False, True])
+@pytest.mark.django_db(transaction=True)
 def test_oidc_ambiguous_email_never_links_or_provisions(legacy_person_emails, link_on_email_match, create_on_login):
     for username in ("ambiguous-first", "ambiguous-second"):
         User.objects.create_user(username, "ambiguous@example.com")

@@ -254,6 +254,7 @@ def test_material_and_client_changes_immediately_change_refreshability():
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("forced", [False, True])
 @pytest.mark.parametrize("not_sent", [False, True])
+@pytest.mark.django_db(transaction=True)
 def test_transport_failure_during_refresh_preserves_consent_health(monkeypatch, forced, not_sent):
     with system_context(reason="test transient refresh"):
         integration = make_integration(
@@ -336,6 +337,7 @@ def test_channel_typed_feed_resolves_the_feed_admission_selector():
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("status", [429, 503, None])
 @pytest.mark.parametrize("expired", [False, True])
+@pytest.mark.django_db(transaction=True)
 def test_preexpiry_refresh_failure_keeps_valid_access_token(monkeypatch, status, expired):
     with system_context(reason="test preexpiry refresh"):
         credential = make_integration(

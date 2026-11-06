@@ -148,6 +148,7 @@ def test_photo_download_is_capped_and_uses_the_collection_origin(settings: Any) 
     assert resolved.photo == ParsedPhoto(data=b"photo", mime="image/jpeg")
 
 
+@pytest.mark.django_db(transaction=True)
 def test_connect_probe_failure_writes_no_rows(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -176,6 +177,7 @@ def test_connect_probe_failure_writes_no_rows(
             assert not model._base_manager.exists(), model._meta.label
 
 
+@pytest.mark.django_db(transaction=True)
 def test_connect_probe_success_commits_every_owned_row_atomically(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,

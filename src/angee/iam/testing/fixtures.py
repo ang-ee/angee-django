@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -12,7 +11,7 @@ from django.core.management import call_command
 from django.db.models.signals import post_migrate
 from pytest_django.plugin import DjangoDbBlocker
 
-from angee.iam.testing.permissions import emit_permissions, installed_field_owners
+from angee.iam.testing.permissions import emit_permissions
 
 if TYPE_CHECKING:
     from angee.iam.testing.graphql import GraphQLDocumentRead
@@ -22,15 +21,17 @@ if TYPE_CHECKING:
 def django_db_setup(
     django_db_setup: None,
     django_db_blocker: DjangoDbBlocker,
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> Iterator[None]:
-    """Install the host's permission schema and restore it after transaction flushes.
+    """Install composed permission inputs and restore them after transaction flushes.
 
-    Native Django database setup owns table creation. Synchronize the host
-    schema once and after each transactional test flush. Tests that bind their
-    own schema use ``composed_permissions`` for the additional sync.
+    Native Django database setup owns table creation. Emit and synchronize the
+    merged addon schema once, then restore it after each transactional flush.
     """
 
     rebac_app = apps.get_app_config("rebac")
+    configs = tuple(apps.get_app_configs())
+    runtime = tmp_path_factory.mktemp("permissions")
 
     def sync_rebac_schema(**kwargs: Any) -> None:
         call_command("rebac", "sync", verbosity=0)
@@ -38,6 +39,7 @@ def django_db_setup(
     post_migrate.connect(sync_rebac_schema, sender=rebac_app, weak=False)
     try:
         with django_db_blocker.unblock():
+            emit_permissions(configs, runtime)
             sync_rebac_schema()
         yield
     finally:
@@ -70,16 +72,10 @@ def composed_tables(db: None) -> None:
 
 
 @pytest.fixture
-def composed_permissions(composed_tables: None, restore_composed_permission_bindings: None, tmp_path: Path) -> None:
-    """Bind installed contributions and let native sync persist their schema."""
+def composed_permissions(composed_tables: None) -> None:
+    """Compatibility alias for tables with the session-composed permission schema."""
 
-    from angee.iam.build import extension_source_map
-
-    configs = list(apps.get_app_configs())
-    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
-    runtime = tmp_path / "permissions"
-    emit_permissions(configs, runtime, sources=sources)
-    call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
+    del composed_tables
 
 
 @pytest.fixture

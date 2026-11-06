@@ -627,6 +627,7 @@ def test_live_schema_projects_sections_and_independent_message():
     assert starred["set_inbox_message_starred"]["starred"] is True
 
 
+@pytest.mark.django_db(transaction=True)
 def test_selected_message_open_stays_flat_and_uses_remain_actor_scoped_as_corpus_grows():
     owner = User.objects.create_user(username="explorer-message-budget")
     channel = make_integration(owner.username, model=Channel, owner=owner)
@@ -736,6 +737,7 @@ def test_new_reply_names_its_parent_for_reader_invalidation():
     ]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_result_batch_preserves_each_group_page_and_statement_budget():
     owner = User.objects.create_user(username="explorer-batch-budget")
     channel = make_integration(owner.username, model=Channel, owner=owner)

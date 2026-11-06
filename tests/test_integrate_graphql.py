@@ -146,6 +146,7 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
     assert len(many) <= len(one) + 1
 
 
+@pytest.mark.django_db(transaction=True)
 def test_record_link_source_fields_are_batched_at_one_five_ten_twenty(composed_tables: None) -> None:
     """Connector URL and label share a page prefetch, independent of link count."""
 
@@ -205,6 +206,7 @@ def test_stream_failure_labels_use_projected_source(composed_tables: None) -> No
 
 
 @pytest.mark.postgresql
+@pytest.mark.django_db(transaction=True)
 def test_bridge_status_fields_share_page_reads_at_one_five_ten_twenty(
     composed_tables: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

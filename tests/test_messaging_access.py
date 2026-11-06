@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 from django.apps import apps
@@ -15,8 +15,6 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
-from angee.iam.build import extension_source_map
-from angee.iam.testing.permissions import emit_permissions, installed_field_owners
 from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import File, Vendor
@@ -24,25 +22,15 @@ from tests.test_messaging import _storage_drive
 
 
 @pytest.fixture(params=("denormalized", "registry"))
-def messaging_access_schema(request: pytest.FixtureRequest, tmp_path: Path, transactional_db: None) -> Any:
+def messaging_access_schema(
+    request: pytest.FixtureRequest, transactional_db: None, composed_permissions: None,
+) -> Iterator[str]:
     """Synchronize messaging's field-backed access chain in either local store."""
 
-    configs = list(apps.get_app_configs())
-    originals = {config: getattr(config, "rebac_schema", None) for config in configs}
-    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
-    runtime = tmp_path / "messaging-access-runtime"
-    emit_permissions(configs, runtime, sources=sources)
-    try:
-        with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
-            call_command("rebac", "sync", verbosity=0)
-            yield request.param
-    finally:
-        for config, original in originals.items():
-            if original is None:
-                if hasattr(config, "rebac_schema"):
-                    delattr(config, "rebac_schema")
-            else:
-                config.rebac_schema = original
+    del transactional_db, composed_permissions
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
+        call_command("rebac", "sync", verbosity=0)
+        yield request.param
 
 
 def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_access_schema: str) -> None:

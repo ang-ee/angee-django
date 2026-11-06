@@ -18,6 +18,7 @@ from typing import Any, cast
 import pytest
 import tomlkit
 from django.apps import AppConfig
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
@@ -87,6 +88,16 @@ from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 collect_ignore = ["provenance_engine"]
+if settings.SETTINGS_MODULE == "tests.settings":
+    # These contracts run in the isolated settings hosts selected by CI.
+    collect_ignore.extend(
+        [
+            "test_permissionless_base.py",
+            "test_permissionless_iam_composition.py",
+            "test_permissionless_graphql.py",
+            "test_permissioned_graphql.py",
+        ]
+    )
 
 # Settings reloads in the suite compose through ProjectContract, which starts
 # Sentry for a configured DSN; a developer's exported DSN never receives test errors.

@@ -386,6 +386,7 @@ def test_retry_action_uses_run_permission_instead_of_engine_row_write(schema, ca
     assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.RUNNING
 
 
+@pytest.mark.django_db(transaction=True)
 def test_duplicate_retry_action_records_requesting_operator(schema, callers, register_step):
     """Only explicit acknowledgment permits retry after an uncertain external effect."""
 
@@ -494,6 +495,7 @@ def test_narrow_outcome_label_uses_published_vocabulary_without_row_queries(sche
     assert counts[0] == counts[1]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_narrow_step_run_relation_projection_does_not_fetch_each_foreign_key(schema, execution):
     """A selected forward relation includes its FK column in the parent query."""
 

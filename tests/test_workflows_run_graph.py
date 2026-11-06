@@ -21,7 +21,7 @@ from tests.test_workflows_review import review as review
 from tests.test_workflows_review import start_review
 from tests.workflow_steps import Echo, Route
 
-pytestmark = pytest.mark.usefixtures("workflow_step_classes")
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
 
 GRAPH = """query($id: String!) {
   workflowrun_by_pk(id: $id) {

@@ -51,7 +51,7 @@ from tests.conftest import (
 from tests.core_persistence import OwnedRow
 from tests.extcontrib.models import Claimed
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
 
 Party = apps.get_model("parties", "Party")
 Handle = apps.get_model("parties", "Handle")

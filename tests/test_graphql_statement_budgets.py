@@ -78,7 +78,7 @@ from tests.messaging_campaign import make_user
 from tests.test_messaging_graphql import _storage_drive
 from tests.test_timeline import KINDS
 
-pytestmark = pytest.mark.postgresql
+pytestmark = [pytest.mark.postgresql, pytest.mark.django_db(transaction=True)]
 
 ROOT = Path(__file__).resolve().parents[1]
 DECISIONS = authored_graphql_document(

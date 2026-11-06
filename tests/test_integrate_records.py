@@ -213,6 +213,7 @@ def test_baseline_completion_is_independent_of_actor_visibility(composed_tables:
         assert not deferred.has_completed_baseline()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     replica.direction = StreamDirection.BIDIRECTIONAL
     replica.save(update_fields=["direction"])
