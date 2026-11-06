@@ -1693,7 +1693,10 @@ class MessagingMutation:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
-        ThreadFollower.objects.mark_read_for_record(record, user=user, role=input.role)
+        try:
+            ThreadFollower.objects.mark_read_for_record(record, user=user, role=input.role)
+        except PermissionDenied as error:
+            return RecordThreadPayload.from_error(error, invalid_code="BAD_RECORD")
         return _record_thread_payload(record, info, role=input.role)
 
 
@@ -2280,7 +2283,10 @@ def _record_thread_payload(
 ) -> RecordThreadPayload:
     """Return a record thread payload with follower state for the request user."""
 
-    attachment = ThreadAttachment.objects.for_record(record, role=role)
+    try:
+        attachment = ThreadAttachment.objects.readable_for_record(record, role=role)
+    except PermissionDenied as error:
+        return RecordThreadPayload.from_error(error, invalid_code="BAD_RECORD")
     thread = attachment.thread if attachment is not None else None
     messages, message_result_count = (
         Message.objects.for_record(
