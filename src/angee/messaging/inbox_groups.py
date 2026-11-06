@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ from django.db.models import (
     IntegerField,
     Max,
     OuterRef,
+    Q,
     Subquery,
     TextField,
     Value,
@@ -38,7 +40,11 @@ class InboxGroupScope(BaseModel):
 
 @dataclass(frozen=True)
 class InboxGroup:
-    """A readable bucket identity and counts inside that bucket."""
+    """A readable bucket identity and counts inside that bucket.
+
+    ``key`` is the raw bucket value behind the public ``value``; ``rows`` is the
+    bucket's carried first page when the header page was asked for one.
+    """
 
     value: str | None
     label: str
@@ -48,16 +54,22 @@ class InboxGroup:
     platform: str = ""
     account: str = ""
     modality: str = ""
+    key: Any = None
+    rows: list[Any] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class InboxGroupPage:
-    """Group cardinality and distinct root rows; overlapping buckets are never summed."""
+    """Group cardinality and distinct root rows; overlapping buckets are never summed.
+
+    ``messages`` carries, once, the messages the headers' carried rows name.
+    """
 
     rows: list[InboxGroup]
     count: int
     record_count: int
     message_count: int
+    messages: Any = None
 
 
 class InboxGroups:
@@ -105,15 +117,24 @@ class InboxGroups:
         """Resolve public IDs through the same read gate used for the group header."""
 
         if value is None:
-            return self.rows.filter(_bucket__isnull=True)
+            return self.bucket_rows([None])
         if self.objects is not None:
             record = self.objects.from_public_id(value)
             if record is None:
                 raise ValueError("Group unavailable.")
-            return self.rows.filter(**{self.scope_field: record.pk})
+            return self.bucket_rows([record.pk])
         if self.choices and value not in dict(self.choices):
             raise ValueError("Unknown group value.")
-        return self.rows.filter(_bucket=value)
+        return self.bucket_rows([value])
+
+    def bucket_rows(self, keys: Sequence[Any]) -> Any:
+        """Rows of the buckets with these raw keys, selected through the indexed scope field."""
+
+        present = [key for key in keys if key is not None]
+        predicate = Q(**{f"{self.scope_field}__in": present})
+        if len(present) < len(keys):
+            predicate |= Q(_bucket__isnull=True)
+        return self.rows.filter(predicate)
 
     def page(self, *, page: int = 1, size: int = 25) -> InboxGroupPage:
         """Count and page headers, retaining distinct totals across overlapping groups."""
@@ -191,6 +212,7 @@ class InboxGroups:
                     count=row["records"],
                     message_count=row["messages"],
                     latest=row.get("_latest"),
+                    key=row["_bucket"],
                 )
                 for row in selected
             ],

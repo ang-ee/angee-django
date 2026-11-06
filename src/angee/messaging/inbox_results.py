@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import operator
+from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
+from functools import reduce
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -176,6 +180,52 @@ class InboxResults:
             )
         return self.groups(scope.axis, require_shared=require_shared).scope(scope.value)
 
+    def group_page(self, axis: str, *, page: int = 1, size: int = 25, leaf_size: int = 0) -> InboxGroupPage:
+        """Page headers; with ``leaf_size`` each carries its first page, and the page their messages.
+
+        Message rows of every header come from one ranked window over the headers'
+        buckets. A content row is a distinct identity, not a message, so each
+        content header still pages through :meth:`page`.
+        """
+
+        groups = self.groups(axis)
+        header = groups.page(page=page, size=size)
+        if leaf_size < 1 or not header.rows:
+            return replace(header, messages=self.inbox.messages.none())
+        InboxPage.window(1, leaf_size)
+        if self.is_content:
+            pages = [
+                self.page(scope=InboxGroupScope(axis=axis, value=row.value), size=leaf_size) for row in header.rows
+            ]
+            return replace(
+                header,
+                rows=[replace(row, rows=carried.rows) for row, carried in zip(header.rows, pages, strict=True)],
+                messages=self.inbox.page_messages([row.part.message_id for carried in pages for row in carried.rows]),
+            )
+        keys = [row.key for row in header.rows]
+        members = groups.bucket_rows(keys)
+        if axis == "day":
+            # Local days narrow by their indexed time span before the date cast.
+            days = sorted(date.fromisoformat(key) for key in keys)
+            members = members.filter(
+                _order_at__gte=datetime.combine(days[0], time.min, self.zone),
+                _order_at__lt=datetime.combine(days[-1] + timedelta(days=1), time.min, self.zone),
+            )
+        order = F("_order_at").asc() if self.options.oldest else F("_order_at").desc()
+        kept = members.first_per_group("_bucket", order_by=[order, F("pk").asc()], limit=leaf_size).order_by(
+            "_order_at" if self.options.oldest else "-_order_at", "pk"
+        )
+        carried_rows: dict[Any, list[InboxResultRow]] = defaultdict(list)
+        ids = []
+        for bucket, pk, sqid, order_at in kept.values_list("_bucket", "pk", "sqid", "_order_at"):
+            carried_rows[bucket].append(InboxResultRow(f"message:{sqid}", order_at, 1, 0, str(sqid)))
+            ids.append(pk)
+        return replace(
+            header,
+            rows=[replace(row, rows=carried_rows.get(row.key, [])) for row in header.rows],
+            messages=self.inbox.page_messages(ids),
+        )
+
     def page(self, *, scope: InboxGroupScope | None = None, page: int = 1, size: int = 25) -> InboxPage:
         """Page distinct content first, then fetch one bounded source use per row."""
 
@@ -296,27 +346,40 @@ class InboxConversationGroups(InboxGroups):
         return replace(result, rows=rows)
 
     def scope(self, value: str | None) -> Any:
-        """Select one bucket through its member threads, never a scan of the bucket CASE.
-
-        A survivor's bucket spans :meth:`Thread.member_threads`, readable or not: a
-        redirect is identity, not content, while every message stays gated by the
-        rows. A redirect is its own bucket only while its survivor is unreadable.
-        """
+        """Select one bucket by its public ID; a redirect under a readable survivor is not a key."""
 
         kind, _, public_id = (value or "").partition(":")
         if kind == "thread":
             record = self.inbox.threads.from_public_id(public_id)
-            if record is None:
+            if record is None or (
+                record.merged_into_id is not None
+                and self.inbox.threads.filter(pk=record.merged_into_id).exists()
+            ):
                 raise ValueError("Conversation unavailable.")
-            if record.merged_into_id is None:
-                members = Subquery(record.member_threads().values("pk"))
-                return self.rows.filter(**{f"{self.scope_field}__in": members})
-            if self.inbox.threads.filter(pk=record.merged_into_id).exists():
-                raise ValueError("Conversation unavailable.")
-            return self.rows.filter(**{self.scope_field: record.pk})
+            return self.bucket_rows([record.pk])
         if kind != "message":
             raise ValueError("Unknown conversation selection.")
         record = self.inbox.messages.from_public_id(public_id)
         if record is None:
             raise ValueError("Conversation unavailable.")
-        return self.rows.filter(_bucket=-record.pk)
+        return self.bucket_rows([-record.pk]).filter(_bucket=-record.pk)
+
+    def bucket_rows(self, keys: Sequence[Any]) -> Any:
+        """Select buckets through member threads and message keys, never a scan of the bucket CASE.
+
+        A survivor's bucket spans :meth:`Thread.member_threads`, readable or not: a
+        redirect is identity, not content, while every message stays gated by the
+        rows. A redirect key (its survivor unreadable) and a standalone message are
+        their own buckets.
+        """
+
+        threads = list(self.inbox.threads.filter(pk__in=[key for key in keys if key > 0]).only("pk", "merged_into_id"))
+        redirects = [thread.pk for thread in threads if thread.merged_into_id is not None]
+        predicate = Q(**{f"{self.scope_field}__in": redirects}) | Q(
+            **{f"{self.message}__in": [-key for key in keys if key < 0]}
+        )
+        survivors = [thread.member_threads() for thread in threads if thread.merged_into_id is None]
+        if survivors:
+            members = reduce(operator.or_, survivors)
+            predicate |= Q(**{f"{self.scope_field}__in": Subquery(members.values("pk"))})
+        return self.rows.filter(predicate)

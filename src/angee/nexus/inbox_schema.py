@@ -125,8 +125,8 @@ class InboxNavigatorRow:
 
 
 @strawberry.type
-class InboxGroup:
-    """A readable grouping key and counts inside that bucket."""
+class InboxGroup(Generic[Row]):
+    """A readable grouping key, counts inside that bucket, and its carried first page."""
 
     value: str | None
     label: str
@@ -136,13 +136,14 @@ class InboxGroup:
     platform: str
     account: str
     modality: str
+    rows: list[Row]
 
 
 @strawberry.type
-class InboxGroupPage:
+class InboxGroupPage(Generic[Row]):
     """Independent header page and distinct totals over its complete population."""
 
-    rows: list[InboxGroup]
+    rows: list[InboxGroup[Row]]
     count: int
     record_count: int
     message_count: int
@@ -169,6 +170,13 @@ class InboxResultRow:
     part: PartType | None
     file: FileType | None
     fragment: FragmentType | None
+
+
+@strawberry.type
+class InboxResultGroupPage(InboxGroupPage[InboxResultRow]):
+    """Result headers whose carried rows name messages; each message loads once."""
+
+    messages: list[MessageType]
 
 
 @strawberry.type
@@ -327,8 +335,9 @@ class NexusInboxQuery:
         circle: str = "",
         page: int = 1,
         size: int = 25,
-    ) -> InboxGroupPage:
-        """Page headers independently; totals count distinct rows across overlaps."""
+        leaf_size: int = 0,
+    ) -> InboxResultGroupPage:
+        """Page headers independently; with ``leaf_size`` each carries its first page of rows."""
 
         inbox = Message.objects.all().explorer()
         rows = inbox.results(
@@ -338,7 +347,7 @@ class NexusInboxQuery:
             circle=circle,
         )
         result = InboxResults(inbox, rows, options.to_pydantic() if options else InboxResultOptions())
-        return cast(InboxGroupPage, result.groups(axis).page(page=page, size=size))
+        return cast(InboxResultGroupPage, result.group_page(axis, page=page, size=size, leaf_size=leaf_size))
 
     @strawberry.field
     def inbox_navigator(
@@ -375,15 +384,19 @@ class NexusInboxQuery:
         options: InboxNavigatorInput | None = None,
         page: int = 1,
         size: int = 25,
-    ) -> InboxGroupPage:
-        """Page all applicable group headers before any member pages are loaded."""
+        leaf_size: int = 0,
+    ) -> InboxGroupPage[InboxNavigatorRow]:
+        """Page all applicable group headers; with ``leaf_size`` each carries its first identity page."""
 
         navigator = NexusInboxNavigator(
             Message.objects.all(),
             coverage.to_pydantic() if coverage else InboxCoverage(),
             options.to_pydantic() if options else NexusInboxNavigatorOptions(),
         )
-        return cast(InboxGroupPage, navigator.groups(axis).page(page=page, size=size))
+        return cast(
+            InboxGroupPage[InboxNavigatorRow],
+            navigator.group_page(axis, page=page, size=size, leaf_size=leaf_size),
+        )
 
     @strawberry.field
     def inbox_relation_kinds(self) -> list[str]:
