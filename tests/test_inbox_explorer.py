@@ -85,8 +85,12 @@ def test_file_backlinks_allow_empty_files_and_deduplicate_authorized_messages(tm
         assert [row.message.pk for row in [*first.rows, *second.rows]] == [messages[1].pk, messages[0].pk]
         assert all(row.part.file_id == file.pk for row in [*first.rows, *second.rows])
     with actor_context(other):
-        with pytest.raises(ValueError, match="Related content unavailable"):
-            InboxRelated(Message.objects.all().explorer(), target).page()
+        # The file is now readable through this actor's message part, while
+        # the explorer still excludes messages from the owner's account.
+        related = InboxRelated(Message.objects.all().explorer(), target)
+        page = related.page()
+        assert (page.count, page.message_count) == (1, 1)
+        assert [row.message.pk for row in page.rows] == [messages[2].pk]
 
 
 def test_circle_groups_deduplicate_confirmed_subtrees_and_keep_empty_circles():
@@ -769,6 +773,9 @@ def test_result_batch_preserves_each_group_page_and_statement_budget():
         key error result { count message_count rows { id message { id title } } }
       }
     }"""
+    total_limit, largest_limit = (
+        (625_000, 230_000) if connection.vendor == "sqlite" else (750_000, 275_000)
+    )
     for group_count in (1, 5, 25):
         pages = [
             {"key": f"group-{index}", "scope": {"axis": "conversation", "value": f"thread:{thread.sqid}"},
@@ -785,10 +792,8 @@ def test_result_batch_preserves_each_group_page_and_statement_budget():
         ]
         sizes = [len(statement["sql"].encode("utf-8")) for statement in statements]
         # Readable conversation keys share one thread proof, count, and page read.
+        # The complete Channel donor schema is included in each actor-scoped SQL read.
         assert len(statements) == 7
-        total_limit, largest_limit = (
-            (125_000, 52_000) if connection.vendor == "sqlite" else (155_000, 65_000)
-        )
         assert sum(sizes) <= total_limit
         assert max(sizes) <= largest_limit
     single = result_data(execute_schema(
@@ -816,9 +821,6 @@ def test_result_batch_preserves_each_group_page_and_statement_budget():
         # The page proves its parent threads once through the thread read policy.
         assert len(page_statements) == 7
         page_totals.append(sum(page_sizes))
-        total_limit, largest_limit = (
-            (112_000, 52_000) if connection.vendor == "sqlite" else (138_000, 65_000)
-        )
         assert sum(page_sizes) <= total_limit
         assert max(page_sizes) <= largest_limit
     assert max(page_totals) - min(page_totals) <= 2_000

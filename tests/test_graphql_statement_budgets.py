@@ -37,6 +37,7 @@ from angee.iam.graphql.capabilities import held_permissions, permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.testing.queries import is_permission_audit_insert
+from angee.intake import schema as intake_schema
 from angee.integrate import schema as integrate_schema
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
@@ -47,14 +48,17 @@ from angee.messaging.testing.models import Channel, Fragment, Message, Part, Thr
 from angee.messaging.testing.models import Party as PartyModel
 from angee.nexus import schema as nexus_schema
 from angee.parties import schema as parties_schema
+from angee.portfolio import schema as portfolio_schema
 from angee.posts import schema as posts_schema
 from angee.projects import schema as projects_schema
 from angee.projects.testing.models import Milestone, Project, Task
+from angee.proposals import schema as proposals_schema
 from angee.provenance.context import changeset as open_changeset
 from angee.storage import schema as storage_schema
 from angee.tags import schema as tags_schema
 from angee.tags.testing.models import Tag, TagAssignment
 from angee.timeline import schema as timeline_schema
+from angee.work import schema as work_schema
 from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import WorkflowRun
 from tests import test_messaging as messaging_models
@@ -146,7 +150,9 @@ def test_inbox_result_batch_threads_stay_flat(composed_tables: None, capture_gra
             )
             title = Fragment.objects.upsert(text=f"Inbox batch {index}", created_by_id=owner.pk)
             Part._base_manager.create(message=message, role="title", fragment=title, created_by=owner)
-    schema = addon_schema(messaging_schema.schemas, "console", nexus_schema.schemas)
+    schema = addon_schema(
+        messaging_schema.schemas, "console", nexus_schema.schemas, work_schema.schemas, intake_schema.schemas,
+    )
     reads = {}
     for count in (1, 5, 25):
         pages = [
@@ -160,9 +166,12 @@ def test_inbox_result_batch_threads_stay_flat(composed_tables: None, capture_gra
         assert [row["result"]["count"] for row in reads[count].data["inbox_results_batch"]] == [1] * count
     reads[5].assert_flat_from(reads[1])
     reads[25].assert_flat_from(reads[5])
+    # Channel's intake_queue axis needs intake's extension and work's queue type.
+    # Pin the resulting actor-scoped SQL separately for the two backends.
+    total_bytes, largest_bytes = (775_000, 280_000) if connection.vendor == "postgresql" else (650_000, 230_000)
     for read in reads.values():
-        read.assert_statements(10)
-        read.assert_bytes(total=180_000, largest=65_000)
+        read.assert_statements(9)
+        read.assert_bytes(total=total_bytes, largest=largest_bytes, cause="complete Channel donor schema")
         read.assert_no_audit_writes()
 
 
@@ -186,7 +195,9 @@ def test_message_part_document_budgets(composed_tables: None, capture_graphql_do
             )
             for index in range(4)
         ]
-    schema = addon_schema(messaging_schema.schemas, "console", nexus_schema.schemas)
+    schema = addon_schema(
+        messaging_schema.schemas, "console", nexus_schema.schemas, work_schema.schemas, intake_schema.schemas,
+    )
     message_variables = {"id": str(message.sqid), "sender": "", "circle": ""}
     reads = {}
     copies = {}
@@ -213,31 +224,31 @@ def test_message_part_document_budgets(composed_tables: None, capture_graphql_do
         copies[count].assert_flat_from(copies[5])
     for read in reads.values():
         # The merged messages resolver reads the parts once for the document.
-        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
-        assert read.statement_count == 14
+        # The complete donor schema measures the composed product policy.
+        assert read.statement_count == 15
         read.assert_bytes(
             total=575_000, largest=205_000,
-            cause="session-merged schema (O 9aaaf82ca) measures the composed product policy",
+            cause="complete messaging, nexus, work, and intake schema",
         )
         read.assert_no_audit_writes()
-    for read in copies.values():
-        # Autocommit after O 9aaaf82ca removes the in-savepoint revision reread.
-        assert read.statement_count == 12
-        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+    for count, read in copies.items():
+        # A present file adds one fixed read; part growth stays flat from five.
+        assert read.statement_count == (12 if count == 1 else 13)
         read.assert_bytes(total=1_100_000, largest=310_000, cause="batched parts and present files")
         read.assert_no_audit_writes()
 
+    with actor_context(owner):
+        assert not File.objects.with_actor(owner).filter(pk=files[3].pk).exists()
     with system_context(reason="test.document_budget.message.hidden_part"):
         Part.objects.create(message=message, parent=hidden_parent, position=40, file=files[3], created_by=owner)
     hidden_read = capture_graphql_document(schema, NEXUS_MESSAGE, message_variables, actor=owner)
     assert hidden_read.statement_count == reads[40].statement_count + 1
     nested_parts = hidden_read.data["inbox_message"]["message"]["parts"]
     assert nested_parts[-1]["parent"] is None
-    # P20 structural delivery: messaging/permissions.extends.zed grants a file
-    # referenced by an admitted part through message_part->read, while the
-    # direct File read stays denied.
+    # The live-backed message_part grant makes the file readable once an
+    # admitted part references it, without granting access to the drive.
     with actor_context(owner):
-        assert not File.objects.with_actor(owner).filter(pk=files[3].pk).exists()
+        assert File.objects.with_actor(owner).filter(pk=files[3].pk).exists()
     assert nested_parts[-1]["file"]["id"] == str(files[3].sqid)
     assert [part["file"]["id"] for part in nested_parts if part["file"] is not None] == [
         str(file.sqid) for file in files
@@ -545,7 +556,8 @@ def test_record_thread_document_file_part_growth(
             )
     schema = addon_schema(
         iam_schema.schemas, "console", integrate_schema.schemas, parties_schema.schemas, messaging_schema.schemas,
-        projects_schema.schemas,
+        projects_schema.schemas, work_schema.schemas, intake_schema.schemas, portfolio_schema.schemas,
+        proposals_schema.schemas,
     )
     variables = {"modelLabel": record._meta.label, "recordId": public_id_of(record)}
     with CaptureQueriesContext(connection) as captured:
@@ -720,11 +732,16 @@ def test_timeline_run_document_requires_run_read_for_linked_status(
     assert [entry["target_id"] for entry in shown.data["timeline"]["entries"]] == [public_id_of(run)]
     hidden.assert_no_audit_writes()
     hidden.assert_statements(5)
-    hidden.assert_bytes(total=130_000, largest=50_000, cause="record-bounded run read denies the outsider")
+    # PostgreSQL renders a larger fixed record-bounded permission proof.
+    hidden_total = 155_000 if connection.vendor == "postgresql" else 130_000
+    hidden.assert_bytes(total=hidden_total, largest=50_000, cause="record-bounded run read denies the outsider")
     shown.assert_no_audit_writes()
     # Hydrating the run through the redacting scope costs one field-scope read.
     shown.assert_statements(9)
-    shown.assert_bytes(total=195_000, largest=50_000, cause="record-bounded redacting run read admits the shared run")
+    shown_total = 225_000 if connection.vendor == "postgresql" else 195_000
+    shown.assert_bytes(
+        total=shown_total, largest=50_000, cause="record-bounded redacting run read admits the shared run",
+    )
 
 
 def test_timeline_rail_sender_statement_budget(comment_record, capture_graphql_document) -> None:
@@ -782,7 +799,9 @@ def test_related_permission_resource_list_budget(composed_tables: None, capture_
         for index in range(20):
             project = Project.objects.create(title=f"Budget project {index}", owner=owner)
             Task.objects.create(title=f"Budget task {index}", owner=owner, project=project)
-    schema = addon_schema(projects_schema.schemas, "console")
+    schema = addon_schema(
+        projects_schema.schemas, "console", portfolio_schema.schemas, work_schema.schemas, proposals_schema.schemas,
+    )
     document = """
         query RelatedPermissions($limit: Int!) {
           project_tasks(limit: $limit) {
@@ -849,7 +868,9 @@ def test_relation_sort_and_filter_aliases_have_no_bypass_audits(
         project = Project.objects.create(title="Budget alias project", owner=owner)
         for index in range(5):
             Task.objects.create(title=f"Budget alias task {index}", owner=owner, project=project)
-    schema = addon_schema(projects_schema.schemas, "console")
+    schema = addon_schema(
+        projects_schema.schemas, "console", portfolio_schema.schemas, work_schema.schemas, proposals_schema.schemas,
+    )
     document = """
         query RelationAliases($limit: Int!) {
           project_tasks(
@@ -902,10 +923,11 @@ def test_decision_concern_labels_batch_across_the_list(
             reads.append(read)
     one, five = reads
     five.assert_flat_from(one)
+    # The same fixed seven-statement proof renders a larger SQL string on PostgreSQL.
+    total_bytes, largest_bytes = (120_000, 82_000) if connection.vendor == "postgresql" else (115_000, 73_000)
     for read in (one, five):
         read.assert_statements(7)
-        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
-        read.assert_bytes(total=115_000, largest=72_000)
+        read.assert_bytes(total=total_bytes, largest=largest_bytes, cause="batched concern-label proof")
         read.assert_no_audit_writes()
 
 
@@ -917,7 +939,9 @@ def test_project_node_display_name_stays_flat_at_one_and_five(
     owner = create_user("document-budget-node-label")
     with system_context(reason="test.document_budget.node_label"):
         projects = [Project.objects.create(title=f"Project label {index}", owner=owner) for index in range(5)]
-    schema = addon_schema(projects_schema.schemas, "console")
+    schema = addon_schema(
+        projects_schema.schemas, "console", portfolio_schema.schemas, work_schema.schemas, proposals_schema.schemas,
+    )
     document = "query Labels($limit: Int!) { projects(limit: $limit) { id display_name } }"
     one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
     five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)
@@ -996,12 +1020,17 @@ def test_node_labels_batch_stored_deferred_and_related_sources(
         agent = Agent.objects.create(name="Assistant", owner=owner)
         sessions = [AgentSession.objects.create(agent=agent, user=owner) for _ in range(5)]
     cases = (
-        (parties_schema.schemas, "parties", [str(row) for row in parties], 5),
-        (projects_schema.schemas, "project_milestones", [str(row) for row in milestones], 6),
-        (agents_schema.schemas, "agent_sessions", [str(row) for row in sessions], 7),
+        (addon_schema(parties_schema.schemas, "console"), "parties", [str(row) for row in parties], 5),
+        (
+            addon_schema(
+                projects_schema.schemas, "console", portfolio_schema.schemas, work_schema.schemas,
+                proposals_schema.schemas,
+            ),
+            "project_milestones", [str(row) for row in milestones], 6,
+        ),
+        (addon_schema(agents_schema.schemas, "console"), "agent_sessions", [str(row) for row in sessions], 7),
     )
-    for schemas, root, expected, statement_limit in cases:
-        schema = addon_schema(schemas, "console")
+    for schema, root, expected, statement_limit in cases:
         document = f"query Labels($limit: Int!) {{ {root}(limit: $limit) {{ id display_name }} }}"
         one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
         five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)

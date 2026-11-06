@@ -354,7 +354,7 @@ def prove_record_references(
 
 
 class RecordReferencePageProof(FieldExtension):
-    """Materialize one native Hasura page before resolving its reference fields."""
+    """Prove references across one native list or all grouped pages before resolving fields."""
 
     def __init__(self, node: type) -> None:
         self.node = node
@@ -366,7 +366,9 @@ class RecordReferencePageProof(FieldExtension):
         rows = list(result)
         references: list[ProtectedRecordRefMixin] = []
         seen: set[int] = set()
-        pending = list(rows)
+        # The grouped root reuses the list field's extensions. Its result is a
+        # list of page results, each with bounded ``rows``; prove their union.
+        pending = [row for page in rows for row in ([page] if isinstance(page, models.Model) else page.rows)]
         while pending:
             row = pending.pop()
             if not isinstance(row, models.Model) or id(row) in seen:

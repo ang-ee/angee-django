@@ -50,7 +50,9 @@ from tests.conftest import result_data as _data
 messaging_schema = importlib.import_module("angee.messaging.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
+intake_schema = importlib.import_module("angee.intake.schema")
 parties_schema = parties_graphql.parties_schema
+work_schema = importlib.import_module("angee.work.schema")
 User = get_user_model()
 
 
@@ -863,12 +865,14 @@ def test_fragment_counts_are_projected_at_one_five_ten_twenty_parts(composed_tab
         size: measure_graphql_document(schema, document, {"message": message.sqid, "limit": size}, actor=admin)
         for size in (1, 5, 10, 20)
     }
+    # The complete Channel donor schema contributes fixed permission SQL.
+    total_bytes, largest_bytes = (210_000, 190_000) if connection.vendor == "postgresql" else (185_000, 170_000)
     for size, read in reads.items():
         assert len(read.data["parts"]) == size
         assert all(row["fragment"] == {"part_count": 1, "message_count": 1} for row in read.data["parts"])
         assert read.statement_count == 6, (size, read.statement_count)
         read.assert_no_audit_writes()
-        read.assert_bytes(total=70_000, largest=56_000)
+        read.assert_bytes(total=total_bytes, largest=largest_bytes, cause="complete Channel donor schema")
     for smaller, larger in ((1, 5), (5, 10), (10, 20)):
         reads[larger].assert_flat_from(reads[smaller])
 
@@ -2928,7 +2932,7 @@ def _schema() -> Any:
 
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
-        for module in (iam_schema, integrate_schema, parties_schema, messaging_schema)
+        for module in (iam_schema, integrate_schema, parties_schema, messaging_schema, work_schema, intake_schema)
     ]
     return GraphQLSchemas(addons).build("console")
 
@@ -2938,7 +2942,7 @@ def _schema_with_sudo_handle_query() -> Any:
 
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
-        for module in (iam_schema, integrate_schema, parties_schema, messaging_schema)
+        for module in (iam_schema, integrate_schema, parties_schema, messaging_schema, work_schema, intake_schema)
     ]
     addons.append(
         SchemaAddon({"console": {key: (SudoHandleQuery,) if key == "query" else () for key in SCHEMA_PART_KEYS}})
