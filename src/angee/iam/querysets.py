@@ -80,6 +80,25 @@ class ProtectedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], RebacQueryS
 
         return actor_user_id(instance_actor(self))
 
+    def _structural_selection_of_admitted(self) -> models.QuerySet[ModelT]:
+        """Keep receiver filters after a caller has admitted the parent.
+
+        An explicit actor or sudo scope remains authoritative. An unbound
+        receiver carries its Django selection to the base manager, dropping
+        even an ambient ``actor_context`` actor. Its joins and predicates
+        travel together without the receiver's policy hook. Callers must have
+        proved the parent that admits these rows before using this bypass.
+        """
+
+        if (self._rebac_actor is not None or self._rebac_relation_actor is not None
+                or self._rebac_sudo_reason is not None):
+            return self
+        rows = self.model._base_manager.db_manager(self.db, hints=self._hints).get_queryset()  # type: ignore[attr-defined]
+        query = self.query.clone()
+        query.__class__ = type(rows.query)
+        rows.query = query
+        return rows
+
     def readable_scalar_subquery(
         self,
         field: str,

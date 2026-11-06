@@ -1,10 +1,10 @@
-"""The history read surface: a record's changesets, read through the record's own gate.
+"""The history read surface: a record's readable changesets touching its document.
 
 One timeline per record, keyed by changeset. Each entry carries the changeset's
 attribution, the field deltas simple-history computes between the record's
 versions, the statements the changeset asserted, withdrew or applied for the
 record, and the survivor/absorbed facts of a merge. Authorization is the
-record's ``read``; gated fields the actor cannot read are left out of every
+record's and changeset's ``read``; gated fields the actor cannot read are left out of every
 delta and statement value, the same redaction the record's own projection
 carries. Statement tables mirror history tables, so they take the same gate.
 """
@@ -350,8 +350,7 @@ class RecordHistory:
     def changesets(self) -> models.QuerySet[Any]:
         """The record's changesets, newest first; ordering is the changeset owner's."""
 
-        rows = Changeset._base_manager.db_manager(self.record._state.db, hints={"instance": self.record}).all()
-        return ChangesetQuerySet.touching_document(rows, self.record)
+        return ChangesetQuerySet.closed_for_record(self.record)
 
     def entries(self, changesets: Iterable[Any]) -> list[HistoryEntryType]:
         """Project an already bounded window, also used by the combined Comments feed."""

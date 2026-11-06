@@ -478,18 +478,25 @@ class MessageQuerySet[MessageT: Message](
         message_types: tuple[str, ...] = (),
         trashed: bool = False,
     ) -> models.QuerySet[Any]:
-        """The parent-authorized message population, without presentation hydration."""
+        """The admitted record's message population, without presentation hydration.
 
-        rows = self.model._base_manager.using(self._db or router.db_for_read(self.model, instance=record))
+        Callers resolve ``record`` through its read gate before this structural
+        projection; a non-chatter role additionally proves the thread read.
+        """
+
+        assert record.pk is not None, "A persisted admitted record is required for structural message selection."
+        rows = self._structural_selection_of_admitted().using(
+            self._db or router.db_for_read(self.model, instance=record),
+        )
         using = rows.db
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        attachment = attachment_model.objects.db_manager(using, hints={"instance": record}).for_record(
+        attachment = attachment_model.objects.db_manager(using, hints={"instance": record}).readable_for_record(
             record, role=role,
         )
         if attachment is None:
             return rows.none().annotate(_order_at=self.chronological_time())
-        # The admitted record implies its chatter. The thread membership narrows
-        # this structural read to that record's transcript.
+        # A record implies its own chatter; other roles passed the thread's read.
+        # Thread membership narrows this selection to that transcript.
         queryset = (
             rows.filter(self.thread_filter(attachment.thread))
             .filter(is_trashed=trashed)

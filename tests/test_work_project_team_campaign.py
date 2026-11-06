@@ -62,7 +62,34 @@ def test_project_manager_roster_read_has_no_audit_insert(team_case):
     assert sum(is_permission_audit_insert(query["sql"], connection) for query in captured) == 0
     # The admitted project's team supplies one bounded roster read and no bypass.
     assert len(captured) == 19
-    assert sum(len(query["sql"].encode("utf-8")) for query in captured) <= 50_000
+    # Team read is a separate policy proof before exposing membership seat ids.
+    assert sum(len(query["sql"].encode("utf-8")) for query in captured) <= 90_000
+
+
+def test_project_reader_without_team_read_sees_labels_without_seat_ids(team_case):
+    project, team, _, author, users = team_case
+    reader = users["outsider"]
+    with system_context(reason="test.work.private_roster"):
+        team.visibility = "private"
+        team.save(update_fields=["visibility"])
+    with actor_context(author):
+        project.grant_record_access("reader", reader)
+    assert project.with_actor(reader).has_access("read")
+    assert not team.with_actor(reader).has_access("read")
+
+    result = execute_schema(
+        addon_schema(work_schema.schemas, "console"),
+        """query($project: ID!) {
+          project_manager_roster(project: $project) {
+            people { subject label seat_id removable }
+          }
+        }""",
+        {"project": project.sqid}, user=reader,
+    )
+    assert result.errors is None
+    people = result.data["project_manager_roster"]["people"]
+    assert people and all(person["label"] for person in people)
+    assert all(person["subject"] == "" and person["seat_id"] is None and not person["removable"] for person in people)
 
 
 def test_project_roster_access_matrix_does_not_carry_share_or_delete(team_case):

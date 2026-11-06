@@ -137,7 +137,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
 8. **Serve nothing new.** `history(model, id)` and `revert_changeset` live in provenance's `console` schema, resource metadata
    marks `history: true`, and the web fragment renders the timeline and drill-in ([README: History surface](../../README.md#history-surface)).
-   **Owner rule:** history reads follow the record's `read` gate and field gates; an addon exposes no history type of its own.
+   **Owner rule:** history reads follow the record's `read` gate, each changeset's `read` gate, and field gates; an addon exposes no history type of its own.
 
 9. **Test history and statements.** Hosts list `angee.provenance.testing` and register `angee.provenance.testing.fixtures`
    (autouse `captured_changeset`); a test that exercises a production boundary is marked `entrypoint_boundaries` and opens

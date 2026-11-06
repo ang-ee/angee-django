@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 16
+// @rebac_schema_revision: 17
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -26,7 +26,6 @@
 // An admitted party or actor-readable handle may project its avatar file's
 // display facts through that row; file content and direct file reads keep their
 // own storage/file policy.
-
 definition parties/party {
     relation owner: auth/user // rebac:field=owner
     relation editor: auth/user | auth/group#member

@@ -599,7 +599,7 @@ def test_nexus_graph_omits_redacted_handle_count_and_private_edges(
         Tie.objects.create(party_a=f.person, party_b=zero)
     query = "query Graph($id: ID!) { party_graph(root_id: $id) { nodes edges } }"
     denied = execute_schema(identity_graphql, query, {"id": f.person.sqid}, user=f.reader)
-    assert denied.errors and denied.errors[0].extensions["code"] == "INTERNAL"
+    assert denied.errors and denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
     graph = result_data(execute_schema(identity_graphql, query, {"id": f.person.sqid}, user=f.owner))["party_graph"]
     nodes = {node["id"]: node for node in graph["nodes"]}
     assert nodes[f.person.sqid]["meta"]["handle_count"] == 7

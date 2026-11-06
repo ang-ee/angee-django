@@ -1,6 +1,6 @@
 """The provenance history surface: shape, read gate, redaction, statements and revert.
 
-``history`` reads a record's changesets through the record's own ``read`` gate;
+``history`` reads closed changesets through the record's ``read`` gate;
 ``revert_changeset`` restores through its ``write`` gate. Knowledge pages carry
 the vault-scoped gate, the ``scopedemo`` probe row carries a field-gated
 ``title``, and a party asserts statements on save.
@@ -293,7 +293,7 @@ def test_history_follows_the_records_read_gate_and_write_decides_revert() -> Non
     assert _history(schema, outsider, "knowledge.Page", page) is None
     seen = _history(schema, viewer, "knowledge.Page", page)
     assert seen["total"] == 2
-    assert all(entry["can_revert"] is False for entry in seen["entries"])
+    assert all(not entry["can_revert"] for entry in seen["entries"])
 
 
 @pytest.mark.parametrize("label", ["knowledge.Nope", "knowledge.Link", "auth.Group"])

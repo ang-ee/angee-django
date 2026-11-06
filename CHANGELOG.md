@@ -17,11 +17,13 @@ live in code docstrings.
 - Workflow trigger capture, retry failure selection, and agent MCP catalogue
   lookup use their owning managers and querysets directly. Test-only forwarding
   APIs and unused imports were removed.
-- The unfinished per-call tool approval path is removed. Projects must, in their
-  own native migration history, disable tools marked `requires_approval` before
-  dropping that field, map parked sessions and turns to error/failed with an
-  explanation, and narrow the active-turn constraint to running turns. No
-  selected tool is made callable by this cutover.
+- The unfinished per-call tool approval path is removed. The
+  `requires_approval` catalogue flag remains: flagged tools stay unavailable
+  until an approval decision path exists, even when a service user has `use`.
+  Projects with a migration that dropped this column must restore it and mark
+  formerly approval-gated tools before enabling them. Parked sessions and turns
+  still need to map to error/failed; the active-turn constraint covers running
+  turns.
 
 ## Unreleased — test contract coverage
 

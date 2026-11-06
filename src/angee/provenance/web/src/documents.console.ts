@@ -20,7 +20,7 @@ export const HistoryEntrySummaryFields = graphql(`
   }
 `);
 
-/** One record's changesets, newest first, through the record's own read gate. */
+/** One record's changesets, newest first, through the record and changeset read gates. */
 export const RecordHistoryDocument = graphql(`
   query RecordHistory($model: String!, $id: ID!, $limit: Int!, $offset: Int!, $selected: ID) {
     history(model: $model, id: $id, limit: $limit, offset: $offset, selected: $selected) {

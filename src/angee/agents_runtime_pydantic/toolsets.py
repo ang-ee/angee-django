@@ -17,6 +17,7 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.apps import apps
+from django.core.exceptions import ObjectDoesNotExist
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError, ValidationError
 from fastmcp.tools import Tool as FastMCPTool
@@ -284,13 +285,17 @@ def _tool_access_allowed(
 ) -> bool:
     """Return the fresh per-call ``use`` decision for one canonical grant ref."""
 
+    try:
+        grant = tool_grant_ref(server_sqid, tool_name, using=using)
+    except ObjectDoesNotExist:
+        return False
     with database_context(using) if using is not None else nullcontext():
         return (
             backend()
             .check_access(
                 subject=agent,
                 action="use",
-                resource=tool_grant_ref(server_sqid, tool_name, using=using),
+                resource=grant,
             )
             .allowed
         )

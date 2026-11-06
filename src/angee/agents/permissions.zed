@@ -1,13 +1,13 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 20
+// @rebac_schema_revision: 21
 
 definition agents/agent {
     // An admitted agent may expose whether its own sessions have active turns;
     // the correlated turn read returns only that boolean.
-    // An actor's own agents and their model readiness may be read for chat selection;
-    // selection returns only the actor's running, callable agent.
+    // Chat selection reads only the actor's own admitted running agents;
+    // its model handle requires the inference model's separate read.
     relation owner: auth/user // rebac:field=owner
     relation actor: auth/user // rebac:field=user
     relation reader: auth/user | auth/group#member
@@ -45,8 +45,8 @@ definition agents/toolrole {
 // The public server/tool-name pair resolves that row at the API boundary.
 // Agent selections resolve live through `selected_agent`; independent direct
 // and group grants remain tuple-backed in `grantee`, while bundles use `role`.
-// Advertisement and execution check `use`; `use_approved` is a separate
-// standing-approval arm.
+// Advertisement and execution check `use` only for enabled tools that do not
+// require an unimplemented approval decision. `use_approved` is separate.
 definition agents/tool_grant {
     relation server: agents/mcp_server // rebac:field=server
     relation selected_agent: auth/user // rebac:field={"path":"agents__user"}

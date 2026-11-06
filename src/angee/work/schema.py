@@ -285,7 +285,7 @@ class ProjectManagerPersonType:
 
     subject: str
     label: str
-    seat_id: PublicID
+    seat_id: PublicID | None
     removable: bool
 
 
@@ -363,11 +363,13 @@ class WorkPeopleQuery:
         """List only person accounts on the project's current team."""
 
         target = authorized_permission_target(info, Project, project, "read")
-        if target.team_id is None:
+        team = target.team
+        if team is None:
             return ProjectManagerRosterType(offered=False, people=[])
         offered = target.has_access("share") and (
-            Membership.MembershipRole.MODERATOR in Membership.objects.available_roles(group=target.team)
+            Membership.MembershipRole.MODERATOR in Membership.objects.available_roles(group=team)
         )
+        reveal_seats = team.with_actor(get_current_user(info)).has_access("read")
         seats = list(MembershipQuerySet.confirmed(cast(Any, Membership._base_manager.all())).filter(
             group_id=target.team_id, role=Membership.MembershipRole.MODERATOR,
         ).order_by("pk")[:100])
@@ -378,8 +380,9 @@ class WorkPeopleQuery:
         }
         return ProjectManagerRosterType(offered=offered, people=[
             ProjectManagerPersonType(
-                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))),
-                label=user_label(people[seat.party_id]), seat_id=seat.sqid, removable=offered,
+                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))) if reveal_seats else "",
+                label=user_label(people[seat.party_id]),
+                seat_id=seat.sqid if reveal_seats else None, removable=offered and reveal_seats,
             )
             for seat in seats if seat.party_id in people
         ])

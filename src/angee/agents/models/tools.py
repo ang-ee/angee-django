@@ -207,6 +207,8 @@ class MCPTool(AuditMixin, ProtectedDataModel, concrete=True):
     description = models.TextField(blank=True)
     input_schema = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=True)
+    requires_approval = models.BooleanField(default=False)
+    """Tools awaiting the unfinished approval decision remain unavailable."""
 
     class Meta:
         """Django model options for MCP tools."""

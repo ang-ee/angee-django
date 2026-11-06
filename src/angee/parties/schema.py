@@ -79,13 +79,13 @@ _ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]:
     """Select the named read :meth:`PartyManager.display_avatar_prefetches` batches for a page.
 
-    The admitted party bounds its avatar projection. Handle visibility keeps
-    its own actor guard; file rows contribute display facts only.
+    The admitted party bounds its avatar projection. File and handle rows keep
+    their own actor read guards.
     """
 
     def prefetch(info: strawberry.Info) -> Prefetch:
         actor = session_user(info)
-        avatars = apps.get_model("storage", "File")._base_manager.select_related(
+        avatars = apps.get_model("storage", "File").objects.with_actor(actor).select_related(
             "mime_type"
         )
         return cast(Prefetch, getattr(Party.objects.display_avatar_prefetches(actor, avatars=avatars), name))
@@ -149,13 +149,15 @@ class PartyType(AuthoredRefMixin, ProtectedNode):
     introduced_by: "PartyType | None" = actor_scoped_to_one("introduced_by")
 
     @strawberry_django.field(only=["avatar_id"], prefetch_related=[_display_avatar_prefetch("own")])
-    def avatar(self) -> AvatarIdentity | None:
+    def avatar(self, info: strawberry.Info) -> AvatarIdentity | None:
         """Project the admitted party's own avatar identity."""
 
         row = cast(Any, self)
         avatar = getattr(row, "_display_own_avatar", None)
         if not hasattr(row, "_display_own_avatar") and row.avatar_id is not None:
-            avatar = File._base_manager.select_related("mime_type").filter(pk=row.avatar_id).first()
+            avatar = File.objects.with_actor(session_user(info)).select_related("mime_type").filter(
+                pk=row.avatar_id,
+            ).first()
         return AvatarIdentity(file=avatar) if avatar is not None else None
 
     created_at: auto
