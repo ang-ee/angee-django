@@ -1,6 +1,6 @@
 # Container authoring
 
-The recipe for contributing to, declaring and narrowing containers from a web fragment. Contracts: `ContainerChild`, `ContainerAlteration`, `ContainerEntry` (`packages/ui/src/runtime/containers.ts:93-146`); compiler: `compileContainers` (`packages/app/src/containers.ts:44`); rules: [Containers](../../../../docs/frontend/guidelines.md#containers). This file shows shapes and adds no rule.
+The recipe for contributing to, declaring and narrowing containers from a web fragment. Contracts: `ContainerChild`, `ContainerAlteration`, `ContainerEntry` (`packages/ui/src/runtime/containers.ts:93-146`); compiler: `compileContainers` (`packages/app/src/containers.ts`); rules: [Containers](../../../../docs/frontend/guidelines.md#containers). This file shows shapes and adds no rule.
 
 ## 1. Find the address
 
@@ -81,7 +81,7 @@ A new kind name is added by declaration merging into `ContainerKinds` (`src/ange
 
 ## 7. Test the contribution
 
-Assert the manifest with `containerChildren(addon, address)` (`packages/app/src/testing.tsx:167`). Render an owner with children placed straight into the runtime, no layering ([rendering and testing](../../../../docs/frontend/guidelines.md#rendering-and-testing)):
+Assert the manifest with `containerChildren(addon, address)` (`packages/app/src/testing.tsx`). Render an owner with children placed straight into the runtime, no layering ([rendering and testing](../../../../docs/frontend/guidelines.md#rendering-and-testing)):
 
 ```tsx
 const containers = containersFromChildren(RESOURCE_CONTAINERS, {

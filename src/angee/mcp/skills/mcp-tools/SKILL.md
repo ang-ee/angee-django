@@ -26,18 +26,18 @@ through the same ambient actor.
 | `angee.mcp.server` | The one process-wide `FastMCP`, registrar discovery in install order, `MOUNT_PATH` | `src/angee/mcp/server.py:38,49,54,92` |
 | `angee.mcp.graphql` | `GraphQLTool` declaration, compiler, limits, actor-scoped execution | `src/angee/mcp/graphql.py:70,73,83,189,226,368,518` |
 | `angee.mcp.middleware`, `angee.mcp.verifier` | Actor bracketing per call; bearer→`SubjectRef` through `ANGEE_MCP_ACTOR_VERIFIER` | `src/angee/mcp/middleware.py:20`, `src/angee/mcp/verifier.py:23,27` |
-| `angee.mcp.asgi` | `http_mounts()` and fresh `lifespans()` factories read by `angee.server.asgi`, entered per serving process | `src/angee/mcp/asgi.py:20,30`, `angee.server.asgi` |
+| `angee.mcp.asgi` | `http_mounts()` and fresh `lifespans()` factories read by `angee.server.asgi`, entered per serving process | `src/angee/mcp/asgi.py`, `angee.server.asgi` |
 | `angee.mcp.resource_tools`, `angee.mcp.apps` | Generated console readers, `RESOURCE_READER_TOOL_TAG`, check `angee.mcp.E001` | `src/angee/mcp/resource_tools.py:35,49,136`, `src/angee/mcp/apps.py:16` |
 | `angee.base.addons` | Optional addon-module discovery; MCP owns registrar validation | [Base adapter](../../../base/addons.py), [MCP server](../../server.py) |
 | `tests/test_<addon>_mcp.py`, `<consumer>/tests/test_mcp.py` | Compile-and-register tests; StreamableHTTP round trip | `tests/test_knowledge_mcp.py:56,197`, `examples/src/example/notes/tests/test_mcp.py:67,148` |
 
 ## Reuse first
 
-- `GraphQLTool` + `register_graphql_tools` (`src/angee/mcp/graphql.py:189,226`): declare an operation and a
+- `GraphQLTool` + `register_graphql_tools` (`src/angee/mcp/graphql.py`): declare an operation and a
   projection; the compiler derives input schema, document, output schema and `readOnlyHint` from the schema bucket.
 - The schema bucket's own gates: strawberry `permission_classes`, `RebacManager` scoping, the write backend and
-  `action_guard` run inside `execute_under_actor` (`src/angee/mcp/graphql.py:83`); a tool adds none.
-- `ActorMiddleware` enters `rebac.actor_context` per call (`src/angee/mcp/middleware.py:20`); tool bodies read
+  `action_guard` run inside `execute_under_actor` (`src/angee/mcp/graphql.py`); a tool adds none.
+- `ActorMiddleware` enters `rebac.actor_context` per call (`src/angee/mcp/middleware.py`); tool bodies read
   `rebac.current_actor()` ambiently and never take an actor argument.
 - Generated readers already cover every console resource (`src/angee/mcp/resource_tools.py:49`); curate a tool
   only for a projection, write or search the generated pair cannot express.
@@ -120,12 +120,12 @@ through the same ambient actor.
 ## Do not
 
 - A tool body that filters rows by user or re-checks a permission: a GraphQL-backed tool delegates both to the
-  schema under `execute_under_actor` (`src/angee/mcp/graphql.py:83`); a hand-written tool delegates to the
-  model verbs and the actor-scoped querysets `ActorMiddleware` pins (`src/angee/mcp/middleware.py:20`;
+  schema under `execute_under_actor` (`src/angee/mcp/graphql.py`); a hand-written tool delegates to the
+  model verbs and the actor-scoped querysets `ActorMiddleware` pins (`src/angee/mcp/middleware.py`;
   [REBAC](../../../../../docs/backend/guidelines.md#rebac)); neither adds a second gate
   ([Keep policy above detail](../../../../../docs/guidelines.md#keep-policy-above-detail)).
-- An actor, user id or tenant argument on a tool: `ActorMiddleware` supplies the actor ambiently (`src/angee/mcp/middleware.py:20`; [GraphQL actor and write contracts](../../../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts)).
-- A second FastMCP instance, mount or lifespan in an addon: `angee.mcp.server.mcp_server` is the process-wide owner (`src/angee/mcp/server.py:54`; [Serving](../../../../../docs/composer.md#serving)).
+- An actor, user id or tenant argument on a tool: `ActorMiddleware` supplies the actor ambiently (`src/angee/mcp/middleware.py`; [GraphQL actor and write contracts](../../../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts)).
+- A second FastMCP instance, mount or lifespan in an addon: `angee.mcp.server.mcp_server` is the process-wide owner (`src/angee/mcp/server.py`; [Serving](../../../../../docs/composer.md#serving)).
 - A tool registry, decorator or settings list beside `mcp_tools.register`: [MCP server](../../server.py) discovers and validates registrars through Base's optional-module reader ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
 - Hand-rolled CRUD readers for a console resource: generated readers already exist and the agents catalogue grants them (`src/angee/mcp/resource_tools.py:49`, `src/angee/agents/grants.py:116`; [DRY](../../../../../docs/guidelines.md#dont-repeat-yourself-dry)).
 - A list query without `limit_arg` or a page bound above `MAX_QUERY_LIMIT`: the compiler refuses the first and clamps the second (`src/angee/mcp/graphql.py:73,528`).
@@ -149,9 +149,9 @@ against console-schema drift (`src/angee/mcp/resource_tools.py:136`).
 
 ## Pitfalls
 
-- A cached `mcp_server()` outlives `override_settings`; clear `mcp_server` and `mcp_app` per test (`src/angee/mcp/server.py:54,69`).
+- A cached `mcp_server()` outlives `override_settings`; clear `mcp_server` and `mcp_app` per test (`src/angee/mcp/server.py`).
 - Agent bearers authenticate as the agent's service user, not its owner; owner-gated fields are null for them (`src/angee/agents/mcp_verifier.py:29`).
-- The MCP path has no request lifecycle; `_execute_sync` recycles connections itself, so do not add signals or middleware for it (`src/angee/mcp/graphql.py:103`).
+- The MCP path has no request lifecycle; `_execute_sync` recycles connections itself, so do not add signals or middleware for it (`src/angee/mcp/graphql.py`).
 - `readOnlyHint` is derived from the root `op_type`; a hand-written tool must declare it or the pydantic runtime refuses to advertise it (`src/angee/agents_runtime_pydantic/toolsets.py:317-324`).
 - Non-GraphQL tools register with `tags`; the resource-reader tag is reserved for generated readers and drives grant sync (`src/angee/mcp/resource_tools.py:35`, `src/angee/agents/grants.py:129`).
 

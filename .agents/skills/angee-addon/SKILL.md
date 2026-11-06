@@ -40,9 +40,9 @@ wires declarations only; the reference example throughout is `examples/src/examp
   `django_compose.conf` merges settings. `angee.server.urls` includes an enabled addon's `urls` module
   and `angee.server.asgi` reads its `asgi` module's `http_mounts`, `protocols()` and `lifespans`
   ([Serving](../../../docs/composer.md#serving)). Declare through those owners.
-- `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts:162,66`), `createNamespaceT`
-  (`packages/ui/src/i18n/index.ts:45`), `expectValidBaseAddon` (`packages/app/src/testing.tsx:101`),
-  `defineAngeeWebVitestConfig` (`packages/app/config/vitest.ts:90`) own fragment composition.
+- `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts`), `createNamespaceT`
+  (`packages/ui/src/i18n/index.ts`), `expectValidBaseAddon` (`packages/app/src/testing.tsx`),
+  `defineAngeeWebVitestConfig` (`packages/app/config/vitest.ts`) own fragment composition.
 - Start an addon from `templates/addons/web` (Copier: manifest, model, gate, schema, demo row, test model, test and, with `include_web`, the fragment under `web/`), not from an older addon ([web build pitfalls](../angee-framework/references/web-pitfalls.md)).
 
 ## Steps
@@ -136,7 +136,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
 5. **Register test models.** Framework addons add `testing/__init__.py` and `testing/models.py`: one
    concrete subclass per abstract source model (`abstract = False`, `app_label = "<label>"`, `db_table =
    "test_<label>_<model>"`, same `rebac_resource_type`); list the addon in `tests/settings.py` `INSTALLED_APPS`
-   (`:29`) and import the module once in `tests/conftest.py` (`# noqa: F401`, `:645`); tests go in
+   and import the module once in `tests/conftest.py` (`# noqa: F401`, `:645`); tests go in
    `tests/test_<name>*.py` (`angee-tests` owns their shapes). A consumer addon keeps `tests/` inside the addon (notes:
    `examples/src/example/notes/tests/`; `pyproject.toml:205` puts `examples/src` on the test path).
    **Owner rule:** [source-addon test models](../../../docs/checks.md#source-addon-test-models) own
