@@ -3,8 +3,10 @@
 Storage contributes a **Files** group in Related on the record routes of types that
 accept attachments: those whose resource metadata lists `storage.FileAttachment`
 in `recordEdges`. `record_files` returns attachments only when the actor can read
-the record and each file. The file keeps its own permissions; attaching it never
-grants file access.
+the record and each file. For record-visible files, a declared record arm supplies
+file read; other files retain their own read check. The edge projects file name,
+size, type and attribution. Its download token re-checks the parent, attachment
+and file. Attaching a private or inherited file never grants file access.
 
 A record type accepts attachments once its owner declares it on
 `storage/file_attachment` from its `permissions.extends.zed`: one relation backed
@@ -29,7 +31,7 @@ definition storage/file_attachment {
 
 definition storage/file {
     relation record: example/record // rebac:field={"path":"attachments__example_record","filters":{"visibility":"record"}}
-    permission read = record->read
+    permission read_granted = record->read
     permission write = record->write
 }
 ```

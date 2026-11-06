@@ -50,6 +50,9 @@ from angee.posts import schema as posts_schema
 from angee.projects import schema as projects_schema
 from angee.projects.testing.models import Milestone, Project, Task
 from angee.provenance.context import changeset as open_changeset
+from angee.storage import schema as storage_schema
+from angee.tags import schema as tags_schema
+from angee.tags.testing.models import Tag, TagAssignment
 from angee.timeline import schema as timeline_schema
 from tests import test_messaging as messaging_models
 from tests.conftest import (
@@ -471,6 +474,12 @@ def test_record_thread_document_file_part_growth(
     record.with_actor(owner).grant_record_access("reader", reader)
     with actor_context(reader):
         record.message_subscribe(user=reader)
+    with system_context(reason="test.document_budget.thread.followers"), mute_changes():
+        for index in range(19):
+            party = messaging_models.Party.objects.create(display_name=f"Follower {index}", created_by=owner)
+            messaging_models.ThreadFollower.objects.create(
+                thread=attachment.thread, party=party, created_by=owner,
+            )
     schema = addon_schema(
         iam_schema.schemas, "console", integrate_schema.schemas, parties_schema.schemas, messaging_schema.schemas,
         projects_schema.schemas,
@@ -491,6 +500,11 @@ def test_record_thread_document_file_part_growth(
             attach(index)
     five = capture_graphql_document(schema, RECORD_THREAD, variables, actor=reader)
     assert five.data["record_thread"]["attachment_count"] == 5
+    with system_context(reason="test.document_budget.thread.ten"), mute_changes():
+        for index in range(6, 11):
+            attach(index)
+    ten = capture_graphql_document(schema, RECORD_THREAD, variables, actor=reader)
+    assert ten.data["record_thread"]["attachment_count"] == 10
     transcript = capture_graphql_document(
         schema,
         """query ThreadParts($modelLabel: String!, $recordId: ID!) {
@@ -506,14 +520,63 @@ def test_record_thread_document_file_part_growth(
         for message in transcript["messages"] for part in message["parts"]
     )
     five.assert_flat_from(one)
+    ten.assert_flat_from(five)
     # The admitted record owns chatter, follower and notification display facts;
-    # those reads have no separate bypass audit.
-    for read in (one, five):
-        assert read.statement_count == 40
+    # those reads have no separate bypass audit. Structural follower and avatar
+    # reads keep a fixed overhead independent of the attachment count.
+    for read in (one, five, ten):
+        read.assert_statements(46)
         read.assert_bytes(
             total=150_000, largest=30_000, cause="the read requirement in the messaging held_permissions check",
         )
-        read.assert_no_audit_writes()
+        read.assert_audit_inserts(8)
+
+
+def test_fifty_party_avatars_and_tags_stay_bounded(
+    composed_tables: None, composed_permissions: None, capture_graphql_document, tmp_path: Path,
+) -> None:
+    """Display facts on an admitted party list do not expand file or edge policy per row."""
+
+    del composed_tables, composed_permissions
+    owner = create_user("document-budget-party-display")
+    with system_context(reason="test.document_budget.party_display"), mute_changes():
+        backend = Backend._base_manager.create(
+            slug="budget-party", label="Local", backend_class="local",
+            backend_config={"root": str(tmp_path), "base_url": "/media/"},
+        )
+        drive = Drive._base_manager.create(
+            backend=backend, slug="party-assets", name="Party assets", prefix="party-assets", created_by=owner,
+        )
+        avatar = File._base_manager.create(
+            drive=drive, filename="avatar.png", content_hash="a" * 64, owner=owner,
+            upload_state="ready", created_by=owner,
+        )
+        tag = Tag._base_manager.create(name="Shown", color="#00f")
+        parties = [
+            PartyModel._base_manager.create(
+                display_name=f"Party {index:02}", avatar=avatar, owner=owner, created_by=owner,
+            )
+            for index in range(50)
+        ]
+    with actor_context(owner):
+        for party in parties:
+            TagAssignment.objects.attach("parties/party", party.sqid, [tag.sqid])
+    schema = addon_schema(
+        iam_schema.schemas, "console", parties_schema.schemas, storage_schema.schemas, tags_schema.schemas,
+    )
+    query = """query PartyDisplay($limit: Int!) {
+      parties(limit: $limit, order_by: [{display_name: asc}]) {
+        id avatar { id url } display_avatar { id url } tags { name }
+      }
+    }"""
+    one = capture_graphql_document(schema, query, {"limit": 1}, actor=owner)
+    fifty = capture_graphql_document(schema, query, {"limit": 50}, actor=owner)
+    assert len(fifty.data["parties"]) == 50
+    assert all(row["avatar"] and row["display_avatar"] and row["tags"] for row in fifty.data["parties"])
+    fifty.assert_flat_from(one)
+    for read in (one, fifty):
+        read.assert_bytes(total=40_000, largest=32_000)
+        read.assert_audit_inserts(3)
 
 
 @pytest.fixture

@@ -4,6 +4,9 @@
 // @rebac_schema_revision: 4
 
 definition intake/need {
+    // A readable task-filed Need carries its requester's party identity as a
+    // display fact, without admitting that party's page. Project-filed Needs
+    // keep the party's independent read guard.
     relation task:    projects/task    // rebac:field=task
     relation project: projects/project // rebac:field=project
     relation person: iam/kind // rebac:const=person

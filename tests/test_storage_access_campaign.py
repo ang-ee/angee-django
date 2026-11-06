@@ -21,7 +21,7 @@ from angee.iam.identity import public_subject_ref
 from angee.projects.testing.models import Project, Task
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
-from angee.storage.models import FileAttachmentManager, FileVisibility
+from angee.storage.models import FileAttachmentManager, FileVisibility, UploadState
 from angee.storage.uploads import DOWNLOAD_TOKEN_SALT
 from tests.conftest import (
     Drive,
@@ -91,6 +91,42 @@ def test_record_files_document_batches_nested_file_rows(record_files_reads: list
 @pytest.mark.postgresql
 def test_record_files_document_has_no_audit_writes(record_files_reads: list[Any]) -> None:
     for read in record_files_reads:
+        read.assert_no_audit_writes()
+
+
+@pytest.mark.postgresql
+@pytest.mark.xfail(
+    strict=True,
+    reason="Task read/write policy proofs still exceed the 32 KB page target outside the attachment projection",
+)
+def test_task_record_projects_ten_files_without_file_policy_statements(
+    drive: Any, composed_permissions: None, capture_graphql_document: Any,
+) -> None:
+    """An admitted record with a declared arm carries its file display facts."""
+
+    del composed_permissions
+    with system_context(reason="test.storage.task_record_files"):
+        project = Project.objects.create(title="Record file budget", owner=drive.alice)
+        task = Task.objects.create(project=project, title="Attached task")
+    assert FileAttachment.objects.has_record_arm(generic_target(task))
+    schema = addon_schema(storage_schema.schemas, "console")
+    variables = {"modelLabel": task._meta.label, "recordId": str(task.sqid)}
+    reads = []
+    for index in range(10):
+        with system_context(reason="test.storage.task_record_files"):
+            file = File.objects.create(
+                drive=drive, filename=f"task-{index}.txt", content_hash=f"{index + 1:064x}",
+                visibility=FileVisibility.RECORD, owner=drive.alice, upload_state="ready",
+            )
+            FileAttachment.objects.attach(file, task)
+        if index in (0, 9):
+            read = capture_graphql_document(schema, RECORD_FILES, variables, actor=drive.alice)
+            assert len(read.data["record_files"]["attachments"]) == index + 1
+            reads.append(read)
+    one, ten = reads
+    ten.assert_flat_from(one)
+    for read in reads:
+        read.assert_bytes(total=280_000, largest=32_000)
         read.assert_no_audit_writes()
 
 
@@ -165,7 +201,9 @@ def test_record_files_query_requires_record_and_file_read_and_uploads_need_the_a
     # covered by record upload tests, and the file edge still scopes itself.
     monkeypatch.setattr(FileAttachmentManager, "has_record_arm", lambda *_: True)
     visible = result_data(execute_schema(schema, query, variables, user=reader))["record_files"]
-    assert visible == {"can_upload": False, "attachments": []}
+    # The patched declaration says this record-visible file follows the parent.
+    # Production requires the actual matching policy arm for this branch.
+    assert visible == {"can_upload": False, "attachments": listed}
     owner_view = result_data(execute_schema(schema, query, variables, user=drive.alice))["record_files"]
     assert owner_view == {"can_upload": True, "attachments": listed}
     assert result_data(execute_schema(schema, query, variables, user=stranger))["record_files"] == {
@@ -316,6 +354,34 @@ def test_download_bearer_rechecks_issuing_actor_before_conditional_response(driv
         # Request/ambient authority must not replace the token's revoked subject.
         assert views.download(conditional, row.filename).status_code == 403
         assert views.download(request, row.filename).status_code == 403
+
+
+def test_projected_download_rechecks_parent_and_live_attachment(drive: Any) -> None:
+    """A projected token cannot outlive its parent read or attachment link."""
+
+    reader = create_user("projected-download-reader")
+    with system_context(reason="test.storage.projected_download"):
+        file = File.objects.create(
+            drive=drive, filename="parent-bound.txt", content_hash="d" * 64,
+            visibility=FileVisibility.RECORD, owner=drive.alice, upload_state=UploadState.READY,
+        )
+        attachment = FileAttachment.objects.attach(file, drive)
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).grant_record_access("viewer", reader)
+        file.with_actor(drive.alice).grant_record_access("viewer", reader)
+    with actor_context(reader):
+        token = file.issue_download_token(parent=drive)
+    assert File.objects.for_download_token(token).pk == file.pk
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).revoke_record_access("viewer", reader)
+    with pytest.raises(exceptions.UploadDenied, match="download parent"):
+        File.objects.for_download_token(token)
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).grant_record_access("viewer", reader)
+    with system_context(reason="test.storage.projected_download.detach"):
+        FileAttachment.objects.filter(pk=attachment.pk).delete()
+    with pytest.raises(exceptions.UploadDenied, match="no longer attached"):
+        File.objects.for_download_token(token)
 
 
 @pytest.mark.parametrize("actor_claim", [None, "", "not-a-subject", "auth/user:not-a-public-id"])

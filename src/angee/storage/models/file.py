@@ -326,33 +326,38 @@ class File(TaggedModel, ProtectedTrashMixin, OwnerMixin, HistoryMixin, Protected
             identity["database"] = using
         return identity
 
-    def issue_download_token(self, actor: ActorLike | None = None) -> str:
+    def issue_download_token(self, actor: ActorLike | None = None, *, parent: models.Model | None = None) -> str:
         """Sign a reusable download token for the given or ambient actor.
 
         An actor is required even in system context; missing actor state raises
         ``NoActorResolvedError``. The claim uses the actor's public identity.
         The token remains a bearer capability; download lookup re-checks that
-        actor's ``read`` permission on every request. Expiry rides on the
+        actor's ``read`` permission on every request. A projected token also
+        re-checks its parent row and live attachment. Expiry rides on the
         signature (``DOWNLOAD_TOKEN_MAX_AGE``).
         """
 
         subject = current_actor() if actor is None else to_subject_ref(actor)
         if subject is None:
             raise NoActorResolvedError("an actor is required to issue a download token")
-        return signing.dumps(
-            {**self._token_identity(), "actor": str(public_subject_ref(subject))}, salt=DOWNLOAD_TOKEN_SALT
-        )
+        claim = {**self._token_identity(), "actor": str(public_subject_ref(subject))}
+        if parent is not None:
+            if parent.pk is None:
+                raise ValueError("a saved download parent is required")
+            claim.update(parent_model=parent._meta.label, parent_id=str(parent.pk))
+        return signing.dumps(claim, salt=DOWNLOAD_TOKEN_SALT)
 
-    def download_url(self, request: Any | None = None) -> str:
+    def download_url(self, request: Any | None = None, *, parent: models.Model | None = None) -> str:
         """Return the token-authenticated proxy download URL for this file.
 
         The filename rides in the path (so the browser saves under it and the URL
         reads cleanly); the signed ``token`` identifies the row and the ambient
-        actor whose read permission is re-checked. Built absolute against
+        actor whose read permission is re-checked. ``parent`` binds a projected
+        URL to the admitted part or record. Built absolute against
         ``request`` when one is given, otherwise root-relative.
         """
 
-        query = urlencode({"token": self.issue_download_token()})
+        query = urlencode({"token": self.issue_download_token(parent=parent)})
         path = f"{reverse('storage_download', args=[self.filename])}?{query}"
         return request.build_absolute_uri(path) if request is not None else path
 

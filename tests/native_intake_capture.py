@@ -904,7 +904,7 @@ class NeedAccessTests(IntakeAccessCase):
         self.assertEqual(need.access_verdict, ["intake.deny"])
         self.assertEqual(need.access_decision.answered_by_id, self.owner.pk)
 
-    def test_requester_comment_and_filer_read_derive_from_need(self):
+    def test_requester_comment_and_filer_identity_derive_from_need(self):
         party = self.party(self.reader)
         need = self.need(party=party)
         with system_context(reason="test restricted request"):
@@ -917,8 +917,14 @@ class NeedAccessTests(IntakeAccessCase):
         for permission in ("read", "comment"):
             self.assertTrue(requester_task.has_access(permission))
         for user in (self.owner, self.writer):
-            self.assertTrue(self.Party.objects.with_actor(user).filter(pk=party.pk).exists())
-            self.assertTrue(apps.get_model("parties", "Person").objects.with_actor(user).filter(pk=party.pk).exists())
+            self.assertFalse(self.Party.objects.with_actor(user).filter(pk=party.pk).exists())
+            self.assertFalse(apps.get_model("parties", "Person").objects.with_actor(user).filter(pk=party.pk).exists())
+            projected = self.graphql(
+                "{ intake_needs { id party { id display_name } } }", {}, user=user,
+            )["intake_needs"]
+            assert {row["id"]: row["party"] for row in projected}[need.sqid] == {
+                "id": party.sqid, "display_name": party.display_name,
+            }
 
     def test_filer_name_sorts_readable_requesters_and_redacts_hidden_parties(self):
         with system_context(reason="test filer parties"):

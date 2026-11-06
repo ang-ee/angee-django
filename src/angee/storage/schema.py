@@ -12,7 +12,7 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db.models import Prefetch, prefetch_related_objects
 from django.urls import reverse
 from graphql import GraphQLError
-from rebac import ObjectRef, PermissionDenied, generic_target, system_context
+from rebac import ObjectRef, PermissionDenied, current_actor, generic_target, system_context
 from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_resource_type
 from strawberry import auto
@@ -42,6 +42,7 @@ from angee.iam.graphql.relations import (
     record_reference_field,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.iam.identity import user_display_label, user_label_annotation
 from angee.storage import exceptions
 from angee.storage.models import File as FileModel
 from angee.storage.models import FileVisibility, FolderQuerySet, UploadState
@@ -170,12 +171,77 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, ProtectedNode):
         return str(row.download_url())
 
 
+@strawberry.type
+class FileMimeIdentity:
+    """MIME display facts carried by a projected file."""
+
+    mime_type: str
+    label: str
+
+    @classmethod
+    def of(cls, file: Any) -> FileMimeIdentity | None:
+        mime = file.mime_type
+        return cls(mime_type=mime.mime_type, label=mime.label) if mime is not None else None
+
+
+@strawberry.type
+class FileIdentity:
+    """Selected file facts projected from an admitted part or record edge."""
+
+    file: strawberry.Private[Any]
+    parent: strawberry.Private[Any | None] = None
+    creator_label: strawberry.Private[str | None] = None
+
+    @strawberry.field
+    def id(self) -> strawberry.ID:
+        return strawberry.ID(self.file.sqid)
+
+    @strawberry.field
+    def filename(self) -> str:
+        return str(self.file.filename)
+
+    @strawberry.field
+    def title(self) -> str:
+        return str(self.file.title)
+
+    @strawberry.field
+    def size_bytes(self) -> int:
+        return int(self.file.size_bytes)
+
+    @strawberry.field
+    def mime_type(self) -> FileMimeIdentity | None:
+        return FileMimeIdentity.of(self.file)
+
+    @strawberry.field
+    def created_by_label(self, info: strawberry.Info) -> str | None:
+        return self.creator_label or user_display_label(self.file.created_by_id, request=get_request(info))
+
+    @strawberry.field
+    def url(self, info: strawberry.Info) -> str | None:
+        if getattr(get_request(info), "view_as", None) is not None:
+            return None
+        return self.file.download_url(parent=self.parent) if self.file.upload_state == UploadState.READY else ""
+
+
 @strawberry_django.type(FileAttachment)
 class FileAttachmentType(RecordReferenceNode):
     """An actor-readable file edge, with its target identity redacted when unreadable."""
 
     label: auto
-    file: FileType
+
+    @strawberry_django.field(only=["file_id"])
+    def file(self) -> FileIdentity:
+        """Expose file display facts under this admitted attachment edge."""
+
+        row = cast(Any, self)
+        file = row._state.fields_cache.get("file")
+        if file is None:
+            file = File._base_manager.select_related("mime_type").get(pk=row.file_id)
+        return FileIdentity(
+            file=file,
+            parent=getattr(row, "_projection_parent", None),
+            creator_label=getattr(row, "_file_creator_label", None),
+        )
 
     model_label: str | None = record_reference_field(FileAttachment, resolver=RecordReferenceNode.reference_model)
     record_id: PublicID | None = record_reference_field(FileAttachment, resolver=RecordReferenceNode.reference_id)
@@ -221,9 +287,30 @@ class StorageQuery:
         if record is None:
             return RecordFilesType(can_upload=False, attachments=[])
         manager = FileAttachment._default_manager
+        target = generic_target(record)
+        has_arm = manager.has_record_arm(target)
+        edges = list(
+            FileAttachment._base_manager.filter(
+                **target.lookups(FileAttachment, "target"), file__is_trashed=False,
+            ).select_related("file", "file__mime_type").annotate(
+                _file_creator_label=user_label_annotation("file__created_by"),
+            )
+        )
+        needs_file_proof = {
+            edge.file_id for edge in edges if not has_arm or edge.file.visibility != FileVisibility.RECORD
+        }
+        readable_files = set(
+            File.objects.with_actor(current_actor()).filter(pk__in=needs_file_proof).values_list("pk", flat=True)
+        ) if needs_file_proof else set()
+        visible = [
+            edge for edge in edges
+            if (has_arm and edge.file.visibility == FileVisibility.RECORD) or edge.file_id in readable_files
+        ]
+        for edge in visible:
+            cast(Any, edge)._projection_parent = record
         return RecordFilesType(
-            can_upload=manager.has_record_arm(generic_target(record)) and record.has_access("write"),
-            attachments=cast(list[FileAttachmentType], manager.for_record(record)),
+            can_upload=has_arm and record.has_access("write"),
+            attachments=cast(list[FileAttachmentType], visible),
         )
 
 

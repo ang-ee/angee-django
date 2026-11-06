@@ -14,7 +14,6 @@ from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, router, transaction
 from django.db.models.expressions import BaseExpression
-from django.db.models.functions import NullIf
 from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
@@ -41,6 +40,7 @@ from angee.intake.managers import NeedManager
 from angee.intake.querysets import (
     _requested_by_viewer_filter,
     _requester_name_filter,
+    filer_name_expression,
 )
 from angee.intake.resources import NeedResource
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -77,10 +77,10 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Pro
 
     resource_class = NeedResource
     sqid_prefix = "ned_"
-    # The requester's name is a sort axis through the linked party: an empty
-    # name and an unreadable party both tie as NULL through the shared guard.
-    hasura_aliases = {
-        "filer_name": NullIf(models.F("party__display_name"), models.Value(""), output_field=models.TextField()),
+    # The Need owner's projection supplies the same display name to filtering
+    # and ordering, preserving the project-filed party gate.
+    hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], BaseExpression]]] = {
+        "filer_name": filer_name_expression,
     }
 
     party = models.ForeignKey(
