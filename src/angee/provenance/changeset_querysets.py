@@ -9,6 +9,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models import Q
+from rebac import permission_expression
 from simple_history.utils import get_history_manager_for_model
 
 from angee.iam.querysets import ProtectedQuerySet
@@ -33,12 +34,16 @@ class ChangesetQuerySet[T: models.Model](ProtectedQuerySet[T], NativeChangesetQu
         return NativeChangesetQuerySet.touching(cast(Any, rows), record) | rows.filter(cls._merge_touching(record))
 
     @classmethod
-    def closed_for_record(cls, record: Any) -> models.QuerySet[Any]:
-        """Return the closed changesets implied by an admitted record's read."""
+    def for_record(cls, record: Any, actor: Any) -> models.QuerySet[Any]:
+        """Return document changesets admitted by the record and changeset read gates."""
 
         model = apps.get_model("provenance", "Changeset")
         rows = model._base_manager.db_manager(record._state.db, hints={"instance": record}).all()
-        return cls.touching_document(rows, record).filter(state=model.State.CLOSED)
+        return cls.touching_document(rows, record).alias(
+            _readable_changeset=permission_expression(model, "read", actor=actor),
+        ).filter(
+            Q(state=model.State.CLOSED) | Q(state=model.State.OPEN, _readable_changeset=True)
+        )
 
     @staticmethod
     def _merge_touching(record: HistoryMixin) -> Q:

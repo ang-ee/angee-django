@@ -1,4 +1,4 @@
-"""Closed changesets selected through the history owner's document membership."""
+"""Changesets selected through the history owner's document membership."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class ChangeKind(TimelineKind):
         return record_history(model) is not None and timeline_subject(model)
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        return ChangesetQuerySet.closed_for_record(record)
+        return ChangesetQuerySet.for_record(record, actor)
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         integer_key = models.Q(origin_object_id__regex=r"^[0-9]{1,18}$") | models.Q(
