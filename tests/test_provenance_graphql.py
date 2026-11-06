@@ -1,6 +1,6 @@
 """The provenance history surface: shape, read gate, redaction, statements and revert.
 
-``history`` reads closed changesets through the record's ``read`` gate;
+``history`` reads admitted document changesets through the record's ``read`` gate;
 ``revert_changeset`` restores through its ``write`` gate. Knowledge pages carry
 the vault-scoped gate, the ``scopedemo`` probe row carries a field-gated
 ``title``, and a party asserts statements on save.

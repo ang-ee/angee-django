@@ -77,7 +77,7 @@ def test_comment_timeline_sender_label_is_implied_and_batches(
             assert {entry.actor for entry in entries} == {label}
             counts.append(len(queries))
         assert counts[0] == counts[1] == counts[2], counts
-        assert counts[0] == 20, counts
+        assert counts[0] == 18, counts
         record_property(f"comment_timeline_{actor.username}_sql", counts)
 
     source, _ = CommentKind().source(record, reader)
@@ -96,11 +96,18 @@ def test_comment_timeline_sender_label_is_implied_and_batches(
             entries = Timeline(record, owner).page(kinds=["messaging.comment"], limit=size).entries
         assert len(entries) == size
         full_counts.append(len(queries))
-    assert full_counts == [38, 38, 38], full_counts
+    # Measured on the integrated line, flat across 1/5/20 rows: the session-merged
+    # permission emission (the composed product policy adds per-type pre-reads,
+    # 6 -> 17) accounts for +32 over the former 38; the bounded run-read proof
+    # removed 7; the earlier display-fact projections removed 3; the OPEN
+    # changeset read gate adds 1. A maximum, not a target: the pre-reads grow
+    # with the policy extension count and belong to the REBAC compiler.
+    assert full_counts == [61, 61, 61], full_counts
     record_property("full_comment_timeline_sql", full_counts)
     with CaptureQueriesContext(connection) as queries:
         assert Timeline(record, owner).page(kinds=["workflows.run"], limit=20).entries == []
-    assert len(queries) == 32
+    # The same attribution without comment rows (32 + 32 - 7 - 2 + 1).
+    assert len(queries) == 56
     record_property("full_no_comment_timeline_sql", len(queries))
 
 
