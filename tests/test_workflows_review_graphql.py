@@ -107,6 +107,33 @@ def test_step_decision_filter_uses_public_identity(schema, linked_decision):
     }
 
 
+def test_decide_returns_the_answered_decision_for_exact_cache_adoption(schema, linked_decision):
+    _, _, _, decision, _, _, _, assignee = linked_decision
+    query = """mutation($id: ID!, $revision: Int!, $chosen: [String!]!) {
+      decide(id: $id, revision: $revision, chosen: $chosen) {
+        ok decision {
+          id kind kind_label revision created_at is_open permissions context proposal
+          verdict verdict_values verdict_label answered_at
+          records { id record_model record_id }
+          requester { display_name }
+          assignees { display_name }
+          answered_by { display_name }
+        }
+      }
+    }"""
+    variables = {"id": decision.sqid, "revision": decision.revision, "chosen": ["accept"]}
+    refused = result_data(execute_schema(schema, query, {**variables, "chosen": ["unknown"]}, user=assignee))["decide"]
+    assert refused == {"ok": False, "decision": None}
+    answered = result_data(execute_schema(schema, query, variables, user=assignee))["decide"]
+    assert answered["ok"]
+    assert answered["decision"]["id"] == decision.sqid
+    assert answered["decision"]["revision"] == decision.revision + 1
+    assert answered["decision"]["is_open"] is False
+    assert answered["decision"]["verdict"] == ["accept"]
+    assert answered["decision"]["verdict_label"] == "Accept"
+    assert answered["decision"]["answered_at"] and answered["decision"]["answered_by"]["display_name"]
+
+
 def test_record_timeline_reads_the_asking_run_and_its_question(schema, linked_decision):
     _, run, step, decision, owner, *_ = linked_decision
     link = step.records.model.system_queryset().get(step_run=step)
