@@ -19,6 +19,7 @@ function threadRecordTabs(
       // conversation (newest at the bottom, scrolled to the latest turn on open). A
       // mail-like aside placement would compose the same view with `order="history"`.
       label: t("threads.tabConversation"),
+      presentation: "full-bleed",
       // The transcript's controls publish into this tab's own pane toolbar row.
       render: (context) => <PaneToolbarHost><ThreadTranscript threadId={context.recordId} order="conversation" /></PaneToolbarHost>,
     },
