@@ -58,10 +58,11 @@ export interface ThreadTranscriptProps {
   /** Host controls join the transcript's one native pane toolbar. */
   toolbarActions?: readonly PaneToolbarAction[];
   timezone?: string;
-  /** Wrap loaded messages with annotations; navigation anchors at the first visible row. */
+  /** Wrap a bounded, loaded ID set with annotations; resolve navigation from the native viewport on demand. */
   renderWindow?: (
     messages: readonly ThreadTranscriptRow[],
-    firstVisibleId: string,
+    positioned: boolean,
+    viewportMessageId: () => string,
     children: React.ReactElement,
   ) => React.ReactElement;
   renderMessageActions?: (message: ThreadTranscriptRow) => React.ReactNode;
@@ -307,23 +308,14 @@ function TranscriptBody({
       ) : null}
     </div>
   );
-  const viewportTop = (scrollRef.current?.scrollTop ?? 0) + scrollMargin;
-  const firstVisibleIndex = virtualItems.find((item) => item.end > viewportTop)?.index
-    ?? virtualItems[0]?.index ?? 0;
-  // Keep one stable membership read for all loaded rows until the server's
-  // 1000-ID limit; a longer history uses a window around the viewport.
-  const matchWindowStart = Math.max(0, Math.min(messages.length - MATCH_WINDOW_SIZE,
-    Math.floor(firstVisibleIndex / (MATCH_WINDOW_SIZE / 2)) * (MATCH_WINDOW_SIZE / 2)
-      - MATCH_WINDOW_SIZE / 4));
-  const matchWindow = messages.length <= MATCH_WINDOW_SIZE
-    ? messages : messages.slice(matchWindowStart, matchWindowStart + MATCH_WINDOW_SIZE);
-  return renderWindow && positioned
-    ? renderWindow(
-        matchWindow,
-        messages[firstVisibleIndex]?.id ?? "",
-        content,
-      )
-    : content;
+  // Membership depends on loaded IDs alone. Keep the latest 1000 when older
+  // history exceeds the server bound; scrolling cannot change the query key.
+  const matchWindow = messages.slice(-MATCH_WINDOW_SIZE);
+  const viewportMessageId = () => {
+    const item = virtualizer.getVirtualItemForOffset(virtualizer.scrollOffset ?? 0);
+    return messages[item?.index ?? 0]?.id ?? "";
+  };
+  return renderWindow ? renderWindow(matchWindow, positioned, viewportMessageId, content) : content;
 }
 
 /** The keyset "load more" control, one shape in both directions. */

@@ -22,6 +22,7 @@ import { FileMessages, useFileMessageCount } from "./FileMessages";
 import type { InboxNavigation, InboxScope } from "./state";
 
 const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://inbox-files", providerNames: [] });
+const originalScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
 // The transcript virtualizes its rows over the measured viewport, which happy-dom
 // reports as zero-sized; give elements a 640 x 640 viewport so the rows render,
 // whichever box the virtualizer measures (@tanstack/virtual-core reads the client
@@ -32,7 +33,11 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(640);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(640);
 });
-afterEach(() => { cleanup(); clearClients(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup(); clearClients(); vi.restoreAllMocks();
+  if (originalScrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScrollTo);
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+});
 
 const pdf = (n: number) => ({
   id: `part-${n}`, name: `renewal-${n}.pdf`, type: "application/pdf", position: n, role: "BODY",
@@ -63,10 +68,15 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     if (meta?.gqlQuery === InboxTranscriptMatches) {
+      const at = meta.gqlVariables?.at;
+      const anchorIndex = transcriptMessages.findIndex((row) => row.id === at);
+      const matching = matchingVisible.map((id) => transcriptMessages.findIndex((row) => row.id === id))
+        .filter((index) => index >= 0).sort((left, right) => left - right);
       return { data: { inbox_transcript_matches: {
         thread: { id: "thread-1", conversation_label: "Renewals" }, count: matchingVisible.length,
         total: transcriptMessages.length, visible: matchingVisible.filter((id) => meta?.gqlVariables?.visible.includes(id)),
-        previous: null, next: null,
+        previous: transcriptMessages[(anchorIndex < 0 ? matching.at(-1) : matching.filter((index) => index < anchorIndex).at(-1)) ?? -1]?.id ?? null,
+        next: transcriptMessages[(anchorIndex < 0 ? matching[0] : matching.find((index) => index > anchorIndex)) ?? -1]?.id ?? null,
       } } };
     }
     if (meta?.gqlQuery === InboxMessage) {
@@ -123,8 +133,8 @@ test("an attachment in the conversation previews in Related", async () => {
   expect(inbox.navigation.patch).not.toHaveBeenCalled();
 });
 
-test("transcript matches read the stable loaded window once while virtual rows measure", async () => {
-  const messages = Array.from({ length: 50 }, (_, index) => ({
+test("a 200-message conversation reads matches once after positioning", async () => {
+  const messages = Array.from({ length: 200 }, (_, index) => ({
     ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
   }));
   const inbox = fixture([], false, false, undefined, messages);
@@ -134,17 +144,18 @@ test("transcript matches read the stable loaded window once while virtual rows m
     request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1));
   const matchesRequest = inbox.custom.mock.calls.find(([request]) =>
     request.meta?.gqlQuery === InboxTranscriptMatches)![0];
-  expect(matchesRequest.meta?.gqlVariables?.visible).toHaveLength(50);
-  expect(matchesRequest.meta?.gqlVariables?.at).toBeTruthy();
+  expect(matchesRequest.meta?.gqlVariables?.visible).toHaveLength(200);
+  expect(matchesRequest.meta?.gqlVariables?.at).toBe("");
+  await waitFor(() => expect(screen.getByText("Renewals")).toBeTruthy());
   expect(inbox.custom.mock.calls.filter(([request]) =>
     request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1);
 });
 
-test("transcript matches include every loaded message within the server limit", async () => {
+test("scrolling a 200-message transcript sends no matches read; previous and next use the viewport", async () => {
   const messages = Array.from({ length: 200 }, (_, index) => ({
     ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
   }));
-  const inbox = fixture([], false, false, undefined, messages, ["message-199"]);
+  const inbox = fixture([], false, false, undefined, messages, messages.slice(1).map((row) => row.id));
   render(<InboxConversation {...inbox.props} />, { wrapper: inbox.wrapper });
 
   await waitFor(() => expect(inbox.custom.mock.calls.some(([request]) =>
@@ -155,16 +166,52 @@ test("transcript matches include every loaded message within the server limit", 
   expect(transcript).toBeTruthy();
   transcript!.scrollTop = 96 * 150;
   fireEvent.scroll(transcript!);
-  await waitFor(() => expect(inbox.custom.mock.calls.some(([request]) =>
-    request.meta?.gqlQuery === InboxTranscriptMatches && request.meta?.gqlVariables?.at !== "message-0")).toBe(true));
-  const afterScroll = inbox.custom.mock.calls.filter(([request]) =>
-    request.meta?.gqlQuery === InboxTranscriptMatches).at(-1)![0];
-  expect(afterScroll.meta?.gqlVariables?.visible).toHaveLength(200);
-  expect(afterScroll.meta?.gqlVariables?.at).not.toBe("message-0");
+  expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+  await waitFor(() => expect(inbox.navigation.patch).toHaveBeenCalledTimes(1));
+  const viewportId = inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches).at(-1)![0].meta?.gqlVariables?.at as string;
+  const viewportIndex = Number(viewportId.slice("message-".length));
+  expect(viewportIndex).toBeGreaterThan(1);
+  expect(viewportIndex).toBeLessThan(199);
+  expect(inbox.navigation.patch).toHaveBeenCalledWith({ at: `message:message-${viewportIndex - 1}` });
+  fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+  await waitFor(() => expect(inbox.navigation.patch).toHaveBeenCalledTimes(2));
+  const nextViewportId = inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches).at(-1)![0].meta?.gqlVariables?.at as string;
+  const nextViewportIndex = Number(nextViewportId.slice("message-".length));
+  expect(inbox.navigation.patch).toHaveBeenCalledWith({ at: `message:message-${nextViewportIndex + 1}` });
+  expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(3);
   transcript!.scrollTop = 1_000_000;
   fireEvent.scroll(transcript!);
   await waitFor(() => expect(document.querySelector('li[data-index="199"]')).toBeTruthy());
-  expect(await screen.findByText("Matches current filters")).toBeTruthy();
+  expect(screen.getAllByText("Matches current filters").length).toBeGreaterThan(0);
+  expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(3);
+});
+
+test("opening at a message anchor retains the positioned scroll element and lands on the message", async () => {
+  const messages = Array.from({ length: 200 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages);
+  inbox.navigation.at = "message:message-150";
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(200 * 640);
+  const positionedElements: HTMLElement[] = [];
+  const matchesAtPosition: number[] = [];
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: function(this: HTMLElement, options: ScrollToOptions) {
+    positionedElements.push(this);
+    matchesAtPosition.push(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches).length);
+    this.scrollTop = options.top ?? 0;
+    queueMicrotask(() => this.dispatchEvent(new Event("scroll")));
+  } });
+  render(<InboxConversation {...inbox.props} />, { wrapper: inbox.wrapper });
+
+  await waitFor(() => expect(document.querySelector('li[data-index="150"] [aria-current="true"]')).toBeTruthy());
+  const transcript = document.querySelector('li[data-index="150"]')?.parentElement?.parentElement;
+  expect(positionedElements[0]).toBe(transcript);
+  expect(matchesAtPosition[0]).toBe(0);
+  expect(transcript?.scrollTop).toBeGreaterThan(0);
+  expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1);
+  expect(inbox.custom.mock.calls.find(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)?.[0].meta?.gqlVariables?.at)
+    .toBe("message-150");
 });
 
 test("transcript matches bound the annotation window after older history loads", async () => {
@@ -176,10 +223,14 @@ test("transcript matches bound the annotation window after older history loads",
 
   await waitFor(() => expect(inbox.custom.mock.calls.some(([request]) =>
     request.meta?.gqlQuery === InboxTranscriptMatches)).toBe(true));
-  for (const [request] of inbox.custom.mock.calls.filter(([entry]) =>
-    entry.meta?.gqlQuery === InboxTranscriptMatches)) {
-    expect(request.meta?.gqlVariables?.visible.length).toBeLessThanOrEqual(1000);
-  }
+  const reads = () => inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches);
+  expect(reads()).toHaveLength(1);
+  expect(reads()[0]![0].meta?.gqlVariables?.visible).toHaveLength(1000);
+  const transcript = document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement;
+  expect(transcript).toBeTruthy();
+  transcript!.scrollTop = 96 * 700;
+  fireEvent.scroll(transcript!);
+  expect(reads()).toHaveLength(1);
 });
 
 test("an attachment in the reader previews in Related and leaves the message full width", async () => {

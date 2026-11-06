@@ -26,7 +26,7 @@ const currentUser = {
 };
 
 describe("Angee app auth provider", () => {
-  test("route checks reuse the resolved session while an invalidated observer refreshes it", async () => {
+  test("route checks reuse the resolved session while its query is invalidated", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const request = vi.fn(async () => ({ current_user: currentUser }));
     const identityRequest = vi.fn(async () => ({ current_user: currentUser, real_user: currentUser }));

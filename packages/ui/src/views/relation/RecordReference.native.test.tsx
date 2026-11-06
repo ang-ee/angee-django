@@ -77,14 +77,14 @@ test("uses a supplied label without a record read and follows the exact tab and 
   expect(screen.queryByRole("button")).toBeNull();
 });
 
-test("an empty supplied label resolves the record's display representation", async () => {
-  const getOne = vi.fn(async () => ({ data: { id: "note-1", title: "Draft review notes" } }));
+test("an empty supplied label stays retained without a per-row read", async () => {
+  const getOne = vi.fn();
   renderInRouter(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={runtime}>
     <RecordReference model="notes.Note" id="note-1" label="" />
   </AppRuntimeProvider></Provider>);
-  await screen.findByRole("link", { name: "Draft review notes" });
-  expect(getOne).toHaveBeenCalledOnce();
-  expect(screen.queryByRole("link", { name: "note-1" })).toBeNull();
+  await waitFor(() => expect(document.querySelector('a[href="/notes/note-1"]')).toBeTruthy());
+  expect(document.querySelector('a[href="/notes/note-1"]')?.textContent).toBe("");
+  expect(getOne).not.toHaveBeenCalled();
 });
 
 test("reference rows batch one bounded label read per model and preserve interleaved order", async () => {

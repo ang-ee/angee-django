@@ -107,6 +107,7 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false, singleGrou
 test("cached group keys let the grouped row read start while headers revalidate", async () => {
   const f = fixture({ singleGroup: true });
   await waitFor(() => expect(f.leafQueries()).toHaveLength(1));
+  expect(f.groupQueries()).toHaveLength(1);
   act(() => f.show(false));
   const client = clients.at(-1)!;
   await client.invalidateQueries({ refetchType: "none" });
@@ -114,8 +115,8 @@ test("cached group keys let the grouped row read start while headers revalidate"
   const previousRows = f.leafQueries().length;
   act(() => f.show(true));
   try {
-    await waitFor(() => expect(f.leafQueries().length).toBeGreaterThan(previousRows));
-    expect(f.groupQueries().length).toBeGreaterThan(1);
+    await waitFor(() => expect(f.leafQueries()).toHaveLength(previousRows + 1));
+    expect(f.groupQueries()).toHaveLength(2);
   } finally {
     await act(async () => f.releaseRoot());
   }
