@@ -21,8 +21,8 @@ export interface FolderActions {
   }) => Promise<void>;
   /** Rename a folder. */
   rename: (id: string, name: string) => Promise<void>;
-  /** Delete a folder; its files fall back to the drive root. */
-  remove: (id: string) => Promise<void>;
+  /** Delete a folder, its files falling back to the drive root; resolves whether it was deleted. */
+  remove: (id: string, options?: Parameters<ReturnType<typeof useDeleteWithPreview>["remove"]>[1]) => Promise<boolean>;
 }
 
 /**
@@ -75,11 +75,12 @@ export function useFolderActions(
         await updateFolder.mutateAsync({ id, values: { name } });
         await invalidateFiles();
       }),
-    remove: (id) =>
+    remove: (id, options) =>
       run(async () => {
         requireFolderResource(resource);
-        await deleteWithPreview.remove(id);
+        if (!(await deleteWithPreview.remove(id, options))) return false;
         await invalidateFiles();
+        return true;
       }),
   };
 }

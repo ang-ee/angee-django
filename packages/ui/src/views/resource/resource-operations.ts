@@ -1,5 +1,7 @@
 import { useCallback } from "react";
 import { useInvalidate } from "@refinedev/core";
+import { useToast } from "../../feedback";
+import { useUiT } from "../../i18n";
 import {
   refineResourceIdentifier,
   refineResourceName,
@@ -85,32 +87,41 @@ export function useDeletePreviewOperation(
 
 export interface UseDeleteWithPreviewResult extends UseAngeeDeletePreviewResult {
   available: boolean;
-  remove: (id: string) => Promise<void>;
+  /** Resolves false when confirmation has no result or is blocked; rejects transport failures. */
+  remove: (id: string, options?: Parameters<UseAngeeDeletePreviewResult["mutate"]>[1]) => Promise<boolean>;
 }
 
 /**
  * Own the standard single-record delete-preview confirmation plus Refine cache
- * invalidation tail. Domain callers retain their own confirmation copy and any
- * related-resource invalidations, while the generated operation/document seam
- * stays in one place.
+ * invalidation tail. A blocked or empty confirmation toasts through the shared
+ * toast owner and resolves false without invalidating. Domain callers retain
+ * their own confirmation copy and any related-resource invalidations, while the
+ * generated operation/document seam stays in one place.
  * @owner DeletePreviewDialog
  */
 export function useDeleteWithPreview(
   resource: DataResourceMetadata | null,
 ): UseDeleteWithPreviewResult {
   const operation = useDeletePreviewOperation(resource);
+  const toast = useToast();
+  const t = useUiT();
   const preview = useAngeeDeletePreview(operation.target, {
     document: operation.document,
   });
   const invalidate = useInvalidate();
   const invalidations = useResourceInvalidates(resource ? [resource.modelLabel] : undefined);
-  const remove = useCallback(async (id: string): Promise<void> => {
+  const remove = useCallback(async (id: string, options?: Parameters<UseAngeeDeletePreviewResult["mutate"]>[1]): Promise<boolean> => {
     if (!resource || !operation.target) {
       throw new Error("Delete preview is unavailable for this resource.");
     }
-    await preview.mutate({ id, confirm: true });
+    const result = await preview.mutate({ id, confirm: true }, options);
+    if (!result || result.hasBlockers) {
+      toast.danger({ title: t("deletePreview.failedTitle"), description: t(result ? "deletePreview.blockedGeneric" : "deletePreview.emptyPreview") });
+      return false;
+    }
     await Promise.all(invalidations.map((target) => invalidate(target)));
-  }, [invalidate, invalidations, operation.target, preview.mutate, resource]);
+    return true;
+  }, [invalidate, invalidations, operation.target, preview.mutate, resource, t, toast]);
   return {
     ...preview,
     available: Boolean(resource && operation.target && operation.document),
