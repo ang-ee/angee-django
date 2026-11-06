@@ -1205,7 +1205,7 @@ class IntegrationLabelMixin(IntegrationConnectionMixin):
     type without adding a GraphQL interface to the SDL.
     """
 
-    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"], prefetch_related=["vendor"])
+    @strawberry_django.field(only=[*Integration.display_label_fields], prefetch_related=["vendor"])
     def display_name(self) -> str:
         """Return the operator label, falling back to the vendor-derived one."""
 

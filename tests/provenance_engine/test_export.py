@@ -2,7 +2,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from angee.provenance.engine.serialization import canonical_json, json_safe, restore_json
+from angee.base.serialization import canonical_json
+from angee.provenance.engine.serialization import json_safe, restore_json
 
 
 def test_native_values_roundtrip_without_tag_collisions():

@@ -16,6 +16,7 @@ from django.db import models, router, transaction
 from django.utils import timezone
 from simple_history.utils import get_history_manager_for_model
 
+from angee.base.serialization import canonical_json
 from angee.provenance.context import (
     actor_context,
     actor_reference,
@@ -30,7 +31,7 @@ from angee.provenance.querysets import model_history
 from .managers import ChangesetManager
 from .policy import get_policy
 from .replay import ordered_states
-from .serialization import canonical_json, json_safe
+from .serialization import json_safe
 
 
 class ChangesetAttribution(models.Model):
