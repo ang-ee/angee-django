@@ -155,6 +155,28 @@ through their native app lifecycle. Decisions-only suites use
 test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
 
+### GraphQL Document Budgets
+
+[`angee.graphql.testing.documents`](../src/angee/graphql/testing/documents.py) executes
+one document as one actor, as served requests do, and records the SQL Django captured
+on every configured database. The same helpers run an addon schema in the bare source
+host under pytest and the composed console schema under Django's test runner:
+
+```python
+read = measure_graphql_document(schema, document, variables, actor=member)
+assert read.data["projects_aggregate"]["aggregate"]["count"] == 3
+read.assert_ceiling(statements=89, sql_kb=539)
+```
+
+A ceiling is the measured cost: statements exact, SQL text rounded up to the next KB
+of 1,024 bytes. A change that lowers a cost lowers its ceiling in the same change; a
+rise is a regression to fix, never a reason to raise the ceiling. Assert the rows a
+read returns beside its ceiling, so a read that loses rows cannot pass. The
+[console document ceilings](../tests/native_graphql_document_budgets.py) pin the
+console app's inbox, transcript, person, projects and current-user reads for a
+platform admin and a member, each after one warm execution, in the
+[composed query-budget host](../tests/test_composed_query_budgets.py) on SQLite.
+
 ### Owner Search
 
 Before adding a backend abstraction, search for the native owner first. Run the
