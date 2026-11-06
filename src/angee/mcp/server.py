@@ -2,9 +2,9 @@
 
 Enabled addons contribute a conventional ``mcp_tools.register(server)`` callable.
 The server authenticates inbound bearers through RebacTokenVerifier and carries
-the actor through ActorMiddleware. MCPConfig supplies the HTTP mount and native
-FastMCP lifespan to django-compose's ASGI contribution owner. The inner HTTP
-application serves its root; the native mount owns the external ``/mcp`` prefix.
+the actor through ActorMiddleware. ``angee.mcp.asgi`` supplies the HTTP mount and
+native FastMCP lifespan to ``angee.server.asgi``. The inner HTTP application serves
+its root; the server mount owns the external ``/mcp`` prefix.
 
 ``stateless_http`` keeps each call independent and ``json_response`` returns a
 buffered JSON body the agent's HTTP client folds without an SSE reader (both passed
@@ -49,7 +49,7 @@ when it advertises a granted tool.
 """
 
 MOUNT_PATH = "/mcp"
-"""The external StreamableHTTP path contributed by MCPConfig.compose_asgi."""
+"""The external StreamableHTTP path contributed by ``angee.mcp.asgi.http_mounts``."""
 
 
 @cache

@@ -18,17 +18,7 @@ class GraphQLConfig(AppConfig):
 
     default = True
     name = "angee.graphql"
-    compose_urls = "angee.graphql.urls"
     requires_apps = ('channels', 'django.contrib.auth', 'django.contrib.sessions')
-
-    def compose_asgi(self):
-        """Contribute the single Channels protocol owner after app population."""
-
-        from django_compose.asgi import AsgiContribution
-
-        from angee.graphql.asgi import websocket_application
-
-        return AsgiContribution(protocols={"websocket": websocket_application()})
 
     def ready(self) -> None:
         """Register schema checks and connect model-change hooks."""
