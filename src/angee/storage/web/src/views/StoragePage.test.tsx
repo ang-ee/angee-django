@@ -53,6 +53,11 @@ const routerMocks = vi.hoisted(() => ({
 }));
 
 const sdkMocks = vi.hoisted(() => ({
+  confirmResult: true,
+  trash: vi.fn(async (_id: string, _options?: { errorNotification?: false }) => true),
+  trashMany: vi.fn(async (_ids: Iterable<string>, _options?: { errorNotification?: false }) => true),
+  restoreMany: vi.fn(async (_ids: Iterable<string>) => true),
+  clearSelection: vi.fn(),
   folderDrives: [] as string[],
   folderBatches: [] as Array<
     Array<{
@@ -110,7 +115,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const { useCallback } = await import("react");
   // A stable confirm, like the real (memoized) `useConfirm` — an unstable one
   // would churn the published navigator's identity and loop the publish effect.
-  const confirmAlways = async () => true;
+  const confirmAlways = async () => sdkMocks.confirmResult;
   return {
     ...actual,
     useRelationOptions: () => ({ options: storageData.drives.map((drive) => ({ value: drive.id, label: drive.name })),
@@ -133,8 +138,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
       <section data-testid="loading">{message}</section>
     ), PreviewPane: ({ file }: { file: { name: string } }) => (
       <section data-testid="preview-pane">{file.name}</section>
-    ), SelectionBarAction: ({ children }: { children: React.ReactNode }) => (
-      <button type="button">{children}</button>
     ), useBreadcrumbLeafLabel: sdkMocks.useBreadcrumbLeafLabel, useConfirm: () => confirmAlways, };
 });
 
@@ -190,7 +193,7 @@ vi.mock("@angee/ui/views/RelationPicker", () => ({
 
 vi.mock("../data/use-file-actions", () => ({
   useFileActions: () => ({
-    busy: false, move: vi.fn(), restore: vi.fn(async () => undefined), restoreMany: vi.fn(async () => undefined), trash: vi.fn(async () => undefined), trashMany: vi.fn(async () => undefined), }), }));
+    busy: false, move: vi.fn(), restore: vi.fn(async () => true), restoreMany: sdkMocks.restoreMany, trash: sdkMocks.trash, trashMany: sdkMocks.trashMany, }), }));
 
 vi.mock("../data/use-folder-actions", () => ({
   useFolderActions: () => ({
@@ -205,7 +208,8 @@ vi.mock("./FileBrowserContent", async () => {
   const { useResourceView } = await import("@angee/ui");
   return {
   FileBrowserContent: ({
-    baseFilter, onListStateChange, rowHref, uploadTarget, }: {
+    baseFilter, onListStateChange, rowHref, uploadTarget, bulkActions, }: {
+    bulkActions?: (ids: ReadonlySet<string>, clear: () => void) => import("react").ReactNode;
     baseFilter: Record<string, { exact: string | boolean }>;
     onListStateChange: (state: Record<string, unknown>) => void;
     rowHref?: (row: { id: string }, scope?: ListViewNavigationScope) => string;
@@ -249,7 +253,9 @@ vi.mock("./FileBrowserContent", async () => {
       data-upload-drive={uploadTarget?.driveId ?? ""}
       data-upload-folder={uploadTarget?.folderId ?? ""}
       data-can-upload={String(uploadTarget !== null)}
-    />
+    >
+      {bulkActions?.(new Set(rows.map((row) => row.id)), sdkMocks.clearSelection)}
+    </section>
     );
   },
   };
@@ -262,6 +268,7 @@ vi.mock("./FileDetail", () => ({
     <section data-testid="file-detail" data-file-id={id} />
   ), }));
 
+import { FilePreviewFrame } from "./FilePreviewFrame";
 import { StorageFileById, StorageFoldersPage, StorageFolderById, StorageDriveById } from "../data/documents";
 import storage from "../index";
 import { StoragePage } from "./StoragePage";
@@ -310,11 +317,11 @@ function matchesNativeWhere(row: Record<string, unknown>, where: unknown): boole
     return !("_eq" in comparison) || row[field] === comparison._eq;
   });
 }
-function pageTree() {
+function pageTree(content = <StoragePage />) {
   return (
     <Provider resources={[fileResource, driveResource, folderResource]} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
       <ToastProvider><ShellPageTestProviders>
-        <StoragePage />
+        {content}
         <PrimaryPaneTestHost />
         <ChatterTabsTestHost />
       </ShellPageTestProviders></ToastProvider>
@@ -331,6 +338,11 @@ function openListFile(id: string): void {
 let storageData = makeStorageData();
 
 beforeEach(() => {
+  sdkMocks.confirmResult = true;
+  sdkMocks.trash.mockReset().mockResolvedValue(true);
+  sdkMocks.trashMany.mockReset().mockResolvedValue(true);
+  sdkMocks.restoreMany.mockReset().mockResolvedValue(true);
+  sdkMocks.clearSelection.mockReset();
   storageData = makeStorageData();
   routerMocks.params = {};
   routerState.reset();
@@ -383,6 +395,57 @@ afterEach(() => {
 });
 
 describe("StoragePage explorer wiring", () => {
+  test.each(["throw", "blocked", "cancel", "success"] as const)("file preview settles %s without closing a retained file", async (outcome) => {
+    const close = vi.fn();
+    if (outcome === "throw") sdkMocks.trash.mockRejectedValue(new Error("Deletion refused"));
+    else sdkMocks.trash.mockResolvedValue(outcome === "success");
+    sdkMocks.confirmResult = outcome !== "cancel";
+    render(pageTree(<FilePreviewFrame id="file-a" fileNavigation={null} closeDetail={close} fileActions={{
+      busy: false, trash: sdkMocks.trash, restore: async () => true, move: async () => undefined,
+      trashMany: sdkMocks.trashMany, restoreMany: sdkMocks.restoreMany,
+    }} />));
+    await waitFor(() => expect(screen.getByTestId("preview-pane").textContent).toBe("alpha.txt"));
+    const trashButton = screen.getByRole("button", { name: "Trash" }) as HTMLButtonElement;
+    await waitFor(() => expect(trashButton.disabled).toBe(false));
+    fireEvent.click(trashButton);
+    if (outcome === "cancel") {
+      await act(async () => { await Promise.resolve(); });
+      expect(sdkMocks.trash).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(sdkMocks.trash).toHaveBeenCalledWith("file-a", { errorNotification: false }));
+    }
+    if (outcome === "throw") await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Deletion refused"));
+    if (outcome === "success") await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    else expect(close).not.toHaveBeenCalled();
+  });
+
+  test.each(["throw", "blocked", "success"] as const)("bulk trash settles its %s outcome without clearing failed selection", async (outcome) => {
+    if (outcome === "throw") sdkMocks.trashMany.mockRejectedValue(new Error("Deletion refused"));
+    else sdkMocks.trashMany.mockResolvedValue(outcome === "success");
+    render(pageTree());
+    await waitFor(() => expect(fileListAttribute("data-row-ids")).toContain("file-a"));
+    const trashButton = within(screen.getByTestId("file-list")).getByRole("button", { name: "Trash" }) as HTMLButtonElement;
+    expect(trashButton.disabled).toBe(false);
+    fireEvent.click(trashButton);
+    await waitFor(() => expect(sdkMocks.trashMany).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.trashMany).toHaveBeenCalledWith(expect.any(Set), { errorNotification: false });
+    if (outcome === "throw") await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Deletion refused"));
+    if (outcome === "success") await waitFor(() => expect(sdkMocks.clearSelection).toHaveBeenCalledTimes(1));
+    else expect(sdkMocks.clearSelection).not.toHaveBeenCalled();
+  });
+
+  test("bulk restore retains selection when its feedback owner reports false", async () => {
+    sdkMocks.restoreMany.mockResolvedValue(false);
+    routerState.setSearch({ folder: "trash" });
+    render(pageTree());
+    const restoreButton = within(screen.getByTestId("file-list")).getByRole("button", { name: "Restore" }) as HTMLButtonElement;
+    await waitFor(() => expect(restoreButton.disabled).toBe(false));
+    fireEvent.click(restoreButton);
+    await waitFor(() => expect(sdkMocks.restoreMany).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.clearSelection).not.toHaveBeenCalled();
+    expect(sdkMocks.trashMany).not.toHaveBeenCalled();
+  });
+
   test("renders a directly shared file when no drive is visible", () => {
     routerMocks.params = { id: "file-a" };
     storageData = { ...storageData, drives: [] };
@@ -784,7 +847,9 @@ function treeRow(id: string): HTMLElement {
     : storageData.folders.find((row) => row.id === id && row.drive === rootPickerValue())?.name
       ?? storageData.files.find((row) => row.id === id)?.filename;
   if (!label) throw new Error(`Unknown fixture row ${id}`);
-  return screen.getByText(label).closest<HTMLElement>('[role="treeitem"]')!;
+  const matches = screen.getAllByText(label, { exact: true }).map((element) => element.closest<HTMLElement>('[role="treeitem"]')).filter((row) => row !== null);
+  expect(matches).toHaveLength(1);
+  return matches[0]!;
 }
 
 function treeAttribute(name: string): string | null {

@@ -1,8 +1,9 @@
+import { useMutation } from "@tanstack/react-query";
 import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
-  CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbar, PaneToolbarMenu,
+  errorMessage, useToast, CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbar, PaneToolbarMenu,
   ResourceViewProvider, ScopedExplorerPane, TreeView, useConfirm, useFilePicker, useLatestRef,
   relationFieldInfoForResource, useRelationOptions, useScopedTreeExplorer,
   type FieldDescriptor, type ListViewProps, type ScopedExplorerController,
@@ -105,16 +106,31 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
   // actions through a ref and stay referentially stable across renders.
   const fileActionsRef = useLatestRef(fileActions);
   const folderActionsRef = useLatestRef(folderActions);
+  const toast = useToast();
+  const deleteFolder = useMutation({
+    mutationFn: async ({ id, name, onDeleted }: { id: string; name: string; onDeleted: () => void }) => {
+      const accepted = await confirm({
+        title: t("folder.deleteTitle", { name }), body: t("folder.deleteBody"),
+        confirm: t("folder.deleteConfirm"), danger: true,
+      });
+      if (!accepted) return;
+      if (await folderActionsRef.current.remove(id, { errorNotification: false })) onDeleted();
+    },
+    onError: (error) => toast.danger({ title: errorMessage(error, t("action.failed")) }),
+  });
   // Dropping a file on a navigator node moves it: the Trash node trashes, All
   // files moves to the drive root, any folder node moves into that folder.
-  const handleFileDrop = useCallback(
-    (nodeId: string, file: FileDragData) => {
+  const fileDrop = useMutation({
+    mutationFn: async ({ nodeId, file }: { nodeId: string; file: FileDragData }) => {
       const actions = fileActionsRef.current;
-      if (nodeId === TRASH_SCOPE) void actions.trash(file.id);
-      else if (nodeId === ALL_SCOPE) void actions.move(file.id, null);
-      else void actions.move(file.id, nodeId);
+      if (nodeId === TRASH_SCOPE) await actions.trash(file.id, { errorNotification: false });
+      else await actions.move(file.id, nodeId === ALL_SCOPE ? null : nodeId, { errorNotification: false });
     },
-    [],
+    onError: (error) => toast.danger({ title: errorMessage(error, t("action.failed")) }),
+  });
+  const handleFileDrop = useCallback(
+    (nodeId: string, file: FileDragData) => fileDrop.mutate({ nodeId, file }),
+    [fileDrop.mutate],
   );
   const driveRootPicker = useMemo(
     () => ({
@@ -150,19 +166,6 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
           ? controller.selectedRow
           : undefined;
       uploadTargetRef.current = controller.uploadTarget;
-      const deleteFolder = async (): Promise<void> => {
-        if (!selectedFolder) return;
-        const ok = await confirm({
-          title: t("folder.deleteTitle", { name: selectedFolder.name }),
-          body: t("folder.deleteBody"),
-          confirm: t("folder.deleteConfirm"),
-          danger: true,
-        });
-        if (!ok) return;
-        void folderActionsRef.current
-          .remove(effectiveScope)
-          .then(() => controller.setSelectedId(ALL_SCOPE));
-      };
       const busy = folderActions.busy || !controller.rootId
         || (effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE && !selectedFolder);
       const submit = async (name: string): Promise<void> => {
@@ -208,7 +211,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
             <StorageFolders drive={controller.rootId} selectedId={openFileId ?? controller.selectedId}
               pane={{ selector, overflowItems: selectedFolder ? [
                 { icon: "pencil", label: t("folder.rename"), disabled: folderActions.busy, onClick: () => setFolderEdit("rename") },
-                { icon: "trash", label: t("folder.delete"), tone: "danger", disabled: folderActions.busy, onClick: () => void deleteFolder() },
+                { icon: "trash", label: t("folder.delete"), tone: "danger", disabled: folderActions.busy, onClick: () => { if (selectedFolder) deleteFolder.mutate({ id: effectiveScope, name: selectedFolder.name, onDeleted: () => controller.setSelectedId(ALL_SCOPE) }); } },
               ] : [] }}
               toolbarActions={<PaneToolbarMenu icon="plus" label={t("new.menu")} text disabled={busy} items={[
                 { icon: "folder", label: t("new.folder"), onClick: () => setFolderEdit("create") },
@@ -225,7 +228,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
         </>
       );
     },
-    [canUpload, confirm, folderRead.error, folderActions.busy, folderActionsRef, folderEdit, handleFileDrop, openFileId, openFileRoute, picker.input, picker.open, t],
+    [canUpload, deleteFolder.mutate, folderRead.error, folderActions.busy, folderActionsRef, folderEdit, handleFileDrop, openFileId, openFileRoute, picker.input, picker.open, t],
   );
   return (
     <ScopedExplorerPane<StorageDrive, StorageTreeRow>

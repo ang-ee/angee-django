@@ -10,18 +10,21 @@ import type {
   DataResourceMetadata,
 } from "@angee/metadata";
 
+type DeleteOptions = Parameters<ReturnType<typeof useDeleteWithPreview>["remove"]>[1];
+type MoveOptions = Pick<NonNullable<Parameters<ReturnType<typeof useUpdate<RowRecord, HttpError, Record<string, unknown>>>["mutateAsync"]>[0]>, "errorNotification">;
+
 export interface FileActions {
   busy: boolean;
-  /** Soft-delete a file into the Trash. */
-  trash: (id: string) => Promise<void>;
-  /** Pull a file back out of the Trash. */
-  restore: (id: string) => Promise<void>;
+  /** Soft-delete a file into the Trash; resolves whether it was trashed. */
+  trash: (id: string, options?: DeleteOptions) => Promise<boolean>;
+  /** Pull a file back out of the Trash; resolves whether it was restored. */
+  restore: (id: string) => Promise<boolean>;
   /** Move a file into a folder by public id, or `null` for the root. */
-  move: (id: string, folder: string | null) => Promise<void>;
-  /** Soft-delete many files in one pass, refetching once. */
-  trashMany: (ids: Iterable<string>) => Promise<void>;
-  /** Restore many files in one pass, refetching once. */
-  restoreMany: (ids: Iterable<string>) => Promise<void>;
+  move: (id: string, folder: string | null, options?: MoveOptions) => Promise<void>;
+  /** Soft-delete many files in one pass, refetching once; stops at the first refusal and resolves whether all were trashed. */
+  trashMany: (ids: Iterable<string>, options?: DeleteOptions) => Promise<boolean>;
+  /** Restore many files in one pass, refetching once; stops at the first refusal and resolves whether all were restored. */
+  restoreMany: (ids: Iterable<string>) => Promise<boolean>;
 }
 
 /**
@@ -47,32 +50,36 @@ export function useFileActions(
 
   return {
     busy,
-    trash: (id) =>
+    trash: (id, options) =>
       run(async () => {
         requireFileResource(resource);
-        await deleteWithPreview.remove(id);
+        return deleteWithPreview.remove(id, options);
       }),
     restore: (id) =>
       run(async () => {
         requireFileResource(resource);
-        await trashRecord.restore(id);
+        return trashRecord.restore(id);
       }),
-    move: (id, folder) =>
+    move: (id, folder, options) =>
       run(async () => {
         requireFileResource(resource);
-        await updateFile.mutateAsync({ id, values: { folder } });
+        await updateFile.mutateAsync({ id, values: { folder }, ...options });
       }),
-    trashMany: (ids) =>
+    trashMany: (ids, options) =>
       run(async () => {
         for (const id of ids) {
           requireFileResource(resource);
-          await deleteWithPreview.remove(id);
+          if (!(await deleteWithPreview.remove(id, options))) return false;
         }
+        return true;
       }),
     restoreMany: (ids) =>
       run(async () => {
         requireFileResource(resource);
-        for (const id of ids) await trashRecord.restore(id);
+        for (const id of ids) {
+          if (!(await trashRecord.restore(id))) return false;
+        }
+        return true;
       }),
   };
 }

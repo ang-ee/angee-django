@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { ToastProvider } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { testDataResource } from "@angee/metadata/testing";
@@ -28,14 +29,14 @@ test.each(["rename", "remove"] as const)("folder %s refreshes related file list 
   const custom = vi.fn(async () => {
     folderName = "Drive root";
     return { data: { delete_folder_preview: {
-      totalDeletedCount: 1, deleted: [], updated: [], blocked: [], hasBlockers: false,
-      root: { label: "storage.Folder", objectLabel: "Before", objectId: "folder-1", children: [] },
+      total_deleted_count: 1, deleted: [], updated: [], blocked: [], has_blockers: false,
+      root: { label: "storage.Folder", object_label: "Before", object_id: "folder-1", children: [] },
     } } };
   });
   function Providers({ children }: { children: ReactNode }) {
     return <Provider dataProvider={{ getList, getOne, update, custom }}>
       <OperationDocumentsProvider documents={{ console: { deletePreviews: { "storage.Folder": DELETE } } }}>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
       </OperationDocumentsProvider>
     </Provider>;
   }

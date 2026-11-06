@@ -134,7 +134,8 @@ export interface UseAngeeDeletePreviewResult {
   preview: DeletePreview | null;
   fetching: boolean;
   error: HttpError | null;
-  mutate: (variables: DeletePreviewVariables) => Promise<DeletePreview | null>;
+  /** Native Refine notification opt-out when the invoking surface owns feedback. */
+  mutate: (variables: DeletePreviewVariables, options?: { errorNotification?: false }) => Promise<DeletePreview | null>;
   reset: () => void;
 }
 
@@ -466,13 +467,14 @@ export function useAngeeDeletePreview(
   const root = target?.root ?? "";
   const run = useCustomMutation<BaseRecord, HttpError, DeletePreviewVariables>();
   const mutate = useCallback(
-    async (variables: DeletePreviewVariables) => {
+    async (variables: DeletePreviewVariables, options?: { errorNotification?: false }) => {
       if (!target) return null;
       const request = deletePreviewRequest(target, variables, { document });
       const response = await run.mutateAsync({
         url: "",
         method: "post",
         values: variables,
+        ...options,
         dataProviderName: request.dataProviderName,
         meta: request.meta,
       });

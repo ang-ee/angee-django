@@ -28,6 +28,8 @@ const sdk = vi.hoisted(() => {
     authoredCalls: [] as unknown[],
     refineMutations: [] as RefineMutation[],
     invalidations: [] as unknown[],
+    refuseRestoreId: null as string | null,
+    blockedDeleteId: null as string | null,
   };
 });
 
@@ -50,7 +52,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
       trash: vi.fn(async () => true),
       restore: vi.fn(async (id: string) => {
         sdk.authoredCalls.push({ id });
-        return true;
+        return id !== sdk.refuseRestoreId;
       }),
     })),
   };
@@ -85,12 +87,12 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       };
     };
   const deletePreview = {
-    totalDeletedCount: 1,
+    total_deleted_count: 1,
     deleted: [],
     updated: [],
     blocked: [],
-    hasBlockers: false,
-    root: { label: "record", objectLabel: "Record", objectId: "row_1", children: [] },
+    has_blockers: false,
+    root: { label: "record", object_label: "Record", object_id: "row_1", children: [] },
   };
   return {
     ...actual,
@@ -99,24 +101,35 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       id: (input as { id?: string }).id,
       ...(input as { values?: Record<string, unknown> }).values,
     })),
-    useCustomMutation: mutation("deletePreview", () => ({
-      deleteFilePreview: deletePreview,
-      deleteFolderPreview: deletePreview,
-    })),
+    useCustomMutation: mutation("deletePreview", (input) => {
+      const preview = (input as { values?: { id?: string } }).values?.id === sdk.blockedDeleteId
+        ? { ...deletePreview, has_blockers: true, total_deleted_count: 0 }
+        : deletePreview;
+      return { deleteFilePreview: preview, deleteFolderPreview: preview };
+    }),
     useInvalidate: () => vi.fn(async (input: unknown) => {
       sdk.invalidations.push(input);
     }),
   };
 });
 
+import { ToastProvider } from "@angee/ui";
 import { useFileActions } from "./use-file-actions";
 import { useFolderActions } from "./use-folder-actions";
+
+const FILE_INVALIDATION = {
+  resource: "console:storage.File",
+  dataProviderName: "console",
+  invalidates: ["resourceAll"],
+};
 
 describe("storage file/folder actions", () => {
   beforeEach(() => {
     sdk.authoredCalls.length = 0;
     sdk.refineMutations.length = 0;
     sdk.invalidations.length = 0;
+    sdk.refuseRestoreId = null;
+    sdk.blockedDeleteId = null;
   });
 
   test("file actions use refine mutations and confirm soft deletes", async () => {
@@ -137,6 +150,7 @@ describe("storage file/folder actions", () => {
     await act(async () => {
       await result.current.trash("fil_1");
       await result.current.move("fil_1", "fld_1");
+      await result.current.move("fil_1", null, { errorNotification: false });
       await result.current.trashMany(["fil_2", "fil_3"]);
       await result.current.restore("fil_1");
     });
@@ -148,9 +162,44 @@ describe("storage file/folder actions", () => {
     ]);
     expect(updateFile?.calls).toEqual([
       { id: "fil_1", values: { folder: "fld_1" } },
+      { id: "fil_1", values: { folder: null }, errorNotification: false },
     ]);
     expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }]);
-    expect(onChanged).toHaveBeenCalledTimes(4);
+    expect(onChanged).toHaveBeenCalledTimes(5);
+  });
+
+  test("bulk restore stops on the shared owner's reported refusal", async () => {
+    sdk.refuseRestoreId = "fil_2";
+    const onChanged = vi.fn();
+    const { result } = renderHook(() => useFileActions({ onChanged }), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.restoreMany(["fil_1", "fil_2", "fil_3"])).resolves.toBe(false);
+    });
+    expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }, { id: "fil_2" }]);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  test("bulk trash does not treat a blocked confirmation as deletion", async () => {
+    sdk.blockedDeleteId = "fil_2";
+    const { result } = renderHook(() => useFileActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.trashMany(["fil_1", "fil_2", "fil_3"], { errorNotification: false })).resolves.toBe(false);
+    });
+    expect(sdk.refineMutations[0]?.calls).toHaveLength(2);
+    expect(sdk.refineMutations[0]?.calls).toEqual([
+      expect.objectContaining({ values: { id: "fil_1", confirm: true }, errorNotification: false }),
+      expect.objectContaining({ values: { id: "fil_2", confirm: true }, errorNotification: false }),
+    ]);
+    expect(sdk.invalidations).toEqual([FILE_INVALIDATION]);
+  });
+
+  test("a blocked folder deletion preserves the folder and does not refresh its files", async () => {
+    sdk.blockedDeleteId = "fld_2";
+    const { result } = renderHook(() => useFolderActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.remove("fld_2")).resolves.toBe(false);
+    });
+    expect(sdk.invalidations).toEqual([]);
   });
 
   test("folder actions use refine mutations and confirm removes", async () => {
@@ -191,21 +240,13 @@ describe("storage file/folder actions", () => {
       expect.objectContaining({ values: { id: "fld_1", confirm: true } }),
     ]);
     expect(sdk.invalidations).toEqual([
-      {
-        resource: "console:storage.File",
-        dataProviderName: "console",
-        invalidates: ["resourceAll"],
-      },
+      FILE_INVALIDATION,
       {
         resource: "console:storage.Folder",
         dataProviderName: "console",
         invalidates: ["resourceAll"],
       },
-      {
-        resource: "console:storage.File",
-        dataProviderName: "console",
-        invalidates: ["resourceAll"],
-      },
+      FILE_INVALIDATION,
     ]);
   });
 });
@@ -283,7 +324,7 @@ function MetadataWrapper({ children }: { children: ReactNode }): ReactElement {
   return (
     <OperationDocumentsProvider documents={STORAGE_OPERATION_DOCUMENTS}>
       <ModelMetadataProvider metadata={STORAGE_METADATA}>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
       </ModelMetadataProvider>
     </OperationDocumentsProvider>
   );
