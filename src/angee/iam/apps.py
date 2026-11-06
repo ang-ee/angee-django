@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from django.apps import AppConfig
+from django.core import checks
 
 from angee.iam.autoconfig import bootstrap_admin_settings
 
@@ -26,9 +27,11 @@ class IAMConfig(AppConfig):
             context.call('bootstrap_admin', database=context.database)
 
     def ready(self) -> None:
-        """Connect IAM's receivers once Django's auth app has connected its own."""
+        """Connect IAM's receivers once Django's auth app has connected its own; register IAM's checks."""
 
-        # Deferred to ready(): signal wiring after app population.
+        # Deferred to ready(): signal wiring and schema checks after app population.
         from angee.iam import signals
+        from angee.iam.checks import check_view_as_admin_only
 
         signals.connect()
+        checks.register(check_view_as_admin_only, checks.Tags.security)

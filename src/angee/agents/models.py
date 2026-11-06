@@ -1673,10 +1673,19 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concret
 
         return "\n".join(f"{cls._SERVICE_ENV_INDENT}{name}: {json.dumps(value)}" for name, value in env.items())
 
-    def service_model_handle(self) -> str:
-        """Return the selected model handle in this agent's runtime convention."""
+    def readable_model_handle(self, actor: Any) -> str:
+        """Return the selected model handle when ``actor`` may read that model.
 
-        model = getattr(self, "model", None)
+        Chat surfaces read the model through the actor's scope; only the service's
+        own provisioning renders the selected model structurally.
+        """
+
+        if actor is None or self.model_id is None:
+            return ""
+        model = (
+            apps.get_model("agents", "InferenceModel").objects.db_manager(self._state.db)
+            .with_actor(actor).filter(pk=self.model_id).first()
+        )
         return self.runtime_backend.model_handle(model) if model is not None else ""
 
     def mcp_config(self) -> dict[str, Any]:
