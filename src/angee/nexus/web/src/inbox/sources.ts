@@ -30,6 +30,17 @@ import type { useNexusT } from "../i18n";
 
 type Translate = ReturnType<typeof useNexusT>;
 
+/** Rows name their messages by id; the page carries each message once. */
+function pageMessages<TMessage extends { id: string }>(messages: readonly TMessage[]) {
+  const byId = new Map(messages.map((message) => [message.id, message]));
+  const required = (id: string): TMessage => {
+    const message = byId.get(id);
+    if (!message) throw new Error("A page row names a message the page does not carry.");
+    return message;
+  };
+  return { required, optional: (id: string | null | undefined) => (id ? required(id) : null) };
+}
+
 export function navigatorSource({
   coverage,
   timezone,
@@ -154,11 +165,16 @@ export function resultSource({
         ...options(request),
         scope: new InboxFilter(request.filter).scope(),
       }),
-      select: (data) => ({
-        rows: data.inbox_results.rows,
-        total: data.inbox_results.count,
-        summary: summary(data.inbox_results.count, data.inbox_results.message_count),
-      }),
+      select: (data) => {
+        const messages = pageMessages(data.inbox_results.messages);
+        return {
+          rows: data.inbox_results.rows.map(({ message_id, ...row }): InboxResultRow => ({
+            ...row, message: messages.required(message_id),
+          })),
+          total: data.inbox_results.count,
+          summary: summary(data.inbox_results.count, data.inbox_results.message_count),
+        };
+      },
     }),
     groups: collectionQuery({
       document: InboxResultGroups,
@@ -203,15 +219,23 @@ export function relatedSource(
         page: request.page,
         size: request.pageSize,
       }),
-      select: (data) => ({
-        rows: data.inbox_connections.rows,
-        total: data.inbox_connections.count,
-        summary: t("inbox.connectionSummary", {
-          count: data.inbox_connections.count,
-          total: data.inbox_connections.message_count,
-          unit,
-        }),
-      }),
+      select: (data) => {
+        const messages = pageMessages(data.inbox_connections.messages);
+        return {
+          rows: data.inbox_connections.rows.map(({ message_id, src_id, dst_id, ...row }): InboxConnectionRow => ({
+            ...row,
+            message: messages.optional(message_id),
+            src: messages.optional(src_id),
+            dst: messages.optional(dst_id),
+          })),
+          total: data.inbox_connections.count,
+          summary: t("inbox.connectionSummary", {
+            count: data.inbox_connections.count,
+            total: data.inbox_connections.message_count,
+            unit,
+          }),
+        };
+      },
     }),
   };
 }

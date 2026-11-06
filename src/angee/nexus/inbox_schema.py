@@ -1,10 +1,11 @@
 """Nexus explorer projections; personal-message query policy belongs to Messaging."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 import strawberry
 from django.apps import apps
+from rebac.graphql.strawberry_django import optimize
 
 from angee.integrate.schema import IntegrationType
 from angee.messaging.inbox import InboxCoverage, InboxSearch
@@ -77,6 +78,21 @@ class InboxPage(Generic[Row]):
 
 
 @strawberry.type
+class InboxPageWithMessages(Generic[Row]):
+    """A server page whose rows name messages by public ID; each message loads once.
+
+    ``messages`` is Messaging's readable queryset of the named messages, so the
+    native optimizer loads every relation the query selects in one read per
+    relation instead of one actor-scoped lookup per row.
+    """
+
+    rows: list[Row]
+    count: int
+    message_count: int
+    messages: list[MessageType]
+
+
+@strawberry.type
 class InboxSender:
     """Confirmed party or unresolved handle and its covered activity."""
 
@@ -142,13 +158,13 @@ class InboxPartUse:
 
 @strawberry.type
 class InboxResultRow:
-    """One message, exact content target, or unavailable attachment use."""
+    """One message, exact content target, or unavailable attachment use; its page carries the message."""
 
     id: str
     latest: datetime
     count: int
     part_count: int
-    message: MessageType
+    message_id: strawberry.ID
     part: PartType | None
     file: FileType | None
     fragment: FragmentType | None
@@ -171,27 +187,33 @@ class InboxRelatedTarget:
 
 @strawberry.type
 class InboxConnection:
-    """A typed use, participant, confirmed handle, or produced relation."""
+    """A typed use, participant, confirmed handle, or produced relation; its page carries the messages."""
 
     id: str
     label: str
     role: str
     provenance: str
     confidence: float | None
-    message: MessageType | None
+    message_id: strawberry.ID | None
     part: PartType | None
     handle: HandleType | None
-    src: MessageType | None
-    dst: MessageType | None
+    src_id: strawberry.ID | None
+    dst_id: strawberry.ID | None
 
 
 @strawberry.type
 class InboxMessage:
     """An independently readable message plus its current result membership."""
 
-    message: MessageType
+    selected: strawberry.Private[Any]
     matches: bool
     uses: list[InboxPartUse]
+
+    @strawberry.field
+    def message(self, info: strawberry.Info) -> MessageType:
+        """Read the selected message once with every relation the query selects."""
+
+        return cast(MessageType, optimize(self.selected, info).get())
 
 
 @strawberry.type
@@ -258,11 +280,11 @@ class NexusInboxQuery:
     @strawberry.field
     def inbox_connections(
         self, target: str, text: str = "", page: int = 1, size: int = 25, oldest: bool = False
-    ) -> InboxPage[InboxConnection]:
+    ) -> InboxPageWithMessages[InboxConnection]:
         """Page the target's declared row unit, without main scope or coverage."""
 
         return cast(
-            InboxPage[InboxConnection],
+            InboxPageWithMessages[InboxConnection],
             InboxRelated(Message.objects.all().explorer(), target).page(text=text, page=page, size=size, oldest=oldest),
         )
 
@@ -277,7 +299,7 @@ class NexusInboxQuery:
         scope: InboxGroupScopeInput | None = None,
         page: int = 1,
         size: int = 25,
-    ) -> InboxPage[InboxResultRow]:
+    ) -> InboxPageWithMessages[InboxResultRow]:
         """Page the chosen result unit inside the common matching-message population."""
 
         inbox = Message.objects.all().explorer()
@@ -289,7 +311,8 @@ class NexusInboxQuery:
         )
         result = InboxResults(inbox, rows, options.to_pydantic() if options else InboxResultOptions())
         return cast(
-            InboxPage[InboxResultRow], result.page(scope=scope.to_pydantic() if scope else None, page=page, size=size)
+            InboxPageWithMessages[InboxResultRow],
+            result.page(scope=scope.to_pydantic() if scope else None, page=page, size=size),
         )
 
     @strawberry.field
@@ -430,7 +453,11 @@ class NexusInboxQuery:
             .filter(pk=message.pk)
             .exists()
         )
-        return InboxMessage(message=message, matches=matches, uses=cast(list[InboxPartUse], inbox.part_uses(message)))
+        return InboxMessage(
+            selected=inbox.page_messages([message.pk]),
+            matches=matches,
+            uses=cast(list[InboxPartUse], inbox.part_uses(message)),
+        )
 
     @strawberry.field
     def inbox_related(

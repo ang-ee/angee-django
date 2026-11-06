@@ -143,9 +143,7 @@ export const InboxResults = graphql(`
         latest
         count
         part_count
-        message {
-          ...InboxMessageFields
-        }
+        message_id
         part {
           ...MessagePartFields
         }
@@ -162,6 +160,9 @@ export const InboxResults = graphql(`
           id
           text
         }
+      }
+      messages {
+        ...InboxMessageFields
       }
     }
   }
@@ -259,9 +260,7 @@ export const InboxConnections = graphql(`
         role
         provenance
         confidence
-        message {
-          ...InboxMessageFields
-        }
+        message_id
         part {
           ...MessagePartFields
         }
@@ -269,12 +268,11 @@ export const InboxConnections = graphql(`
           ...MessageSenderFields
           platform
         }
-        src {
-          ...InboxMessageFields
-        }
-        dst {
-          ...InboxMessageFields
-        }
+        src_id
+        dst_id
+      }
+      messages {
+        ...InboxMessageFields
       }
     }
   }
@@ -318,12 +316,21 @@ export const InboxMessage = graphql(`
 export type InboxNavigatorRow = DocumentType<
   typeof InboxNavigator
 >["inbox_navigator"]["rows"][number];
-export type InboxResultRow = DocumentType<
-  typeof InboxResults
->["inbox_results"]["rows"][number];
-export type InboxConnectionRow = DocumentType<
-  typeof InboxConnections
->["inbox_connections"]["rows"][number];
+type InboxResultsPage = DocumentType<typeof InboxResults>["inbox_results"];
+type InboxConnectionsPage = DocumentType<typeof InboxConnections>["inbox_connections"];
+/** A message a result or connection page carries once for every row that names it. */
+export type InboxPageMessage = InboxResultsPage["messages"][number];
+export type InboxResultRow = Omit<InboxResultsPage["rows"][number], "message_id"> & {
+  message: InboxPageMessage;
+};
+export type InboxConnectionRow = Omit<
+  InboxConnectionsPage["rows"][number],
+  "message_id" | "src_id" | "dst_id"
+> & {
+  message: InboxPageMessage | null;
+  src: InboxPageMessage | null;
+  dst: InboxPageMessage | null;
+};
 
 export const InboxSelection = graphql(`
   query NexusInboxSelection($sender: String!, $circle: String!) {

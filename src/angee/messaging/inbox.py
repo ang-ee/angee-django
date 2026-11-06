@@ -96,11 +96,16 @@ class InboxSearch(BaseModel):
 
 @dataclass(frozen=True)
 class InboxPage:
-    """A server-selected page; total rows and messages are independent facts."""
+    """A server-selected page; total rows and messages are independent facts.
+
+    Rows that name messages by public ID carry them once in ``messages``, a
+    readable queryset a projection loads with every relation it selects.
+    """
 
     rows: list[Any]
     count: int
     message_count: int = 0
+    messages: Any = None
 
     @staticmethod
     def window(page: int, size: int) -> slice:
@@ -342,6 +347,11 @@ class MessageInbox:
         scoped = self.scoped(self.coverage(coverage), sender=sender, circle=circle)
         return self.matching(scoped, search).canonical()
 
+    def page_messages(self, ids: Any) -> Any:
+        """The readable messages a page's rows name, with their list-scale title text."""
+
+        return self.messages.filter(pk__in=ids).with_title_text().order_by("pk")
+
     def message(self, public_id: str) -> Any:
         """Read a message independently of the current result filters."""
 
@@ -412,8 +422,11 @@ class MessageInbox:
         parts = self.target_parts(target)
         all_uses = self.messages.filter(pk__in=Subquery(parts.order_by().values("message_id")))
         rows = self.matching(all_uses, InboxSearch(text=text, quoted=True))
+        # A lazy page lets the GraphQL projection load the selected relations once.
         return InboxPage(
-            list(rows.order_by("_order_at" if oldest else "-_order_at", "pk")[InboxPage.window(page, size)]),
+            rows.with_title_text().order_by("_order_at" if oldest else "-_order_at", "pk")[
+                InboxPage.window(page, size)
+            ],
             rows.count(),
             all_uses.count(),
         )

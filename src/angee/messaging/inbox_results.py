@@ -29,13 +29,16 @@ class InboxResultOptions(BaseModel):
 
 @dataclass(frozen=True)
 class InboxResultRow:
-    """One message, exact file/fragment, or unavailable attachment use."""
+    """One message, exact file/fragment, or unavailable attachment use.
+
+    ``message_id`` names the row's message by public ID; the page carries it.
+    """
 
     id: str
     latest: datetime
     count: int
     part_count: int
-    message: Any
+    message_id: str
     part: Any | None = None
     file: Any | None = None
     fragment: Any | None = None
@@ -180,13 +183,14 @@ class InboxResults:
         order = "_order_at" if self.options.oldest else "-_order_at"
         if not self.is_content:
             count = activity.count()
+            selected = list(
+                activity.order_by(order, "pk").values_list("pk", "sqid", "_order_at")[InboxPage.window(page, size)]
+            )
             return InboxPage(
-                [
-                    InboxResultRow(f"message:{message.sqid}", message._order_at, 1, 0, message)
-                    for message in activity.order_by(order, "pk")[InboxPage.window(page, size)]
-                ],
+                [InboxResultRow(f"message:{sqid}", order_at, 1, 0, str(sqid)) for _, sqid, order_at in selected],
                 count,
                 count,
+                self.inbox.page_messages([pk for pk, _, _ in selected]),
             )
         groups = (
             activity.scoped_for_aggregate()
@@ -226,10 +230,7 @@ class InboxResults:
             if self.options.lens == "attachments"
             else {}
         )
-        messages = {
-            record.pk: record
-            for record in self.inbox.messages.filter(pk__in=[part.message_id for part in sources.values()])
-        }
+        message_model = self.inbox.messages.model
         rows = []
         for group in selected:
             key = group["_identity"]
@@ -243,7 +244,7 @@ class InboxResults:
                     group["latest"],
                     group["messages"],
                     group["parts"],
-                    messages[part.message_id],
+                    message_model.public_id_from_pk(part.message_id),
                     part,
                     file,
                     fragment,
@@ -254,7 +255,12 @@ class InboxResults:
             .values("_identity", "message_id")
             .aggregate(records=Count("_identity", distinct=True), messages=Count("message_id", distinct=True))
         )
-        return InboxPage(rows, totals["records"], totals["messages"])
+        return InboxPage(
+            rows,
+            totals["records"],
+            totals["messages"],
+            self.inbox.page_messages([part.message_id for part in sources.values()]),
+        )
 
 
 class InboxConversationGroups(InboxGroups):
