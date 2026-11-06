@@ -54,6 +54,8 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from angee.base.build import extension_source_map
 from angee.base.testing.permissions import emit_permissions, installed_field_owners
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.decisions.testing.models import Decision
 from angee.provenance.context import changeset
 from angee.provenance.testing import load_statement_sources
 from tests.chatterdemo.models import ChatterDoc
@@ -73,6 +75,7 @@ with CaptureQueriesContext(connections['default']) as default_queries:
     with system_context(reason='tests.placement.fixture'), changeset(fresh=True):
         ActivityType.objects.create(key='call', name='Call')
         user = create_user('actor')
+        reviewer = create_user('reviewer')
         record = ChatterDoc.objects.create(title='Placed record')
         write_relationships([RelationshipTuple(to_object_ref(record), 'writer', to_subject_ref(user))])
     vault = vault_for(user, name='Placed vault')
@@ -90,11 +93,22 @@ with CaptureQueriesContext(connections['default']) as default_queries:
     # One GraphQL document.
     rows = result_data(execute_schema(schema, 'query { pages { id title } }', user=user))['pages']
     assert [row['title'] for row in rows] == ['Placed page']
+    # Answer a decision.
+    write_relationships([RelationshipTuple(to_object_ref(vault), 'viewer', to_subject_ref(reviewer))])
+    with changeset(fresh=True):
+        question = Decision.objects.ask(DecisionRequest(
+            kind='note_review', records=(vault,), assignees=(reviewer,), requester=user,
+            proposal=DecisionProposal(alternatives=[
+                {'key': 'complete', 'label': 'Complete', 'outcome': 'completed'},
+            ]),
+        ), actor=user)
+        answered = Decision.objects.decide(question, actor=reviewer, chosen=['complete'], revision=question.revision)
+    assert answered.verdict == ['complete']
     # Delete.
     with system_context(reason='tests.placement.delete'):
         record.delete()
     assert not ChatterDoc._base_manager.filter(pk=record.pk).exists()
-for row in (user, record, vault, page, task, message):
+for row in (user, reviewer, record, vault, page, task, message, question, answered):
     assert row._state.db == 'placed', row
 assert default_queries.captured_queries == [], default_queries.captured_queries
 '''

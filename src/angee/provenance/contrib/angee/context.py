@@ -48,7 +48,7 @@ def merge_context(survivor: models.Model, *, join: bool = False) -> Iterator[Non
         # destination just as it owns current_changeset(record=True).
         context_alias = context._state.db or router.db_for_write(changeset_model(), instance=context)
         if context_alias != survivor._state.db:
-            raise ValidationError("A fold must share the database of its changeset.")
+            raise ValidationError("A fold and its changeset must be routed to one database.")
     with changeset(
         fresh=context is None,
         activity="merge" if context is None else None,

@@ -718,10 +718,7 @@ class _RelationIDDecoder:
 
     def resolve(self, values: Iterable[str], actor: Any) -> dict[str, _DecodedRelationID]:
         """Read the operands' targets under the source's actor, else REBAC's ambient scope, fail-closed."""
-        queryset = require_rebac_queryset(self.model)
-        if actor is not None:
-            queryset = queryset.with_actor(actor)
-        queryset = queryset.with_action("read").scoped_for_aggregate()
+        queryset = require_rebac_queryset(self.model, actor=actor).with_action("read").scoped_for_aggregate()
         instances = instances_from_public_ids(self.model, values, queryset=queryset)
         return {
             value: _DecodedRelationID(self.decoder(value) if self.decoder is not None else instance.pk)

@@ -116,7 +116,7 @@ export function ManageAccessDialog(props: ManageAccessDialogProps): React.ReactE
       <Glyph name="share" />
       {props.compact ? <span>{t("access.people")}{props.peopleLoaded ? ` · ${props.people?.length ?? 0}` : null}</span> : null}
       {props.people && props.people.length > 0 ? <AvatarStack aria-hidden="true" className="ml-1">
-        {props.people.slice(0, 3).map((person) => <Avatar key={person.subject} size="sm" initials={avatarInitials(person.label)} />)}
+        {props.people.slice(0, 3).map((person, index) => <Avatar key={person.subject || `${person.roleId}:${index}`} size="sm" initials={avatarInitials(person.label)} />)}
       </AvatarStack> : null}
     </Button>
   ) : props.trigger;
@@ -299,8 +299,8 @@ function PeopleContents({
       <div className={ACCESS_SECTION_HEADING_CLASS}>{t("access.people")} · {people.length}</div>
       {fetching && people.length === 0 ? <div className="grid gap-2" aria-label={t("access.people")}>
         <Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" />
-      </div> : people.length === 0 ? <InlineEmpty label={t("access.noReaders")} /> : people.map((person) => {
-        return <div key={person.subject} className="flex items-center gap-3 border-b border-border-subtle py-2 last:border-b-0">
+      </div> : people.length === 0 ? <InlineEmpty label={t("access.noReaders")} /> : people.map((person, index) => {
+        return <div key={person.subject || `${person.roleId}:${index}`} className="flex items-center gap-3 border-b border-border-subtle py-2 last:border-b-0">
           <span aria-hidden="true" className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-sheet-2 font-semibold">
             {person.label.charAt(0).toUpperCase()}
           </span>

@@ -14,7 +14,7 @@ from django.db import models, router, transaction
 from django.db.models.base import ModelBase
 from django.utils import timezone
 from django.utils.functional import classproperty
-from simple_history.manager import HistoryManager
+from simple_history.manager import HistoricalQuerySet, HistoryManager
 from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
 from simple_history.utils import get_change_reason_from_object, get_history_manager_for_model
@@ -48,11 +48,24 @@ class _ChangesetHistory(models.Model):
         abstract = True
 
 
-class ModelHistoryManager(HistoryManager):
+class ModelHistoricalQuerySet[T: models.Model](HistoricalQuerySet[T]):
+    """Stock historical rows under the Angee-declared row type variable.
+
+    Stock ``HistoricalQuerySet`` declares no type parameters: django-stubs reads
+    the untyped class as implicitly generic and Django's ``__class_getitem__``
+    returns it unchanged. ``ModelHistory`` installs this base, and a typed
+    ``historical_queryset`` subclasses it, so the provenance mypy plugin binds
+    the concrete historical row to ``T``.
+    """
+
+
+class ModelHistoryManager[T: models.Model](HistoryManager[T]):
     """Native bulk construction extended to accept deletion snapshots.
 
     ``self.model`` is the regular historical class; like the native manager, this
     reads its ``tracked_fields`` and ``get_default_history_user`` class attributes.
+    ``T`` is the Angee-declared row type the provenance mypy plugin binds, as for
+    ``ModelHistoricalQuerySet``.
     """
 
     def bulk_history_create(
@@ -146,6 +159,7 @@ class ModelHistory(HistoricalRecords):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("history_manager", ModelHistoryManager)
+        kwargs.setdefault("historical_queryset", ModelHistoricalQuerySet)
         kwargs.setdefault("bases", (_ChangesetHistory,))
         super().__init__(*args, **kwargs)
 

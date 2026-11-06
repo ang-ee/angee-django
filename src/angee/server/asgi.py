@@ -1,14 +1,16 @@
 """Bootstrap native Django, then serve it with enabled addons' ASGI contributions.
 
-An enabled addon's ``asgi`` module may define any of three callables, read once
-after Django setup in installed app order:
+An enabled addon's ``asgi`` module may define any of three contributions, read
+once after Django setup in installed app order. ``http_mounts`` and ``lifespans``
+are ordered contributions, each a value or a callable returning it
+(:func:`angee.base.addons.addon_contribution`):
 
-- ``http_mounts()`` returns ``(prefix, application)`` pairs. A prefix is an
+- ``http_mounts`` holds ``(prefix, application)`` pairs. A prefix is an
   absolute decoded path without a trailing slash (except ``/``); the mounted
   application receives the original path with its prefix added to ``root_path``.
 - ``protocols()`` maps ASGI scope types to applications. ``http`` and
   ``lifespan`` are reserved for Django and the server.
-- ``lifespans()`` returns factories of fresh async context managers, entered in
+- ``lifespans`` holds factories of fresh async context managers, entered in
   order at lifespan startup and exited in reverse at shutdown.
 
 Mount and protocol collisions fail fast. Unmounted HTTP goes to Django's handler.
@@ -17,7 +19,7 @@ Mount and protocol collisions fail fast. Unmounted HTTP goes to Django's handler
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from typing import cast
 
@@ -26,9 +28,8 @@ from asgiref.typing import ASGI3Application, ASGIReceiveCallable, ASGISendCallab
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.core.handlers.asgi import ASGIHandler
-from django_compose.components import installed_components
 
-from angee.base.addons import optional_addon_module
+from angee.base.addons import addon_contribution, addon_modules
 from angee.server.signals import connect_web_statement_timeout
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
@@ -43,22 +44,16 @@ class _Application:
     """Dispatch HTTP to addon mounts or Django, other scopes to contributed protocols."""
 
     def __init__(self) -> None:
-        apps.check_apps_ready()
-        if not apps.ready:
-            raise RuntimeError("ASGI composition requires completed django.setup()")
         self.http = cast(ASGI3Application, ASGIHandler())
         self.mounts: dict[str, ASGI3Application] = {}
         self.protocols: dict[str, ASGI3Application] = {}
         self.lifespans: list[_Lifespan] = []
         mount_owners: dict[str, str] = {}
         protocol_owners = {"http": "Django HTTP fallback", "lifespan": "Angee server lifespan"}
-        index = installed_components("angee.addons")
-        for config in apps.get_app_configs():
-            module = optional_addon_module(config, "asgi", index=index)
-            if module is None:
+        for config, module in addon_modules("asgi"):
+            if config.name == __package__:
                 continue
-            mounts: Iterable[tuple[str, ASGI3Application]] = getattr(module, "http_mounts", list)()
-            for prefix, handler in mounts:
+            for prefix, handler in addon_contribution(module, "http_mounts"):
                 if (
                     not isinstance(prefix, str)
                     or not prefix.startswith("/")
@@ -71,7 +66,7 @@ class _Application:
             for protocol, handler in protocols.items():
                 self._claim(protocol_owners, protocol, config.name)
                 self.protocols[protocol] = handler
-            self.lifespans.extend(getattr(module, "lifespans", list)())
+            self.lifespans.extend(addon_contribution(module, "lifespans"))
         self.prefixes = sorted(self.mounts, key=lambda prefix: (-len(prefix), prefix))
 
     @staticmethod

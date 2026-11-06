@@ -24,12 +24,12 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 |---|---|---|
 | `src/angee/integrate/README.md` | The owner table: connection, epochs/cursors, links, failures, adapter contract, console | `src/angee/integrate/README.md:8-15` |
 | `impl.py` | `IntegrationImpl`, `BridgeImpl` (adapter contract), `LiveBridgeImpl` (session facts, `start_live`) | `src/angee/integrate/impl.py:34,65,183,206` |
-| `models.py` | `Integration`, `Bridge` (scheduling, locks, live state), `SyncStream` + manager, `RecordLink` + manager, `Credential`, `OAuthClient` | `src/angee/integrate/models.py:292,1134,1697,2754,3748,3956,4134,4389` |
+| `models.py` | `Integration`, `Bridge` (scheduling, locks, live state), `SyncStream` + manager, `RecordLink` + manager, `Credential`, `OAuthClient` | `src/angee/integrate/models.py:294,1144,1705,2771,3763,3971,4148,4404` |
 | `states.py`, `streams.py` | `StreamDefinition` knobs; `StreamPage`, `RecordChange`, `ApplyResult`, errors, driver verbs | `src/angee/integrate/states.py:101`, `src/angee/integrate/streams.py:135,146,181,211,219,429,914,1114,1229` |
 | `credentials.py`, `oauth/providers.py` | `CredentialKind` handlers; `OAuthProviderType` presets via `ANGEE_OAUTH_PROVIDER_TYPE_CLASSES` | `src/angee/integrate/credentials.py:17,33`, `src/angee/integrate/oauth/providers.py:14` |
 | `tasks.py`, `scheduler.py`, `queue.py`, `constants.py` | Due-bridge and discovery dispatch, `run_bridge_session`, task names and tick constants | `src/angee/integrate/tasks.py:31,48,60,77,84`, `src/angee/integrate/scheduler.py:21,39` |
 | `session.py`, `session_runner.py`, `session_process.py`, `live.py` | Worker-only loop, outcome handling, fresh-interpreter host, console-safe pairing facts | `src/angee/integrate/session.py:60`, `src/angee/integrate/session_runner.py:27`, `src/angee/integrate/session_process.py:37`, `src/angee/integrate/live.py:60,100` |
-| The capability's donor | The concrete bridge model a source extends (`messaging.Channel`, `parties.Directory`, `integrate_vcs.VcsBridge`) and its `ImplClassField` | `src/angee/messaging/models.py:1030,1049,1051`, `src/angee/messaging/backends.py:224,232` |
+| The capability's donor | The concrete bridge model a source extends (`messaging.Channel`, `parties.Directory`, `integrate_vcs.VcsBridge`) and its `ImplClassField` | `src/angee/messaging/models.py:1030,1045,1047`, `src/angee/messaging/backends.py:224,232` |
 | `testing/`, `tests/integrate_fixtures.py`, `tests/conftest.py` | Concrete `Integration`, `SyncStream`, `RecordLink`; `ConnectionAdapter`/`LiveConnectionAdapter`; `make_integration`, `current_stream` | `src/angee/integrate/testing/{integration.py:7,models.py:13,23}`, `tests/integrate_fixtures.py:25,75,81`, `tests/conftest.py:336,380` |
 
 ## Reuse first
@@ -40,8 +40,8 @@ source addon contributes one adapter class, its registry key and its tests. Refe
   (`src/angee/integrate/streams.py:1114,429,914,689,1229`) own paging, cursor commit, quarantine, conflicts
   and parallelism; an adapter extracts and applies only.
 - `Bridge.run_sync`, `claim_sync`, `record_sync_error`, `update_live_state`, `claim_live_account`
-  (`src/angee/integrate/models.py:3414,3174,3337,2926,2903`) own lifecycle, telemetry and locks.
-- `Credential.auth_headers`, `ensure_fresh`, `Integration.fresh_credential` (`src/angee/integrate/models.py:1297,1341,2068`)
+  (`src/angee/integrate/models.py:3430,3190,3353,2942,2919`) own lifecycle, telemetry and locks.
+- `Credential.auth_headers`, `ensure_fresh`, `Integration.fresh_credential` (`src/angee/integrate/models.py:1306,1350,2085`)
   own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin.
 - `IntegrationError(public_message, transient=, retry_after=)` (`src/angee/integrate/errors.py:25`) is the only
   exception an operator sees; `RequestNotSentError` marks safe retries.
@@ -106,7 +106,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    covers, the driver alone promotes links, adapters never persist cursors or credentials.
 
 4. **Credentials and OAuth.** Read material through the row: `self.bridge.fresh_credential()`, then
-   `credential.auth_headers()` or the handler's secret (`src/angee/integrate/models.py:2068,1297`); kinds are
+   `credential.auth_headers()` or the handler's secret (`src/angee/integrate/models.py:2085,1306`); kinds are
    `CredentialKind` handlers (`src/angee/integrate/credentials.py:17`). If the vendor needs an OAuth preset →
    subclass `OAuthProviderType` with a unique `key` and contribute
    `"ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.<key>"` (`src/angee/integrate/README.md:91-99`, `tests/integrate_fixtures.py:98-113`). If the
@@ -118,7 +118,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    dedicated queue; the stack runs it on the threads pool), `session_class` (a worker-only `LiveSession`
    subclass), and `session_isolation = "process"` when the vendor SDK can abort the interpreter
    (`src/angee/integrate/impl.py:186-191`; fixture: `tests/integrate_fixtures.py:75-78`). The capability's row
-   sets `live_impl_field` to its selector (`src/angee/messaging/models.py:1047`). `start_live` enqueues
+   sets `live_impl_field` to its selector (`src/angee/messaging/models.py:1045`). `start_live` enqueues
    `integrate.run_bridge_session` with `expires` of one tick (`src/angee/integrate/impl.py:206-224`); the
    reconciler `ensure_bridge_sessions` restarts healthy connected bridges (`src/angee/integrate/tasks.py:84`).
    **Owner rule:** [Task pitfalls](../../../jobs/skills/jobs-tasks/references/pitfalls.md)
@@ -150,7 +150,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 - A private cursor table, checkpoint column or `last_synced_at` on the bridge: `SyncStream.cursor` and its generation own position ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "The cursor commits with the records it covers").
 - Persisting the cursor, promoting a link or writing credential material inside an adapter: the driver and credential manager own those (`src/angee/integrate/impl.py:122-130`, `src/angee/integrate/README.md:36,142-147`).
 - Choosing a winner on divergent edits or a remote tombstone against a local edit: conflicts await explicit resolution ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "Compare both mapped sides with their pinned applied base").
-- Running `extract`/`enumerate_keys` inside an enclosing transaction, or network IO inside `prepare_page`/`apply_record`: extraction runs outside the page transaction and may read the row (the IMAP adapter reloads credentials per page through `fresh_credential`, `src/angee/messaging_integrate_imap/backend.py:220`, `src/angee/integrate/models.py:2068`); the driver refuses extraction in an atomic block (`src/angee/integrate/streams.py:440`) and application does database work only (`src/angee/integrate/impl.py:106,122,150`; [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "The cursor commits with the records it covers").
+- Running `extract`/`enumerate_keys` inside an enclosing transaction, or network IO inside `prepare_page`/`apply_record`: extraction runs outside the page transaction and may read the row (the IMAP adapter reloads credentials per page through `fresh_credential`, `src/angee/messaging_integrate_imap/backend.py:220`, `src/angee/integrate/models.py:2085`); the driver refuses extraction in an atomic block (`src/angee/integrate/streams.py:440`) and application does database work only (`src/angee/integrate/impl.py:106,122,150`; [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "The cursor commits with the records it covers").
 - Re-raising a vendor exception's text or passing `str(exc)` to the operator ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "An integration failure reaches the operator only as an IntegrationError").
 - A `LiveBridgeImpl` without `session_queue`, which would put a session that outlives a tick on the shared prefork queue: `start_live` refuses it (`src/angee/integrate/impl.py:206-218`; [Task pitfalls](../../../jobs/skills/jobs-tasks/references/pitfalls.md) "A long-lived Celery task needs the three-check wake loop").
 - A worker writing `Integration.lifecycle` to report an outcome: report on `runtime_status` and the live desire ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "A lifecycle column is declared intent").

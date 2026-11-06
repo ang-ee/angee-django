@@ -13,6 +13,7 @@ from rebac.resources import model_resource_type
 from angee.base.fields.state import enum_member_for
 from angee.base.managers import AngeeManager
 from angee.base.models.hierarchy import HierarchyQuerySet
+from angee.base.permissions import require_rebac_queryset
 from angee.base.querysets import AngeeQuerySet
 
 if TYPE_CHECKING:
@@ -38,18 +39,15 @@ class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
 
         return self.filter(is_confirmed=True, is_dismissed=False)
 
-    def with_readable(self) -> Self:
-        """Annotate ``readable``: whether the ambient actor may read each membership.
+    def with_can_read(self) -> Self:
+        """Annotate ``can_read``: whether the ambient actor may read each membership.
 
         A record that displays another group's roster admits its seats' labels
-        only; a seat's id and its holder's subject stay with ``readable`` rows.
+        only; a seat's id and its holder's subject stay with ``can_read`` rows.
         """
 
-        actor = current_actor()
-        if actor is None:
-            return self.annotate(readable=models.Value(False))
-        readers = type(self)(model=self.model, using=self.db).with_actor(actor).scoped_for_aggregate()
-        return self.annotate(readable=models.Exists(readers.filter(pk=models.OuterRef("pk"))))
+        readers = require_rebac_queryset(self.model, actor=current_actor()).scoped_for_aggregate()
+        return self.annotate(can_read=models.Exists(readers.filter(pk=models.OuterRef("pk"))))
 
 
 _MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)

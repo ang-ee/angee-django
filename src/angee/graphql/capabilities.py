@@ -125,11 +125,8 @@ def _permission_annotation(model: type[models.Model], name: str, info: Any = Non
 
 def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.Exists:
     """Project one permission using the target queryset's actor and native scope."""
-    actor = relation_actor(queryset)
-    if actor is None:
-        return models.Exists(queryset.model._base_manager.none())
-    scoped = require_rebac_queryset(queryset.model).with_actor(actor).with_action(name).scoped_for_aggregate()
-    return models.Exists(scoped.filter(pk=models.OuterRef("pk")))
+    scoped = require_rebac_queryset(queryset.model, actor=relation_actor(queryset))
+    return models.Exists(scoped.with_action(name).scoped_for_aggregate().filter(pk=models.OuterRef("pk")))
 
 
 def permissions_field(names: Iterable[str]) -> Any:

@@ -38,7 +38,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
   [GraphQL ASGI](../../../src/angee/graphql/asgi.py) owns WebSocket contributions.
 - Native django-compose owns component graphs, generic lifecycle and optional hook dispatch:
   `django_compose.conf` merges settings. `angee.server.urls` includes an enabled addon's `urls` module
-  and `angee.server.asgi` reads its `asgi` module's `http_mounts()`, `protocols()` and `lifespans()`
+  and `angee.server.asgi` reads its `asgi` module's `http_mounts`, `protocols()` and `lifespans`
   ([Serving](../../../docs/composer.md#serving)). Declare through those owners.
 - `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts:162,66`), `createNamespaceT`
   (`packages/ui/src/i18n/index.ts:45`), `expectValidBaseAddon` (`packages/app/src/testing.tsx:101`),

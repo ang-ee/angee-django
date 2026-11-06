@@ -60,7 +60,7 @@ from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.permissions import actor_user_id, instance_actor, require_rebac_queryset
 from angee.graphql.events import ChangeRelatedRecord
 from angee.iam.service_users import sync_service_user
 from angee.integrate.models import IntegrationCreateMode
@@ -1676,16 +1676,15 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concret
     def readable_model_handle(self, actor: Any) -> str:
         """Return the selected model handle when ``actor`` may read that model.
 
-        Chat surfaces read the model through the actor's scope; only the service's
-        own provisioning renders the selected model structurally.
+        Chat surfaces read the model through the actor's scope, else REBAC's
+        ambient scope; only the service's own provisioning renders the selected
+        model structurally.
         """
 
-        if actor is None or self.model_id is None:
+        if self.model_id is None:
             return ""
-        model = (
-            apps.get_model("agents", "InferenceModel").objects.db_manager(self._state.db)
-            .with_actor(actor).filter(pk=self.model_id).first()
-        )
+        rows = require_rebac_queryset(apps.get_model("agents", "InferenceModel"), actor=actor)
+        model = rows.filter(pk=self.model_id).first()
         return self.runtime_backend.model_handle(model) if model is not None else ""
 
     def mcp_config(self) -> dict[str, Any]:

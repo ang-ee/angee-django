@@ -21,16 +21,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import cache
+from types import ModuleType
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django_compose.components import InstalledComponents, installed_components
 from fastmcp import FastMCP
 
-from angee.base.addons import optional_addon_module
+from angee.base.addons import addon_modules, optional_addon_module
 from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
 
@@ -101,20 +101,23 @@ def _registrars() -> tuple[ToolRegistrar, ...]:
     deterministic.
     """
 
-    index = installed_components("angee.addons")
     return tuple(
-        registrar for config in apps.get_app_configs()
-        if (registrar := tool_registrar(config, index=index)) is not None
+        registrar for _config, module in addon_modules('mcp_tools')
+        if (registrar := _module_registrar(module)) is not None
     )
 
 
-def tool_registrar(app_config: AppConfig, *, index: InstalledComponents | None = None) -> ToolRegistrar | None:
+def tool_registrar(app_config: AppConfig) -> ToolRegistrar | None:
     """Load the conventional registrar only from an enabled addon."""
 
-    module = optional_addon_module(app_config, 'mcp_tools', index=index)
-    if module is None or not hasattr(module, 'register'):
+    module = optional_addon_module(app_config, 'mcp_tools')
+    return _module_registrar(module) if module is not None else None
+
+
+def _module_registrar(module: ModuleType) -> ToolRegistrar | None:
+    if not hasattr(module, 'register'):
         return None
     registrar = module.register
     if not callable(registrar):
-        raise ImproperlyConfigured(f'{app_config.name}.mcp_tools.register must be callable')
+        raise ImproperlyConfigured(f'{module.__name__}.register must be callable')
     return registrar

@@ -44,6 +44,7 @@ from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     SubjectRef,
+    check_permission,
     system_context,
     to_subject_ref,
 )
@@ -1957,12 +1958,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         never offers both Retry and Connect.
         """
 
-        row = copy(self).with_actor(actor) if actor is not None else self
+        subject = to_subject_ref(actor) if actor is not None else instance_actor(self)
         return (
-            row.owner_id == actor_user_id(instance_actor(row))
-            and (row.has_access("write") if write_access is None else write_access)
-            and (row.credential_id is None or row.is_reconnect_required)
-            and row.is_oauth_connectable()
+            self.owner_id == actor_user_id(subject)
+            and (check_permission("write", self, actor=actor).allowed if write_access is None else write_access)
+            and (self.credential_id is None or self.is_reconnect_required)
+            and self.is_oauth_connectable()
         )
 
     def require_connect(self, actor: Any) -> None:

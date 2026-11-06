@@ -277,7 +277,7 @@ class ModelHistory(CaptureHistory):
     def revert_order(self, first: Any, last: Any, previous: Any) -> tuple[Any, ...]:
         """Restore parents first; remove creations after reference replay, children first."""
 
-        model = type(first.instance)
+        model = first.instance_type
         removal = previous is None or previous.history_type == "-"
         depth = len(model._meta.get_parent_list())
         return (2 if removal else 0, -depth if removal else depth, model._meta.label_lower, first.pk)
@@ -293,9 +293,9 @@ class ModelHistory(CaptureHistory):
         recorded its own version of the same write restores the same values.
         """
 
-        model = type(first.instance)
+        model = first.instance_type
         using = first._state.db
-        row = model._base_manager.using(using).filter(pk=first.instance.pk).first()
+        row = model._base_manager.using(using).filter(pk=getattr(first, model._meta.pk.attname)).first()
         if previous is None or previous.history_type == "-":
             if row is not None:
                 row.revert_removal(reason=f"Revert changeset {first.changeset_id}")

@@ -40,13 +40,17 @@ def declared_grants(model: type[models.Model]) -> dict[str, str]:
     return declaration
 
 
-def require_rebac_queryset[M: models.Model](model: type[M]) -> RebacQuerySet[M]:
-    """Preserve the default manager's filters and require its native REBAC query contract."""
+def require_rebac_queryset[M: models.Model](model: type[M], *, actor: Any = None) -> RebacQuerySet[M]:
+    """Preserve the default manager's filters and require its native REBAC query contract.
+
+    A bound ``actor`` is pinned. Without one, REBAC's ambient scope answers: system
+    context reads unscoped and an actorless read fails closed.
+    """
 
     queryset = model._default_manager.get_queryset()
     if not isinstance(queryset, RebacQuerySet):
         raise ImproperlyConfigured(f"{model._meta.label} requires a RebacQuerySet default manager.")
-    return queryset
+    return queryset.with_actor(actor) if actor is not None else queryset
 
 
 @dataclass(frozen=True, slots=True)
