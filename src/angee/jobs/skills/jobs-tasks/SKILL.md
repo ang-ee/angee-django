@@ -23,13 +23,13 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
 |---|---|---|
 | `<addon>/tasks.py` | `@shared_task(name="<label>.<verb>")` wrappers discovered by `autodiscover_tasks` | `src/angee/parties/tasks.py:12`, `src/angee/work/tasks.py:19` |
 | `<addon>/autoconfig.py` | `CELERY_BEAT_SCHEDULE:append` entries for the addon's own task names | `src/angee/parties/autoconfig.py:23-28`, `src/angee/work/autoconfig.py:5-16` |
-| `angee.jobs.enqueue` | `enqueue_task`: on-commit send, `queue`, `expires`, `robust` | `src/angee/jobs/enqueue.py:14` |
+| `angee.jobs.enqueue` | `enqueue_task`: on-commit send, `queue`, `expires`, `robust` | `src/angee/jobs/enqueue.py` |
 | `angee.jobs.celery` | The one `Celery("angee")` app, `ANGEE_CELERY_TASK_CLASS`, autodiscovery | `src/angee/jobs/celery.py:17-19` |
 | `angee.jobs.timeouts` | `task_time_budget`, `task_claim_lease`, the settlement reserve | `src/angee/jobs/timeouts.py:7,11,18` |
-| `angee.jobs.locks` | `LockKey`, `task_lock`, `record_lock_key`, `task_locks_are_cross_process` | `src/angee/jobs/locks.py:17,187,194,207` |
-| `angee.jobs.scheduler` | `DatabaseScheduler`: code-declared schedule written to `PeriodicTask` rows, stale rows pruned | `src/angee/jobs/scheduler.py:16` |
+| `angee.jobs.locks` | `LockKey`, `task_lock`, `record_lock_key`, `task_locks_are_cross_process` | `src/angee/jobs/locks.py` |
+| `angee.jobs.scheduler` | `DatabaseScheduler`: code-declared schedule written to `PeriodicTask` rows, stale rows pruned | `src/angee/jobs/scheduler.py` |
 | `angee.jobs.autoconfig` | Worker defaults: limits 840/900 s, prefetch 1, ignore results, beat scheduler path, broker from namespace | `src/angee/jobs/autoconfig.py:8,25` |
-| `angee.provenance.tasks.Task` | Attribution: a fresh `changeset(activity="system", change_reason="task.<name>")` per run | `src/angee/provenance/tasks.py:12`, `src/angee/provenance/autoconfig.py:25` |
+| `angee.provenance.tasks.Task` | Attribution: a fresh `changeset(activity="system", change_reason="task.<name>")` per run | `src/angee/provenance/tasks.py`, `src/angee/provenance/autoconfig.py:25` |
 | `manage.py celery`, stack template | Django-loaded Celery CLI; `worker --beat` plus one threads-pool queue worker | `src/angee/jobs/management/commands/celery.py:11`, `templates/stacks/_shared/stack-body.yaml.jinja:427-448` |
 
 ## Reuse first
@@ -37,12 +37,12 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
 - Celery native: `shared_task(name=..., autoretry_for=, retry_backoff=, retry_kwargs=, expires=, time_limit=)`;
   the app base is `celery.contrib.django.task:DjangoTask` (`src/angee/jobs/celery.py:17`) — do not subclass it
   per addon.
-- `enqueue_task` for every dispatch from Django code (`src/angee/jobs/enqueue.py:14`); `send_task` directly only
+- `enqueue_task` for every dispatch from Django code (`src/angee/jobs/enqueue.py`); `send_task` directly only
   inside the jobs addon.
 - The verb the task calls: a manager or model method under `system_context(reason=...)` that owns the row lock,
   idempotency and state transition (`src/angee/parties/tasks.py:40-44`, `src/angee/work/tasks.py:23-25`).
-- `task_lock(LockKey(...))` for duplicate-work suppression around external IO (`src/angee/jobs/locks.py:194`);
-  `task_time_budget()` for any bounded executor (`src/angee/jobs/timeouts.py:11`).
+- `task_lock(LockKey(...))` for duplicate-work suppression around external IO (`src/angee/jobs/locks.py`);
+  `task_time_budget()` for any bounded executor (`src/angee/jobs/timeouts.py`).
 
 ## Steps
 
@@ -112,7 +112,7 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
 
 5. **Budget time, choose the queue.** Worker limits are `CELERY_TASK_SOFT_TIME_LIMIT=840` / `CELERY_TASK_TIME_LIMIT=900`
    (`src/angee/jobs/autoconfig.py:16-17`). A bounded body stops at `task_time_budget()` and a persisted claim
-   fence outlives both limits by `task_claim_lease()` (`src/angee/jobs/timeouts.py:11,18`; users:
+   fence outlives both limits by `task_claim_lease()` (`src/angee/jobs/timeouts.py`; users:
    `src/angee/integrate/streams.py:1233`, `src/angee/workflows/runner.py:352`). If the task outlives a tick
    (a live connection) → a dedicated queue name on the owning impl, `time_limit=None` on the task, and the
    three-check wake loop (`src/angee/integrate/tasks.py:77`, [Task pitfalls](references/pitfalls.md) "A long-lived Celery task needs the three-check wake loop"); the stack
@@ -123,7 +123,7 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
 6. **Make it idempotent.** A redelivered or duplicated task must converge: the verb locks the row
    (`lock_if_supported`), revalidates its state, and returns without writing when already done
    (`src/angee/messaging/delivery.py:36-75`). Advisory `task_lock` is process-local on SQLite; derive liveness
-   from it only when `task_locks_are_cross_process()` (`src/angee/jobs/locks.py:207`). **Owner rule:**
+   from it only when `task_locks_are_cross_process()` (`src/angee/jobs/locks.py`). **Owner rule:**
    [Put behavior on the owning object](../../../../../docs/guidelines.md#put-behavior-on-the-owning-object): the
    manager owns convergence, the task owns none.
 
@@ -143,8 +143,8 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
 
 ## Do not
 
-- `send_task`, `.delay()` or `.apply_async()` from addon code: `enqueue_task` owns the commit boundary (`src/angee/jobs/enqueue.py:14`; [stack](../../../../../docs/stack.md#backend), the Celery row).
-- A per-addon `Celery()` app, task base class or `celery.py`: `angee.jobs.celery.app` and `ANGEE_CELERY_TASK_CLASS` are the owners (`src/angee/jobs/celery.py:17`; [composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
+- `send_task`, `.delay()` or `.apply_async()` from addon code: `enqueue_task` owns the commit boundary (`src/angee/jobs/enqueue.py`; [stack](../../../../../docs/stack.md#backend), the Celery row).
+- A per-addon `Celery()` app, task base class or `celery.py`: `angee.jobs.celery.app` and `ANGEE_CELERY_TASK_CLASS` are the owners (`src/angee/jobs/celery.py`; [composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
 - Beat entries in `angee.jobs.autoconfig`, a schedule file or hand-made `PeriodicTask` rows: each addon appends its own names and `DatabaseScheduler` prunes the rest (`tests/test_jobs.py:182,197`; [Autoconfig](../../../../../docs/composer.md#autoconfig)).
 - Business rules, row locks held across network IO, or state transitions in the task body: the manager verb owns them ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "Task locks are advisory, row locks are authoritative"; [thin caller check](../../../../../AGENTS.md#architecture-gate)).
 - Model instances or querysets as task arguments: identifiers only, resolved through `apps.get_model` (`src/angee/work/tasks.py:23`; [Django-native rule](../../../../../docs/backend/guidelines.md#django-native-rule)).

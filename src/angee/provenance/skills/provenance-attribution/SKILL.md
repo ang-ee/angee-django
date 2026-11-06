@@ -22,14 +22,14 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 |---|---|---|
 | `<addon>/models.py` | `HistoryMixin` composition, captured manager, `history_revert_permission`, `history_relations`, `statements` declaration | `src/angee/tags/models.py:58-77`, `tests/statement_models.py:16` |
 | `<addon>/pyproject.toml` | `[project].dependencies = [..., "angee-provenance>=3,<4"]` | `src/angee/tags/pyproject.toml` |
-| `src/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:346), `ModelHistory` (:97), `HistoryDocumentMixin` (:50), `record_history` (:86) | docstrings |
-| `src/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager` (:20), `AngeeHistoryUnscopedManager` (:24), `AngeeHistoryMergeableUnscopedManager` (:33); `AngeeHistoryQuerySet` (:16) | docstrings |
-| `src/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (:132), `HistoryMixin` (:438); `changeset()` (:334), `current_changeset` (:224), `ChangesetRequired` (:28) | [README](../../README.md) |
-| `src/angee/provenance/models.py`, `managers.py` | `Changeset` (:102) with `ambient_attribution` (:188), `revert` (:370), `document` (:349); `Rule` (:78), `Seed` (:90); `ChangesetQuerySet.touching` (:30), `ChangesetManager.claim` (:134) | docstrings |
-| `src/angee/provenance/statements.py` | `StatementRecords` (:1424), `Aspect` (:730), `PairAspect` (:1624), `StatementsMixin` (:798), `StatementSourceMixin` (:678), `StatementLinkMixin` (:710), `SourceKind` (:664) | module docstring |
-| `src/angee/provenance/tasks.py`, `middleware.py`, `contrib/angee/context.py` | the entrypoint boundaries: `Task` (:12), `ChangesetMiddleware`, `management_context` (:25), `merge_context` (:34) | [README: Boundaries](../../README.md#boundaries) |
-| `src/angee/provenance/evidence.py`, `src/angee/base/models/derived.py` | `EvidenceReference` (:38), `EvidenceFact` (:28), `FactAuthority` (:20), `readable_records` (:127); `DerivedFrom` (:13) | docstrings |
-| `src/angee/provenance/testing/` | `captured_changeset` autouse fixture (`fixtures.py:21`), concrete `Changeset`/`Rule`/`Seed` (`models.py`) | [source-addon test models](../../../../../docs/checks.md#source-addon-test-models) |
+| `src/angee/provenance/contrib/angee/history.py` | `HistoryMixin`, `ModelHistory`, `HistoryDocumentMixin`, `record_history` | docstrings |
+| `src/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager`, `AngeeHistoryUnscopedManager`, `AngeeHistoryMergeableUnscopedManager`; `AngeeHistoryQuerySet` | docstrings |
+| `src/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory`, `HistoryMixin`; `changeset()`, `current_changeset`, `ChangesetRequired` | [README](../../README.md) |
+| `src/angee/provenance/models.py`, `managers.py` | `Changeset` with `ambient_attribution`, `revert`, `document`; `Rule`, `Seed`; `ChangesetQuerySet.touching`, `ChangesetManager.claim` | docstrings |
+| `src/angee/provenance/statements.py` | `StatementRecords`, `Aspect`, `PairAspect`, `StatementsMixin`, `StatementSourceMixin`, `StatementLinkMixin`, `SourceKind` | module docstring |
+| `src/angee/provenance/tasks.py`, `middleware.py`, `contrib/angee/context.py` | the entrypoint boundaries: `Task`, `ChangesetMiddleware`, `management_context`, `merge_context` | [README: Boundaries](../../README.md#boundaries) |
+| `src/angee/provenance/evidence.py`, `src/angee/base/models/derived.py` | `EvidenceReference`, `EvidenceFact`, `FactAuthority`, `readable_records`; `DerivedFrom` | docstrings |
+| `src/angee/provenance/testing/` | `captured_changeset` autouse fixture (`fixtures.py`), concrete `Changeset`/`Rule`/`Seed` (`models.py`) | [source-addon test models](../../../../../docs/checks.md#source-addon-test-models) |
 
 ## Reuse first
 
@@ -41,7 +41,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 - `Changeset.objects.claim(scope, key, fingerprint=)` for idempotent creation; `merge_context` for merges.
 - `angee.base.models.derived.DerivedFrom` for evidence edges; `readable_records`/`readable_evidence` for admission and display.
 - Statement declarations with donors and links: `src/angee/parties/models.py:111`; the `UserSource` donor
-  (`src/angee/provenance/contrib/iam/models.py:12`) as the pattern for principals in addons that must not depend on provenance.
+  (`src/angee/provenance/contrib/iam/models.py`) as the pattern for principals in addons that must not depend on provenance.
 - Upstream: django-simple-history (`diff_against`, `bulk_history_create`), `rebac` `actor_context`/`system_context`, Celery `DjangoTask`
   — [Stack](../../../../../docs/stack.md#backend) rows 67, 76, 79.
 
@@ -77,7 +77,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
    [project migration history](../../../../../docs/composer.md#project-migration-history).
 
 4. **Write under the entrypoint's boundary; attribute, and open only a distinct logical write.** Attribution is ambient: the
-   changeset projects REBAC's current actor and sudo reason (`Changeset.ambient_attribution`, `models.py:188`), so domain code
+   changeset projects REBAC's current actor and sudo reason (`Changeset.ambient_attribution`, `models.py`), so domain code
    sets the actor with `actor_context`/`system_context(reason="<label>.<verb>")` and writes. A deliberately separate logical
    write (merge, revert, seed, an MCP tool call, a bridge session or stream pull) opens its own, nested inside the entrypoint's:
 
@@ -86,7 +86,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
        ...
    ```
 
-   Machine reasons use the `a.b` form so presentation stays silent (`MACHINE_REASON`, `models.py:61,215`); a human
+   Machine reasons use the `a.b` form so presentation stays silent (`MACHINE_REASON`, `models.py`); a human
    sentence passes through. Keyed creation claims first: `Changeset.objects.claim(scope, key, fingerprint=...)`.
    **Owner rule:** entrypoints own boundaries, one per unit of work; strict mode refuses a captured write without one
    ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives), "Every captured write…").
@@ -130,7 +130,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
    statements paragraphs; [Glossary: Statement](../../../../../docs/glossary.md#backend).
 
 7. **Retain derivation evidence.** An evidence owner declares a `DerivedFrom` child (`DecisionRecord`,
-   `src/angee/decisions/models.py:95`; `ExtractionSource`, `src/angee/extraction/models.py:514`) and admits sources
+   `src/angee/decisions/models.py`; `ExtractionSource`, `src/angee/extraction/models.py`) and admits sources
    with `readable_records(refs, actors)` (standing read for every participant); frozen values travel as `EvidenceFact`
    with a `FactAuthority`. **Owner rule:** [Glossary: Derived-from evidence](../../../../../docs/glossary.md#workflows);
    edges never grant access to their targets.
@@ -171,7 +171,7 @@ statement tables.
 - Only on integrated `src`: build, migration autodetection, permission sync, the native host proof
   (`tests/test_provenance_native.py`), the console history drill-in — [composition and schema](../../../../../docs/checks.md#composition-and-schema).
 - Loop: [slice](../../../../../.agents/skills/slice/SKILL.md#workflow). False greens: with `REBAC_STRICT_MODE` off a missing
-  boundary is never refused (`Changeset.context_required`, `models.py:195`); the generic base test plugin installs no
+  boundary is never refused (`Changeset.context_required`, `models.py`); the generic base test plugin installs no
   boundary, only the provenance fixtures do ([source-addon test models](../../../../../docs/checks.md#source-addon-test-models)).
 
 ## Pitfalls
