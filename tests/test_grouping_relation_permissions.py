@@ -15,6 +15,7 @@ import strawberry_django
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models
 from django.db.models.functions import Coalesce, NullIf
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
@@ -181,6 +182,7 @@ class GroupMiddleType(ProtectedNode):
 class GroupParentType(ProtectedNode):
     kind: auto
     amount: auto
+    occurred_at: auto
     label_name: str | None = strawberry_django.field(annotate=models.F("label_name"))
     nested_name: str | None = strawberry_django.field(annotate=models.F("nested_name"))
     target: GroupLabelType | None = actor_scoped_to_one("target")
@@ -246,8 +248,12 @@ def relation_grouping_case(transactional_db: None):
                     "middle__target__display_name",
                     "plain", "plain__display_name",
                     "occurred_at", "occurred_on", "metadata.mailbox", "metadata.rank", "metadata.held_at",
+                    "metadata.enabled",
                 ],
-                json_paths={"metadata.mailbox": "str", "metadata.rank": "int", "metadata.held_at": "datetime"},
+                json_paths={
+                    "metadata.mailbox": "str", "metadata.rank": "int", "metadata.held_at": "datetime",
+                    "metadata.enabled": "bool",
+                },
                 insert=False,
                 update=False,
                 delete=False,
@@ -418,7 +424,7 @@ def test_grouped_page_window_sql_budget(relation_grouping_case: Any) -> None:
     ])
     metadata = next(resource for resource in case.owner.resources("public") if resource.model is GroupParent)
     assert metadata.roots.grouped_rows_name == "group_parents_grouped_rows"
-    assert metadata.type_names.grouped_row_page == "group_parents_grouped_row_page"
+    assert metadata.type_names.grouped_row_page == "group_parents_grouped_rows_page"
     # Measured SQLite leaf SQL bytes at 1/10/50 groups: 19,714/17,393/21,425;
     # PostgreSQL: 20,485/18,004/21,964. Largest: 16,535/14,108/17,708
     # and 17,169/14,615/18,215. The 30/25 KB ceilings leave CI headroom.
@@ -430,14 +436,18 @@ def test_grouped_page_window_sql_budget(relation_grouping_case: Any) -> None:
         pages = ", ".join(f'{{key: "{label.sqid}", limit: 4}}' for label in labels[:count])
         document = f'''query GroupedResourceList {{
           group_parents_grouped_rows(group_by: {{field: TARGET}}, pages: [{pages}],
-            where: {{kind: {{_eq: "window"}}}}, order_by: [{{id: asc}}]) {{ id kind target {{ id display_name }} }}
+            where: {{kind: {{_eq: "window"}}}}, order_by: [{{id: asc}}]) {{
+              key rows {{ id kind target {{ id display_name }} }}
+            }}
         }}'''
         read = measure_graphql_document(case.schema, document, {}, actor=case.alice)
         read.assert_no_audit_writes()
         assert read.statement_count == 2
         read.assert_bytes(total=30_000, largest=25_000)
         assert sum("ROW_NUMBER" in sql.upper() for sql in read.statements) == 1
-        assert len(read.data["group_parents_grouped_rows"]) == count * 4
+        result = read.data["group_parents_grouped_rows"]
+        assert [page["key"] for page in result] == [label.sqid for label in labels[:count]]
+        assert [len(page["rows"]) for page in result] == [4] * count
         groups = measure_graphql_document(
             case.schema,
             """query GroupedResourceGroups($limit: Int) {
@@ -512,30 +522,32 @@ def test_extracted_group_pages_match_native_keys_at_flat_cost(
         assert all(group["aggregate"]["count"] == 4 for group in groups.data["group_parents_groups"])
         keys = [group["key"][key_field] for group in groups.data["group_parents_groups"]]
         assert all(key is not None for key in keys)
-        labels = [group["label"] for group in groups.data["group_parents_groups"]]
-        assert all(label.startswith(key[:10]) if granularity else label == str(key)
-                   for key, label in zip(keys, labels, strict=True))
+        assert all(group["label"] is None for group in groups.data["group_parents_groups"])
         if axis == "METADATA__RANK":
             assert all(isinstance(key, int) for key in keys)
         pages = [{"key": key, "limit": 2, "offset": 1} for key in keys]
         rows = measure_graphql_document(
             case.schema,
-            f'''query AxisRows($pages: [group_parents_grouped_row_page!]!) {{
+            f'''query AxisRows($pages: [group_parents_grouped_rows_page!]!) {{
               group_parents_grouped_rows(group_by: {{{spec}}}, pages: $pages,
-                where: {{kind: {{_eq: "axis"}}}}, order_by: [{{id: asc}}]) {{ id kind }}
+                where: {{kind: {{_eq: "axis"}}}}, order_by: [{{id: asc}}]) {{
+                  key rows {{ id kind }}
+                }}
             }}''',
             {"pages": pages}, actor=case.alice,
         )
         rows.assert_no_audit_writes()
         assert rows.statement_count == 1
         assert sum("ROW_NUMBER" in sql.upper() for sql in rows.statements) == 1
-        assert len(rows.data["group_parents_grouped_rows"]) == count * 2
+        result = rows.data["group_parents_grouped_rows"]
+        assert [page["key"] for page in result] == keys
+        assert [len(page["rows"]) for page in result] == [2] * count
         expected = {
             row_id
             for key in keys
             for row_id in seeded[key if granularity is None else key[:7]][1:3]
         }
-        assert {row["id"] for row in rows.data["group_parents_grouped_rows"]} == expected
+        assert {row["id"] for page in result for row in page["rows"]} == expected
         if prior_rows is not None and prior_groups is not None:
             rows.assert_flat_from(prior_rows)
             groups.assert_flat_from(prior_groups)
@@ -554,7 +566,7 @@ def test_extracted_group_pages_match_native_keys_at_flat_cost(
         groups.assert_bytes(total=5_000, largest=5_000, cause="native grouped aggregate")
 
 
-@pytest.mark.parametrize("granularity", ["DAY", "WEEK", "YEAR"])
+@pytest.mark.parametrize("granularity", ["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"])
 @pytest.mark.parametrize("axis", ["OCCURRED_AT", "OCCURRED_ON"])
 def test_date_buckets_round_trip_group_keys(
     relation_grouping_case: Any, axis: str, granularity: str,
@@ -581,17 +593,90 @@ def test_date_buckets_round_trip_group_keys(
       group_parents_groups(group_by: [{{field: {axis}, granularity: {granularity}}}],
         where: {{kind: {{_eq: "date-grain"}}}}) {{ key {{ {key_field} }} label aggregate {{ count }} }}
     }}''')["group_parents_groups"]
+    assert all(group["label"] is None for group in groups)
     pages = [{"key": group["key"][key_field], "limit": group["aggregate"]["count"]} for group in groups]
     rows = measure_graphql_document(
         case.schema,
-        f'''query DateRows($pages: [group_parents_grouped_row_page!]!) {{
+        f'''query DateRows($pages: [group_parents_grouped_rows_page!]!) {{
           group_parents_grouped_rows(group_by: {{field: {axis}, granularity: {granularity}}},
-            pages: $pages, where: {{kind: {{_eq: "date-grain"}}}}, order_by: [{{id: asc}}]) {{ id }}
+            pages: $pages, where: {{kind: {{_eq: "date-grain"}}}}, order_by: [{{id: asc}}]) {{
+              key rows {{ id }}
+            }}
         }}''',
         {"pages": pages}, actor=case.alice,
     )
     assert rows.statement_count == 1
-    assert {row["id"] for row in rows.data["group_parents_grouped_rows"]} == {parent.sqid for parent in parents}
+    result = rows.data["group_parents_grouped_rows"]
+    assert [page["key"] for page in result] == [page["key"] for page in pages]
+    assert {row["id"] for page in result for row in page["rows"]} == {parent.sqid for parent in parents}
+
+
+@override_settings(TIME_ZONE="America/Chicago")
+def test_grouped_page_keys_preserve_local_month_membership_and_empty_pages(
+    relation_grouping_case: Any,
+) -> None:
+    """UTC November can belong to October, and every requested page keeps its wire key."""
+
+    case = relation_grouping_case
+    with system_context(reason="test.grouped_page.local_month.seed"):
+        october = GroupParent.objects.create(
+            kind="local-month", occurred_at=datetime(2026, 11, 1, 3, tzinfo=UTC),
+        )
+        november = GroupParent.objects.create(
+            kind="local-month", occurred_at=datetime(2026, 11, 1, 8, tzinfo=UTC),
+        )
+    write_relationships([
+        RelationshipTuple(to_object_ref(row), "reader", case.alice)
+        for row in (october, november)
+    ])
+    groups = _query(case, case.alice, '''query {
+      group_parents_groups(group_by: [{field: OCCURRED_AT, granularity: MONTH}],
+        where: {kind: {_eq: "local-month"}}) { key { occurred_at_month } }
+    }''')["group_parents_groups"]
+    keys = {
+        datetime.fromisoformat(group["key"]["occurred_at_month"]).month:
+        group["key"]["occurred_at_month"]
+        for group in groups
+    }
+    requested = [keys[11], "2026-12-01T00:00:00-06:00", keys[10]]
+    read = measure_graphql_document(
+        case.schema,
+        '''query LocalMonthRows($pages: [group_parents_grouped_rows_page!]!) {
+          group_parents_grouped_rows(
+            group_by: {field: OCCURRED_AT, granularity: MONTH}, pages: $pages,
+            where: {kind: {_eq: "local-month"}}, order_by: [{id: asc}]
+          ) { key rows { id } }
+        }''',
+        {"pages": [{"key": key, "limit": 1} for key in requested]},
+        actor=case.alice,
+    )
+    assert read.statement_count == 1
+    assert read.data["group_parents_grouped_rows"] == [
+        {"key": keys[11], "rows": [{"id": november.sqid}]},
+        {"key": requested[1], "rows": []},
+        {"key": keys[10], "rows": [{"id": october.sqid}]},
+    ]
+
+
+def test_json_boolean_group_headers_leave_label_to_client(relation_grouping_case: Any) -> None:
+    """JSON boolean keys retain their type without a server display label."""
+
+    case = relation_grouping_case
+    with system_context(reason="test.grouped_page.json_bool.seed"):
+        row = GroupParent.objects.create(kind="json-bool", metadata={"enabled": False, "mailbox": ""})
+    write_relationships([
+        RelationshipTuple(to_object_ref(row), "reader", case.alice)
+    ])
+    groups = _query(case, case.alice, '''query {
+      group_parents_groups(group_by: [{field: METADATA__ENABLED}],
+        where: {kind: {_eq: "json-bool"}}) { key { metadata__enabled } label }
+    }''')["group_parents_groups"]
+    assert groups == [{"key": {"metadata__enabled": False}, "label": None}]
+    blanks = _query(case, case.alice, '''query {
+      group_parents_groups(group_by: [{field: METADATA__MAILBOX}],
+        where: {kind: {_eq: "json-bool"}}) { key { metadata__mailbox } label }
+    }''')["group_parents_groups"]
+    assert blanks == [{"key": {"metadata__mailbox": ""}, "label": None}]
 
 
 def test_grouped_row_pages_keep_offsets_and_redacted_null_bucket(relation_grouping_case: Any) -> None:
@@ -606,17 +691,20 @@ def test_grouped_row_pages_keep_offsets_and_redacted_null_bucket(relation_groupi
             group_by: {{field: TARGET}},
             pages: [{{key: "{case.alpha.sqid}", limit: 1, offset: 1}}, {{key: null, limit: 2}}],
             where: {{kind: {{_eq: "target"}}}}, order_by: [{{id: asc}}]
-          ) {{ id target {{ id }} }}
+          ) {{ key rows {{ id target {{ id }} }} }}
           groups: group_parents_groups(
             group_by: [{{field: TARGET}}], where: {{kind: {{_eq: "target"}}}}
           ) {{ key {{ target_id }} label aggregate {{ count }} }}
         }}''',
     )
-    assert [row["id"] for row in result["rows"]] == [
-        case.parents[index].sqid for index in (1, 2, 5)
-    ]
-    assert [row["target"] for row in result["rows"]] == [
-        {"id": case.alpha.sqid}, None, None,
+    assert result["rows"] == [
+        {"key": case.alpha.sqid, "rows": [
+            {"id": case.parents[1].sqid, "target": {"id": case.alpha.sqid}},
+        ]},
+        {"key": None, "rows": [
+            {"id": case.parents[2].sqid, "target": None},
+            {"id": case.parents[5].sqid, "target": None},
+        ]},
     ]
     groups = {group["key"]["target_id"]: group for group in result["groups"]}
     assert groups[case.alpha.sqid]["label"] == "Alpha"

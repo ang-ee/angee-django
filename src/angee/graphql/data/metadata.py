@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
@@ -80,6 +80,8 @@ class DataResourcePolicy:
     record_search_fields: tuple[str, ...] | None = None
     context_fields: tuple[str, ...] | None = None
     public_id_field: str | None = None
+    identity_policies: Mapping[str, str] | None = None
+    """Public ID fields of non-Node relation projections used by this resource."""
     subject_field: str | None = None
     row_model: str | None = None
     history: bool | None = None
@@ -147,6 +149,12 @@ def finalize_data_resources(
             )
             if node_name:
                 identity_policies[node_name] = str(declared)
+        for contribution in contributions:
+            for node_name, field_name in (contribution.policy.identity_policies or {}).items():
+                existing = identity_policies.get(node_name)
+                if existing is not None and existing != field_name:
+                    raise ImproperlyConfigured(f"GraphQL type {node_name!r} has conflicting public identities.")
+                identity_policies[node_name] = field_name
     # Final executable fields, including extensions and wire aliases, decide labels.
     # Resolve every declaration before building relations, so ordering cannot
     # choose a different label for a resource encountered later in this loop.
@@ -216,6 +224,8 @@ def finalize_data_resources(
                 f"{native_resource.name}_grouped_rows" if native_resource.groups_root else None,
                 query_fields,
             )
+            # The root's final SDL owns its {key, rows} result shape; metadata
+            # supplies the root and request-page input names needed to select it.
             create_name = exposed(mutation, native_resource.insert_one_root, mutation_fields)
             update_name = exposed(mutation, native_resource.update_by_pk_root, mutation_fields)
             delete_name = exposed(mutation, native_resource.delete_by_pk_root, mutation_fields)

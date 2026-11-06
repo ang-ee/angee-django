@@ -138,6 +138,17 @@ class ResourceGrandchild(ProtectedDataModel):
         app_label = "tests"
 
 
+@strawberry_django.type(ResourceChild)
+class ResourceChildGroupIdentityType(ProtectedNode):
+    """Expose the parent public ID selected by a nested group drill."""
+
+    name: auto
+
+    @strawberry_django.field(only=["parent_id"])
+    def parent(self) -> strawberry.ID:
+        return require_public_id(ResourceParent, cast(Any, self).parent_id)
+
+
 @strawberry_django.type(ResourceParent)
 class ResourceSubtitleParentType:
     """Nested object projection used by subtitle leaf-validation tests."""
@@ -448,7 +459,7 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         grouped="things_group",
         group_key="thingsGroupKey",
         group_by_spec="thingsGroupBySpec",
-        grouped_row_page="things_grouped_row_page",
+        grouped_row_page="things_grouped_rows_page",
         group_order="thingsGroupOrder",
         having="thingsHaving",
         create_input="things_insert_input",
@@ -693,7 +704,7 @@ def test_final_metadata_includes_only_allowlisted_input_only_fields() -> None:
         filterable=["id", "name", "word_count"],
         sortable=["name", "word_count"],
         aggregatable=["id", "word_count"],
-        groupable=["word_count"],
+        groupable=["name"],
         insertable=["name", "word_count"],
         updatable=["word_count"],
         get_queryset=lambda info: HasuraResourceThing.objects.all(),
@@ -720,7 +731,8 @@ def test_final_metadata_includes_only_allowlisted_input_only_fields() -> None:
     assert metadata.query.fields["word_count"].filter is not None
     assert metadata.query.fields["word_count"].sort is not None
     assert fields["word_count"].aggregatable is True
-    assert "word_count" in metadata.query.axes
+    assert "name" in metadata.query.axes
+    assert "word_count" not in metadata.query.axes
     assert fields["word_count"].creatable is True
     assert fields["word_count"].updatable is True
     assert metadata_module.readable_model_field_names(schema.angee_resources[0]) == frozenset({"id", "name"})
@@ -1024,7 +1036,7 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract(label
 
     @strawberry_django.type(ResourceGrandchild)
     class ResourceGrandchildType(ProtectedNode):
-        pass
+        child: ResourceChildGroupIdentityType
 
     write_backend = type(
         "NoopWriteBackend",
@@ -1053,7 +1065,7 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract(label
                 {
                     "public": {
                         "query": [resource.query],
-                        "types": [ResourceGrandchildType, *resource.types],
+                        "types": [ResourceGrandchildType, ResourceChildGroupIdentityType, *resource.types],
                     }
                 }
             )
@@ -1732,11 +1744,11 @@ def test_filterable_relation_filters_by_public_id_without_field_id_decode(
 def test_nested_relation_group_key_filters_its_bucket_rows(
     relation_filter_tables: None,
 ) -> None:
-    """A nested relation bucket sqid decodes through its full filter path."""
+    """A nested relation bucket sqid decodes through its selectable public ID path."""
 
     @strawberry_django.type(ResourceGrandchild)
     class ResourceGrandchildFilterType(ProtectedNode):
-        pass
+        child: ResourceChildGroupIdentityType
 
     resource = hasura_model_resource(
         ResourceGrandchildFilterType,
@@ -1759,7 +1771,7 @@ def test_nested_relation_group_key_filters_its_bucket_rows(
                 {
                     "public": {
                         "query": [resource.query],
-                        "types": [ResourceGrandchildFilterType, *resource.types],
+                        "types": [ResourceGrandchildFilterType, ResourceChildGroupIdentityType, *resource.types],
                     }
                 }
             )

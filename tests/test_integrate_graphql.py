@@ -65,10 +65,6 @@ User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
 integrate_vcs_schema = importlib.import_module("angee.integrate_vcs.schema")
-_BRIDGE_SYNCED = "bridge.synced"
-"""Raw stored value of one integration event kind (``str`` for clean typing)."""
-
-
 def test_integration_node_resolves_nested_relations(
     composed_tables: None,
 ) -> None:
@@ -1291,6 +1287,8 @@ def test_webhook_crud_secret_write_only(
     # ``secret`` is accepted on the input but never rendered on the output type.
     assert "secret" in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
     assert "secret" not in _sdl_block(console_sdl, "type WebhookSubscriptionType")
+    assert "event_kinds" not in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
+    assert "event_kinds" not in _sdl_block(console_sdl, "type WebhookSubscriptionType")
     # The creator owns a new subscription; ownership is never a client-written column.
     assert "owner" not in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
     # The create mutation is contributed to the console mutation root.
@@ -1321,7 +1319,6 @@ def test_webhook_crud_secret_write_only(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="top-secret",
-            event_kinds=[_BRIDGE_SYNCED],
         )
     subscription_id = str(subscription.sqid)
 
@@ -1334,7 +1331,6 @@ def test_webhook_crud_secret_write_only(
               webhook_subscriptions_by_pk(id: $id) {
                 target_url
                 enabled
-                event_kinds
                 owner { username }
               }
             }
@@ -1346,7 +1342,6 @@ def test_webhook_crud_secret_write_only(
     assert read_back == {
         "target_url": "https://hooks.example.test/events",
         "enabled": True,
-        "event_kinds": [_BRIDGE_SYNCED],
         "owner": {"username": "webhook-owner"},
     }
     # Querying the absent ``secret`` field is a schema error, proving it is write-only.
@@ -1396,7 +1391,6 @@ def test_integration_action_mutations_are_admin_only(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="original-secret",
-            event_kinds=[_BRIDGE_SYNCED],
         )
     sub_id = str(subscription.sqid)
 
@@ -1635,7 +1629,6 @@ def test_rotate_webhook_secret_changes_the_stored_secret(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="original-secret",
-            event_kinds=[_BRIDGE_SYNCED],
         )
     sub_id = str(subscription.sqid)
 
@@ -1669,7 +1662,6 @@ def test_test_webhook_delivery_records_failure_status(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="original-secret",
-            event_kinds=[_BRIDGE_SYNCED],
         )
 
     def fail_delivery(self: WebhookSubscription, body: bytes) -> str:

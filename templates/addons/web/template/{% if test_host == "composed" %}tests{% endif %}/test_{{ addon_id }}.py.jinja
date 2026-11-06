@@ -33,5 +33,5 @@ class {{ model_name }}VisibilityTests(TransactionTestCase):
     def test_owner_reads_own_rows_and_an_outsider_reads_none(self) -> None:
         """The field-backed owner relation scopes reads without storing a tuple."""
 
-        self.assertEqual([visible.pk for visible in {{ model_name }}.objects.as_user(self.owner)], [self.row.pk])
-        self.assertFalse({{ model_name }}.objects.as_user(self.outsider).exists())
+        self.assertEqual([visible.pk for visible in {{ model_name }}.objects.with_actor(self.owner)], [self.row.pk])
+        self.assertFalse({{ model_name }}.objects.with_actor(self.outsider).exists())

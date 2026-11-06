@@ -321,7 +321,14 @@ resources must keep the DDN/NDC-preview shape:
 with each group returning a typed `key: <Model>GroupKey!` and the free
 `aggregate: <Model>Aggregate!`. The stock `<resource>_aggregate` root remains
 the unmodified refine/Hasura aggregate surface; grouped roots are authored
-operations owned by the dialect adapters.
+operations owned by the dialect adapters. `<resource>_grouped_rows` accepts
+`group_by` and `pages: [<resource>_grouped_rows_page!]!` and returns
+`[<resource>_grouped_rows_page_result!]!`: one result per requested page in
+request order, including empty pages, with the exact requested `key: JSON` and
+bounded `rows: [Node!]!`. The refine `groupedListQueryMeta` selection and
+`useGroupedNativePages` mapping must consume these keyed page results in the
+same change; the client formats date and JSON scalar headers from keys, while
+the server supplies actor-admitted relation display names.
 
 Future grouped features such as bucket ordering, bucket predicates, additional
 date extraction, or JSON drill-down operators must be added at the dialect

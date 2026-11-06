@@ -6,7 +6,6 @@ import dataclasses
 import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
 from functools import cache, partial
 from types import EllipsisType
 from typing import TYPE_CHECKING, Any, cast
@@ -32,6 +31,7 @@ from strawberry_django.fields.types import field_type_map
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django.optimizer import optimizer
 from strawberry_django.resolvers import django_resolver
+from strawberry_django.utils.gql_compat import get_sub_field_selections
 from strawberry_django_aggregates import (
     default_operators_for,
     group_by_alias,
@@ -57,7 +57,7 @@ from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
-from angee.base.models.base import record_display_label
+from angee.base.models.base import AngeeModel
 from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
 from angee.base.models.inputs import InputExtensionsMixin
@@ -101,7 +101,9 @@ from angee.graphql.introspection import (
     is_to_one_relation,
     require_field_for_path,
 )
+from angee.graphql.node import display_name_paths, node_display_name
 from angee.graphql.writes import write_queryset
+from graphql import GraphQLObjectType, get_named_type
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
@@ -1362,6 +1364,19 @@ def _positive_conjuncts(predicate: models.Q) -> list[tuple[str, Any]]:
     return clauses
 
 
+def grouped_rows_page_result_type(name: str, node: type) -> type:
+    """Describe a requested grouped page with its unchanged wire key and bounded nodes."""
+
+    return strawberry.type(
+        type(
+            f"{name}_grouped_rows_page_result",
+            (),
+            {"__annotations__": {"key": JSON | None, "rows": _types.GenericAlias(list, (node,))}},
+        ),
+        name=f"{name}_grouped_rows_page_result",
+    )
+
+
 def _attach_grouped_rows(
     resource: HasuraResource,
     *,
@@ -1393,16 +1408,18 @@ def _attach_grouped_rows(
 
     page_type = strawberry.input(
         type(
-            f"{resource.name}_grouped_row_page",
+            f"{resource.name}_grouped_rows_page",
             (),
             {
                 "__annotations__": {"key": JSON | None, "limit": int, "offset": int},
                 "offset": 0,
             },
         ),
-        name=f"{resource.name}_grouped_row_page",
+        name=f"{resource.name}_grouped_rows_page",
     )
     resource.types.append(page_type)
+    result_type = grouped_rows_page_result_type(resource.name, node)
+    resource.types.append(result_type)
 
     def resolve_grouped_rows(
         self: Any,
@@ -1411,7 +1428,7 @@ def _attach_grouped_rows(
         pages: list[Any],
         where: Any = None,
         order_by: Any = None,
-    ) -> models.QuerySet[Any]:
+    ) -> list[Any]:
         del self
         path = next((name for name in groupable if group_by_enum_member(name) == group_by.field.name), None)
         if path is None:
@@ -1464,7 +1481,7 @@ def _attach_grouped_rows(
                 value_expression = Trunc(value_expression, time_bucket.value)
                 value_expression = Cast(value_expression, output_field=models.DateField())
         if not pages:
-            return read_queryset(info).none()
+            return []
         if len(pages) > 50:
             raise ValueError("A grouped row read accepts at most 50 visible groups.")
         converted: list[tuple[Any, int, int]] = []
@@ -1541,12 +1558,38 @@ def _attach_grouped_rows(
                 _angee_group_rank__lte=offset + limit,
             )
         queryset = queryset.filter(scope & windows) if windows else queryset.none()
-        active = optimizer.get()
-        return (
-            active.optimize(queryset, info)
-            if active is not None
-            else strawberry_django.optimizer.optimize(queryset, info)
-        )
+        # strawberry-django descends into OffsetPaginated.results and connections,
+        # but not a list of page wrappers; give its optimizer the nested rows selection.
+        raw_info = info._raw_info
+        result_graphql_type = get_named_type(raw_info.return_type)
+        assert isinstance(result_graphql_type, GraphQLObjectType)
+        row_nodes = [
+            node
+            for nodes in get_sub_field_selections(raw_info, result_graphql_type).values()
+            if nodes[0].name.value == "rows"
+            for node in nodes
+        ]
+        if row_nodes:
+            row_info = raw_info._replace(
+                field_name="rows",
+                field_nodes=row_nodes,
+                return_type=result_graphql_type.fields["rows"].type,
+                parent_type=result_graphql_type,
+                path=raw_info.path.add_key(0).add_key("rows", result_graphql_type.name),
+            )
+            active = optimizer.get()
+            queryset = (
+                active.optimize(queryset, row_info)
+                if active is not None
+                else strawberry_django.optimizer.optimize(queryset, row_info)
+            )
+        matching: list[list[Any]] = [[] for _ in pages]
+        for row in queryset:
+            for index, (key, _, _) in enumerate(converted):
+                if row._angee_group_key == key:
+                    matching[index].append(row)
+                    break
+        return [result_type(key=page.key, rows=rows) for page, rows in zip(pages, matching, strict=True)]
 
     resolve_grouped_rows.__annotations__ = {
         "self": Any,
@@ -1555,7 +1598,7 @@ def _attach_grouped_rows(
         "pages": _types.GenericAlias(list, (page_type,)),
         "where": resource.filter_type | None,
         "order_by": _types.GenericAlias(list, (resource.order_by_type,)) | None,
-        "return": _types.GenericAlias(list, (node,)),
+        "return": _types.GenericAlias(list, (result_type,)),
     }
     root = f"{resource.name}_grouped_rows"
     resolve_grouped_rows.__name__ = root
@@ -1568,7 +1611,7 @@ def _attach_grouped_rows(
 
 
 class _GroupLabels(FieldExtension):
-    """Fill selected group labels from their keys or an actor-admitted target read."""
+    """Fill relation group labels from an actor-admitted target read."""
 
     def __init__(
         self,
@@ -1600,17 +1643,12 @@ class _GroupLabels(FieldExtension):
         granularity = group_by[0].granularity
         if granularity is strawberry.UNSET:
             granularity = None
+        if granularity is not None or path in self.json_paths:
+            return groups
         try:
             field = require_field_for_path(self.model, path)
         except FieldPathError:
             field = None
-        if (granularity is not None or path in self.json_paths) and groups:
-            key_name = group_by_alias(path, granularity, field)
-            for group in groups:
-                key = getattr(group.key, key_name, None)
-                if key is not None:
-                    group._angee_label = key.isoformat() if isinstance(key, (date, datetime)) else str(key)
-            return groups
         if field is None or not is_to_one_relation(field) or not groups:
             return groups
         key_name = group_by_alias(path, None, field)
@@ -1625,17 +1663,16 @@ class _GroupLabels(FieldExtension):
             if relation_source is not None
             else target._default_manager.all()
         )
-        display_paths = getattr(target, "record_display_paths", None)
-        if display_paths:
-            joins = [path for path in display_paths if target._meta.get_field(path).is_relation]
-            if joins:
-                queryset = queryset.select_related(*joins)
+        if issubclass(target, AngeeModel):
+            _, related = display_name_paths(target)
+            if related:
+                queryset = queryset.select_related(*related)
         admitted = instances_from_public_ids(target, ids, queryset=queryset)
         for group in groups:
             key = getattr(group.key, key_name, None)
             record = admitted.get(key) if key is not None else None
             if record is not None:
-                group._angee_label = record_display_label(record)
+                group._angee_label = node_display_name(record)
         return groups
 
     def resolve(self, next_: Callable[..., Any], source: Any, info: strawberry.Info, **kwargs: Any) -> Any:
@@ -1656,7 +1693,7 @@ def _attach_group_labels(
     source: Callable[[strawberry.Info], models.QuerySet[Any]],
     json_paths: Mapping[str, str],
 ) -> None:
-    """Project relation and extracted-axis labels beside native keys and counts."""
+    """Project admitted relation display names beside native keys and counts."""
 
     if resource.group_type is None or resource.groups_root is None:
         return
@@ -1704,6 +1741,7 @@ def hasura_model_resource(
     id_column: str = "pk",
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
+    identity_policies: Mapping[str, str] | None = None,
     subject_field: str | None = None,
     row_model: str = "server",
     subtitle: DataResourceSubtitleMetadata | None = None,
@@ -1756,6 +1794,8 @@ def hasura_model_resource(
     representation-field search.
     ``context_fields`` declares the readable fields whose native widgets render
     the compact record-header facts line.
+    ``identity_policies`` declares public ID fields on non-Node relation
+    projections used by this resource's grouped drills.
 
     Model ``hasura_aliases`` mappings contribute named Django expression
     sorts automatically, including from extension bases. They use native lazy
@@ -2206,6 +2246,7 @@ def hasura_model_resource(
         lines=lines,
         model_label=model_label,
         public_id_field=public_id_field,
+        identity_policies=identity_policies,
         subject_field=subject_field,
         row_model=row_model,
         subtitle=subtitle,
@@ -2387,6 +2428,7 @@ def attach_hasura_resource_metadata(
     lines: HasuraLines | None = None,
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
+    identity_policies: Mapping[str, str] | None = None,
     subject_field: str | None = None,
     row_model: str = "server",
     subtitle: DataResourceSubtitleMetadata | None = None,
@@ -2421,6 +2463,7 @@ def attach_hasura_resource_metadata(
             aggregate_measures=_hasura_aggregate_measures(model, aggregatable),
             default_measures=(DataAggregateMeasureMetadata(op="count"),),
             public_id_field=public_id_field,
+            identity_policies=dict(identity_policies) if identity_policies else None,
             subject_field=subject_field,
             row_model=row_model,
             subtitle=subtitle,

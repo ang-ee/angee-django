@@ -28,6 +28,7 @@ from angee.iam.audit import TrashedRefMixin
 from angee.iam.graphql.actions import session_user
 from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.identity import user_display_label, user_public_id
 from angee.provenance.engine.exceptions import CreationKeyConflict
 
@@ -53,6 +54,7 @@ class DashboardWidgetVisibilityInput:
 
 @strawberry_django.type(DashboardWidget)
 class DashboardWidgetType(ProtectedNode):
+    dashboard: DashboardType = actor_scoped_to_one("dashboard")
     widget_key: auto
     definition_ref: auto
     spec_version: auto

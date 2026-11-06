@@ -241,6 +241,30 @@ def test_baseline_adoption_preserves_established_bases_and_delete_conflicts(
         assert (failure.kind, failure.code) == (SyncFailureKind.CONFLICT, "both_changed")
 
 
+def test_record_link_exposes_bridge_application_facts(stream_bridge: Channel) -> None:
+    """Bridge consumers can read the pinned aggregate base and retained application count."""
+
+    stream = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
+    link = RecordLink.objects.observe(stream, "remote-root")
+    assert link.applied_snapshot is None
+    assert link.application_count() == 0
+
+    RecordLink.objects.promote(
+        link, source_payload={"name": "applied"}, source_hash="snapshot-1",
+        mapped_payload={"name": "applied"}, remote_version="v1",
+    )
+    link.refresh_from_db()
+    assert link.applied_snapshot == link.applied_base
+    assert link.applied_snapshot.mapped_payload == {"name": "applied"}
+    assert link.application_count() == 1
+
+    child = RecordLink.objects.observe(stream, "remote-child")
+    child.parent = link
+    child.save(update_fields=["parent"])
+    assert child.applied_snapshot == link.applied_snapshot
+    assert child.application_count() == link.application_count()
+
+
 @pytest.mark.parametrize("tombstone", [False, True])
 def test_repeated_page_identity_uses_earlier_revision_or_conflict(stream_bridge: Channel, tombstone: bool) -> None:
     stream = current_stream(

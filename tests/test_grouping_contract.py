@@ -51,7 +51,14 @@ def test_every_server_grouped_resource_emits_both_roots_and_metadata() -> None:
             page_type = get_named_type(grouped_rows.args["pages"].type)
             assert isinstance(page_type, GraphQLInputObjectType)
             assert page_type.name == types.grouped_row_page
+            assert page_type.name == f"{roots.grouped_rows_name}_page"
             assert set(page_type.fields) == {"key", "limit", "offset"}
+            result_type = get_named_type(grouped_rows.type)
+            assert isinstance(result_type, GraphQLObjectType)
+            assert result_type.name == f"{roots.grouped_rows_name}_page_result"
+            assert str(grouped_rows.type) == f"[{result_type.name}!]!"
+            assert str(result_type.fields["key"].type) == "JSON"
+            assert str(result_type.fields["rows"].type) == f"[{types.node}!]!"
     assert ("console", "platform.Field") in audited
     assert any(label != "platform.Field" for _, label in audited)
 
@@ -77,7 +84,14 @@ def test_composed_grouped_resources_emit_group_and_row_roots(tmp_path: Path) -> 
             assert set(rows.args) == {"group_by", "pages", "where", "order_by"}
             page_type = get_named_type(rows.args["pages"].type)
             assert isinstance(page_type, GraphQLInputObjectType)
+            assert page_type.name == f"{rows_root}_page"
             assert set(page_type.fields) == {"key", "limit", "offset"}
+            result_type = get_named_type(rows.type)
+            assert isinstance(result_type, GraphQLObjectType)
+            assert str(rows.type) == f"[{result_type.name}!]!"
+            assert str(result_type.fields["key"].type) == "JSON"
+            assert isinstance(result_type.fields["rows"].type, GraphQLNonNull)
+            assert isinstance(result_type.fields["rows"].type.of_type, GraphQLList)
         if schema_name == "console":
             assert "platform_fields_grouped_rows" in query.fields
 

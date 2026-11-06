@@ -36,7 +36,9 @@ live in code docstrings.
 
 - Removed the outbound integration event fan-out and inbound VCS webhook dispatch,
   which had no production producer or receiver route. Subscription CRUD and signed
-  test delivery remain available.
+  test delivery remain available. Subscription `event_kinds` is removed from the
+  model, GraphQL writes and console form because no event kind can be delivered;
+  projects must remove that column in their own native migration history.
 - Removed `VcsBridge.webhook_secret`, `Bridge.next_subscription_refresh_at`, and
   `Integration.use_count_24h` / `error_count_24h`. Projects must, in their own
   native migration history, remove the secret from VcsBridge, the refresh
@@ -49,8 +51,10 @@ live in code docstrings.
 
 - Channel intake now offers only `all_messages`. The selectable `reaction`,
   `mention`, and `command` triggers never captured messages and have been removed
-  from the declared choices. The stored column remains unchanged; existing rows
-  with those values need an explicit data decision before enabling capture.
+  from the declared choices. Projects must, in their own native migration history
+  after messaging 0011, map stored retired values to `all_messages` while clearing
+  `intake_queue`. This preserves their prior no-capture behavior and keeps
+  filter, sort, and group values consistent with the enum.
 
 ## Unreleased — extraction correction cleanup
 
@@ -98,10 +102,18 @@ live in code docstrings.
 - Every grouped list reads the first rows of its visible groups through one
   `<resource>_grouped_rows(group_by, pages, where, order_by)` root (a window per
   group under one proof) and the group headers and counts through the
-  `<resource>_groups` root, which now returns each relation group's `label`;
-  the per-group row and aggregate aliases are gone. Date-bucket, JSON-path and
-  computed-resource axes use the same root. Fifty groups cost 2 statements
-  instead of 200.
+  `<resource>_groups` root, which returns an actor-admitted relation target's
+  display name as `label`; the per-group row and aggregate aliases are gone.
+  Date-bucket, JSON-path, and computed-resource axes use the same root. The
+  grouped-rows root returns one `{ key, rows }` result per requested
+  `<resource>_grouped_rows_page` input in request order, including empty pages;
+  `key` is the exact requested JSON value, and `rows` contains only that page's
+  bounded records. Clients must select
+  `key` and `rows` and use this page membership directly, including for
+  local-time date buckets. Fifty groups cost 2 statements instead of 200. The
+  client owns date-bucket labels from the key's local calendar fields and
+  localized JSON scalar, boolean, and
+  blank labels; the server emits no label for those axes.
 - List columns that show a record reference select `record_label` and
   `record_id` through the list document; no list cell resolves a label with a
   per-row read, and a hidden target renders no label.

@@ -33,7 +33,7 @@ from strawberry_django_hasura import (
 )
 
 from angee.graphql.data.contracts import DataAggregateMeasureMetadata
-from angee.graphql.data.hasura import hasura_query_axes
+from angee.graphql.data.hasura import grouped_rows_page_result_type, hasura_query_axes
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
@@ -73,13 +73,15 @@ def _attach_grouped_rows(
     assert resource.order_by_type is not None
     page_type = strawberry.input(
         type(
-            f"{resource.name}_grouped_row_page",
+            f"{resource.name}_grouped_rows_page",
             (),
             {"__annotations__": {"key": JSON | None, "limit": int, "offset": int}, "offset": 0},
         ),
-        name=f"{resource.name}_grouped_row_page",
+        name=f"{resource.name}_grouped_rows_page",
     )
     resource.types.append(page_type)
+    result_type = grouped_rows_page_result_type(resource.name, node)
+    resource.types.append(result_type)
     builder = AggregateBuilder(
         model=resource.row_model,
         name_prefix=resource.name,
@@ -111,25 +113,29 @@ def _attach_grouped_rows(
         assert isinstance(key_type, GraphQLObjectType)
         scalar = get_named_type(key_type.fields[alias].type)
         assert isinstance(scalar, (GraphQLScalarType, GraphQLEnumType))
-        result: list[Any] = []
         keys: list[Any] = []
         for page in pages:
             if page.limit < 0 or page.offset < 0:
                 raise ValueError("Grouped row limit and offset must be nonnegative.")
-            if any(type(page.key) is type(key) and page.key == key for key in keys):
+            key = scalar.parse_value(page.key) if page.key is not None else None
+            if key in keys:
                 raise ValueError("A grouped row read accepts each key once.")
-            keys.append(page.key)
-            rows = source.query(info, where=where, order_by=order_by, limit=None, offset=None)
-            matching = []
-            for row in rows:
-                [bucket] = compute_row_aggregation((row,), model=resource.row_model, group_by=spec)
-                group_key = builder.shape_group_key(resource.group_key_type, bucket, spec)
-                value = getattr(group_key, alias)
-                key = scalar.serialize(value) if value is not None else None
-                if type(key) is type(page.key) and key == page.key:
-                    matching.append(row)
-            result.extend(matching[page.offset : page.offset + page.limit])
-        return result
+            keys.append(key)
+        matching: list[list[Any]] = [[] for _ in pages]
+        rows = source.query(info, where=where, order_by=order_by, limit=None, offset=None)
+        for row in rows:
+            [bucket] = compute_row_aggregation((row,), model=resource.row_model, group_by=spec)
+            group_key = builder.shape_group_key(resource.group_key_type, bucket, spec)
+            value = getattr(group_key, alias)
+            key = scalar.parse_value(scalar.serialize(value)) if value is not None else None
+            for index, page_key in enumerate(keys):
+                if key == page_key:
+                    matching[index].append(row)
+                    break
+        return [
+            result_type(key=page.key, rows=matched[page.offset : page.offset + page.limit])
+            for page, matched in zip(pages, matching, strict=True)
+        ]
 
     resolve_grouped_rows.__annotations__ = {
         "self": Any,
@@ -138,7 +144,7 @@ def _attach_grouped_rows(
         "pages": _types.GenericAlias(list, (page_type,)),
         "where": resource.filter_type | None,
         "order_by": _types.GenericAlias(list, (resource.order_by_type,)) | None,
-        "return": _types.GenericAlias(list, (node,)),
+        "return": _types.GenericAlias(list, (result_type,)),
     }
     root = f"{resource.name}_grouped_rows"
     resolve_grouped_rows.__name__ = root

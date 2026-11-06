@@ -40,7 +40,7 @@ from angee.base.models.identity import public_id_of
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
-from angee.graphql.ids import PublicID, require_instance_for_id
+from angee.graphql.ids import PublicID, public_id_field, require_instance_for_id
 from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.subscriptions import changes
@@ -217,6 +217,7 @@ class CredentialOAuthClientType:
 class ExternalAccountType(ProtectedNode):
     """GraphQL projection of a linked external identity."""
 
+    oauth_client: PublicID = public_id_field("oauth_client")
     external_id: auto
     email: auto
     display_name: auto
@@ -1375,7 +1376,6 @@ class WebhookSubscriptionType(ProtectedNode):
     owner: UserType | None
     integration_filter: IntegrationType | None
     target_url: auto
-    event_kinds: JSON
     impl_app_filter: JSON
     enabled: auto
     last_delivery_at: auto
@@ -1813,8 +1813,8 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id", "consecutive_failures"],
     groupable=["enabled", "last_delivery_status"],
-    insertable=["target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
-    updatable=["target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
+    insertable=["target_url", "secret", "impl_app_filter", "integration_filter", "enabled"],
+    updatable=["target_url", "secret", "impl_app_filter", "integration_filter", "enabled"],
     field_id_decode={
         "owner": public_pk_decoder(User),
         "integration_filter": public_pk_decoder(Integration),
