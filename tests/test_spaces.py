@@ -106,7 +106,8 @@ def _schema() -> Any:
         )
         for module in modules
     ]
-    return GraphQLSchemas(addons).build("console")
+    # An addon-only build: donor addons are left out, so it declares itself partial.
+    return GraphQLSchemas(addons, partial_schema=True).build("console")
 
 
 @pytest.mark.django_db(transaction=True)

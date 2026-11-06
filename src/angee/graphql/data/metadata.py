@@ -130,6 +130,8 @@ def attach_data_resource_contribution(
 def finalize_data_resources(
     schema: GraphQLSchema,
     surfaces: tuple[object, ...],
+    *,
+    partial_schema: bool = False,
 ) -> tuple[data_contract.DataResourceMetadata, ...]:
     """Create one neutral description per model label from the composed schema."""
 
@@ -331,6 +333,7 @@ def finalize_data_resources(
             subject_field=cast(str | None, _single_policy_value(model_label, contributions, "subject_field")),
             row_model=cast(str, _single_policy_value(model_label, contributions, "row_model") or "server"),
             graphql_schema=schema,
+            partial_schema=partial_schema,
             identity_policies=identity_policies,
             representation_policies=representation_policies,
             contributors=tuple(dict.fromkeys(item.origin for item in contributions)),
@@ -490,6 +493,7 @@ def readable_model_field_names(
 def _finalize_data_resource(
     *,
     graphql_schema: GraphQLSchema,
+    partial_schema: bool = False,
     model: type[models.Model] | None = None,
     roots: data_contract.DataResourceRoots,
     type_names: data_contract.DataResourceTypeNames,
@@ -649,6 +653,7 @@ def _finalize_data_resource(
     )
     query = ResourceQueryProjection(
         schema=graphql_schema,
+        partial_schema=partial_schema,
         types=type_names,
         fields=active_fields,
         identity=projected_public_id_field,

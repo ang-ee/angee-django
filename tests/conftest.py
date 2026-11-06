@@ -954,13 +954,15 @@ def addon_schema(schemas: dict[str, Any], name: str, *composed: dict[str, Any]) 
 
     ``composed`` mappings (another addon's ``schemas``, e.g. the shared record
     verbs) contribute their same-named bucket parts after the addon's own.
+    This helper explicitly declares the build partial because donor addons may
+    be absent from these isolated test schemas.
     """
 
     parts = {
         key: tuple(part for source in (schemas, *composed) for part in source.get(name, {}).get(key, ()))
         for key in SCHEMA_PART_KEYS
     }
-    return GraphQLSchemas([SchemaAddon({name: parts})]).build(name)
+    return GraphQLSchemas([SchemaAddon({name: parts})], partial_schema=True).build(name)
 
 
 def authored_graphql_document(path: Path, export: str) -> str:

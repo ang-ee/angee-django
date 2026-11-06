@@ -147,6 +147,58 @@ def test_group_drill_requires_a_selectable_row_identity_at_schema_build() -> Non
         replace(projection, schema=schema).build()
 
 
+def test_unexposed_relation_drill_fails_in_a_complete_schema() -> None:
+    projection = _projection(
+        axes=(DataQueryAxis(
+            field="channel", kind="relation",
+            server=DataQueryServerAxis("CHANNEL", "channel_id"),
+            drill=DataQueryDrill("identity", "channel", "channel_id"),
+        ),),
+    )
+    schema = build_schema(_SCHEMA.replace("channel: Channel, ", ""))
+
+    with pytest.raises(ImproperlyConfigured) as error:
+        replace(projection, schema=schema).build()
+    assert "Relation group axes ['channel'] have a drill but no selectable row identity" in str(error.value)
+    assert "'Entry'" in str(error.value)
+    assert "expose the related row's public ID or remove the drill" in str(error.value)
+
+
+def test_unexposed_relation_drill_drops_only_in_a_declared_partial_schema() -> None:
+    projection = _projection(
+        axes=(DataQueryAxis(
+            field="channel", kind="relation",
+            server=DataQueryServerAxis("CHANNEL", "channel_id"),
+            drill=DataQueryDrill("identity", "channel", "channel_id"),
+        ),),
+    )
+    schema = build_schema(_SCHEMA.replace("channel: Channel, ", ""))
+
+    axis = replace(projection, schema=schema, partial_schema=True).build().axes["channel"]
+    assert axis.server is not None
+    assert axis.drill is None
+    assert axis.identity_path is None
+
+
+def test_scalar_group_drill_needs_no_related_row_identity() -> None:
+    # The row does not expose `created`, so the identity check would fail a
+    # relation axis; a scalar axis drills through its own filter field instead.
+    projection = replace(
+        _projection(
+            axes=(DataQueryAxis(
+                field="created", kind="date",
+                server=DataQueryServerAxis("CREATED", "created"),
+                drill=DataQueryDrill("identity", "created", "created"),
+            ),),
+        ),
+        schema=build_schema(_SCHEMA.replace(", created: DateTime }", " }")),
+    )
+
+    axis = projection.build().axes["created"]
+    assert axis.identity_path is None
+    assert axis.drill == DataQueryDrill("identity", "created", "created")
+
+
 def test_client_filter_only_field_has_no_invented_row_accessor() -> None:
     schema = build_schema(_SCHEMA.replace("state: State!, ", ""))
     server = replace(_projection(), schema=schema).build()

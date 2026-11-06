@@ -103,6 +103,7 @@ class ResourceQueryProjection:
     model: type[models.Model] | None = None
     identity_policies: dict[str, str] | None = None
     representation_policies: dict[str, str | None] | None = None
+    partial_schema: bool = False
 
     def build(self) -> DataResourceQuery:
         """Resolve all projections once, retaining only executable capabilities."""
@@ -153,16 +154,14 @@ class ResourceQueryProjection:
             extractions = tuple(replace(item, drill=self.drill(item.drill, fields)) for item in axis.extractions)
             # A relation drill filters by the related row's public id, so the
             # row must expose it; a scalar axis drills on its own filter field.
-            # A schema that does not expose the axis field at all (an addon-only
-            # schema built over a model another addon extends) can group by the
-            # key but cannot drill into it, so the drill is dropped there instead
-            # of failing the build; the composed product exposes the field.
+            # An explicitly partial schema may omit a donor's axis field while
+            # retaining its group key. Only that build may drop the drill.
             if (
                 relation is not None
                 and identity_path is None
                 and (drill is not None or any(item.drill is not None for item in extractions))
             ):
-                if self.selection(canonical)[1] is None:
+                if self.partial_schema and self.selection(canonical)[1] is None:
                     drill = None
                     extractions = tuple(replace(item, drill=None) for item in extractions)
                 else:
