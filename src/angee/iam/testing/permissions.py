@@ -1,8 +1,10 @@
-"""Compose installed permission declarations for source-model tests."""
+"""Compose installed permission declarations for bare and generated test hosts."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from copy import copy
+from importlib import import_module
 from pathlib import Path
 
 from django.apps import AppConfig
@@ -10,14 +12,31 @@ from django_compose.artifacts import atomic_write
 
 
 def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:
-    """Use source composition's field ownership in installed-schema test callers."""
+    """Use source declarations for field ownership in bare and composed test hosts."""
 
     # Pytest imports plugins before Django populates each worker's app registry.
     from django_compose.model_composition import ModelComposition
 
     from angee.iam.build import field_gate_owners
 
-    return field_gate_owners(ModelComposition.discover(app_configs))
+    # Generated app configs expose runtime models. The compiler discovers donor
+    # ownership from each addon's source exports, including cross-addon donors.
+    source_configs = []
+    for config in app_configs:
+        module = config.models_module
+        if module is not None and (module.__name__ == config.name or module.__name__.startswith(f"{config.name}.")):
+            source_configs.append(config)
+            continue
+        source_config = copy(config)
+        module_name = f"{config.name}.models"
+        try:
+            source_config.models_module = import_module(module_name)
+        except ModuleNotFoundError as error:
+            if error.name != module_name:
+                raise
+            source_config.models_module = None
+        source_configs.append(source_config)
+    return field_gate_owners(ModelComposition.discover(source_configs))
 
 
 def emit_permissions(
