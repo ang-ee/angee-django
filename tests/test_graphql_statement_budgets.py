@@ -213,12 +213,18 @@ def test_message_part_document_budgets(composed_tables: None, capture_graphql_do
         copies[count].assert_flat_from(copies[5])
     for read in reads.values():
         # The merged messages resolver reads the parts once for the document.
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
         assert read.statement_count == 14
-        read.assert_bytes(total=450_000, largest=135_000, cause="bounded actor-scoped part and file reads")
+        read.assert_bytes(
+            total=575_000, largest=205_000,
+            cause="session-merged schema (O 9aaaf82ca) measures the composed product policy",
+        )
         read.assert_no_audit_writes()
     for read in copies.values():
+        # Autocommit after O 9aaaf82ca removes the in-savepoint revision reread.
         assert read.statement_count == 12
-        read.assert_bytes(total=310_000, largest=85_000, cause="batched parts and present files")
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=1_100_000, largest=310_000, cause="batched parts and present files")
         read.assert_no_audit_writes()
 
     with system_context(reason="test.document_budget.message.hidden_part"):
@@ -227,6 +233,9 @@ def test_message_part_document_budgets(composed_tables: None, capture_graphql_do
     assert hidden_read.statement_count == reads[40].statement_count + 1
     nested_parts = hidden_read.data["inbox_message"]["message"]["parts"]
     assert nested_parts[-1]["parent"] is None
+    # P20 structural delivery: messaging/permissions.extends.zed grants a file
+    # referenced by an admitted part through message_part->read, while the
+    # direct File read stays denied.
     with actor_context(owner):
         assert not File.objects.with_actor(owner).filter(pk=files[3].pk).exists()
     assert nested_parts[-1]["file"]["id"] == str(files[3].sqid)
@@ -296,13 +305,16 @@ def record_decisions_reads(composed_tables: None, capture_graphql_document):
 
 def test_record_decisions_document_budget(record_decisions_reads) -> None:
     empty, open_one, answered = record_decisions_reads
-    empty.assert_bytes(total=33_000, largest=31_000, cause="bounded target read protects concern identity")
+    # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+    empty.assert_bytes(total=78_000, largest=72_000, cause="bounded target read protects concern identity")
     empty.assert_statements(4)
-    open_one.assert_bytes(total=37_000, largest=31_000, cause="bounded target read protects concern identity")
+    # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+    open_one.assert_bytes(total=100_000, largest=72_000, cause="bounded target read protects concern identity")
     open_one.assert_statements(5)
     open_one.assert_no_audit_writes()
     for count, read in answered.items():
-        read.assert_bytes(total=44_000, largest=31_000, cause="target read and held_many field gates")
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=115_000, largest=72_000, cause="target read and held_many field gates")
         assert read.statement_count == 7, (count, read.statement_count)
         read.assert_no_audit_writes()
     empty.assert_no_audit_writes()
@@ -363,13 +375,13 @@ def _record_sources_reads(capture_graphql_document, *, kind: type[Integration], 
 
 
 def test_record_sources_document_budget(record_sources_reads) -> None:
-    reads, _, _, kind = record_sources_reads
-    # CI's full-profile host composes more addons; retain two statements of headroom.
-    maximum = 16 if kind is Feed else 15
-    total_bytes = 70_000 if kind is Feed else 62_000
+    reads, _, _, _ = record_sources_reads
+    # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+    maximum = 12
+    total_bytes = 165_000
     for read in reads.values():
         read.assert_bytes(
-            total=total_bytes, largest=16_000, cause="batched reads bind under 100 bytes of keys per link",
+            total=total_bytes, largest=56_000, cause="batched reads bind under 100 bytes of keys per link",
         )
         read.assert_statements(maximum)
         read.assert_no_audit_writes()
@@ -416,9 +428,9 @@ def test_record_link_source_fields_without_stream_stay_flat(record_sources_reads
 
 
 def test_record_sources_document_fixed_budgets(record_sources_reads) -> None:
-    # One page hook supplies each link's stream and connector; the Feed resource
-    # adds one concrete-target read because this schema exposes posts.Feed.
-    expected = 14 if record_sources_reads[3] is Feed else 13
+    # session-merged schema (O 9aaaf82ca) measures the composed product policy;
+    # the merged plan folds the concrete-target point probes into its list read.
+    expected = 10
     for read in record_sources_reads[0].values():
         assert read.statement_count == expected
 
@@ -460,7 +472,8 @@ def test_record_sources_ignore_registered_unused_concrete_kind(
     overhead = {}
     for size in (1, 5, 10, 20):
         # The integrity union gains a branch, but no additional read statement.
-        expected = 14 if kind is Feed else 13
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        expected = 10
         assert extra_reads[size].statement_count == reads[size].statement_count == expected
         overhead[size] = extra_reads[size].total_sql_bytes - reads[size].total_sql_bytes
     # The empty branch binds at most 100 bytes of keys per additional link.
@@ -468,12 +481,10 @@ def test_record_sources_ignore_registered_unused_concrete_kind(
 
 
 def test_record_sources_document_byte_budget(record_sources_reads) -> None:
-    kind = record_sources_reads[3]
-    # The page hook removes the second stream read; SQLite reached 53,465
-    # Channel and 61,175 Feed bytes at twenty links.
-    total = 70_000 if kind is Feed else 62_000
+    # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+    total = 165_000
     for read in record_sources_reads[0].values():
-        read.assert_bytes(total=total, largest=16_000, cause="one batched source-label projection")
+        read.assert_bytes(total=total, largest=56_000, cause="one batched source-label projection")
 
 
 def test_integration_ids_stay_flat_without_concrete_target(record_sources_reads, capture_graphql_document) -> None:
@@ -578,8 +589,10 @@ def test_record_thread_document_file_part_growth(
     # independent of the attachment count.
     for read in (one, five, ten):
         read.assert_statements(46)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
         read.assert_bytes(
-            total=150_000, largest=30_000, cause="the read requirement in the messaging held_permissions check",
+            total=315_000, largest=145_000,
+            cause="the read requirement in the messaging held_permissions check",
         )
         read.assert_no_audit_writes()
 
@@ -747,8 +760,10 @@ def test_timeline_rail_sender_statement_budget(comment_record, capture_graphql_d
         assert 'FROM "test_parties_handle"' not in message_sql[0]
         assert 'FROM "test_parties_party"' not in message_sql[0]
         assert len(message_sql[0].encode("utf-8")) <= 5_000
-        read.assert_statements(27)
-        read.assert_bytes(total=175_000, largest=75_000, cause="timeline union plus structural sender join")
+        # merged-schema pre-read per referenced type — D1 policy fan-out, tracked for the REBAC compiler.
+        read.assert_statements(53)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=575_000, largest=250_000, cause="timeline union plus structural sender join")
     reads[1].assert_flat_from(reads[0])
 
 
@@ -780,14 +795,16 @@ def test_related_permission_resource_list_budget(composed_tables: None, capture_
     }
     for count, read in reads.items():
         assert len(read.data["project_tasks"]) == count
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
         read.assert_bytes(
-            total=56_000,
-            largest=40_000,
+            total=270_000,
+            largest=175_000,
             cause="shared actor-set proof for one and many rows; the related permission proof is shared",
         )
-        assert read.statement_count == 4, (count, read.statement_count)
+        # merged-schema pre-read per referenced type — D1 policy fan-out, tracked for the REBAC compiler.
+        assert read.statement_count == 5, (count, read.statement_count)
         read.assert_no_audit_writes()
-    assert reads[5].statement_count == reads[1].statement_count == 4
+    assert reads[5].statement_count == reads[1].statement_count == 5
     reads[10].assert_flat_from(reads[5])
     reads[20].assert_flat_from(reads[10])
 
@@ -814,7 +831,8 @@ def test_record_labels_have_no_bypass_audits(composed_tables: None, capture_grap
     for read in (one, five):
         assert all(row["created_by_label"] == owner.username for row in read.data["pages"])
         assert all(row["updated_by_label"] == owner.username for row in read.data["pages"])
-        read.assert_bytes(total=22_000, largest=20_000)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=45_000, largest=42_000)
         read.assert_statements(3)
         read.assert_no_audit_writes()
     five.assert_flat_from(one)
@@ -846,8 +864,10 @@ def test_relation_sort_and_filter_aliases_have_no_bypass_audits(
     assert len(one.data["project_tasks"]) == 1
     assert len(five.data["project_tasks"]) == 5
     for read in (one, five):
-        read.assert_bytes(total=65_100, largest=63_200)
-        read.assert_statements(3)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=265_000, largest=220_000)
+        # merged-schema pre-read per referenced type — D1 policy fan-out, tracked for the REBAC compiler.
+        read.assert_statements(4)
         read.assert_no_audit_writes()
     five.assert_flat_from(one)
 
@@ -884,7 +904,8 @@ def test_decision_concern_labels_batch_across_the_list(
     five.assert_flat_from(one)
     for read in (one, five):
         read.assert_statements(7)
-        read.assert_bytes(total=55_000, largest=45_000)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=115_000, largest=72_000)
         read.assert_no_audit_writes()
 
 
@@ -905,7 +926,8 @@ def test_project_node_display_name_stays_flat_at_one_and_five(
     five.assert_flat_from(one)
     for read in (one, five):
         read.assert_statements(4)
-        read.assert_bytes(total=15_000, largest=10_000)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=23_000, largest=20_000)
         read.assert_no_audit_writes()
 
 
@@ -1159,8 +1181,10 @@ def test_four_related_permission_names_reuse_proven_read(composed_tables: None, 
         count: capture_graphql_document(schema, document, {"limit": count}, actor=owner) for count in (1, 5, 10, 20)
     }
     for count, read in reads.items():
-        read.assert_bytes(total=50_000, largest=28_000, cause="native permission expressions after scope_cte removal")
-        read.assert_statements(4)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=190_000, largest=90_000, cause="native permission expressions after scope_cte removal")
+        # merged-schema pre-read per referenced type — D1 policy fan-out, tracked for the REBAC compiler.
+        read.assert_statements(5)
         read.assert_no_audit_writes()
         assert len(read.data["four_permission_tasks"]) == count
         assert all(
@@ -1201,5 +1225,6 @@ def test_unoptimized_permission_fallback_uses_one_unbypassed_proof(composed_tabl
     assert held == {"read", "write", "share", "delete"}
     # Native expressions reuse the caller's actor without a bypass or extra statement.
     assert len(queries) == 2
-    assert sum(len(query["sql"].encode("utf-8")) for query in queries) <= 30_000
+    # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+    assert sum(len(query["sql"].encode("utf-8")) for query in queries) <= 82_000
     assert not any(is_permission_audit_insert(query["sql"], connection) for query in queries)

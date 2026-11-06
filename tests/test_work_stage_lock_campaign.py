@@ -11,7 +11,7 @@ from tests.work_campaign import Task, make_task
 from tests.work_campaign import productivity_create_case as productivity_create_case
 from tests.work_campaign import work_case as work_case
 
-pytestmark = [pytest.mark.postgresql, pytest.mark.skipif(
+pytestmark = [pytest.mark.postgresql, pytest.mark.django_db(transaction=True), pytest.mark.skipif(
     connection.vendor != "postgresql", reason="PostgreSQL work stage row-lock contract",
 )]
 
