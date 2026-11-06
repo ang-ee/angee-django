@@ -26,7 +26,7 @@ COMPOSED_TEST_TIMEOUT = 1200
 
 Every caller that starts ``composed_host.py`` passes this one value. The rule: stay
 above the slowest real CI run times the run-to-run spread of CI runners, and well
-under a CI shard's own 40-minute limit, so a hang ends with the test named instead
+under a CI shard's own 60-minute limit, so a hang ends with the test named instead
 of the job ending with no verdict. Measured on 2026-10-14: the slowest is the
 workflows posts group on PostgreSQL, 187 s on an idle workstation; on CI it took
 467 s in one run and over 600 s in two others, where the bound was then 600 s and
