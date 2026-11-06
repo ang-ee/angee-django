@@ -81,7 +81,7 @@ its normal outbox/precondition policy.
 ## History surface
 
 [`schema.py`](schema.py) owns the read surface in the `console` schema. The
-`history(model, id, limit, offset)` query returns one record's changesets newest
+`history(model, id, limit, offset)` query returns one record's closed changesets newest
 first (`RecordHistoryType { total, entries: [HistoryEntryType!]! }`), resolved through the record's own
 `read` gate: a hidden or unknown record reads as `null`, and a model without
 native history or a REBAC resource type is refused. `HistoryAttribution` is the

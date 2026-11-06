@@ -170,9 +170,11 @@ Use these owners instead of maintaining another contract in an addon:
   row-relative operation with
   `Model._base_manager.db_manager(hints={"instance": row})` and use that
   manager's `db`. Django does not route transactions, commit hooks or raw
-  connections, so the owner that opens one names the routed alias: the row's
-  database, the manager's or queryset's `db`, or `router.db_for_write` for a
-  class-level owner, with `connections[alias]` for raw SQL on that alias. Pass
+  connections. The target contract is that the owner that opens one names the
+  routed alias: the row's database, the manager's or queryset's `db`, or
+  `router.db_for_write` for a class-level owner, with `connections[alias]` for
+  raw SQL on that alias. It is not implemented yet: the remaining bare
+  `transaction.atomic()` sites are recorded debt and are not placement-safe. Pass
   Django- and library-supplied aliases (signal `using`, `Collector`,
   `save(using=...)` in an override, a hook's `using` argument) through unchanged;
   do not thread aliases through Angee helpers, managers, hooks or tasks. Use
@@ -188,8 +190,7 @@ Use these owners instead of maintaining another contract in an addon:
   literal `default` alias. Read replicas for permission data are unsupported: a
   lagging replica serves grants already revoked on the primary. Before a replica
   router is introduced, every REBAC model, the `contenttypes` and `auth` rows it
-  joins, and reads inside `transaction.atomic` must use the primary (recorded
-  debt: work-state `notes/2026-11-06-debt-replica-stale-grants.md`).
+  joins, and reads inside `transaction.atomic` must use the primary.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
@@ -1094,8 +1095,9 @@ tasks through [`angee.provenance.tasks.Task`](../../src/angee/provenance/tasks.p
 commands through `angee.server.management`'s `ANGEE_SERVER_COMMAND_CONTEXT` hooks, contributed by
 [`provenance`](../../src/angee/provenance/contrib/angee/context.py). The
 [server launcher](../composer.md#flow) supplies the winning command's parsed,
-read-only options at its `execute` boundary; use those options for `--database`
-selection rather than parsing argv. (`serve`, `runserver` and `test` are
+read-only options at its `execute` boundary; a command's `--database` is a
+Django-supplied alias that a context passes through unchanged from those options,
+never parsed from argv. (`serve`, `runserver` and `test` are
 excluded because their requests, connections, tasks and tests own boundaries;
 interactive shells keep the command boundary); a bridge live-session run through
 [`run_bridge_session_job`](../../src/angee/integrate/session_runner.py). A
@@ -1432,11 +1434,14 @@ open fresh evaluator scopes for authorization and change-feed reads.
 
 ### GraphQL actor and write contracts
 
-- **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
-  carries the target user's public id. [IAM admission](../../src/angee/iam/models.py)
+- **View-as is a server-side, read-only HTTP preview for platform admins only.**
+  `X-Angee-View-As` carries the target user's public id. [IAM admission](../../src/angee/iam/models.py)
   checks the real actor's `view_as` permission and the target's eligibility;
   [ViewAs](../../src/angee/graphql/view_as.py) binds both `request.user` and
-  the ambient actor to that target. Mutations and HTTP subscriptions fail with
+  the ambient actor to that target. `auth/user#view_as` is IAM's platform-admin
+  arm alone: the `angee.iam.E001` [system check](../../src/angee/iam/checks.py)
+  refuses a permission fragment that extends it, so an addon grants its display
+  need through its own record's read. Mutations and HTTP subscriptions fail with
   `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
   [GraphQL WebSocket consumer](../../src/angee/graphql/consumers.py) retains its
   handshake actor and does not support this header. [MCP execution](../../src/angee/mcp/graphql.py)
