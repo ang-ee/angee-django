@@ -28,6 +28,7 @@ from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.querysets import MergeableQuerySet
+from angee.iam.permissions import instance_actor
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.provenance.evidence import EvidenceReference
 from angee.provenance.statements import (
@@ -127,7 +128,7 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
         identities. Empty strings follow the same fallback as absent values.
         """
 
-        actor = self.effective_actor()[0]
+        actor = instance_actor(self)
         handles = self.with_actor(actor).scoped() if actor is not None else self.none()
         return handles.annotate(_sender_name=handles.sender_name_expression())
 
@@ -144,7 +145,7 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
         if party_read_implied:
             party_name = F(f"{prefix}party__display_name")
         else:
-            actor = self.effective_actor()[0]
+            actor = instance_actor(self)
             party_model = apps.get_model("parties", "Party")
             party_name = party_model.objects.filter(pk=OuterRef(f"{prefix}party_id")).readable_scalar_subquery(
                 "display_name",
@@ -169,7 +170,7 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
         rows = (
             apps.get_model("parties", "Party")
             .objects.handle_statements()
-            .for_reader(self.effective_actor()[0])
+            .for_reader(instance_actor(self))
             .applied()
             .filter(subject_id=OuterRef("party_id"), handle_id=OuterRef("pk"))
         )
@@ -292,7 +293,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         if isinstance(candidates, ArchiveQuerySet):
             candidates = candidates.unarchived()
         organizations = apps.get_model("parties", "Organization").objects.filter(legal_name__iregex=pattern)
-        actor = self.effective_actor()[0]
+        actor = instance_actor(self)
         if actor is not None:
             organizations = organizations.with_actor(actor)
         legal_name_ids = organizations.scoped_for_aggregate().values("pk")
@@ -341,7 +342,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         visible_review_link = (
             apps.get_model("parties", "Party")
             .objects.handle_statements()
-            .for_reader(self.effective_actor()[0])
+            .for_reader(instance_actor(self))
             .to_review()
             .filter(subject_id=OuterRef("pk"))
         )
@@ -374,7 +375,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
     def organization_memberships(self) -> Any:
         """Readable current organisation relationships anchored at these parties."""
 
-        actor = self.effective_actor()[0]
+        actor = instance_actor(self)
         organizations = apps.get_model("parties", "Organization").objects.all()
         relationships = apps.get_model("parties", "Relationship").objects.canonical()
         if actor is not None:

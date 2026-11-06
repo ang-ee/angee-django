@@ -26,7 +26,7 @@ from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.querysets import MergeableQuerySet
 from angee.base.serialization import strip_null_bytes
 from angee.iam.models.ownership import OwnerQuerySet
-from angee.iam.permissions import actor_user_id
+from angee.iam.permissions import actor_user_id, instance_actor
 from angee.iam.querysets import ProtectedQuerySet, ProtectedUnscopedQuerySet
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.models import IntegrationLifecycle, IntegrationQuerySet
@@ -245,7 +245,7 @@ class ThreadQuerySet[ThreadT: Thread](
         rows = list(self.order_by().select_related("title").only("pk", "modality", "title__text"))
         labels = {thread.pk: thread.display_title for thread in rows}
         untitled = {thread.pk: thread.modality for thread in rows if not labels[thread.pk]}
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
         people: dict[Any, list[str]] = {pk: [] for pk in untitled}
         if untitled and actor is not None:
             handles = (
@@ -786,7 +786,7 @@ class MessageQuerySet[MessageT: Message](
         """Correlate the actor-readable sender identity without multiplying rows."""
 
         handle_model = apps.get_model("parties", "Handle")
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
         handles = handle_model.objects.with_actor(actor) if actor is not None else handle_model.objects.all()
         return (
             handles.with_sender_name()
@@ -803,7 +803,7 @@ class MessageQuerySet[MessageT: Message](
         """Correlate the title from the actor-readable thread queryset."""
 
         thread_model = apps.get_model("messaging", "Thread")
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
         return thread_model.objects.filter(pk=models.OuterRef("thread_id")).readable_scalar_subquery(
             "title__text",
             actor=actor,
@@ -820,7 +820,7 @@ class MessageQuerySet[MessageT: Message](
 
         integration_model = apps.get_model("integrate", "Integration")
         vendor_model = apps.get_model("integrate", "Vendor")
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
         vendors = vendor_model.objects.with_actor(actor).scoped() if actor is not None else vendor_model.objects.none()
         return integration_model.objects.filter(
             pk=models.OuterRef("channel_id"), vendor_id__in=vendors.values("pk")

@@ -14,7 +14,7 @@ from rebac.roles import ROLE_RELATION
 
 from angee.base.querysets import AngeeQuerySet
 from angee.iam.choices import UserKind
-from angee.iam.permissions import actor_user_id
+from angee.iam.permissions import actor_user_id, instance_actor
 from angee.iam.roles import protected_account_holders
 
 if TYPE_CHECKING:
@@ -25,7 +25,9 @@ class ProtectedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], RebacQueryS
     """Native actor-scoped collection and readable correlated projections."""
 
     def attributed_user_id(self) -> Any:
-        return actor_user_id(self.effective_actor()[0])
+        """Keep the requesting user when an owning bulk write bypasses read scoping."""
+
+        return actor_user_id(instance_actor(self))
 
     def readable_scalar_subquery(
         self,
@@ -41,7 +43,7 @@ class ProtectedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], RebacQueryS
         callers own domain fallbacks and may explicitly coalesce an absent value.
         """
 
-        actor = actor or self.effective_actor()[0]
+        actor = actor or instance_actor(self)
         readable = self.with_actor(actor).scoped() if actor is not None else self
         # The selected field owns the scalar type; only the outer fallback needs
         # a common output type (overriding Subquery changes empty-set compilation).
@@ -68,7 +70,7 @@ class ProtectedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], RebacQueryS
         )
 
     def _keyset_cursor_scope(self, scope: tuple[Any, ...]) -> tuple[Any, ...]:
-        return (*scope, str(self.effective_actor()[0]))
+        return (*scope, str(instance_actor(self)))
 
 
 class ProtectedUnscopedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], TrackedQuerySet[ModelT]):

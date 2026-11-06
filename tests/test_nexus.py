@@ -676,12 +676,11 @@ def test_party_network_applies_pair_intersection_to_every_edge(
     assert nodes[visible.sqid]["detail"] == "0 handles"
     assert nodes[visible.sqid]["meta"]["handle_count"] == 0
 
-    identity_graph = _data(execute_schema(schema, query, {"id": center.sqid}, user=identity_reader))["party_graph"]
-    assert len(identity_graph["nodes"]) == 1
-    node = identity_graph["nodes"][0]
-    assert node["id"] == center.sqid
-    assert "detail" not in node
-    assert "handle_count" not in node["meta"]
+    # D1b projects follower identity from an admitted thread without granting
+    # a Party read; a follower-only reader cannot open that Party's graph.
+    identity_graph = execute_schema(schema, query, {"id": center.sqid}, user=identity_reader)
+    assert identity_graph.errors
+    assert identity_graph.data is None
 
 
 @pytest.mark.django_db(transaction=True)

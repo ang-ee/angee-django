@@ -20,9 +20,8 @@ from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery,
 from django.db.models.functions import RowNumber
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from rebac import current_actor
 
-from angee.iam.permissions import actor_user_id
+from angee.iam.permissions import actor_user_id, instance_actor
 
 
 class InboxCoverage(BaseModel):
@@ -149,7 +148,7 @@ class MessageInbox:
     """Query owner for personal inbox reads, composed from a MessageQuerySet."""
 
     def __init__(self, queryset: Any) -> None:
-        self.actor = queryset.actor() or current_actor()
+        self.actor = instance_actor(queryset)
         self.user_id = actor_user_id(self.actor)
         self.messages = (
             queryset.inbox()

@@ -184,17 +184,23 @@ def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
     return schema.get_definition(resource_type) if schema is not None else None
 
 
-def instance_actor(instance: models.Model) -> SubjectRef | None:
-    """Return the instance's pinned actor, falling back to the ambient actor.
+def instance_actor(instance: models.Model | RebacQuerySet[Any]) -> SubjectRef | None:
+    """Return a row or queryset's pinned actor, then the ambient actor.
 
-    Instance verbs and audit defaults share this resolution, including during
-    elevated writes. Plain Django models have only the ambient actor.
+    Instance verbs, queryset projections, and audit defaults share this
+    resolution, including during elevation. Plain Django models have only the
+    ambient actor.
     """
 
     # Schema declarations also load before Django setup; the native mixin is model-defined.
     from rebac import RebacMixin
 
-    actor = instance.actor() if isinstance(instance, RebacMixin) else None
+    if isinstance(instance, RebacQuerySet):
+        actor = instance.effective_actor()[0]
+    elif isinstance(instance, RebacMixin):
+        actor = instance.actor()
+    else:
+        actor = None
     return actor if actor is not None else current_actor()
 
 
