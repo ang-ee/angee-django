@@ -44,8 +44,10 @@ async function fixture() {
   });
   const provider = { getList,
     getOne: vi.fn(async ({ id }: { id: string }) => ({ data: rows.find((row) => row.id === id)! })),
-    custom: vi.fn(async () => ({ data: { notes_groups: [{ key: { updated_at_month: "2021-01-01T00:00:00Z",
-      updated_at_month_range: { from: "2021-01-01T00:00:00Z", to: "2021-02-01T00:00:00Z" } }, aggregate: { count: rows.length } }], totalCount: 1 } })),
+    // The groups read carries each group's first page at the declared size.
+    custom: vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => ({ data: { notes_groups: [{ key: { updated_at_month: "2021-01-01T00:00:00Z",
+      updated_at_month_range: { from: "2021-01-01T00:00:00Z", to: "2021-02-01T00:00:00Z" } }, aggregate: { count: rows.length },
+      rows: rows.slice(0, (meta?.gqlVariables as { rows_limit?: number } | undefined)?.rows_limit ?? 0) }], totalCount: 1 } })),
   } satisfies RefineTestDataProvider;
   function NotesPage() {
     React.useEffect(() => { lifecycle.mounts++; return () => { lifecycle.unmounts++; }; }, []);

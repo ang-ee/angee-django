@@ -1,4 +1,13 @@
-import { parse, parseType, print } from "graphql";
+import {
+  Kind,
+  parse,
+  parseType,
+  print,
+  visit,
+  type DocumentNode,
+  type FieldNode,
+  type OperationDefinitionNode,
+} from "graphql";
 import { refineFieldsFromPaths, selectionText } from "./selections";
 
 /** Executable GraphQL names supplied by the resource metadata edge. */
@@ -81,4 +90,54 @@ export function listQueryMeta(
     }`),
     gqlVariables: variables,
   };
+}
+
+/** Names the groups root and the list ordering a carried group page uses. */
+export interface GroupRowsTarget {
+  root: string;
+  orderType: string;
+}
+
+/**
+ * Add each group's carried first page to a generated groups document: `rows`
+ * selects the leaf `paths` under `@include(if: $with_rows)`, so one document
+ * serves group levels that carry pages and levels that do not. The variables are
+ * `with_rows`, `rows_limit` (the declared per-group page size) and
+ * `rows_order_by` (the leaf list's ordering); `groupByVariables` fills them.
+ */
+export function groupRowsDocument(
+  document: DocumentNode | string,
+  target: GroupRowsTarget,
+  paths: readonly string[],
+): DocumentNode {
+  for (const name of [target.root, target.orderType]) {
+    if (!/^[_A-Za-z][_0-9A-Za-z]*$/.test(name)) throw new Error(`Invalid GraphQL name: ${name}`);
+  }
+  const fields = refineFieldsFromPaths(paths);
+  if (fields.length === 0) throw new Error("A group rows selection requires fields.");
+  const template = parse(
+    `query GroupRows($with_rows: Boolean = false, $rows_limit: Int = 1, $rows_order_by: [${target.orderType}!]) { ` +
+      `${target.root} { rows(limit: $rows_limit, order_by: $rows_order_by) @include(if: $with_rows) { ` +
+      `${selectionText(fields)} } } }`,
+    { noLocation: true },
+  );
+  const operation = template.definitions[0] as OperationDefinitionNode;
+  const rows = (operation.selectionSet.selections[0] as FieldNode).selectionSet!.selections[0]!;
+  let carried = false;
+  const source = typeof document === "string" ? parse(document, { noLocation: true }) : document;
+  const extended = visit(source, {
+    OperationDefinition(node) {
+      return { ...node, variableDefinitions: [...(node.variableDefinitions ?? []), ...(operation.variableDefinitions ?? [])] };
+    },
+    Field(node) {
+      if (node.alias || node.name.value !== target.root || !node.selectionSet) return undefined;
+      carried = true;
+      return {
+        ...node,
+        selectionSet: { kind: Kind.SELECTION_SET, selections: [...node.selectionSet.selections, rows] },
+      };
+    },
+  });
+  if (!carried) throw new Error(`Groups document does not select ${target.root}.`);
+  return extended;
 }
