@@ -7,6 +7,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import AbstractAsyncContextManager
 from typing import Any, ClassVar, cast
 
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, router, transaction
 from pydantic_ai.models import Model
@@ -54,9 +55,8 @@ class AgentManager[AgentT: Agent](AngeeHistoryManager[AgentT]):
         if user_id is None:
             return None
         candidates = (
-            self.model._base_manager.using(self._db)
+            self.with_actor(current_actor())
             .filter(owner_id=user_id, is_template=False, runtime_status=RuntimeStatus.RUNNING)
-            .select_related("model")
             .order_by("-updated_at", "-pk")
         )
         return next((agent for agent in candidates if agent.can_chat), None)
@@ -845,6 +845,16 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Prote
         """Return the selected model handle in this agent's runtime convention."""
 
         model = getattr(self, "model", None)
+        return self.runtime_backend.model_handle(model) if model is not None else ""
+
+    def readable_model_handle(self, actor: Any) -> str:
+        """Return the selected model handle only when ``actor`` can read that model."""
+
+        if actor is None or self.model_id is None:
+            return ""
+        model = apps.get_model("agents", "InferenceModel").objects.db_manager(self._state.db).with_actor(
+            actor,
+        ).filter(pk=self.model_id).first()
         return self.runtime_backend.model_handle(model) if model is not None else ""
 
     def mcp_config(self) -> dict[str, Any]:

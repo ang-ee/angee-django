@@ -3407,6 +3407,28 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     assert viewer_session is None
 
 
+def test_chat_selection_hides_unreadable_model_handle(composed_tables: None) -> None:
+    """Agent ownership selects chat, but provider policy still gates the model handle."""
+
+    owner = User.objects.create_user(username="chat-private-model-owner")
+    provider = _provider("chat-private-model-provider")
+    with system_context(reason="test.agents.private_model.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="private-runtime-model")
+        agent = Agent.objects.create(
+            name="Private model", owner=owner, model=model, runtime_class="claude_code",
+            runtime_status="running", service="svc-private-model",
+        )
+    assert Agent.objects.with_actor(owner).filter(pk=agent.pk).exists()
+    assert not InferenceModel.objects.with_actor(owner).filter(pk=model.pk).exists()
+
+    result = _data(_execute(
+        _schema(),
+        "{ resolve_session_for_view(view: {}) { agent_id model_handle } }",
+        user=owner,
+    ))["resolve_session_for_view"]
+    assert result == {"agent_id": str(agent.sqid), "model_handle": ""}
+
+
 def test_chat_selection_breaks_timestamp_ties_and_keeps_actor_sessions(composed_tables: None) -> None:
     """Equal update times select one stable agent and the actor's latest open session."""
 

@@ -6,8 +6,8 @@ definition decisions/decision {
     // A readable concerned record may display whether an open decision exists;
     // its timeline may count those open decisions. Neither fact admits the
     // decision or its protected fields.
-    // record_decision_answers projects answered decisions from its proved
-    // record. Direct decision reads and the timeline keep this gate.
+    // record_decision_answers uses the proved record to bound candidates,
+    // then applies this decision's read gate before projecting its answer.
     relation assignee: auth/user // rebac:field=assignees
     relation requester: auth/user // rebac:field=requester
     relation person: iam/kind // rebac:const=person

@@ -1162,7 +1162,7 @@ class _RecordThreadContext:
 
     @cached_property
     def attachment(self) -> Any:
-        return (ThreadAttachment.objects.for_record(self.record, role=self.role)
+        return (ThreadAttachment.objects.readable_for_record(self.record, role=self.role)
                 if self._attachment is _UNRESOLVED else self._attachment)
 
     @cached_property
@@ -1726,7 +1726,7 @@ class MessagingQuery:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
         record, attachment = resolved
         if input.role != record.thread_attachment_role:
-            attachment = ThreadAttachment.objects.for_record(record, role=input.role)
+            attachment = ThreadAttachment.objects.readable_for_record(record, role=input.role)
         return RecordThreadPayload(_context=_RecordThreadContext(
             record=record,
             info=info,

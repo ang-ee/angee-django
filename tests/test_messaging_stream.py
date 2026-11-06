@@ -4,6 +4,7 @@ from datetime import datetime
 
 from rebac import actor_context, system_context
 
+from angee.messaging.testing.models import Message
 from tests import test_messaging as messaging_models
 from tests.conftest import execute_schema, result_data
 from tests.test_messaging_graphql import _platform_admin, _request, _schema
@@ -18,6 +19,10 @@ def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tab
         first = ticket.message_post("First entry")
         reply = ticket.message_post("First reply", parent=first)
         ticket.message_update_content(reply, body="Edited reply")
+        assert list(Message.objects.filter(pk=first.pk).record_scope(ticket).values_list("pk", flat=True)) == [first.pk]
+        assert set(Message.objects.filter(created_by__username="stream-reader").record_scope(ticket).values_list(
+            "pk", flat=True,
+        )) == {first.pk, reply.pk}
 
     payload = result_data(
         execute_schema(

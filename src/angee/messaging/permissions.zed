@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 23
+// @rebac_schema_revision: 24
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -52,9 +52,9 @@ definition messaging/thread {
 // A trashed message is withheld from every reader but its channel's managers
 // and admins. Record chatter moderators reach trashed comments through the
 // record-gated removed list instead, so its parts, files and reactions follow.
-// Reading an admitted record's chatter implies its attached messages, including
-// their count and the moderator's removed count; each read stays inside the
-// admitted record's thread membership. A selected message implies its parts.
+// Reading an admitted record implies only its own chatter messages, including
+// their count and the moderator's removed count. Other attachment roles require
+// the attached thread's read. A selected message implies its parts.
 definition messaging/message {
     relation thread: messaging/thread // rebac:field=thread
     relation channel: messaging/channel // rebac:field=channel
@@ -118,7 +118,7 @@ definition messaging/thread_follower {
     // from suggestions. The current user's identity implies their Person link
     // and effective follow across the admitted thread's merged members.
     // An admitted thread's read implies its explicit follower rows. The record
-    // GraphQL projection may carry only their party identity display facts.
+    // GraphQL projection may carry party display facts and the public account.
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
     relation user: auth/user // rebac:field=party__person__user
@@ -131,8 +131,9 @@ definition messaging/thread_follower {
 }
 
 definition messaging/thread_notification {
-    // Chatter for an admitted record may show only the current user's delivery
-    // facts and error count, bounded by its thread attachment.
+    // Chatter for an admitted record may show the current user's delivery
+    // facts and an error count that includes authored messages' recipients,
+    // bounded by its thread attachment.
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
     relation message: messaging/message // rebac:field=message

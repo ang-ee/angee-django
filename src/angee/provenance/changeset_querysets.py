@@ -32,6 +32,14 @@ class ChangesetQuerySet[T: models.Model](ProtectedQuerySet[T], NativeChangesetQu
 
         return NativeChangesetQuerySet.touching(cast(Any, rows), record) | rows.filter(cls._merge_touching(record))
 
+    @classmethod
+    def closed_for_record(cls, record: Any) -> models.QuerySet[Any]:
+        """Return the closed changesets implied by an admitted record's read."""
+
+        model = apps.get_model("provenance", "Changeset")
+        rows = model._base_manager.db_manager(record._state.db, hints={"instance": record}).all()
+        return cls.touching_document(rows, record).filter(state=model.State.CLOSED)
+
     @staticmethod
     def _merge_touching(record: HistoryMixin) -> Q:
         predicate = Q(pk__in=[])

@@ -18,6 +18,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Prefetch
+from rebac import current_actor
 from strawberry import auto
 from strawberry.permission import BasePermission, PermissionExtension
 from strawberry.scalars import JSON
@@ -159,13 +160,14 @@ class MCPServerType(ProtectedNode):
 
 @strawberry_django.type(MCPTool)
 class MCPToolType(ProtectedNode):
-    """Admin projection of one MCP tool."""
+    """Admin projection of one MCP tool, including its read-only approval gate."""
 
     server: MCPServerType
     name: auto
     description: auto
     input_schema: JSON
     enabled: auto
+    requires_approval: auto
     created_at: auto
     updated_at: auto
 
@@ -562,13 +564,12 @@ class AgentSessionQuery:
         agent = Agent.objects.chat_for_actor()
         if agent is None:
             return None
-        model = agent.model
         session = AgentSessionModel.objects.current_for_agent(agent)
         return AgentChatTarget(
             agent_id=PublicID(str(agent.sqid)),
             agent_name=str(agent.name),
             status=str(agent.runtime_status),
-            model_handle=str(agent.service_model_handle()) if model is not None else "",
+            model_handle=agent.readable_model_handle(current_actor()),
             runtime_class=agent.runtime_class,
             runs_in_process=agent.runs_in_process,
             session_id=PublicID(str(session.sqid)) if session is not None else None,

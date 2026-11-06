@@ -14,6 +14,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import (
     PermissionDenied,
+    current_actor,
     generic_target,
     system_context,
 )
@@ -366,6 +367,16 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
                 target.require_access(read_access)
             elif not target._message_read_allowed():
                 raise PermissionDenied("Reading a redirected chatter thread requires record read access.")
+        return attachment
+
+    def readable_for_record(self, record: Any, *, role: str = "chatter") -> ThreadAttachmentT | None:
+        """A record implies its own chatter; other roles require thread read."""
+
+        attachment = self.for_record(record, role=role)
+        if attachment is not None and role != record.thread_attachment_role:
+            actor = current_actor()
+            if actor is None or not attachment.thread.with_actor(actor).has_access("read"):
+                return None
         return attachment
 
     def source_threads_for_record(self, record: Any) -> Any:

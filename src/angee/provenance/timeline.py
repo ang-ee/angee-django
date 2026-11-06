@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from django.apps import apps
 from django.db import models
 from django.db.models.functions import Cast
 from rebac import SubjectRef, resolve_subjects
@@ -26,9 +25,7 @@ class ChangeKind(TimelineKind):
         return record_history(model) is not None and timeline_subject(model)
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        model = apps.get_model("provenance", "Changeset")
-        rows = model._base_manager.db_manager(record._state.db, hints={"instance": record}).all()
-        return ChangesetQuerySet.touching_document(rows, record).filter(state=model.State.CLOSED)
+        return ChangesetQuerySet.closed_for_record(record)
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         integer_key = models.Q(origin_object_id__regex=r"^[0-9]{1,18}$") | models.Q(

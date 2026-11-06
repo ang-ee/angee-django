@@ -54,7 +54,7 @@ class MCPToolManager[ToolT: MCPTool](ProtectedManager[ToolT]):
         return {
             str(name): str(pk)
             for name, pk in self.sudo(reason="agents.tool_grant_ids").filter(
-                **lookup, name__in=tool_names, enabled=True,
+                **lookup, name__in=tool_names, enabled=True, requires_approval=False,
             ).values_list("name", "pk")
         }
 

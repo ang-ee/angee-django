@@ -574,8 +574,8 @@ def test_record_thread_document_file_part_growth(
     five.assert_flat_from(one)
     ten.assert_flat_from(five)
     # The admitted record owns chatter, follower and notification display facts;
-    # those reads have no separate bypass audit. Structural follower and avatar
-    # reads keep a fixed overhead independent of the attachment count.
+    # structural follower and avatar reads keep a fixed audited overhead
+    # independent of the attachment count.
     for read in (one, five, ten):
         read.assert_statements(46)
         read.assert_bytes(
@@ -627,8 +627,11 @@ def test_fifty_party_avatars_and_tags_stay_bounded(
     assert all(row["avatar"] and row["display_avatar"] and row["tags"] for row in fifty.data["parties"])
     fifty.assert_flat_from(one)
     for read in (one, fifty):
-        read.assert_bytes(total=40_000, largest=32_000)
-        read.assert_no_audit_writes()
+        # The avatar security ruling requires each File's own read proof. Its
+        # policy SQL is fixed per page: one and fifty parties issue 12 statements
+        # and the same 279,966-byte largest statement.
+        read.assert_bytes(total=520_000, largest=285_000, cause="actor-scoped avatar File reads")
+        read.assert_audit_inserts(1)
 
 
 @pytest.fixture

@@ -98,12 +98,17 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
     def connection_health(self) -> models.QuerySet[CredentialT]:
         """Load current health and refresh evidence for an integration-owned projection.
 
+        The receiver belongs to an admitted Integration: GraphQL prefetches
+        attach this to admitted Integration rows, and the single-row fallback
+        starts from that Integration's credential ID.
         Native prefetch hints batch non-secret facts. Only an expired OAuth row
         that needs refreshability loads its deferred material through its handler.
         """
 
+        # Both callers require an admitted Integration parent; this projection
+        # carries only the receiver's filtered credential population.
         return (
-            self.model._base_manager.using(self.db)
+            self._structural_selection_of_admitted()
             .select_related("oauth_client")
             .only(
                 "status",

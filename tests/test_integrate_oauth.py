@@ -199,6 +199,20 @@ def test_connection_health_listing_decrypts_only_the_expired_row(monkeypatch, ro
     assert len([query for query in queries if "material" in query["sql"]]) == int(expired_row)
 
 
+@pytest.mark.usefixtures("composed_tables")
+def test_connection_health_preserves_credential_selection():
+    with system_context(reason="test.connection_health.selection"):
+        first = make_integration("health-first", kind="oauth")
+        make_integration("health-second", kind="oauth")
+    selected = Credential.objects.filter(pk=first.credential_id).connection_health()
+    assert list(selected.values_list("pk", flat=True)) == [first.credential_id]
+    joined = Credential.objects.filter(oauth_client__slug="health-first").connection_health()
+    assert list(joined.values_list("pk", flat=True)) == [first.credential_id]
+    with actor_context(first.owner):
+        readable = Credential.objects.with_actor(first.owner).connection_health()
+        assert list(readable.values_list("pk", flat=True)) == [first.credential_id]
+
+
 @pytest.mark.parametrize("status,failed,expired,refreshable,expected", [
     ("active", False, False, False, False), ("revoked", False, False, True, True),
     ("active", True, False, True, True), ("active", False, True, True, False),

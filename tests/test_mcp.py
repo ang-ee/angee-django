@@ -15,6 +15,7 @@ from angee.agents.grants import tool_grant_ref
 from angee.agents.mcp_verifier import resolve_actor
 from angee.agents.models import MCPPlacement
 from angee.agents.testing.models import Agent, MCPServer, MCPTool
+from angee.agents_runtime_pydantic.toolsets import _tool_access_allowed
 from angee.integrate.credentials import CredentialKind
 from angee.mcp.verifier import _verifier
 from tests import test_integrate_vcs  # noqa: F401 -- register the concrete relation graph
@@ -338,3 +339,36 @@ def test_agent_mcp_m2m_reconciles_server_read_and_tool_use(composed_tables: None
         agent.mcp_tools.remove(tool)
         assert not backend().check_access(subject=subject, action="read", resource=tool_ref).allowed
         assert not backend().check_access(subject=subject, action="use", resource=grant_ref).allowed
+
+
+def test_tool_requiring_approval_stays_blocked_without_a_decision(composed_tables: None) -> None:
+    """An existing use grant cannot execute a tool awaiting approval."""
+
+    owner = User.objects.create_user(username="approval-tool-owner")
+    with system_context(reason="test.mcp.approval.seed"):
+        server = MCPServer.objects.create(name="approval-server", url="http://x/mcp/approval/")
+        tool = MCPTool.objects.create(server=server, name="approval-tool", requires_approval=True)
+        agent = Agent.objects.create(name="Approval Agent", owner=owner)
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="ws-approval", service="svc-approval")
+        agent.mcp_tools.add(tool)
+        subject = agent.principal_subject()
+        assert backend().check_access(subject=subject, action="use", resource=to_object_ref(tool)).allowed
+        assert MCPTool.objects.authorization_ids(str(server.sqid), (tool.name,)) == {}
+        assert not _tool_access_allowed(subject, str(server.sqid), tool.name)
+
+
+def test_tool_approval_flag_is_readable_in_console(composed_tables: None) -> None:
+    """An operator can diagnose a blocked tool from the resource read."""
+
+    from tests.test_agents_graphql import _execute, _platform_admin, _schema
+
+    admin = _platform_admin("approval-console-admin")
+    with system_context(reason="test.mcp.approval.console"):
+        server = MCPServer.objects.create(name="approval-console-server", url="http://x/mcp/approval-console/")
+        MCPTool.objects.create(server=server, name="pending-tool", requires_approval=True)
+
+    schema = _schema()
+    data = _execute(schema, "{ mcp_tools { name requires_approval } }", user=admin)
+    assert data.errors is None
+    assert {row["name"]: row["requires_approval"] for row in data.data["mcp_tools"]}["pending-tool"] is True

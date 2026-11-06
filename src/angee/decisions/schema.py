@@ -174,12 +174,11 @@ class DecisionQuery:
         actor = get_current_user(info)
         record_model = apps.get_model(model)
         record = require_instance_for_id(record_model, str(id), queryset=record_model.objects.with_actor(actor))
-        # The proved record bounds decision identities through the same concern
-        # links the timeline uses. A second decision read would expand unrelated
-        # concerned-record policy into this page.
+        # The record proves which decisions may be candidates; each decision's
+        # own read permission decides whether its answer may be shown.
         concerns = DecisionRecord._base_manager.filter(DecisionRecord.record_filter(record)).values("decision_id")
         queryset = (
-            Decision._base_manager.filter(pk__in=concerns)
+            Decision.objects.with_actor(actor).filter(pk__in=concerns)
             .exclude(answered_at=None)
             .order_by("-answered_at", "-pk")[: max(1, min(limit, 100))]
         )
