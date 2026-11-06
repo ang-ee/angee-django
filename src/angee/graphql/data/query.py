@@ -123,6 +123,7 @@ class ResourceQueryProjection:
                 sort=DataQueryOrder(name) if name in self.order_fields else descriptor.sort,
             )
         axes: dict[str, DataQueryAxis] = {}
+        missing_identities: list[str] = []
         finalized_axes = self.final_axes()
         consumed_labels = set((self.label_axes or {}).values())
         for axis in finalized_axes:
@@ -150,11 +151,14 @@ class ResourceQueryProjection:
                 server = replace(server, label_input=label.server.input, label_key=label.server.key)
             drill = self.drill(axis.drill, fields)
             extractions = tuple(replace(item, drill=self.drill(item.drill, fields)) for item in axis.extractions)
-            if identity_path is None and (drill is not None or any(item.drill is not None for item in extractions)):
-                raise ImproperlyConfigured(
-                    f"Group axis {canonical!r} has a drill but no selectable row identity on {self.types.node!r}: "
-                    "expose the related row's public ID or remove the drill."
-                )
+            # A relation drill filters by the related row's public id, so the
+            # row must expose it; a scalar axis drills on its own filter field.
+            if (
+                relation is not None
+                and identity_path is None
+                and (drill is not None or any(item.drill is not None for item in extractions))
+            ):
+                missing_identities.append(canonical)
             axes[canonical] = replace(
                 axis,
                 field=canonical,
@@ -164,6 +168,11 @@ class ResourceQueryProjection:
                 label_path=relation.label_path if relation else None,
                 drill=drill,
                 extractions=extractions,
+            )
+        if missing_identities:
+            raise ImproperlyConfigured(
+                f"Relation group axes {missing_identities!r} have a drill but no selectable row identity on "
+                f"{self.types.node!r}: expose the related row's public ID or remove the drill."
             )
         if self.row_model == "client":
             canonical_labels = {self.canonical(label) for label in consumed_labels}
