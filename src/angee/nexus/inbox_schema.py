@@ -335,6 +335,7 @@ class NexusInboxQuery:
     @strawberry.field
     def inbox_results_batch(
         self,
+        info: strawberry.Info,
         pages: list[InboxResultPageInput],
         coverage: InboxCoverageInput | None = None,
         search: InboxSearchInput | None = None,
@@ -347,18 +348,16 @@ class NexusInboxQuery:
         if len(pages) > 100 or len({page.key for page in pages}) != len(pages):
             raise ValueError("Choose at most 100 result pages with distinct keys.")
         result = _result_collection(coverage, search, options, sender, circle)
-        batch = []
-        for page in pages:
-            try:
-                batch.append(InboxResultBatchPage(
-                    key=page.key,
-                    result=cast(InboxPage[InboxResultRow], result.page(
-                        scope=page.scope.to_pydantic() if page.scope else None, page=page.page, size=page.size,
-                    )),
-                ))
-            except ValueError as error:
-                batch.append(InboxResultBatchPage(key=page.key, result=None, error=classify_error(error).message))
-        return batch
+        reads = result.pages(
+            [(page.scope.to_pydantic() if page.scope else None, page.page, page.size) for page in pages],
+            include_channel=selected_field(info.selected_fields, "result.rows.message.channel"),
+        )
+        return [
+            InboxResultBatchPage(key=page.key, result=None, error=classify_error(read).message)
+            if isinstance(read, ValueError)
+            else InboxResultBatchPage(key=page.key, result=cast(InboxPage[InboxResultRow], read))
+            for page, read in zip(pages, reads, strict=True)
+        ]
 
     @strawberry.field
     def inbox_result_groups(

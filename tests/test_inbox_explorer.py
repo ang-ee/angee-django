@@ -570,11 +570,24 @@ def test_unreadable_thread_is_not_exposed_as_a_group():
         )
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
+        assert not Thread.objects.with_actor(owner).filter(pk=thread.pk).exists()
         result = inbox.conversations(inbox.messages)
         assert result.rows[0].thread is None
         assert result.rows[0].id == f"message:{message.sqid}"
         groups = InboxResults(inbox, inbox.messages, InboxResultOptions()).groups("conversation").page()
         assert groups.rows[0].value == f"message:{message.sqid}"
+        unreadable_scope = InboxGroupScope(axis="conversation", value=f"thread:{thread.sqid}")
+        for lens in ("conversations", "attachments", "text"):
+            with pytest.raises(ValueError, match="Conversation unavailable"):
+                InboxResults(inbox, inbox.messages, InboxResultOptions(lens=lens)).page(scope=unreadable_scope)
+    request = RequestFactory().post("/graphql/console/")
+    request.user = owner
+    projected = result_data(execute_schema(
+        _schema(),
+        "query($id: ID!) { inbox_message(id: $id) { message { thread { id } } } }",
+        {"id": str(message.sqid)}, request=request,
+    ))
+    assert projected["inbox_message"]["message"]["thread"] is None
 
 
 def test_live_schema_projects_sections_and_independent_message():
@@ -771,14 +784,12 @@ def test_result_batch_preserves_each_group_page_and_statement_budget():
             f"Inbox title {index}" for index in range(group_count)
         ]
         sizes = [len(statement["sql"].encode("utf-8")) for statement in statements]
-        # Measured SQLite 1/5/25: 8/20/80 statements, 124911/597399/2959903 SQL bytes,
-        # max 54863/54863/54864; PostgreSQL: 8/20/80, 154671/746199/3703903 bytes,
-        # max 69735/69735/69736. Three policy-bearing statements per group remain.
-        assert len(statements) == 5 + 3 * group_count
-        base_limit, group_limit, largest_limit = (
-            (25_000, 145_000, 70_000) if connection.vendor == "sqlite" else (30_000, 180_000, 85_000)
+        # Readable conversation keys share one thread proof, count, and page read.
+        assert len(statements) == 7
+        total_limit, largest_limit = (
+            (125_000, 52_000) if connection.vendor == "sqlite" else (155_000, 65_000)
         )
-        assert sum(sizes) <= base_limit + group_limit * group_count
+        assert sum(sizes) <= total_limit
         assert max(sizes) <= largest_limit
     single = result_data(execute_schema(
         _schema(),
@@ -802,13 +813,11 @@ def test_result_batch_preserves_each_group_page_and_statement_budget():
             f"Inbox title {index}" for index in range(24, 24 - size, -1)
         ]
         page_sizes = [len(statement["sql"].encode("utf-8")) for statement in page_statements]
-        # Measured SQLite 1/5/25 rows: 6/6/6 statements, 85358/85358/85359 bytes,
-        # max 41165/41165/41166; PostgreSQL: 6/6/6, 107594/107594/107595,
-        # max 52283/52283/52284. Title selection adds no per-row statement.
-        assert len(page_statements) == 6
+        # The page proves its parent threads once through the thread read policy.
+        assert len(page_statements) == 7
         page_totals.append(sum(page_sizes))
         total_limit, largest_limit = (
-            (105_000, 52_000) if connection.vendor == "sqlite" else (132_000, 65_000)
+            (112_000, 52_000) if connection.vendor == "sqlite" else (138_000, 65_000)
         )
         assert sum(page_sizes) <= total_limit
         assert max(page_sizes) <= largest_limit
@@ -816,6 +825,14 @@ def test_result_batch_preserves_each_group_page_and_statement_budget():
     mixed = [dict(page, page=2 if index == 0 else 1) for index, page in enumerate(pages[:2])]
     paged = result_data(execute_schema(_schema(), query, {"pages": mixed}, request=request))["inbox_results_batch"]
     assert [(page["result"]["count"], len(page["result"]["rows"])) for page in paged] == [(1, 0), (1, 1)]
+    repeated = [
+        {**pages[0], "key": "first", "page": 1},
+        {**pages[0], "key": "second", "page": 2},
+    ]
+    repeated_result = result_data(execute_schema(_schema(), query, {"pages": repeated}, request=request))[
+        "inbox_results_batch"
+    ]
+    assert [(page["result"]["count"], len(page["result"]["rows"])) for page in repeated_result] == [(1, 1), (1, 0)]
 
 
 def test_result_batch_keeps_readable_pages_when_one_group_is_unavailable():

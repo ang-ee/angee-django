@@ -43,6 +43,7 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
+from angee.graphql.introspection import selected_field
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.relations import RecordPointerType
 from angee.graphql.subscriptions import changes
@@ -58,6 +59,7 @@ from angee.iam.graphql.relations import (
     record_reference_field,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.iam.querysets import structural_prefetch
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
@@ -483,7 +485,9 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
     parent: "MessageType | None" = actor_scoped_to_one("parent")
     merged_into: "MessageType | None" = actor_scoped_to_one("merged_into")
     subtype: MessageSubtypeType | None
-    thread: "ThreadType | None" = actor_scoped_to_one("thread")
+
+    thread: ThreadType | None = actor_scoped_to_one("thread")
+
     channel: ChannelType | None = actor_scoped_to_one("channel")
     participants: list[ParticipantType] = actor_scoped_to_many("participants")
     created_at: auto
@@ -621,14 +625,14 @@ def _record_parts_prefetch(info: strawberry.Info) -> models.Prefetch:
     """Keep trusted parent membership while native hints project selected part fields."""
 
     rows = Part._base_manager
-    selected = optimize(rows, info, store=OptimizerStore(only=["message_id", "parent_id", "position", "sqid"]))
-    return models.Prefetch(
-        "parts", queryset=selected.prefetch_related(
-            models.Prefetch(
-                "file", queryset=File.objects.sudo(reason="messaging.admitted_part_file").select_related("mime_type"),
-            ),
-        ),
-    )
+    include_file = selected_field(info.selected_fields, "file")
+    only = ["message_id", "parent_id", "position", "sqid"]
+    selected = optimize(rows, info, store=OptimizerStore(only=[*only, "file_id"] if include_file else only))
+    if include_file:
+        selected = selected.prefetch_related(models.Prefetch(
+            "file", queryset=File._base_manager.select_related("mime_type"),
+        ))
+    return structural_prefetch("parts", queryset=selected)
 
 
 @strawberry_django.type(Message)
@@ -936,7 +940,8 @@ class NotificationMessagePointerType:
 class ThreadNotificationType(ProtectedNode):
     """GraphQL projection of a recipient's delivery and per-item acknowledgement."""
 
-    thread: "ThreadType | None" = actor_scoped_to_one("thread")
+    thread: ThreadType | None = actor_scoped_to_one("thread")
+
     attachment: "ThreadAttachmentType | None" = actor_scoped_to_one("attachment")
     follower: "ThreadFollowerType | None" = actor_scoped_to_one("follower")
 
@@ -2573,9 +2578,7 @@ def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
     prefetch_related_objects(
         list(parties.values()),
         *party_model.objects.display_avatar_prefetches(
-            actor, avatars=apps.get_model("storage", "File").objects.sudo(
-                reason="parties.admitted_avatar"
-            ).select_related("mime_type"),
+            actor, avatars=apps.get_model("storage", "File")._base_manager.select_related("mime_type"),
         ),
     )
     people = {row.pk: row for row in person_model._base_manager.filter(pk__in=parties)}

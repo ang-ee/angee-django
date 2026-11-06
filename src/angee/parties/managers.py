@@ -44,6 +44,7 @@ from angee.base.models.persistence import require_composed_type
 from angee.base.querysets import by_key
 from angee.base.serialization import canonical_json
 from angee.iam.permissions import actor_user_id
+from angee.iam.querysets import structural_prefetch
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedAddressbook, ParsedContact, ParsedPhoto
 from angee.parties.connections import ParsedConnection
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
@@ -509,7 +510,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """
 
         return DisplayAvatarPrefetches(
-            own=Prefetch("avatar", queryset=avatars, to_attr=_DISPLAY_OWN_AVATAR),
+            own=structural_prefetch("avatar", queryset=avatars, to_attr=_DISPLAY_OWN_AVATAR),
             handles=Prefetch(
                 "handles", queryset=self._display_avatar_handles(actor, avatars), to_attr=_DISPLAY_AVATAR_HANDLES
             ),
@@ -524,7 +525,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             .objects.with_actor(actor)
             .filter(avatar__in=avatars.values("pk"))
             .order_by("-party_link_confirmed", "pk")
-            .prefetch_related(Prefetch("avatar", queryset=avatars))
+            .prefetch_related(structural_prefetch("avatar", queryset=avatars))
         )
 
     def handle_statements(self) -> Any:

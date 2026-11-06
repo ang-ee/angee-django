@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from django.db import models
 from django.db.models import Exists, F, OuterRef, Q, TextField
 from django.db.models.functions import Cast, Coalesce
+from django.db.models.query import prefetch_related_objects
 from rebac import to_subject_ref
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.resources import model_resource_type
@@ -21,8 +22,58 @@ if TYPE_CHECKING:
     from angee.iam.models import User
 
 
+class _StructuralPrefetch(models.Prefetch):
+    """Fetch a protected child through an already admitted parent population."""
+
+    def __init__(self, lookup: str, *, queryset: models.QuerySet[Any], to_attr: str | None = None) -> None:
+        super().__init__(lookup, queryset=queryset, to_attr=to_attr)
+        self.admitted_queryset = queryset
+
+    def admitted(self) -> models.Prefetch:
+        """Restore the bounded base queryset after the parent read is established."""
+
+        return models.Prefetch(self.prefetch_through, queryset=self.admitted_queryset, to_attr=self.to_attr)
+
+
+def structural_prefetch(
+    lookup: str, *, queryset: models.QuerySet[Any], to_attr: str | None = None,
+) -> models.Prefetch:
+    """Mark a child read to run after its actor-scoped parent is admitted.
+
+    The constructor is centralized because django-stubs' Prefetch hook assumes
+    every subclass has generic type arguments, which this native subclass lacks.
+    """
+
+    return cast(models.Prefetch, cast(Any, _StructuralPrefetch)(lookup, queryset=queryset, to_attr=to_attr))
+
+
 class ProtectedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], RebacQuerySet[ModelT]):
     """Native actor-scoped collection and readable correlated projections."""
+
+    _prefetch_done: bool
+    _prefetch_related_lookups: tuple[Any, ...]
+
+    def _fetch_all(self) -> None:
+        """Apply structural child prefetches only after the parent scope is evaluated."""
+
+        if self._prefetch_done:
+            super()._fetch_all()
+            return
+        lookups = self._prefetch_related_lookups
+        structural = [lookup for lookup in lookups if isinstance(lookup, _StructuralPrefetch)]
+        if not structural:
+            super()._fetch_all()
+            return
+        self._prefetch_related_lookups = tuple(
+            lookup for lookup in lookups if not isinstance(lookup, _StructuralPrefetch)
+        )
+        try:
+            super()._fetch_all()
+            if self._result_cache:
+                prefetch_related_objects(self._result_cache, *(lookup.admitted() for lookup in structural))
+            self._prefetch_done = True
+        finally:
+            self._prefetch_related_lookups = lookups
 
     def attributed_user_id(self) -> Any:
         """Keep the requesting user when an owning bulk write bypasses read scoping."""

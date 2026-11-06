@@ -39,6 +39,7 @@ from angee.graphql.data.hasura import (
 from angee.graphql.ids import PublicID
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.iam.querysets import structural_prefetch
 from angee.tags.models import Tag as TagModel
 
 Tag = apps.get_model("tags", "Tag")
@@ -84,8 +85,8 @@ _TAG_EDGES_ATTR = "_angee_tag_edges"
 def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
     """Prefetch admitted rows' tag edges and readable tags, once per page.
 
-    The parent query proves row read. The structural edge queryset retains its
-    explicit sudo scope through REBAC's prefetch optimizer, while the inner tag
+    The parent query proves row read. The structural edge queryset runs after
+    that admission, while the inner tag
     queryset keeps the vocabulary's actor read guard and selected type hints.
     A multi-table child's edges key on its canonical ancestor, which declares
     ``tag_assignments``, so the lookup climbs the child's parent links to it.
@@ -100,12 +101,12 @@ def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
     edges = (
         TagAssignment._base_manager.none()
         if actor is None
-        else TagAssignment.objects.sudo(reason="tags.admitted_parent").filter(tag__in=tags.values("pk")).by_tag()
+        else TagAssignment._base_manager.filter(tag__in=tags.values("pk")).order_by("tag__name", "tag__sqid")
     ).prefetch_related(
         models.Prefetch("tag", queryset=tags),
     )
     links = canonical_link_path(field.origin_django_type.model) if field.origin_django_type else ()
-    return models.Prefetch("__".join((*links, "tag_assignments")), queryset=edges, to_attr=_TAG_EDGES_ATTR)
+    return structural_prefetch("__".join((*links, "tag_assignments")), queryset=edges, to_attr=_TAG_EDGES_ATTR)
 
 
 def _prefetched_tag_edges(row: models.Model) -> Any:

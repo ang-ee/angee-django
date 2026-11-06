@@ -676,11 +676,15 @@ def test_party_network_applies_pair_intersection_to_every_edge(
     assert nodes[visible.sqid]["detail"] == "0 handles"
     assert nodes[visible.sqid]["meta"]["handle_count"] == 0
 
-    # D1b projects follower identity from an admitted thread without granting
-    # a Party read; a follower-only reader cannot open that Party's graph.
+    # D1b lets an admitted follower project party identity, but does not grant
+    # a Party root read through that follower. The graph keeps the Party gate.
+    with actor_context(identity_reader):
+        assert not Party.objects.with_actor(identity_reader).filter(pk=center.pk).exists()
     identity_graph = execute_schema(schema, query, {"id": center.sqid}, user=identity_reader)
-    assert identity_graph.errors
     assert identity_graph.data is None
+    assert identity_graph.errors is not None and len(identity_graph.errors) == 1
+    assert identity_graph.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    assert identity_graph.errors[0].message == "Permission denied."
 
 
 @pytest.mark.django_db(transaction=True)
