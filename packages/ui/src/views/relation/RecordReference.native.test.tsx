@@ -77,13 +77,13 @@ test("uses a supplied label without a record read and follows the exact tab and 
   expect(screen.queryByRole("button")).toBeNull();
 });
 
-test("an empty supplied label stays retained without a per-row read", async () => {
+test("an empty supplied label shows the id without a per-row read", async () => {
   const getOne = vi.fn();
   renderInRouter(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={runtime}>
     <RecordReference model="notes.Note" id="note-1" label="" />
   </AppRuntimeProvider></Provider>);
-  await waitFor(() => expect(document.querySelector('a[href="/notes/note-1"]')).toBeTruthy());
-  expect(document.querySelector('a[href="/notes/note-1"]')?.textContent).toBe("");
+  const link = await screen.findByRole("link", { name: "note-1" });
+  expect(link.getAttribute("href")).toBe("/notes/note-1");
   expect(getOne).not.toHaveBeenCalled();
 });
 

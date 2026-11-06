@@ -109,11 +109,14 @@ function MatchWindow({
   const queryClient = useQueryClient();
   const dataProvider = useDataProvider();
   const providerName = useActiveDataProviderName() ?? "default";
+  // Membership and count do not depend on the navigation anchor. Retain the
+  // opening anchor so click navigation does not start a second observer read.
+  const membershipAnchor = useRef(navigation.at.startsWith("message:") ? navigation.at.slice(8) : "").current;
   const variables = {
     ...scope,
     thread: navigation.thread,
     visible: ids,
-    at: navigation.at.startsWith("message:") ? navigation.at.slice(8) : "",
+    at: membershipAnchor,
   };
   const query = useAuthoredQuery(
     InboxTranscriptMatches,
@@ -139,7 +142,10 @@ function MatchWindow({
       onError(error instanceof Error ? error.message : String(error));
     }
   }
-  useEffect(() => { navigateMatch.current = navigateToMatch; });
+  useEffect(() => {
+    navigateMatch.current = navigateToMatch;
+    return () => { if (navigateMatch.current === navigateToMatch) navigateMatch.current = null; };
+  });
   return (
     <Matches.Provider value={matches?.visible ?? []}>
       {children}

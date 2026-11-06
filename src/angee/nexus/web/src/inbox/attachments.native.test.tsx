@@ -4,7 +4,7 @@ import { ResourceViewProvider, ToastProvider, createRouteHref, type ChatterViewC
 import { createUiTestProviders } from "@angee/ui/testing";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { authoredQueryReadsLiveChange } from "@angee/refine";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -185,6 +185,52 @@ test("scrolling a 200-message transcript sends no matches read; previous and nex
   await waitFor(() => expect(document.querySelector('li[data-index="199"]')).toBeTruthy());
   expect(screen.getAllByText("Matches current filters").length).toBeGreaterThan(0);
   expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(3);
+});
+
+test("successive Next clicks advance sparse matches in place with one read each", async () => {
+  const messages = Array.from({ length: 200 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages,
+    [10, 30, 50, 70, 90].map((index) => `message-${index}`));
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(200 * 640);
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true,
+    value: function(this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? 0;
+      queueMicrotask(() => this.dispatchEvent(new Event("scroll")));
+    },
+  });
+  function NavigationHarness() {
+    const [at, setAt] = useState("");
+    inbox.navigation.at = at;
+    inbox.navigation.patch.mockImplementation(({ at: next }: { at?: string }) => setAt(next ?? ""));
+    return <InboxConversation {...inbox.props} />;
+  }
+  render(<NavigationHarness />, { wrapper: inbox.wrapper });
+  const matchReads = () => inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches);
+  const feedReads = () => inbox.custom.mock.calls.filter(([request]) =>
+    request.meta?.gqlVariables?.threadId === "thread-1" && request.meta?.gqlVariables?.limit === 50);
+  await waitFor(() => expect(matchReads()).toHaveLength(1));
+  expect(feedReads()).toHaveLength(1);
+  const transcript = document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement;
+  expect(transcript).toBeTruthy();
+  transcript!.scrollTop = 0;
+  fireEvent.scroll(transcript!);
+
+  fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+  await waitFor(() => expect(inbox.navigation.at).toBe("message:message-10"));
+  await waitFor(() => expect(document.querySelector('li[data-index="10"] [aria-current="true"]')).toBeTruthy());
+  expect(screen.getByText("Full conversation · 200 messages · 5 match your filters")).toBeTruthy();
+  expect(matchReads()).toHaveLength(2);
+  expect(feedReads()).toHaveLength(1);
+  expect(document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement).toBe(transcript);
+
+  fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+  await waitFor(() => expect(inbox.navigation.at).toBe("message:message-30"));
+  expect(screen.getByText("Full conversation · 200 messages · 5 match your filters")).toBeTruthy();
+  expect(matchReads().map(([request]) => request.meta?.gqlVariables?.at)).toEqual(["", "message-0", "message-10"]);
+  expect(feedReads()).toHaveLength(1);
+  expect(document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement).toBe(transcript);
 });
 
 test("opening at a message anchor retains the positioned scroll element and lands on the message", async () => {
