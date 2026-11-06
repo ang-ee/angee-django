@@ -23,7 +23,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
 | `src/angee/graphql/data/resource_fields.py` | Widget and currency classification from field declarations | `resource_field_widget`, `is_resource_field_widget` |
 | `src/angee/graphql/schema.py` | Django `ValidationError` → `VALIDATION` extension with per-field messages | `_apply_validation_error` |
 | `packages/ui/src/views/form/registered-form.ts` | Complete-form registration and lookup | `registerForm`, `RegisteredFormView` |
-| `packages/ui/src/views/form/FormView.tsx`, `use-form-view-save.ts` | The form surface; native save, its invalidation and `expected_revision`; the custom-submit branch | `useFormViewSave`, revision detection :216-217, custom branch :475, native `expected_revision` :486-490 |
+| `packages/ui/src/views/form/FormView.tsx`, `use-form-view-save.ts` | The form surface; native save, its invalidation and `expected_revision`; the custom-submit branch | `useFormViewSave`: revision detection, the custom-submit branch, native `expected_revision` |
 | `packages/ui/src/views/form/validation-errors.ts` | `FormSubmitResult`; error decoding; React Hook Form binding | `formSubmitError`, `applyFormErrors` |
 | `packages/ui/src/views/form/form-spec*.ts`, `json-schema.ts` | FormSpec parse/deserialize; Ajv resolver; schema action args | `parseFormSpec`, `deserializeFormSpec`, `jsonSchemaActionArgs` |
 | `packages/ui/src/widgets/types.ts`, `packages/metadata/src/fields.ts` | Widget contract; default widget per field metadata | `WidgetDefinition`, `defaultWidgetForModelField` |
@@ -148,7 +148,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    reads `field` and `row`, never a model probe ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Custom resource widget keys").
 
 6. **Project a typed config into a FormSpec form.** Annotate the Pydantic model
-   (`src/angee/workflows_agents/steps.py:29` shape); the base owner projects it.
+   (`StartConversationConfig` in `src/angee/workflows_agents/steps.py` shape); the base owner projects it.
 
    ```python
    class WebhookConfig(BaseModel):
@@ -187,8 +187,8 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    On the backend raise Django `ValidationError({"field": "…"})` from `clean()` or the manager; the wire
    mapping is `_apply_validation_error` (`src/angee/graphql/schema.py`) and `applyFormErrors` binds it. For stale-edit
    protection compose `OptimisticLockMixin` (`base/models/locks.py`); the token contract is
-   [write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) and `useFormViewSave` sends it on native saves only (:216-217, :486-490).
-   **Owner rule:** `FormView` owns native saves, their invalidation and `expected_revision` (`use-form-view-save.ts:486-490`); a custom `submit` keeps its mutation owner's invalidation and revision handling (`:475`; [form save contracts](../../../docs/frontend/guidelines.md#form-save-contracts) "custom commands retain their mutation owner's invalidation"); a page adds neither.
+   [write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) and `useFormViewSave` sends it on native saves only.
+   **Owner rule:** `FormView` owns native saves, their invalidation and `expected_revision` (`useFormViewSave` in `use-form-view-save.ts`); a custom `submit` keeps its mutation owner's invalidation and revision handling ([form save contracts](../../../docs/frontend/guidelines.md#form-save-contracts) "custom commands retain their mutation owner's invalidation"); a page adds neither.
 
 ## Do not
 
@@ -218,7 +218,7 @@ reports a conflict, and a `ValidationError` lands under its field.
   [frontend](../../../docs/checks.md#frontend-packages-and-addon-fragments), [browser](../../../docs/checks.md#browser-verification).
 - Loop: `.agents/skills/slice/SKILL.md`. False greens: typecheck and vitest never prove the page works;
   `@angee/gql` is stale until codegen reruns ([web build pitfalls](../angee-framework/references/web-pitfalls.md), "Generated documents are an explicit prerequisite");
-  an invalid `forms:` value throws only when `RegisteredFormView` renders (registered-form.ts:44,53).
+  an invalid `forms:` value throws only when `RegisteredFormView` renders (`useRegisteredForm`, `RegisteredFormView` in registered-form.ts).
 
 ## Pitfalls
 
@@ -227,7 +227,7 @@ reports a conflict, and a `ValidationError` lands under its field.
 - An M2M is `many2many` chips writing an id array, never `tagInput` ([frontend rules](../../../docs/frontend/guidelines.md#rules), "A to-many relation").
 - A `FormView` create dialog under the console layout needs `<ControlBandProvider host={undefined}>` ([form pitfalls](references/pitfalls.md), "A FormView create dialog").
 - A `defaultValue`/`createDefaults` seed submits on create even when `readOnly`; use `createOnly` for visible-but-fixed ([form save contracts](../../../docs/frontend/guidelines.md#form-save-contracts), "A `createDefaults` seed").
-- A form in `forms:` is a component rendered by `RegisteredFormView`, so `use<Addon>T()` and `useContainer` work inside it (registered-form.ts; `TagForm.tsx:13-15`; [frontend rules](../../../docs/frontend/guidelines.md#rules), "Route every user-facing string").
+- A form in `forms:` is a component rendered by `RegisteredFormView`, so `use<Addon>T()` and `useContainer` work inside it (registered-form.ts; `TagForm` in `TagForm.tsx`; [frontend rules](../../../docs/frontend/guidelines.md#rules), "Route every user-facing string").
 
 ## Read next
 
@@ -241,6 +241,6 @@ reports a conflict, and a `ValidationError` lands under its field.
 
 <!--
 Docs: AGENTS.md; docs/guidelines.md; docs/frontend/guidelines.md #package-layering, #ownership-boundaries, #one-way-rules, #native-state-owners, #reserved-translation-namespace, #component-ontology, #rules, #authoring, #narrowing-and-when, #variants-and-impl, #framework-containers, #context-aside, #resource-views, #rendering-and-testing, #form-save-contracts; docs/backend/guidelines.md #rules, #migration-history, #resource-loading, #naming, #checks; docs/stack.md #backend, #stack-serve-mode, #frontend; docs/checks.md #agent-methodology-and-documentation, #composition-and-schema, #frontend-packages-and-addon-fragments; docs/glossary.md (no form/widget terms).
-Code: src/angee/base/schemas/{forms.py,form_spec.schema.json}; base/implementations.py:28,46-47,95-160; base/exceptions.py:25-60; graphql/schema.py:150-235; graphql/data/resource_fields.py:40-175; money/{pyproject.toml,fields.py,web/**}; tags/web/src/**; tags/models.py:74-85; workflows/web/src/run-workflow-actions.tsx; workflows_agents/steps.py:29,38; examples/src/example/notes/web/src/NotePage.tsx; packages/ui/src/views/form/{registered-form.ts,FormView.tsx:1-140,Form.tsx,form-spec-schema.ts,form-spec.ts:60-140,json-schema.ts:1-60,117-198,validation-errors.ts:1-100,191-231,use-form-view-save.ts:1-60,143,187-220,486-490}; views/page/{Field.tsx:18-115,Group.tsx:9-67}; views/resource/model-metadata-defaults.ts:61,114; views/relation/RelationRecordDialog.tsx:20,39,253-259; widgets/types.ts:110-212; runtime/{runtime.ts:362-372,contracts.ts:156-161}; packages/metadata/src/{index.ts,artifact-schema.ts:1-80,fields.ts:62-75}; packages/refine/src/operations.ts:18,63,292,320; packages/app/src/define-addon.ts:157,164; packages/ui/package.json:780-781; tests/test_impl.py:669-800.
-Outstanding discrepancies and gaps: `fractionDigitsField` (packages/ui/src/widgets/types.ts:151) is read by src/angee/money/web/src/widgets/money.tsx:94, but no backend emits it and packages/metadata/src/artifact-schema.ts has no key: an authored <Field> prop documented nowhere. docs/glossary.md has no FormSpec or widget term.
+Code: src/angee/base/schemas/{forms.py,form_spec.schema.json}; base/implementations.py; base/exceptions.py; graphql/schema.py; graphql/data/resource_fields.py; money/{pyproject.toml,fields.py,web/**}; tags/web/src/**; tags/models.py; workflows/web/src/run-workflow-actions.tsx; workflows_agents/steps.py; examples/src/example/notes/web/src/NotePage.tsx; packages/ui/src/views/form/{registered-form.ts,FormView.tsx,Form.tsx,form-spec-schema.ts,form-spec.ts,json-schema.ts,validation-errors.ts,use-form-view-save.ts}; views/page/{Field.tsx,Group.tsx}; views/resource/model-metadata-defaults.ts; views/relation/RelationRecordDialog.tsx; widgets/types.ts; runtime/{runtime.ts,contracts.ts}; packages/metadata/src/{index.ts,artifact-schema.ts,fields.ts}; packages/refine/src/operations.ts; packages/app/src/define-addon.ts; packages/ui/package.json; tests/test_impl.py.
+Outstanding discrepancies and gaps: `fractionDigitsField` (packages/ui/src/widgets/types.ts) is read by src/angee/money/web/src/widgets/money.tsx, but no backend emits it and packages/metadata/src/artifact-schema.ts has no key: an authored <Field> prop documented nowhere. docs/glossary.md has no FormSpec or widget term.
 -->

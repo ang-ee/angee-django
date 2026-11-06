@@ -202,9 +202,10 @@ These tests exercise documentation links/commands, template input agreement,
 adapter parity, and mocked helper behavior without starting the application.
 `tests/test_owner_index.py` validates the owner index citations: every
 `` `Symbol` path `` in `.agents/skills/angee-design/references/owners.md` names a
-file that declares the symbol, no Owner cell cites a line, and every public class a
-foundation models or fields module declares, and every source distribution
-(including libraries), has a row.
+file that declares the symbol, and every public class a foundation models or fields
+module declares, and every source distribution (including libraries), has a row. It
+also refuses any `path:line` or `path:line-line` in the skills, capability guides
+and their references; only `docs/` references keep a line.
 Disabling pytest-django, application configuration, and conftest intentionally
 isolates these tests; use normal pytest for application or template behavior.
 If template source changes too, run its contract tests and the Python suite above. A prose-only

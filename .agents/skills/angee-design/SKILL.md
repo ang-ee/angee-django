@@ -92,7 +92,7 @@ concern and for consumers of any contract the feature changes.
 - Walking `parent` in Python or a recursive CTE → `HierarchyMixin`; [Stack: backend](../../../docs/stack.md#backend) "Tree library choice".
 - A dotted-path column, `import_string` from writable data, an entry point or a private registry dict → `ImplClassField` + its base's named settings mapping; [Stack: backend](../../../docs/stack.md#backend) "Implementation-registry choice".
 - Reading `os.environ` or a private settings parser → `autoconfig.py` `SETTINGS`; [Autoconfig](../../../docs/composer.md#autoconfig).
-- A permission decision in a resolver, in React or in a Zed caveat → the model's Zed plus `authorized_permission_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy), `angee.E024` (`src/angee/base/checks.py:31-37`).
+- A permission decision in a resolver, in React or in a Zed caveat → the model's Zed plus `authorized_permission_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy), `angee.E024` (`check_rebac_caveats` in `src/angee/base/checks.py`).
 - A hand-rolled page, table or form → `ListView`/`RowsListView`/`FormView` and `registerForm`; [Frontend rules](../../../docs/frontend/guidelines.md#rules) **Routes and pages stay thin**.
 
 ## Verify
@@ -101,8 +101,9 @@ Done means the current note holds the owner map with every fact resolved to an
 owner or a named gap, the level, the dependency choice, the swept names and the
 deletion list; open shapes are questions to the architect, not edits. The index
 is validated by `tests/test_owner_index.py` (every Owner cell cites a symbol
-with its file and no line, each cited file declares it, and every public
-foundation class and addon manifest has a row) and the link contract test under
+with its file, each cited file declares it, every public foundation class and
+addon manifest has a row, and no skill cites a line outside `docs/`) and the link
+contract test under
 [Agent methodology and documentation](../../../docs/checks.md#agent-methodology-and-documentation),
 both static and runnable in any lane. The feature's own checks belong to its artifact
 skill and [Checks](../../../docs/checks.md#python-and-composition-contracts); `slice` owns the

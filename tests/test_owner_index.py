@@ -1,11 +1,12 @@
 """The owner index names only symbols that exist where it says they are.
 
 Static: run with ``-p no:django --noconftest`` like ``test_agent_methodology.py``.
-Every Owner cell cites a ```Symbol` path`` and no ``path:line``; the cited file
-declares the symbol: a Python ``def``, ``class`` or assignment target at any depth,
-or an exported declaration of a TypeScript or ES module. Every public class a
-foundation ``models``/``fields`` module declares and every ``angee.*`` source
-distribution has a row, including explicit libraries.
+Every Owner cell cites a ```Symbol` path``; the cited file declares the symbol: a
+Python ``def``, ``class`` or assignment target at any depth, or an exported
+declaration of a TypeScript or ES module. Every public class a foundation
+``models``/``fields`` module declares and every ``angee.*`` source distribution has
+a row, including explicit libraries. No skill, capability guide or reference file
+cites a line: only ``docs/`` references keep one.
 """
 
 from __future__ import annotations
@@ -26,8 +27,14 @@ FOUNDATION_MODULES = sorted(
     for module in (ADDONS / "base" / area).glob("*.py")
     if module.name != "__init__.py"
 )
+SKILL_DOCUMENTS = sorted([*ROOT.glob(".agents/skills/**/*.md"), *ROOT.glob("src/angee/*/skills/**/*.md")])
 CITATION = re.compile(r"`(\w+)` ((?:src|packages|examples)/[\w./-]+\.\w+)")
-LOCATION = re.compile(r"(?<![\w/])((?:src|packages|examples)/[\w./-]+\.\w+)(?::(\d+))?")
+LOCATION = re.compile(r"(?<![\w/])((?:src|packages|examples)/[\w./-]+\.\w+)")
+LINE_REFERENCE = re.compile(
+    r"(?<![\w/.-])(?!(?:\.\./)*docs/)(?:[\w.{}*-]+/)*[\w.{}*-]*\w\.[a-z]+:\d+"  # path:line, path:line-line
+    r"|\bREADME:\d+"  # a README line
+    r"|`:\d+|(?<=[\s(]):\d+(?=[\s),;.-]|$)"  # a bare :line continuing an earlier path
+)
 EXPORT = re.compile(r"^\s*export\s+(?:default\s+)?(?:async\s+)?(?:const|function|class|type|interface)\s+(\w+)", re.M)
 
 
@@ -90,10 +97,11 @@ def test_every_owner_cell_cites_a_symbol() -> None:
         assert CITATION.search(cell), f"an Owner cell cites no `symbol` path: {cell}"
 
 
-def test_no_owner_cell_cites_a_line() -> None:
-    for cell in owner_cells():
-        lines = [f"{path}:{line}" for path, line in LOCATION.findall(cell) if line]
-        assert not lines, f"cite `symbol` path without a line, not {', '.join(lines)}: {cell}"
+@pytest.mark.parametrize("document", SKILL_DOCUMENTS, ids=lambda path: path.relative_to(ROOT).as_posix())
+def test_skills_cite_no_lines(document: Path) -> None:
+    """Skills cite a symbol, heading or file, so a moved line never stales them; ``docs/`` lines are exempt."""
+    lines = LINE_REFERENCE.findall(document.read_text())
+    assert not lines, f"cite a symbol or heading instead of {lines}"
 
 
 @pytest.mark.parametrize(("symbol", "path"), citations(), ids=lambda value: str(value))
@@ -103,7 +111,7 @@ def test_cited_file_declares_the_symbol(symbol: str, path: str) -> None:
     assert symbol in declarations(source), f"{path} does not declare {symbol}"
 
 
-@pytest.mark.parametrize("path", sorted({path for cell in owner_cells() for path, _ in LOCATION.findall(cell)}))
+@pytest.mark.parametrize("path", sorted({path for cell in owner_cells() for path in LOCATION.findall(cell)}))
 def test_every_cited_owner_path_exists(path: str) -> None:
     assert (ROOT / path).is_file(), path
 
