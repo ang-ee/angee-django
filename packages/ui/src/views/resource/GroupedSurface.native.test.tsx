@@ -49,11 +49,18 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   let resolvePage!: (value: { data: Row[]; total: number }) => void;
   const lifecycle = { mounts: 0, unmounts: 0 };
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    const variables = meta!.gqlVariables as { group_by: { field: string }[]; limit: number; offset: number };
+    const variables = meta!.gqlVariables as {
+      group_by: { field: string }[]; limit: number; offset: number; with_rows?: boolean; rows_limit?: number;
+    };
     const field = variables.group_by[0]!.field;
     if (failedRoot && field === "status") throw new Error("Group query unavailable");
+    // The leaf groups read carries each group's first page.
+    const carried = variables.with_rows
+      ? { rows: Array.from({ length: Math.min(rowTotal, variables.rows_limit ?? 0) }, (_, index) => ({
+          id: `carried-${index}`, title: "Native row", status: "active" })) }
+      : {};
     return { data: { notes_groups: [{ key: { [field]: field === "status" ? "active" : `Title ${variables.offset}` },
-      aggregate: { count: rowTotal } }], totalCount: field === "status" ? 1 : 130 } };
+      aggregate: { count: rowTotal }, ...carried }], totalCount: field === "status" ? 1 : 130 } };
   });
   const getList = vi.fn(async ({ pagination }: GetListParams) => {
     if (pagination?.currentPage === delayPage) {
@@ -176,7 +183,9 @@ test("a native grouped header sort updates the leaf query and preserves the pare
   act(() => f.view.setFilter({ title: { iContains: "kept" } }));
   await waitFor(() => expect(f.header(1)).toBeDefined());
   act(() => f.surface.toggleGroup(f.header(1)!.bucketKey));
-  await waitFor(() => expect(f.getList).toHaveBeenCalled());
+  // Page 1 rides on the groups read; only a resized or later page reads rows on its own.
+  await waitFor(() => expect(f.surface.groupedItems.some((item) => item.kind === "record")).toBe(true));
+  expect(f.getList).not.toHaveBeenCalled();
   const leafKey = f.header(1)!.bucketKey;
   act(() => f.surface.setScopePageSize(leafKey, 50));
   act(() => f.surface.setScopePage(leafKey, 2));

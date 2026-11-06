@@ -100,7 +100,11 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
       queries.map(() => ({
         data: {
           notes_groups: [
-            { key: { status: "active" }, aggregate: { count: 1 } },
+            {
+              key: { status: "active" },
+              aggregate: { count: 1 },
+              rows: [{ id: "note_1", title: "First" }],
+            },
           ],
           totalCount: 1,
         },
@@ -376,7 +380,9 @@ describe("useGroupedResourceViewSurface", () => {
     tableMocks.subgroupTotal = 5;
     const probe = () => (
       <ToastProvider>
-        <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": {} } } }}>
+        <OperationDocumentsProvider
+          documents={{ console: { groups: { "notes.Note": "query NoteGroups { notes_groups { key { status title } aggregate { count } } }" } } }}
+        >
           <ResourceViewProvider scope="local" initialState={{ pageSize: 2 }}>
             <NestedPageProbe />
           </ResourceViewProvider>

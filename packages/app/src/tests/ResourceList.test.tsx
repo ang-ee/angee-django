@@ -410,6 +410,24 @@ vi.mock("@angee/refine", async (importOriginal) => {
     }
     return current;
   }
+  function bucketKeyOf(
+    row: Row,
+    dimensions: readonly HasuraGroupDimension[],
+  ): Record<string, unknown> {
+    const key: Record<string, unknown> = {};
+    for (const dimension of dimensions) {
+      const keyField = dimension.key ?? dimension.input;
+      const value = groupValue(row, dimension, keyField);
+      key[keyField] = value;
+      if (dimension.rangeKey) {
+        key[dimension.rangeKey] = dateGroupRangeValue(
+          value,
+          dimension.granularity ?? dimension.input,
+        );
+      }
+    }
+    return key;
+  }
   function groupBuckets(
     rows: readonly Row[],
     dimensions: readonly HasuraGroupDimension[],
@@ -417,18 +435,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
   ): readonly AggregateBucket[] {
     const buckets = new Map<string, AggregateBucket>();
     for (const row of rows) {
-      const key: Record<string, unknown> = {};
-      for (const dimension of dimensions) {
-        const keyField = dimension.key ?? dimension.input;
-        const value = groupValue(row, dimension, keyField);
-        key[keyField] = value;
-        if (dimension.rangeKey) {
-          key[dimension.rangeKey] = dateGroupRangeValue(
-            value,
-            dimension.granularity ?? dimension.input,
-          );
-        }
-      }
+      const key = bucketKeyOf(row, dimensions);
       const bucketKey = JSON.stringify(key);
       const current = buckets.get(bucketKey);
       buckets.set(
@@ -542,17 +549,21 @@ vi.mock("@angee/refine", async (importOriginal) => {
         refetch: vi.fn(),
       };
     }
-    const buckets = groupBuckets(
-      filteredRows(sdkMocks.rows, options.where),
-      options.dimensions,
-      options.measures,
-    );
+    const members = filteredRows(sdkMocks.rows, options.where);
+    const buckets = groupBuckets(members, options.dimensions, options.measures);
     const pageSize = options.pageSize ?? buckets.length;
     const page = Math.max(1, options.page ?? 1);
+    const carried = options.rows;
+    // The leaf groups read carries each group's first page.
     const visibleBuckets = buckets.slice(
       (page - 1) * pageSize,
       page * pageSize,
-    );
+    ).map((bucket) => carried ? {
+      ...bucket,
+      rows: members.filter((row) =>
+        JSON.stringify(bucketKeyOf(row, options.dimensions)) === JSON.stringify(bucket.key),
+      ).slice(0, carried.limit),
+    } : bucket);
     return {
       count: visibleBuckets.reduce((total, bucket) => total + bucket.count, 0),
       totalCount: buckets.length,

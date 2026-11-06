@@ -136,10 +136,12 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
         decisions: [{ id: "dcn_review", kind: "review", verdict: null, answered_at: null }],
         decisions_aggregate: { aggregate: { count: 1 } },
       } });
+      // The leaf groups read carries each group's first page.
       if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: [{
         key: { status: current.status, origin: current.origin, version__workflow_id: current.version?.workflow?.id,
           version__workflow__name: current.version?.workflow?.name },
         aggregate: { count: 1 },
+        ...(variables.with_rows ? { rows: [current] } : {}),
       }], totalCount: 1 } });
       if (/\bworkflow\s*\(/.test(query)) return jsonResponse({ data: { workflow: [current.version?.workflow], workflow_aggregate: { aggregate: { count: 1 } } } });
       const rows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];

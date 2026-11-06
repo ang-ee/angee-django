@@ -668,7 +668,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.13" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
     { name = "strawberry-django-aggregates", git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc" },
-    { name = "strawberry-django-hasura", git = "https://github.com/ang-ee/strawberry-django-hasura.git?rev=4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0" },
+    { name = "strawberry-django-hasura", specifier = ">=0.15,<0.16" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
     { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=091238ecd4ae07798ef12e9eb24281540da41ced" },
 ]
@@ -4589,13 +4589,17 @@ dependencies = [
 
 [[package]]
 name = "strawberry-django-hasura"
-version = "0.14.0"
-source = { git = "https://github.com/ang-ee/strawberry-django-hasura.git?rev=4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0#4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0" }
+version = "0.15.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-django-aggregates" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/01/3b/cb94a2bf9f1ceb27e325c6a6fd9e6bffcaf90f57a13231fde509af0c8cf2/strawberry_django_hasura-0.15.0.tar.gz", hash = "sha256:923ac3f808d2dd9ab3431623ecd4cd5719c86e2009228f874d6ef865186e66a9", size = 169865, upload-time = "2026-11-06T23:52:23.662Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/01/fb99d3dee80e22af942d787a0cb493d48c0e42d29891b1e0a9017f1a1c55/strawberry_django_hasura-0.15.0-py3-none-any.whl", hash = "sha256:d5b89c93d3f00d8fb03f9a3ec3d56c216c013faff2c37cf12e73621d6a6dfffc", size = 72733, upload-time = "2026-11-06T23:52:22.236Z" },
 ]
 
 [[package]]
