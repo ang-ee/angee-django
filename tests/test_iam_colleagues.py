@@ -155,20 +155,6 @@ def test_search_ordering_and_limit_are_user_collection_mechanics(composed_tables
     assert [row["username"] for row in _colleagues(actor, limit=1)] == ["alan"]
 
 
-@pytest.mark.django_db(transaction=True)
-def test_visible_person_from_public_id_uses_actor_scoped_queryset(composed_tables: None) -> None:
-    """Actions resolving a selected person cannot drift from the picker."""
-
-    del composed_tables
-    actor = User.objects.create_user(username="actor", email="actor@example.com")
-    visible = User.objects.create_user(username="visible", email="visible@example.com")
-    hidden = User.objects.create_user(username="hidden", email="hidden@example.com")
-    _grant_directory(actor)
-
-    assert User.objects.visible_person_from_public_id(actor, visible.public_id) == visible
-    assert User.objects.visible_person_from_public_id(actor, hidden.public_id) == hidden
-
-
 class IamDemoResourceLedger(Resource):
     """Concrete resource ledger for IAM demo resource-load tests."""
 

@@ -378,7 +378,6 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
 
     sqid_prefix = "wst_"
     container_field_name = "queue"
-    category_field_name = "category"
     locked_rows_label = "Triage and duplicate stages"
 
     class StageCategory(models.TextChoices):

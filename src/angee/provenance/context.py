@@ -257,14 +257,6 @@ def require_changeset(*, record: bool = False) -> ChangesetLike:
     return context
 
 
-def mark_changeset_failed() -> None:
-    """Record a handled failure on the open boundary; its changesets close as failed."""
-
-    boundary = _open_boundary()
-    if boundary is not None:
-        boundary.mark_failed()
-
-
 def discard_changeset_claim(instance: ChangesetLike) -> None:
     """Remove the current boundary row after a rolled-back claim insert."""
 

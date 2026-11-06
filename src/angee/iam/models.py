@@ -622,11 +622,6 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         return list(self.colleagues(actor).picker(search)[: bounded_limit(limit)])
 
-    def visible_person_from_public_id(self, actor: Any, public_id: str) -> UserT | None:
-        """Resolve one public user id against the same colleague rows as the picker."""
-
-        return instance_from_public_id(self.model, str(public_id), queryset=self.colleagues(actor).active_people())
-
     def viewable_people(
         self,
         actor: Any,
@@ -659,25 +654,6 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             queryset=self.view_as_queryset(actor),
         )
         return copy(candidate) if candidate is not None else None
-
-    def active_person_for_subject(self, subject: SubjectRef) -> UserT | None:
-        """Resolve an accountable human actor from a concrete canonical subject."""
-
-        if (
-            subject.subject_type != model_resource_type(self.model)
-            or subject.optional_relation
-            or subject.subject_id in {"", "*"}
-        ):
-            return None
-        try:
-            return (
-                self.system_context(reason="iam.subject.active_person")
-                .active_people()
-                .filter(pk=subject.subject_id)
-                .first()
-            )
-        except TypeError, ValueError, ValidationError:
-            return None
 
 
 class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel, concrete=True):

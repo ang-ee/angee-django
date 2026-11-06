@@ -64,12 +64,6 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
                 for row in self.values("source_addon").annotate(count=models.Count("id"))
             }
 
-    def ledger_page(self, *, limit: int) -> list[LedgerT]:
-        """Return up to ``limit`` ledger rows in the queryset's declared order."""
-
-        with system_context(reason="resources.ledger_page"):
-            return list(self.all()[:limit])
-
     def seeding(self, record: models.Model) -> Self:
         """Return the ledger rows whose target is ``record``, by its model label and public id."""
 
