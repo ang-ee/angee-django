@@ -194,9 +194,18 @@ class AngeeQuerySet(
     """QuerySet API shared by Angee source and runtime models."""
 
     def with_page_hook(self, prepare: Callable[[models.QuerySet[_ModelT], list[_ModelT]], None]) -> Self:
-        """Prepare a selected page once after Django materializes its model rows."""
+        """Prepare a selected page once after Django materializes its model rows.
 
-        class PageHookIterable(ModelIterable):
+        Hooks chain: a later hook runs after the hooks already attached to this
+        queryset, over the same materialized rows, so every owner that prepares
+        a projection keeps it when another owner adds its own.
+        """
+
+        base = self._iterable_class
+        if not issubclass(base, ModelIterable):
+            raise TypeError("with_page_hook() prepares model rows; this queryset yields another row shape.")
+
+        class PageHookIterable(base):  # type: ignore[valid-type,misc]
             def __iter__(self) -> Iterator[_ModelT]:
                 rows = list(super().__iter__())
                 prepare(cast(models.QuerySet[_ModelT], self.queryset), rows)
