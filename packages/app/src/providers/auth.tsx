@@ -306,10 +306,8 @@ export function createAngeeAuthProviderFromRequest(
  * endpoint to confirm session loss before logout. This matters because one
  * Refine auth provider serves data providers with independent credentials.
  * Client gates remain UX only; the server is the authorization boundary.
- * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
-export const IDENTITY_STALE_TIME = Number.POSITIVE_INFINITY;
+const IDENTITY_STALE_TIME = Number.POSITIVE_INFINITY;
 const IDENTITY_QUERY_SETTINGS = {
   staleTime: IDENTITY_STALE_TIME,
   retry: false,
@@ -399,11 +397,7 @@ export function useLogoutAction(): {
   };
 }
 
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function useUpdatePreferences(
+function useUpdatePreferences(
   options: UseUpdatePreferencesOptions = {},
 ): UseUpdatePreferencesResult {
   const [run, mutation] = useAuthoredMutation(
