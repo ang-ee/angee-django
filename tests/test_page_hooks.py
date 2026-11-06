@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 from django.db.models.query import ValuesIterable
-
 from rebac import system_context
+
 from tests.chatterdemo.models import ChatterDoc
 
 
