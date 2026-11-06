@@ -40,6 +40,7 @@ export interface NativeGroupedPageScope {
   key: string;
   value: unknown;
   identity: unknown;
+  legacyRowIdentity: (row: Row) => unknown;
   groupBy: { field: string; granularity?: string };
   parentWhere?: Record<string, unknown>;
   orderBy?: unknown;
@@ -54,7 +55,6 @@ export function useGroupedNativePages(
   scopes: readonly NativeGroupedPageScope[],
   fields: readonly string[],
   modelLabel: string | undefined,
-  rowValue: (row: Row) => unknown,
 ): ReadonlyMap<string, AngeeListBatchEntry> {
   const models = useCanonicalResourceModelLabels(modelLabel ? [modelLabel] : []);
   const targetKey = stableSerialize(target);
@@ -62,7 +62,7 @@ export function useGroupedNativePages(
   const fieldsKey = stableSerialize(fields);
   const prepared = React.useMemo(
     () => {
-      if (!target) return { requests: [], requestByScope: new Map<string, string>() };
+      if (!target) return { requests: [], requestByScope: new Map<string, { requestKey: string; index: number }>() };
       const byParent = new Map<string, NativeGroupedPageScope[]>();
       for (const scope of scopes) {
         const key = stableSerialize([scope.groupBy, scope.parentWhere, scope.orderBy]);
@@ -70,13 +70,13 @@ export function useGroupedNativePages(
         pages.push(scope);
         byParent.set(key, pages);
       }
-      const requestByScope = new Map<string, string>();
+      const requestByScope = new Map<string, { requestKey: string; index: number }>();
       const requests = [...byParent].flatMap(([parentKey, pages]) => {
         const chunks = [];
         for (let start = 0; start < pages.length; start += MAX_GROUPED_ROW_PAGES) {
           const chunk = pages.slice(start, start + MAX_GROUPED_ROW_PAGES);
           const key = stableSerialize([parentKey, start]);
-          for (const page of chunk) requestByScope.set(page.key, key);
+          for (const [index, page] of chunk.entries()) requestByScope.set(page.key, { requestKey: key, index });
           chunks.push({
             key,
             ...groupedListQueryMeta(target, fields, chunk[0]!.groupBy, chunk,
@@ -95,16 +95,22 @@ export function useGroupedNativePages(
     errorNotification: false,
   });
   return React.useMemo(() => new Map(scopes.map((scope) => {
-    const entry = results.get(prepared.requestByScope.get(scope.key) ?? "");
-    const rows = (entry?.data?.rows ?? []) as readonly Row[];
+    const request = prepared.requestByScope.get(scope.key);
+    const entry = results.get(request?.requestKey ?? "");
+    const pageResults = entry?.data?.rows as readonly (Row | { key: unknown; rows: readonly Row[] })[] | undefined;
+    const pageResult = request ? pageResults?.[request.index] : undefined;
+    // TRANSITION: remove after the grouped-rows page contract is on the stack
+    const rows = pageResults?.[0] && !Object.hasOwn(pageResults[0], "rows")
+      ? (pageResults as readonly Row[]).filter((row) => stableSerialize(scope.legacyRowIdentity(row)) === stableSerialize(scope.identity))
+      : ((pageResult as { rows: readonly Row[] } | undefined)?.rows ?? []);
     return [scope.key, {
-      rows: rows.filter((row) => stableSerialize(rowValue(row)) === stableSerialize(scope.identity)),
+      rows,
       total: scope.total,
       fetching: entry?.isFetching ?? true,
       error: entry?.error ?? null,
       refetch: () => { void entry?.refetch(); },
     }];
-  })), [scopesKey, prepared, results, rowValue]);
+  })), [scopesKey, prepared, results]);
 }
 
 export interface CollectionGroupRequest extends CollectionPageRequest {

@@ -40,7 +40,7 @@ afterEach(() => { cleanup(); clearClients(); });
 test("a base-filtered list reads its visible group while enum facets need no request", async () => {
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     const variables = meta!.gqlVariables as GroupVariables & Record<string, unknown>;
-    if ("pages" in variables) return { data: { data: { rows: [] } } };
+    if ("pages" in variables) return { data: { data: { rows: (variables.pages as { key: unknown }[]).map(({ key }) => ({ key, rows: [] })) } } };
     const key = variables.group_by[0]!.field.toLowerCase();
     return { data: { parts_groups: [{ key: { [key]: "BODY" }, aggregate: { count: 2 } }], totalCount: 1 } };
   });

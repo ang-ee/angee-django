@@ -124,10 +124,11 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
     if (error === "root") throw new Error("Channel groups unavailable");
     const leaves = leafRequests([[{ meta }]]);
     if (leaves.length > 0) {
-      const rows = leaves.flatMap((leaf) => {
-        const page = selectRows(leaf.where, leaf.offset, leaf.limit);
-        return page.rows;
-      });
+      const pages = (meta!.gqlVariables as { pages: { key: string | null }[] }).pages;
+      const rows = leaves.map((leaf, index) => ({
+        key: pages[index]!.key,
+        rows: selectRows(leaf.where, leaf.offset, leaf.limit).rows,
+      }));
       return { data: { data: { rows } } };
     }
     const groupVariables = meta!.gqlVariables as GroupVariables;

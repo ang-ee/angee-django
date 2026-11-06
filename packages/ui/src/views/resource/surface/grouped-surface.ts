@@ -312,12 +312,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       orderBy: query.toOrderBy(order),
     }));
   }, [source, query, leafScopes]);
-  const rowValue = React.useCallback((row: Row) => {
-    const group = rowGroupStack.at(-1);
-    return group ? query.group(group).identity(row) : null;
-  }, [query, rowGroupStack]);
   const nativeLeafResults = useGroupedNativePages(
-    source ? null : listTarget, leafRequests, requestedFields, dataResource?.modelLabel, rowValue,
+    source ? null : listTarget, leafRequests, requestedFields, dataResource?.modelLabel,
   );
   const authoredLeaves = useCollectionQueryBatch(source?.rows, leafScopes);
   const leafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(

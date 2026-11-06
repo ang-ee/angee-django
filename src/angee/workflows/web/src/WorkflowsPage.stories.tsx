@@ -63,9 +63,9 @@ export function CatalogueStory({ appearance, list = false, unavailable = false, 
       ], totalCount: 1 } });
       if (query.includes("query GroupedResourceList") && query.includes("workflowrun_grouped_rows")) {
         const pages = request.variables.pages as { key: string; offset: number; limit: number }[];
-        return jsonResponse({ data: { rows: pages.flatMap((page) => [runFixture()]
+        return jsonResponse({ data: { rows: pages.map((page) => ({ key: page.key, rows: [runFixture()]
           .filter((row) => row.status === page.key)
-          .slice(page.offset, page.offset + page.limit)) } });
+          .slice(page.offset, page.offset + page.limit) })) } });
       }
       if (query.includes("workflowrun")) return jsonResponse({ data: { workflowrun: [runFixture()], workflowrun_aggregate: { aggregate: { count: 1 } } } });
       if (query.includes("trigger")) return jsonResponse({ data: { trigger: [triggerFixture], trigger_aggregate: { aggregate: { count: 1 } } } });

@@ -15,6 +15,7 @@ test("grouped list pages share one document and retain independent pagination", 
   );
   const text = print(meta.document);
   expect(text).toContain("rows: workflow_runs_grouped_rows");
+  expect(text).toMatch(/key\s+rows \{\s+id\s+subject_model\s+subject_id\s+\}/);
   expect(text).not.toContain("workflow_runs_aggregate");
   expect(meta.variables).toMatchObject({
     group_by: { field: "STATUS" },

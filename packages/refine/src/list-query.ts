@@ -120,7 +120,8 @@ export function groupedListQueryMeta(
       $order_by: [${target.orderType}!]
     ) {
       rows: ${target.groupedRowsRoot}(group_by: $group_by, pages: $pages, where: $where, order_by: $order_by) {
-        ${selectionText(fields, {})}
+        key
+        rows { ${selectionText(fields, {})} }
       }
     }
   `);

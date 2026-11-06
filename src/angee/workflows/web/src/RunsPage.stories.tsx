@@ -147,10 +147,10 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
       if (query.includes("query GroupedResourceList") && query.includes("workflowrun_grouped_rows")) {
         const sourceRows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];
         const pages = variables.pages as { key: string; offset: number; limit: number }[];
-        return jsonResponse({ data: { rows: pages.flatMap((page) => sourceRows
+        return jsonResponse({ data: { rows: pages.map((page) => ({ key: page.key, rows: sourceRows
           .filter((row) => row.status === page.key)
           .slice(page.offset, page.offset + page.limit)
-          .map((row) => ({ ...row, subject_label: "Review notes" }))) } });
+          .map((row) => ({ ...row, subject_label: "Review notes" })) })) } });
       }
       if (/\bworkflow\s*\(/.test(query)) return jsonResponse({ data: { workflow: [current.version?.workflow], workflow_aggregate: { aggregate: { count: 1 } } } });
       const rows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];

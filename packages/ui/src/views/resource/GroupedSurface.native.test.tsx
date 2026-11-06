@@ -58,7 +58,7 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false, singleGrou
         return new Promise<{ data: { data: Record<string, unknown> } }>((resolve) => { resolvePage = resolve; });
       }
       return { data: { data: {
-        rows: [{ id: `page-${page}`, title: selected.key, status: "active" }],
+        rows: [{ key: selected.key, rows: [{ id: `page-${page}`, title: selected.key, status: "active" }] }],
       } } };
     }
     const variables = meta!.gqlVariables as { group_by: { field: string }[]; limit: number; offset: number };
@@ -101,7 +101,7 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false, singleGrou
     delay: (page: number) => { delayPage = page; },
     delayRoot: () => { rootGate = new Promise<void>((resolve) => { releaseRoot = resolve; }); },
     releaseRoot: () => { releaseRoot(); rootGate = null; },
-    release: () => resolvePage({ data: { data: { rows: [{ id: "obsolete", title: "Old filter row" }] } } }) };
+    release: () => resolvePage({ data: { data: { rows: [{ key: "Old filter row", rows: [{ id: "obsolete", title: "Old filter row" }] }] } } }) };
 }
 
 test("cached group keys let the grouped row read start while headers revalidate", async () => {
