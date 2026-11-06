@@ -22,15 +22,15 @@ design-system shape that declares intent and composes owners.
 | File or module | Owns | Reference |
 |---|---|---|
 | `web/src/index.tsx` (`defineBaseAddon`) | Routes, menus, icons, i18n bundle, forms, widgets, containers: the one greppable seam | `src/angee/tags/web/src/index.tsx:35-53` |
-| `packages/app/src/define-base-addon.ts` | `BaseAddonRoute`, `resourcePageRoutes` (list + `$id` pair, `console` layout), `defineBaseAddon` | `:20`, `:66`, `:162` |
-| `packages/app/src/define-addon.ts` | package metadata fields and `composeAddons` (fail-fast layering) | `:139`, `:295` |
+| `packages/app/src/define-base-addon.ts` | `BaseAddonRoute`, `resourcePageRoutes` (list + `$id` pair, `console` layout), `defineBaseAddon` | the named symbols |
+| `packages/app/src/define-addon.ts` | package metadata fields and `composeAddons` (fail-fast layering) | the named symbols |
 | `web/src/views/<Name>Page.tsx` | One routed page: declarations, container reads, domain glue only | `src/angee/tags/web/src/views/TagsPage.tsx:13` |
-| `packages/ui/src/views/resource/resource-list/public.tsx` | `ResourceList`: routed record navigation, inline/modal record, create | `:236` |
-| `packages/ui/src/views/resource/list-view/frame.tsx`, `RowsListView.tsx` | `ListView` (server collection, grouping, views, `rowActions`), `RowsListView` (bounded in-memory rows) | `:39`, `:115` |
-| `packages/ui/src/views/form/registered-form.ts` | `registerForm`: the complete form a page passes as `form=`; authored under `angee-forms` | `:22` |
-| `packages/ui/src/runtime/containers.ts`, `packages/app/src/containers.ts` | `ContainerChild`, `ContainerEntry`, `useContainer`; the compiler | `:93`, `:127`, `:432`; `:44` |
-| `web/src/i18n.ts`, `packages/ui/src/i18n/index.ts` | The addon namespace bundle and `createNamespaceT` | `src/angee/tags/web/src/i18n.ts`, `:45` |
-| `web/src/documents*.ts`, `packages/refine/src/dialect/authored-hooks.tsx` | Typed `graphql()` documents, `useAuthoredQuery`/`useAuthoredMutation` | `src/angee/decisions/web/src/documents.console.ts`, `:92`, `:213` |
+| `packages/ui/src/views/resource/resource-list/public.tsx` | `ResourceList`: routed record navigation, inline/modal record, create | the named symbols |
+| `packages/ui/src/views/resource/list-view/frame.tsx`, `RowsListView.tsx` | `ListView` (server collection, grouping, views, `rowActions`), `RowsListView` (bounded in-memory rows) | the named symbols |
+| `packages/ui/src/views/form/registered-form.ts` | `registerForm`: the complete form a page passes as `form=`; authored under `angee-forms` | the named symbols |
+| `packages/ui/src/runtime/containers.ts`, `packages/app/src/containers.ts` | `ContainerChild`, `ContainerEntry`, `useContainer`; the compiler | the named symbols |
+| `web/src/i18n.ts`, `packages/ui/src/i18n/index.ts` | The addon namespace bundle and `createNamespaceT` | `src/angee/tags/web/src/i18n.ts` |
+| `web/src/documents*.ts`, `packages/refine/src/dialect/authored-hooks.tsx` | Typed `graphql()` documents, `useAuthoredQuery`/`useAuthoredMutation` | `src/angee/decisions/web/src/documents.console.ts` |
 
 ## Reuse first
 
@@ -38,10 +38,10 @@ design-system shape that declares intent and composes owners.
 - `ResourceList` + `List`/`Form` own the resource page; `ListView` owns grouping, boards, search, `rowActions`, trash; `RowsListView` owns bounded in-memory rows ([rules](../../../docs/frontend/guidelines.md#rules)).
 - Record surfaces are `FormView` via `ResourceList`'s `Form` child or `form`; `RecordHeader`, `MetaGrid`, `Statusline`, `EmptyState`, `ErrorBanner`, `LoadingPanel` are the fragments ([ontology](../../../docs/frontend/guidelines.md#component-ontology)).
 - A tab, verb, header control, drawer or Links group is a child of a [framework container](../../../docs/frontend/guidelines.md#framework-containers); search `packages/ui/src/catalog.ts` before any new element.
-- Links: `useRouteHref` (`packages/ui/src/runtime/runtime.ts:474`), `useResourceRecordHref` (`:403`), `useRouteParam` (`packages/ui/src/views/resource/resource-routing.ts:153`).
-- Reads: the surfaces for resources; `graphql()` documents with `useAuthoredQuery` for bespoke operations; `useActionMutation` (`packages/refine/src/dialect/hooks.tsx:540`) and `useActionResultRun` (`packages/ui/src/views/resource/action-result-run.ts:52`) for verbs.
-- `useContainer` + `containerContents`/`ContainerOutlet` (`packages/ui/src/lib/container-outlet.tsx:17`) read contributions; no page registry.
-- Tests: `expectValidBaseAddon`, `containerChildren`, `ShellPageTestProviders` (`packages/app/src/testing.tsx:101,167,45`); stories: `RoutedRuntimeFixture` (`packages/storybook/src/stories/runtime-fixtures.tsx:211`).
+- Links: `useRouteHref` (`packages/ui/src/runtime/runtime.ts`), `useResourceRecordHref`, `useRouteParam` (`packages/ui/src/views/resource/resource-routing.ts`).
+- Reads: the surfaces for resources; `graphql()` documents with `useAuthoredQuery` for bespoke operations; `useActionMutation` (`packages/refine/src/dialect/hooks.tsx`) and `useActionResultRun` (`packages/ui/src/views/resource/action-result-run.ts`) for verbs.
+- `useContainer` + `containerContents`/`ContainerOutlet` (`packages/ui/src/lib/container-outlet.tsx`) read contributions; no page registry.
+- Tests: `expectValidBaseAddon`, `containerChildren`, `ShellPageTestProviders` (`packages/app/src/testing.tsx`); stories: `RoutedRuntimeFixture` (`packages/storybook/src/stories/runtime-fixtures.tsx`).
 
 ## Steps
 

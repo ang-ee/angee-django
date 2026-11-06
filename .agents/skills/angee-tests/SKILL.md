@@ -20,14 +20,14 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py:15-63`, `tests/settings.py:29-110`, `tests/conftest.py:645` |
-| `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`:17`), `composed_tables` (`:58`); `composed_permissions` (`permissions.py:41`) | module docstrings |
-| `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`), `execute_schema` (`:893`), `result_data` (`:913`) | `tests/test_tags.py:46-55` |
+| `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup`, `composed_tables`; `composed_permissions` (`permissions.py`) | module docstrings |
+| `tests/conftest.py` | actors and schema drivers: `create_user`, `create_platform_admin`, `vault_for`, `addon_schema`, `execute_schema`, `result_data` | `tests/test_tags.py:46-55` |
 | `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_tags.py`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | the composed-host subprocess that runs consumer `TransactionTestCase` modules in the framework suite | `tests/test_composed_note_workflow.py:17-40` |
-| `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon` (`:101`), `chromeSnapshotForRoute`, `TEST_SCHEMAS` (`:354`); `createUiTestProviders` (`ui:35`) | `src/angee/tags/web/src/index.test.ts` |
-| `packages/app/config/vitest.ts`, `src/angee/vitest.shared.ts` | `defineAngeeWebVitestConfig` (`:90`), `gqlAliasFor` (`:30`); the addon-tree `gqlAlias` | `src/angee/tags/web/vitest.config.ts` |
-| `packages/storybook/src/stories/runtime-fixtures.tsx`, `.storybook/main.mjs`, `scripts/catalog.test.mjs` | `storySchema` (`:111`), `jsonResponse` (`:100`), `RuntimeFixture` (`:144`); addon story discovery; token-drift scan over `src/` | `src/angee/workflows/web/src/TriggersPage.stories.tsx` |
-| `packages/e2e/src/` | `test`/`api` (`fixtures.ts:25`), `defineE2EConfig` (`config.ts:27`), `loginViaApi` (`auth.ts:23`), `roleStatePath` (`auth.ts:41`), `PageObject` (`pom.ts:9`) | `examples/e2e/` (`@angee-example/notes-e2e`) |
+| `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon`, `chromeSnapshotForRoute`, `TEST_SCHEMAS`; `createUiTestProviders` (`ui`) | `src/angee/tags/web/src/index.test.ts` |
+| `packages/app/config/vitest.ts`, `src/angee/vitest.shared.ts` | `defineAngeeWebVitestConfig`, `gqlAliasFor`; the addon-tree `gqlAlias` | `src/angee/tags/web/vitest.config.ts` |
+| `packages/storybook/src/stories/runtime-fixtures.tsx`, `.storybook/main.mjs`, `scripts/catalog.test.mjs` | `storySchema`, `jsonResponse`, `RuntimeFixture`; addon story discovery; token-drift scan over `src/` | `src/angee/workflows/web/src/TriggersPage.stories.tsx` |
+| `packages/e2e/src/` | `test`/`api` (`fixtures.ts`), `defineE2EConfig` (`config.ts`), `loginViaApi` (`auth.ts`), `roleStatePath` (`auth.ts`), `PageObject` (`pom.ts`) | `examples/e2e/` (`@angee-example/notes-e2e`) |
 
 ## Reuse first
 

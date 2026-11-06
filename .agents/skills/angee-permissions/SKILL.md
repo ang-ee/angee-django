@@ -20,20 +20,20 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 | `<addon>/permissions.zed` | Every definition the addon owns: relations, permissions, revision header | `examples/src/example/notes/permissions.zed:10` (`notes/note`), `:32-33` (ownership gate) |
 | `<addon>/permissions.extends.zed` | Relations, uniquely owned permission declarations and arms contributed to definitions owned elsewhere | `examples/src/example/notes/permissions.extends.zed`, `tests/extcontrib/permissions.extends.zed` |
 | `Model.Meta.rebac_resource_type` | Binds a model to its definition | `examples/src/example/notes/models.py:22` (class), `:67` (option) |
-| `angee.base.models.roles.role_anchor` | Table-less anchor model for a `<ns>/role` namespace | `src/angee/base/models/roles.py:14`, `src/angee/tags/models.py:341` |
-| `Model.rebac_grantable` + `AngeeModel.grant_record_access` | The direct-share surface and its permission policy | `src/angee/base/models/base.py:88`, `:160`, `:312` (`require_access`) |
-| `src/angee/base/build.py` | Fragment merge, field-gate ownership, emitted `runtime/permissions/<package>.zed`, effective schema artifact projection; AppConfig owns the schema declaration | `merged_schemas` `:202`, `_merge_definition` `:267`, `schema_path_wiring` `:394`, `composed_grants` `:494`, `field_gate_owners` `:509` |
-| `src/angee/base/permissions.py` | `declared_grants` `:23`, `effective_rebac_definition` `:50`, `subject_reaches_user` `:120`, `candidate_relationships` `:180` | whole file |
+| `angee.base.models.roles.role_anchor` | Table-less anchor model for a `<ns>/role` namespace | `src/angee/base/models/roles.py`, `src/angee/tags/models.py:341` |
+| `Model.rebac_grantable` + `AngeeModel.grant_record_access` | The direct-share surface and its permission policy | `src/angee/base/models/base.py`, `require_access` |
+| `src/angee/base/build.py` | Fragment merge, field-gate ownership, emitted `runtime/permissions/<package>.zed`, effective schema artifact projection; AppConfig owns the schema declaration | `merged_schemas`, `_merge_definition`, `PermissionIntegration`, `composed_grants`, `field_gate_owners` |
+| `src/angee/base/permissions.py` | `declared_grants`, `effective_rebac_definition`, `subject_reaches_user`, `candidate_relationships` | whole file |
 | `src/angee/base/checks.py` | `angee.E024` (no caveats) `:37`, `angee.E045` (`owner` relation needs `OwnerMixin`) `:71` | whole file |
-| `src/angee/base/models/ownership.py` | `angee.E022` `:134` and `angee.E027` `:171`: the `transfer` + `write__owner` gate every `OwnerMixin` model's definition carries | `OwnerMixin.check` `:91` |
+| `src/angee/base/models/ownership.py` | `angee.E022` `:134` and `angee.E027` `:171`: the `transfer` + `write__owner` gate every `OwnerMixin` model's definition carries | `OwnerMixin.check` |
 | `src/angee/iam/permissions.zed` | `auth/user` `:6`, `iam/kind` `:104`, `auth/group` `:110`, `angee/role` `:120` — the subjects every addon targets | whole file |
-| `src/angee/graphql/actions.py` | `authorized_action_target` `:240`, `authorized_permission_target` `:276` resolver preflight | `src/angee/graphql/trash.py:57` (`trash_target`) |
+| `src/angee/graphql/actions.py` | `authorized_action_target`, `authorized_permission_target` resolver preflight | `src/angee/graphql/trash.py` (`trash_target`) |
 | `src/angee/base/apps.py` | REBAC synchronization contribution to upstream provisioning | `BaseConfig.compose_provision`; explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting |
 
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
 `django-zed-rebac` (`docs/stack.md#backend`, line 76); `composed_tables`
-(`src/angee/base/testing/fixtures.py:58`) and `composed_permissions`
-(`src/angee/base/testing/permissions.py:41`) sync it into the test database.
+(`src/angee/base/testing/fixtures.py`) and `composed_permissions`
+(`src/angee/base/testing/permissions.py`) sync it into the test database.
 
 ## Reuse first
 
@@ -44,7 +44,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 - Row-dependent sharing: `rebac:field={"path":…,"filters":{…}}` (notes extends `storage/file`), `rebac:const={"target_id":"shared","filters":{…}}` + `shared_reader = authenticated` (money/rate, dashboards).
 - Live user facts: `rebac:attribute={"field":…,"value":…}` on `iam/kind`; compose `iam/kind:person#active_member`, never a copy.
 - Edge seams other addons already own: `tags/tag_assignment`, `storage/file_attachment`, `knowledge/record_binding`, `messaging/thread_attachment`, `projects/task`, `decisions/decision` — each declares `target_*`/`subject_*` arms for you to union into (notes extends file).
-- Native API: `.with_actor(user)`, `.as_user(user)`, `.with_action(perm)`, `.for_write()`, `.readable(field)`, `.sudo(reason=…)`, `.system_context(reason=…)` (rebac `managers.py:719-858`), `has_access` (rebac `mixins.py:1079`), `check_new` (rebac `preflight.py:147`); Angee adds `AngeeModel.require_access` (`base.py:312`) and `rebac_grantable` + `angee.graphql.sharing` for shares.
+- Native API: `.with_actor(user)`, `.as_user(user)`, `.with_action(perm)`, `.for_write()`, `.readable(field)`, `.sudo(reason=…)`, `.system_context(reason=…)` (rebac `managers.py:719-858`), `has_access` (rebac `mixins.py:1079`), `check_new` (rebac `preflight.py:147`); Angee adds `AngeeModel.require_access` (`base.py`) and `rebac_grantable` + `angee.graphql.sharing` for shares.
 
 ## Steps
 
@@ -121,12 +121,12 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
        permission read_granted = note_record->read   // the owner derives read from read_granted
    }
    ```
-   If your role must be elevated → union it into `iam/protected#member`; if it manages people → union into `auth/user#list`/account verbs (`tests/extcontrib/permissions.extends.zed`). If the model composes `TaggedModel` → declare the `target`-backed relation on `tags/tag_assignment` or `tags.E002` (`src/angee/tags/models.py:296`) fails startup. Collisions (reused relation or newly introduced permission names), unknown targets, and native-invalid references raise `SchemaExtensionError` (`build.py:98`).
+   If your role must be elevated → union it into `iam/protected#member`; if it manages people → union into `auth/user#list`/account verbs (`tests/extcontrib/permissions.extends.zed`). If the model composes `TaggedModel` → declare the `target`-backed relation on `tags/tag_assignment` or `tags.E002` (`src/angee/tags/models.py:296`) fails startup. Collisions (reused relation or newly introduced permission names), unknown targets, and native-invalid references raise `SchemaExtensionError` (`build.py`).
    **Owner rule:** the target addon owns the seam, the contributor owns its vocabulary and revision (`docs/backend/guidelines.md#rebac`, "A consumer addon contributes…", line 765, and the revision rule at line 788). The composer emits the merged `runtime/permissions/<package>.zed` (`docs/composer.md#flow`); do not hand-edit or commit it.
 
 5. **Declare direct sharing and field gates on the model.** `rebac_grantable` maps a stored (unbacked) relation to the permission that manages it; `angee.E015-E017` (`base.py:373-406`) validate it against the effective definition. Field gates are `read__<field>` / `write__<field>` permissions in the zed (`write__<field>` is enforced on update only; keep protected creation values out of insert inputs).
    - Gates in the owning zed: any permission. Gates in a fragment: only on a concrete column *your* package's donor (`extends` model) contributes to that target; `_id` attnames, base and many-to-many fields are refused and a second package cannot extend your gate (`_merge_definition`, `build.py:267-318`).
-   - A materialized MTI child inherits no `rebac_grantable` from its concrete parent (`build.py:474-476`, `composed_grants` `:494`); declare the child's own surface or it has none.
+   - A materialized MTI child inherits no `rebac_grantable` from its concrete parent (`build.py:474-476`, `composed_grants`); declare the child's own surface or it has none.
    - Gated fields project as `None` under the default `REBAC_FIELD_READ_MODE="redact"` (`src/angee/base/autoconfig.py:31`); they are never filterable or sortable. Filter on `queryset.readable(field)` (`src/angee/iam/models.py:227`); write targets load with `.for_write()`.
    **Owner rule:** `rebac_grantable` is the one share declaration; `grant_record_access`/`revoke_record_access`/`direct_record_access` and `validate_record_access_target/subject` (`base.py:160-301`) own the policy and GraphQL sharing dispatches to them (`docs/backend/guidelines.md#direct-record-access`).
 
@@ -136,7 +136,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
                                          narrow=lambda rows: rows.trash_targets())
    target.trash(reason=reason)                     # src/angee/graphql/trash.py:57-74
    ```
-   - Instance verbs: `self.require_access("write")`; unsaved rows: native `create` on `insert()`, or `candidate_relationships(instance, action).allows(subject, action)` (`permissions.py:180`) for a preflight on a row that is not the stored one.
+   - Instance verbs: `self.require_access("write")`; unsaved rows: native `create` on `insert()`, or `candidate_relationships(instance, action).allows(subject, action)` (`permissions.py`) for a preflight on a row that is not the stored one.
    - Framework-internal writes: `with system_context(reason="<owner>.<verb>")` only for named system work (`audit.py:28` delete retention, `ownership.py:305` transfer validation). `system_grant_record_access` requires that scope (`base.py:178`).
    - Two-phase destructive verbs check the public permission, then run the destructive work elevated, and test the deny branch.
    **Owner rule:** the resolver's budget is input, context, dispatch, result; the access decision lives in the zed and the model (`docs/guidelines.md#keep-policy-above-detail`, `docs/backend/guidelines.md#graphql-actor-and-write-contracts`). Cross-owner orchestration inside the verb is legitimate under `docs/guidelines.md#put-behavior-on-the-owning-object`; a second decision is not.
@@ -145,7 +145,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    - Ordinary sync after a zed edit on a running stack: `rebac sync` (`docs/checks.md#composition-and-schema`), then restart Django through the operator (`docs/howto/getstarted.md#restart-the-running-stack`). `rebac sync --check` is the drift gate; `rebac check` validates without writing.
    - Retirement of removed definitions, packages or backings: provision's sync step runs `--skip-checks sync --prune-stale --yes` after `migrate` and before `check` (`provision.py:58`, `docs/backend/guidelines.md#rebac`, line 825). Run the same shape, in that order, when a type was renamed or removed.
    - Deliberate overwrite: `--force-overwrite` (explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting) replaces locally managed live policy. Use it only when that replacement is the decision (`docs/backend/guidelines.md#rebac`, line 829); it is not part of an ordinary sync.
-   If `rebac.E009` names a backing you just renamed, removed or added → the stored schema, not the source, is stale, and the check blocks the very sync that would fix it: run the retirement shape above with `--skip-checks` (`migrate --skip-checks` first when migrations are pending), then `check`. `rebac.E009` is the library's backing check (`rebac/checks.py:321-331`); a role or anchor type it cannot resolve needs its `role_anchor` (`roles.py:25`).
+   If `rebac.E009` names a backing you just renamed, removed or added → the stored schema, not the source, is stale, and the check blocks the very sync that would fix it: run the retirement shape above with `--skip-checks` (`migrate --skip-checks` first when migrations are pending), then `check`. `rebac.E009` is the library's backing check (`rebac/checks.py:321-331`); a role or anchor type it cannot resolve needs its `role_anchor` (`roles.py`).
 
    **Owner rule:** sync, prune and overwrite are the library's command options; Angee adds only the merged-file emission and path wiring (`build.py:20-24`) and provision's step order (`provision.py:49`).
 
@@ -165,7 +165,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 - Caveated subjects or `with` contexts in any zed → `angee.E024` (`src/angee/base/checks.py:37`); use step 3.
 - A Python provider, `visible_to`, `is_superuser` branch or queryset filter as authorization → `docs/backend/guidelines.md#rebac` ("Visibility and access are REBAC-native, always", line 650).
 - Editing a framework addon's `permissions.zed` to name your role → `docs/backend/guidelines.md#rebac` (line 765); use `permissions.extends.zed`.
-- A fragment that declares a new non-gate permission → `_merge_definition` (`build.py:267`) raises. A `read` arm on a definition that owns `read_granted` (`messaging/thread`) bypasses its withholding → `docs/backend/guidelines.md#rebac` ("Permission fragments widen `read_granted`", line 503); union there.
+- A fragment that declares a new non-gate permission → `_merge_definition` (`build.py`) raises. A `read` arm on a definition that owns `read_granted` (`messaging/thread`) bypasses its withholding → `docs/backend/guidelines.md#rebac` ("Permission fragments widen `read_granted`", line 503); union there.
 - `#effective_member` inside a relation's allowed subjects → invalid schema; store the role and arrow (`docs/backend/guidelines.md#rebac`, "Relations constrain stored subjects", line 601).
 - Mirroring a column into tuples, or a remote backend → `docs/stack.md#backend` (local backend only).
 - A private share mutation, Django group M2M, or `auth.Permission` sync → `docs/backend/guidelines.md#rebac` ("Declare direct sharing once", line 553; "Membership has one store", line 609).

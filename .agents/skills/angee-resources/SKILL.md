@@ -19,26 +19,26 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 |---|---|---|
 | `<addon>/pyproject.toml` `[tool.angee.resources]` | which files load, their tier, `adopt`, `depends_on`, `kind`, `model`; `retired_models` | `src/angee/money/pyproject.toml:8-12`, `examples/src/example/notes/pyproject.toml:27-42` |
 | `<addon>/resources/<tier>/NNN_<label>.<model>.yaml` | the rows; the filename names the target model | `src/angee/tags/resources/demo/010_tags.tag.yaml` |
-| `src/angee/resources/entries.py`, `tiers.py` | manifest parsing, filename inference, dependency order, grant rows; the three tiers and their prerequisite order | `resource_manifest_for:97`, `retired_models_for:111`, `ResourceEntry:221`, `infer_model_label:406`, `EntryGraph.ordered:558`, `GrantRow:632`; `ResourceTier:11`, `with_prerequisites:32` |
-| `src/angee/resources/loader.py` | xref identity, header validation, adoption, catalogue-tier check, seeded transition state, ledger hash | `AngeeResource:56`, `after_init_instance:174`, `after_save_instance:205`, `_row_content_hash:398`, `_adoption_fields:522`, `_unique_adoption_field:666`, `_validate_headers:753`, `_validate_catalogue_tier:772`, `build_resource:827` |
-| `src/angee/resources/mixins.py` | `resource_class`, `catalogue`/`catalogue_tier(s)`, cooperative `after_resource_load`, check `angee.E014` | `ResourceLoadMixin:17`, `is_catalogue_model:48`, `check:67`, `after_resource_load:97` |
-| `src/angee/resources/models.py`, `managers.py` | the ledger `(source_addon, xref)`; validate/load/diff/`load_xref`/`resolve`; demo guard, exclusions, xref collisions, merge guard | `Resource:16`; `retired_seed_keys:106`, `seeded_record_merge_guard:121`, `ResourceManager:137`, `load_addons:221`, `load_xref:248`, `_check_load_tiers:318`, `_excluded_entry_keys:536`, `_check_xref_collisions:562` |
-| `src/angee/resources/grants.py`, `management/commands/resources.py` | `kind = "grants"` rows into REBAC tuples, idempotent by tuple key; the `resources validate\|load\|diff` command and tier selection | `materialize_grant_groups:61`, docstring `:1-12`; `Command:17` |
-| `src/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration:18`, `retired_primary_keys:38`; `DropGuardAutodetector:624` |
+| `src/angee/resources/entries.py`, `tiers.py` | manifest parsing, filename inference, dependency order, grant rows; the three tiers and their prerequisite order | `resource_manifest_for`, `retired_models_for`, `ResourceEntry`, `infer_model_label`, `EntryGraph.ordered`, `GrantRow`; `ResourceTier`, `with_prerequisites` |
+| `src/angee/resources/loader.py` | xref identity, header validation, adoption, catalogue-tier check, seeded transition state, ledger hash | `AngeeResource`, `after_init_instance`, `after_save_instance`, `_row_content_hash`, `_adoption_fields`, `_unique_adoption_field`, `_validate_headers`, `_validate_catalogue_tier`, `build_resource` |
+| `src/angee/resources/mixins.py` | `resource_class`, `catalogue`/`catalogue_tier(s)`, cooperative `after_resource_load`, check `angee.E014` | `ResourceLoadMixin`, `is_catalogue_model`, `check`, `after_resource_load` |
+| `src/angee/resources/models.py`, `managers.py` | the ledger `(source_addon, xref)`; validate/load/diff/`load_xref`/`resolve`; demo guard, exclusions, xref collisions, merge guard | `Resource`; `retired_seed_keys`, `seeded_record_merge_guard`, `ResourceManager`, `load_addons`, `load_xref`, `_check_load_tiers`, `_excluded_entry_keys`, `_check_xref_collisions` |
+| `src/angee/resources/grants.py`, `management/commands/resources.py` | `kind = "grants"` rows into REBAC tuples, idempotent by tuple key; the `resources validate\|load\|diff` command and tier selection | `materialize_grant_groups`, docstring `:1-12`; `Command` |
+| `src/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration`, `retired_primary_keys`; `DropGuardAutodetector` |
 
 ## Reuse first
 
 - The loader is django-import-export + tablib composed by `angee.resources` ([stack](../../../docs/stack.md#backend),
   `django-import-export` row): never a `loaddata` fixture, a row-creating command or a `post_migrate` seeder.
 - Identity is the ledger's `(source_addon, xref)`; relations name rows `<addon label or name>.<xref>`
-  (`widgets.py` `split_xref:288`, `resolve_xref:223`).
-- Runtime code reaches a seeded row with `Resource.objects.resolve(handle, model=…)` (`managers.py:146`)
-  or re-imports one with `load_xref` (`managers.py:248`); tests take the concrete ledger from
+  (`widgets.py` `split_xref`, `resolve_xref`).
+- Runtime code reaches a seeded row with `Resource.objects.resolve(handle, model=…)` (`managers.py`)
+  or re-imports one with `load_xref` (`managers.py`); tests take the concrete ledger from
   `angee.resources.testing` (`src/angee/resources/testing/__init__.py:1-12`).
-- Shared catalogues exist: `integrate.Vendor` (`src/angee/integrate/models.py:1464`), `money.Currency`
-  (`src/angee/money/models.py:80`); contribute rows with `adopt`.
-- Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`src/angee/workflows/resources.py:68,124`);
-  non-row declarations use `ResourceEntryKind` (`src/angee/resources/kinds.py:16`).
+- Shared catalogues exist: `integrate.Vendor` (`src/angee/integrate/models.py`), `money.Currency`
+  (`src/angee/money/models.py`); contribute rows with `adopt`.
+- Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`src/angee/workflows/resources.py`);
+  non-row declarations use `ResourceEntryKind` (`src/angee/resources/kinds.py`).
 
 ## Steps
 

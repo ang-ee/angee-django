@@ -17,25 +17,25 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
 
 | File or module | Owns | Reference |
 |---|---|---|
-| `src/angee/base/schemas/forms.py` | FormSpec projection of a Pydantic JSON Schema; annotation checks | `config_form_spec` :262, `check_form_annotations` :52 |
+| `src/angee/base/schemas/forms.py` | FormSpec projection of a Pydantic JSON Schema; annotation checks | `config_form_spec`, `check_form_annotations` |
 | `src/angee/base/schemas/form_spec.schema.json` | The one FormSpec contract (Python validator, generated TS types, standalone Ajv) | `$defs.Annotations`, `$defs.Relation` |
-| `src/angee/base/implementations.py` | `config_model` → `ImplChoice.config_schema` | `config_model` :46, `config_schema` :28, `choice()` :110 |
-| `src/angee/graphql/data/resource_fields.py` | Widget and currency classification from field declarations | `resource_field_widget` :118, `is_resource_field_widget` :54 |
-| `src/angee/graphql/schema.py` | Django `ValidationError` → `VALIDATION` extension with per-field messages | `_apply_validation_error` :200 |
-| `packages/ui/src/views/form/registered-form.ts` | Complete-form registration and lookup | `registerForm` :22, `RegisteredFormView` :50 |
-| `packages/ui/src/views/form/FormView.tsx`, `use-form-view-save.ts` | The form surface; native save, its invalidation and `expected_revision`; the custom-submit branch | `useFormViewSave` :187, revision detection :216-217, custom branch :475, native `expected_revision` :486-490 |
-| `packages/ui/src/views/form/validation-errors.ts` | `FormSubmitResult`; error decoding; React Hook Form binding | :27, `formSubmitError` :73, `applyFormErrors` :97 |
-| `packages/ui/src/views/form/form-spec*.ts`, `json-schema.ts` | FormSpec parse/deserialize; Ajv resolver; schema action args | `parseFormSpec` :13, `deserializeFormSpec` :78, `jsonSchemaActionArgs` :146 |
-| `packages/ui/src/widgets/types.ts`, `packages/metadata/src/fields.ts` | Widget contract; default widget per field metadata | `WidgetDefinition` :206, `defaultWidgetForModelField` :62 |
+| `src/angee/base/implementations.py` | `config_model` → `ImplChoice.config_schema` | `config_model`, `config_schema`, `choice()` |
+| `src/angee/graphql/data/resource_fields.py` | Widget and currency classification from field declarations | `resource_field_widget`, `is_resource_field_widget` |
+| `src/angee/graphql/schema.py` | Django `ValidationError` → `VALIDATION` extension with per-field messages | `_apply_validation_error` |
+| `packages/ui/src/views/form/registered-form.ts` | Complete-form registration and lookup | `registerForm`, `RegisteredFormView` |
+| `packages/ui/src/views/form/FormView.tsx`, `use-form-view-save.ts` | The form surface; native save, its invalidation and `expected_revision`; the custom-submit branch | `useFormViewSave`, revision detection :216-217, custom branch :475, native `expected_revision` :486-490 |
+| `packages/ui/src/views/form/validation-errors.ts` | `FormSubmitResult`; error decoding; React Hook Form binding | `formSubmitError`, `applyFormErrors` |
+| `packages/ui/src/views/form/form-spec*.ts`, `json-schema.ts` | FormSpec parse/deserialize; Ajv resolver; schema action args | `parseFormSpec`, `deserializeFormSpec`, `jsonSchemaActionArgs` |
+| `packages/ui/src/widgets/types.ts`, `packages/metadata/src/fields.ts` | Widget contract; default widget per field metadata | `WidgetDefinition`, `defaultWidgetForModelField` |
 
 ## Reuse first
 
 - `Form`, `Field`, `Group` (`packages/ui/src/views/page/`): read `FieldDescriptor`
-  (Field.tsx:18) and `GroupProps` (Group.tsx:9) before any control or branch.
+  (Field.tsx) and `GroupProps` (Group.tsx) before any control or branch.
 - `ResourceList form={…}`, `RegisteredFormView` and `useRelationForms`
-  (`views/relation/RelationRecordDialog.tsx:39`) all resolve the one registered form.
+  (`views/relation/RelationRecordDialog.tsx`) all resolve the one registered form.
 - The built-in widget registry (`packages/ui/src/widgets/index.ts`) before any new control.
-- Relation owners: `relationFieldInfo`/`relationListFieldInfo` (`views/resource/model-metadata-defaults.ts:61,114`),
+- Relation owners: `relationFieldInfo`/`relationListFieldInfo` (`views/resource/model-metadata-defaults.ts`),
   `RelationFieldWidget`, `RelationMultiFieldWidget`, `views/relation/relation-options.ts`.
 - Dialog and result owners: `MutationDialog` + `DescriptorFieldList`; `<Action args submit>` via `RecordActionBar`;
   `savedFormSubmitResult`, `formSubmitError`, `actionOutcomeSubmitResult`, `applyFormErrors`, `createJsonSchemaResolver`.
@@ -98,7 +98,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    `index.tsx` contributes `forms: { "tags.Tag": tagForm }` and the `"tags.tags#fields": {}`
    container; `TagsPage.tsx` passes `<ResourceList resource={TAG_MODEL} form={tagForm} placement="inline" routed>`.
    The component owns create/edit through `props.id`. **Owner rule:** one registration per
-   canonical model label; routes and pickers resolve it through `useFormOverride` (`packages/ui/src/runtime/runtime.ts:369`)
+   canonical model label; routes and pickers resolve it through `useFormOverride` (`packages/ui/src/runtime/runtime.ts`)
    ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Register a resource's complete form once").
 
 4. **Declare fields for a caller-specific form** (`examples/src/example/notes/web/src/NotePage.tsx`).
@@ -115,11 +115,11 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    </Form>
    ```
 
-   Omit `widget` for the metadata default (`defaultWidgetForModelField`, `packages/metadata/src/fields.ts:62`).
+   Omit `widget` for the metadata default (`defaultWidgetForModelField`, `packages/metadata/src/fields.ts`).
    Narrow, filter, branch and split create/edit through `FieldDescriptor` props (`relationResource`,
-   `filters`, `create={null}`, `showWhen`, `createOnly`/`editOnly`; Field.tsx:18).
+   `filters`, `create={null}`, `showWhen`, `createOnly`/`editOnly`; Field.tsx).
    **Owner rule:** the descriptor resolves its own widget (`fieldWidgetId`,
-   Field.tsx:103); a view never re-derives it ([owning object](../../../docs/guidelines.md#put-behavior-on-the-owning-object)).
+   Field.tsx); a view never re-derives it ([owning object](../../../docs/guidelines.md#put-behavior-on-the-owning-object)).
 
 5. **Build a widget** (`src/angee/money/web/src/widgets/money.tsx`). The value is
    the wire scalar (a Decimal string); `read` is required, `edit`/`cell` optional.
@@ -161,10 +161,10 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
        config_form_spec_json_fields = False   # True renders unsupported shapes through the json widget
    ```
 
-   The supported shapes and annotation keys are the owner's contract: `config_form_spec` (forms.py:262)
+   The supported shapes and annotation keys are the owner's contract: `config_form_spec` (forms.py)
    and `$defs.Annotations` in `form_spec.schema.json`; an unsupported shape fails unless
-   `config_form_spec_json_fields`. The UI resolves the spec with `useFormSpecFields` (form-spec.ts:89)
-   and `formSpecInitialValues` (:135).
+   `config_form_spec_json_fields`. The UI resolves the spec with `useFormSpecFields` (form-spec.ts)
+   and `formSpecInitialValues`.
    **Owner rule:** `parse_config` stays the validation owner; FormSpec is a projection, never a second
    schema ([backend rules](../../../docs/backend/guidelines.md#rules), "Pydantic declarations own implementation config defaults").
 
@@ -185,8 +185,8 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    read model changes ([form save contracts](../../../docs/frontend/guidelines.md#form-save-contracts)).
    A custom `submit` returns `savedFormSubmitResult` or `formSubmitError(error)` ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Submit owners return FormSubmitResult").
    On the backend raise Django `ValidationError({"field": "…"})` from `clean()` or the manager; the wire
-   mapping is `_apply_validation_error` (`src/angee/graphql/schema.py:200`) and `applyFormErrors` binds it. For stale-edit
-   protection compose `OptimisticLockMixin` (`base/models/locks.py:189`); the token contract is
+   mapping is `_apply_validation_error` (`src/angee/graphql/schema.py`) and `applyFormErrors` binds it. For stale-edit
+   protection compose `OptimisticLockMixin` (`base/models/locks.py`); the token contract is
    [write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) and `useFormViewSave` sends it on native saves only (:216-217, :486-490).
    **Owner rule:** `FormView` owns native saves, their invalidation and `expected_revision` (`use-form-view-save.ts:486-490`); a custom `submit` keeps its mutation owner's invalidation and revision handling (`:475`; [form save contracts](../../../docs/frontend/guidelines.md#form-save-contracts) "custom commands retain their mutation owner's invalidation"); a page adds neither.
 
@@ -195,7 +195,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
 - Hand-roll a form, detail or table in a page ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Use shared page, resource, form…").
 - Register a model's form twice or treat inline `fields` as a registration ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Register a resource's complete form once").
 - Add a widget registry or register at runtime; `widgets:`/`forms:` compose at build time ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Compose addon capabilities at build time").
-- Use a widget key the field never declared, or a custom key outside `namespace.addon.widgetName` ([custom resource widget keys](../../../docs/frontend/guidelines.md#rules); `is_resource_field_widget`, resource_fields.py:54).
+- Use a widget key the field never declared, or a custom key outside `namespace.addon.widgetName` ([custom resource widget keys](../../../docs/frontend/guidelines.md#rules); `is_resource_field_widget`, resource_fields.py).
 - Add another in-band form transport or hand-written `…Data`/`…Variables` types ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Submit owners return FormSubmitResult").
 - Decide permissions or business state in a form; `visibleWhen` reads projected admission ([keep policy above detail](../../../docs/guidelines.md#keep-policy-above-detail)).
 - Mirror form values, baselines or errors into local state beside React Hook Form ([frontend rules](../../../docs/frontend/guidelines.md#rules), "React state has one owner").
@@ -227,7 +227,7 @@ reports a conflict, and a `ValidationError` lands under its field.
 - An M2M is `many2many` chips writing an id array, never `tagInput` ([frontend rules](../../../docs/frontend/guidelines.md#rules), "A to-many relation").
 - A `FormView` create dialog under the console layout needs `<ControlBandProvider host={undefined}>` ([form pitfalls](references/pitfalls.md), "A FormView create dialog").
 - A `defaultValue`/`createDefaults` seed submits on create even when `readOnly`; use `createOnly` for visible-but-fixed ([form save contracts](../../../docs/frontend/guidelines.md#form-save-contracts), "A `createDefaults` seed").
-- A form in `forms:` is a component rendered by `RegisteredFormView`, so `use<Addon>T()` and `useContainer` work inside it (registered-form.ts:50; `TagForm.tsx:13-15`; [frontend rules](../../../docs/frontend/guidelines.md#rules), "Route every user-facing string").
+- A form in `forms:` is a component rendered by `RegisteredFormView`, so `use<Addon>T()` and `useContainer` work inside it (registered-form.ts; `TagForm.tsx:13-15`; [frontend rules](../../../docs/frontend/guidelines.md#rules), "Route every user-facing string").
 
 ## Read next
 
