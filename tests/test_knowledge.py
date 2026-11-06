@@ -9,7 +9,6 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.test import override_settings
 from rebac import (
     MissingActorError,
     PermissionDenied,
@@ -566,19 +565,9 @@ def test_markdown_save_rejects_a_concurrent_title_edit_with_native_page_revision
             )
         stored = MarkdownPage.objects.get(pk=page.pk)
         assert (stored.title, stored.body) == ("Concurrent title", "Original body")
-        class WriteRouter:
-            def db_for_read(self, model, **hints):
-                if model is MarkdownPage:
-                    raise AssertionError("A body write must select its write database before opening a transaction.")
-                return None
-
-            def db_for_write(self, model, **hints):
-                return "default"
-
-        with override_settings(DATABASE_ROUTERS=[WriteRouter()]):
-            saved = MarkdownPage.objects.write_body(
-                stored, "Accepted body", title="Accepted title", expected_hash=stored.body_hash,
-                expected_revision=stored.revision,
-            )
+        saved = MarkdownPage.objects.write_body(
+            stored, "Accepted body", title="Accepted title", expected_hash=stored.body_hash,
+            expected_revision=stored.revision,
+        )
         assert saved.revision == stored.revision + 1
         assert (saved.title, saved.body) == ("Accepted title", "Accepted body")

@@ -162,20 +162,34 @@ Use these owners instead of maintaining another contract in an addon:
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
   promote it to a model or manager method.
-- **Database routing:** a persisted row's database is `row._state.db`; bind a
-  manager for an unsaved or row-relative operation with
+- **Database routing:** one deployment router in `DATABASE_ROUTERS` owns which
+  database each model lives on (static placement). Angee adds no
+  operation-scoped database selection: side effects follow Django routing, not
+  the database of the row that produced them, and tests run on one database. A
+  persisted row's database is `row._state.db`; bind a manager for an unsaved or
+  row-relative operation with
   `Model._base_manager.db_manager(hints={"instance": row})` and use that
-  manager's `db`. Do not thread database aliases through Angee instance methods
-  or hooks. Use native relation access, `refresh_from_db` when deferred or stale
-  fields need reloading, and ordinary `atomic` and `on_commit` boundaries while
-  preserving locks and batching. A declared
-  read-only external import source may select its database explicitly.
-  Multi-database support extends Django with a router for static model placement;
-  add operation scoping only for a concrete need. REBAC-managed models and their
-  relationship store must share a database alias. The upstream
-  `rebac.checks.check_policy_models` check owns that routing rule; run native
-  checks for the aliases selected by the deployment rather than imposing a
-  second framework rule that requires the literal `default` alias.
+  manager's `db`. Django does not route transactions, commit hooks or raw
+  connections, so the owner that opens one names the routed alias: the row's
+  database, the manager's or queryset's `db`, or `router.db_for_write` for a
+  class-level owner, with `connections[alias]` for raw SQL on that alias. Pass
+  Django- and library-supplied aliases (signal `using`, `Collector`,
+  `save(using=...)` in an override, a hook's `using` argument) through unchanged;
+  do not thread aliases through Angee helpers, managers, hooks or tasks. Use
+  native relation access, `refresh_from_db` when deferred or stale fields need
+  reloading, and preserve locks and batching. A declared read-only external
+  import source may select its database explicitly.
+  [`test_static_placement.py`](../../tests/test_static_placement.py) is the one
+  router test: it places every model on a second alias and asserts that no query
+  reaches `default`. REBAC-managed models and their relationship store must
+  share a database alias. The upstream `rebac.checks.check_policy_models` check
+  owns that routing rule; run native checks for the aliases selected by the
+  deployment rather than imposing a second framework rule that requires the
+  literal `default` alias. Read replicas for permission data are unsupported: a
+  lagging replica serves grants already revoked on the primary. Before a replica
+  router is introduced, every REBAC model, the `contenttypes` and `auth` rows it
+  joins, and reads inside `transaction.atomic` must use the primary (recorded
+  debt: work-state `notes/2026-11-06-debt-replica-stale-grants.md`).
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
