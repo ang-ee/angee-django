@@ -284,7 +284,7 @@ jobs:
 {% endif %}
   compose:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
-    command: ["uv", "run", "--no-sync", "python", "manage.py", "compose"]
+    command: ["uv", "run", "--no-sync", "python", "manage.py", "compose", "--if-stale"]
     holds: *python-consumers
     depends_on: [py-sync]
 
@@ -431,10 +431,10 @@ services:
         && exec uv run --no-sync python manage.py serve --host 0.0.0.0 --port 8000 --forwarded-allow-ips "$$TRUSTED_PROXY_CIDR" --workers {% if effective_serve_mode == "production" %}{{ serve_workers }} --production{% else %}1{% endif %}{% endif %}
     ready:
       cmd: ["uv", "run", "--no-sync", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2).close()"]
-{% endif %}      interval: 5s
+{% endif %}      interval: 1s
       timeout: 3s
-      start_period: 30s
-      retries: 180
+      start_period: 1s
+      retries: 900
     after: [provision{% if stack_flavor == "instance" %}, caddy{% else %}{% if effective_serve_mode == "production" %}, frontend{% endif %}{% endif %}]
 
 {% if enable_celery %}
@@ -452,8 +452,9 @@ services:
   # The queue worker retains its own pool and concurrency policy.
   celery-{{ role }}:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
-    # Let Celery finish a warm shutdown, then bound native supervisor updates.
-    stop_grace_period: 30s
+    # Let Celery finish a warm shutdown, then bound native supervisor updates;
+    # a local worker that hangs on shutdown costs the whole restart its grace.
+    stop_grace_period: 10s
 {% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "celery", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
     after: [provision]
 {% else %}    command:
@@ -482,10 +483,10 @@ services:
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     ready:
       http: { port: {{ ui_port }}, path: / }
-      interval: 5s
+      interval: 1s
       timeout: 3s
-      start_period: 30s
-      retries: 180
+      start_period: 1s
+      retries: 900
     after: [django, operator, deps, compose, operator-schema]
 
   # Storybook component workshop (@angee/storybook): renders @angee/ui with mocked
@@ -525,10 +526,10 @@ services:
     # The slim node image has neither wget nor curl, so probe with its own runtime.
     ready:
       cmd: ["node", "-e", "require('net').connect({{ ui_port }}, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
-      interval: 5s
+      interval: 1s
       timeout: 3s
-      start_period: 30s
-      retries: 180
+      start_period: 1s
+      retries: 900
     after: [django, deps, compose, operator-schema]{% if ingress_domain_value == "localhost" %}
     ports:
       - "${ports.ui}:{{ ui_port }}"{% else %}
