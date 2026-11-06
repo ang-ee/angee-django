@@ -509,11 +509,6 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
         admitted.update(pk for pk in candidates if pk in touched and pk not in refused)
         return frozenset(admitted)
 
-    def admits_revert(self, changeset: Any) -> bool:
-        """Return whether one successful changeset belongs wholly to this document."""
-
-        return changeset.pk in self.admitted_reverts((changeset,))
-
     def revertable_changesets(self, changesets: Iterable[Any], *, actor: Any = None) -> frozenset[Any]:
         """Return admitted page keys when the reader may replay this record."""
 

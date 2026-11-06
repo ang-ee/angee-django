@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 
 import strawberry
 from django.contrib.auth.models import AnonymousUser
-from rebac import ObjectRef, PermissionDenied, current_actor
+from rebac import ObjectRef, current_actor
 from strawberry.permission import BasePermission
 from strawberry_django.auth.utils import get_current_user
 
@@ -38,15 +38,6 @@ def current_actor_has_role(role: ObjectRef) -> bool:
     """Return whether the ambient REBAC actor is an effective member of ``role``."""
 
     return subject_has_role(current_actor(), role)
-
-
-def require_platform_admin(info: strawberry.Info) -> Any:
-    """Return the session user or raise when it lacks platform-admin reach."""
-
-    user = get_current_user(info)
-    if not is_platform_admin(user):
-        raise PermissionDenied("Platform admin permission required.")
-    return user
 
 
 class RolePermission(BasePermission):

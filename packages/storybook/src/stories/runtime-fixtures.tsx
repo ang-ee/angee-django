@@ -1,5 +1,4 @@
 import {
-  ActiveGraphQLSchemaProvider,
   ModelMetadataProvider,
   defineAngeeSchemaMetadata,
   refineResourcesFromAngeeSchemaMetadata,
@@ -193,13 +192,11 @@ export function RuntimeFixture({
           options={{ syncWithLocation, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
         >
           <OperationDocumentsProvider documents={operationDocuments}>
-            <ActiveGraphQLSchemaProvider schema={activeSchema}>
-              <ModelMetadataProvider metadata={fieldMetadata}>
-                <QueryStateAdapter>
-                  <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
-                </QueryStateAdapter>
-              </ModelMetadataProvider>
-            </ActiveGraphQLSchemaProvider>
+            <ModelMetadataProvider metadata={fieldMetadata}>
+              <QueryStateAdapter>
+                <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
+              </QueryStateAdapter>
+            </ModelMetadataProvider>
           </OperationDocumentsProvider>
         </Refine>
       </AppearanceProvider>

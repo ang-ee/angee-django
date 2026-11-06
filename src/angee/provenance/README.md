@@ -85,9 +85,9 @@ its normal outbox/precondition policy.
 first (`RecordHistoryType { total, entries: [HistoryEntryType!]! }`), resolved through the record's own
 `read` gate: a hidden or unknown record reads as `null`, and a model without
 native history or a REBAC resource type is refused. `HistoryAttribution` is the
-shared interface for detailed entries and the compact `HistorySummaryType` lines
-used by Activity; the web `HistoryEntrySummary` component renders that compact
-shape. Each `HistoryEntryType` carries the changeset's attribution (`actor` as
+attribution interface `HistoryEntryType` implements; the web
+`HistoryEntrySummaryFields` fragment selects it. Each `HistoryEntryType` carries
+the changeset's attribution (`actor` as
 the public SubjectRef, `actor_model`/`actor_id` as the same public reference,
 `source_kind`), `action`, `activity`, `change_reason`,
 times, `outcome`, the field deltas simple-history's `diff_against` computes

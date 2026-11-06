@@ -461,7 +461,7 @@ def _message_search_query(term: str) -> models.Q:
     Titles need no arm of their own: a ``TITLE`` part's text is fragment text like
     any body paragraph, so ``parts__fragment__text`` covers subjects too. The
     substring arms serve the record-scoped chatter search (bounded by the record
-    gate); the corpus-wide fast path is :meth:`MessageQuerySet.searching_fulltext`.
+    gate).
     """
 
     return (
@@ -1570,25 +1570,6 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         removed, _ = self.model._base_manager.filter(pk__in=revoked).delete()
         return removed
 
-    def subjects_for_record(self, record: Any, *, role: str = "chatter", limit: int = 100) -> list[SubjectRef]:
-        """List a bounded panel roster of human account follower subjects."""
-
-        attachment = _record_attachment(record, role=role)
-        if attachment is None:
-            return []
-        people = (
-            apps.get_model("parties", "Person")
-            ._base_manager.filter(
-                pk__in=self.model._base_manager.filter(
-                    thread_id__in=attachment.thread.member_threads().values("pk"),
-                ).values("party_id"),
-                user__kind="person",
-            )
-            .select_related("user")
-            .order_by("pk")[:limit]
-        )
-        return [to_subject_ref(person.user) for person in people]
-
     def for_record(self, record: Any, *, role: str = "chatter") -> Any:
         """Return followers for ``record`` and ``role``."""
 
@@ -2693,17 +2674,6 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         values = [external_id for external_id in external_ids if external_id]
         digests = [hashlib.md5(value.encode("utf-8")).hexdigest() for value in values]
         return _external_id_annotated(self).filter(_eid_digest__in=digests, external_id__in=values)
-
-    def searching_fulltext(self, term: str) -> Self:
-        """Return messages whose fragments full-text match ``term`` — the corpus-scale path.
-
-        Rides the fragment GIN vector, so titles and bodies match through one index
-        that holds each unique text once; use this for inbox-wide search where the
-        substring predicates of :meth:`searching` would scan.
-        """
-
-        query = apps.get_model("messaging", "Fragment").objects.search_query(term)
-        return self.filter(parts__fragment__search=query)
 
     def involving_parties(self, parties: Any) -> Self:
         """Return messages any of ``parties``' resolved handles participated in.

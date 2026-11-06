@@ -528,11 +528,7 @@ function scopesApp(item: ChromeMenuNode): boolean {
   return item.isApp || item.flatten === true;
 }
 
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function buildMenuTree(
+function buildMenuTree(
   items: readonly ChromeMenuItem[],
 ): MenuTree {
   const byId = new Map<string, ChromeMenuNode>();

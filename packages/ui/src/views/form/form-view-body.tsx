@@ -347,7 +347,7 @@ export interface FormViewLineProps {
 }
 
 /** The form's editable lines bound to its draft: in a declared `lines` section or their trailing pane. */
-export function FormViewLines({
+function FormViewLines({
   surface,
   linePrimaryFields,
   lineFields,

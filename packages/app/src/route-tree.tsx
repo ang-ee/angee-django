@@ -1,5 +1,4 @@
 import {
-  ActiveGraphQLSchemaProvider,
   ModelMetadataProvider,
   schemaFieldMetadataWithVocabulary,
   type SchemaFieldMetadata,
@@ -191,16 +190,14 @@ function RefineLayoutRoute({
     </Chrome>
   );
   return (
-    <ActiveGraphQLSchemaProvider schema={schemaName}>
-      <ActiveDataProviderNameProvider name={schemaName}>
-        <ModelMetadataProvider metadata={metadata}>
-          {providers.reduceRight<ReactNode>(
-            (children, provider) => createElement(provider.component, { key: provider.id, children }),
-            body,
-          )}
-        </ModelMetadataProvider>
-      </ActiveDataProviderNameProvider>
-    </ActiveGraphQLSchemaProvider>
+    <ActiveDataProviderNameProvider name={schemaName}>
+      <ModelMetadataProvider metadata={metadata}>
+        {providers.reduceRight<ReactNode>(
+          (children, provider) => createElement(provider.component, { key: provider.id, children }),
+          body,
+        )}
+      </ModelMetadataProvider>
+    </ActiveDataProviderNameProvider>
   );
 }
 

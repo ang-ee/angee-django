@@ -37,7 +37,7 @@ import { enumValueLabel, statusLabel } from "../../lib/labels";
 import { isTone, type Tone } from "../../lib/tones";
 import { useStatusTone } from "../../widgets/use-status-tone";
 
-export const RELATION_OPTION_LIMIT = 200;
+const RELATION_OPTION_LIMIT = 200;
 
 export interface RelationOptionsConfig {
   searchText?: string;
@@ -381,11 +381,7 @@ export function relationSelectedOption(
   return { value: id, label: relationOptionLabel(row, labelField, id), ...relationOptionColor(row, colorField) };
 }
 
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function relationOptionsFromRows(
+function relationOptionsFromRows(
   rows: readonly Row[],
   labelField: string,
   config: Pick<RelationOptionsConfig, "sort"> & {
