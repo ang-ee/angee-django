@@ -48,6 +48,7 @@ from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import (
     SchemaAddon,
+    addon_schema,
     execute_schema,
     result_data,
 )
@@ -1091,6 +1092,38 @@ def test_hasura_relation_axis_has_one_server_identity_and_drill() -> None:
     axis = hasura_query_axes(ResourceChild, ("parent",), ("parent",))[0]
     assert axis.server == DataQueryServerAxis(input="PARENT", key="parent_id")
     assert axis.drill == DataQueryDrill(kind="identity", field="parent", value_key="parent_id")
+
+
+def test_public_schema_requires_an_exposed_relation_drill_identity() -> None:
+    @strawberry_django.type(ResourceChild)
+    class ResourceChildWithoutParentType(ProtectedNode):
+        name: auto
+
+    resource = hasura_model_resource(
+        ResourceChildWithoutParentType,
+        model=ResourceChild,
+        name="children_without_parent",
+        filterable=["id", "parent", "name"],
+        sortable=["name"],
+        aggregatable=["id"],
+        groupable=["parent", "name"],
+        insert=False,
+        update=False,
+        delete=False,
+        get_queryset=lambda info: ResourceChild.objects.all(),
+    )
+    schemas = {"public": {"query": [resource.query], "types": [ResourceChildWithoutParentType, *resource.types]}}
+
+    with pytest.raises(ImproperlyConfigured) as error:
+        GraphQLSchemas([SchemaAddon(schemas)]).build("public")
+    assert "Relation group axes ['parent'] have a drill but no selectable row identity" in str(error.value)
+    assert "ResourceChildWithoutParentType" in str(error.value)
+    assert "expose the related row's public ID or remove the drill" in str(error.value)
+
+    partial = addon_schema(schemas, "public")
+    axes = partial.angee_resources[0].query.axes
+    assert axes["parent"].drill is None
+    assert axes["name"].drill is not None
 
 
 def test_hasura_model_resource_groups_json_path_axes() -> None:

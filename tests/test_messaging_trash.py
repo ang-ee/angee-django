@@ -225,10 +225,11 @@ def _console_schema() -> Any:
     """Build the messaging console schema with the shared record verbs."""
 
     modules = (iam_schema, integrate_schema, parties_schema, messaging_schema, records)
+    # An addon-only build: donor addons are left out, so it declares itself partial.
     return GraphQLSchemas([
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
         for module in modules
-    ]).build("console")
+    ], partial_schema=True).build("console")
 
 
 _COMMENTS = ("Off topic remark", "Useful remark")

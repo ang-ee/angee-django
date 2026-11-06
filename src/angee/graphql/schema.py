@@ -327,10 +327,11 @@ class GraphQLSchemas:
 
     _discovered: ClassVar[GraphQLSchemas | None] = None
 
-    def __init__(self, addons: Iterable[AppConfig]) -> None:
-        """Store addon configs in deterministic discovery order."""
+    def __init__(self, addons: Iterable[AppConfig], *, partial_schema: bool = False) -> None:
+        """Store addon configs; only explicitly partial builds may omit donor fields."""
 
         self.addons = tuple(addons)
+        self.partial_schema = partial_schema
         self._builds: dict[str, strawberry.Schema] = {}
         self._build_lock = threading.RLock()
 
@@ -493,6 +494,7 @@ class GraphQLSchemas:
         resources = finalize_data_resources(
             schema._schema,
             (*parts.query, *parts.mutation, *parts.subscription),
+            partial_schema=self.partial_schema,
         )
         self._attach_schema_metadata(schema, name=name, resources=resources)
         return schema

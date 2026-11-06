@@ -163,7 +163,8 @@ def _schema() -> Any:
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
         for module in (iam_schema, integrate_schema, parties_schema, messaging_schema, imap_schema)
     ]
-    return GraphQLSchemas(addons).build("console")
+    # An addon-only build: donor addons are left out, so it declares itself partial.
+    return GraphQLSchemas(addons, partial_schema=True).build("console")
 
 
 def test_update_imap_channel_credential_replaces_the_login_in_place(
