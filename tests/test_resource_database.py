@@ -62,7 +62,7 @@ with schema_changes():
 with system_context(reason='tests.resources.load'):
     ledger = Resource.objects
     owner = apps.get_app_config('fixture_resources')
-    call_command('resources', 'validate', 'master', database='default', stdout=StringIO())
+    call_command('resources', 'validate', 'master', stdout=StringIO())
     assert not Resource._base_manager.exists()
     assert not ContentTypeRow.objects.exists()
     first = ledger.load_addons((owner,), tiers=['master'])

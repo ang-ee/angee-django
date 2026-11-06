@@ -51,6 +51,8 @@ class _Application:
         mount_owners: dict[str, str] = {}
         protocol_owners = {"http": "Django HTTP fallback", "lifespan": "Angee server lifespan"}
         for config, module in addon_modules("asgi"):
+            if config.name == __package__:
+                continue
             for prefix, handler in addon_contribution(module, "http_mounts"):
                 if (
                     not isinstance(prefix, str)

@@ -173,8 +173,12 @@ Use these owners instead of maintaining another contract in an addon:
   connections. The target contract is that the owner that opens one names the
   routed alias: the row's database, the manager's or queryset's `db`, or
   `router.db_for_write` for a class-level owner, with `connections[alias]` for
-  raw SQL on that alias. It is not implemented yet: the remaining bare
-  `transaction.atomic()` sites are recorded debt and are not placement-safe. Pass
+  raw SQL on that alias. It is not implemented yet: owners that open
+  `transaction.atomic()` or `transaction.on_commit` without an alias, or run raw
+  SQL on `django.db.connection`, are recorded debt and not placement-safe (274
+  bare `transaction.atomic()` sites in `src/`, for example
+  `src/angee/base/models/transitions.py:300,641`, `src/angee/jobs/enqueue.py:39`,
+  `src/angee/workflows/managers.py:1242-1255` and `src/angee/posts/models.py:450`). Pass
   Django- and library-supplied aliases (signal `using`, `Collector`,
   `save(using=...)` in an override, a hook's `using` argument) through unchanged;
   do not thread aliases through Angee helpers, managers, hooks or tasks. Use

@@ -1810,10 +1810,11 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         user: Any = None,
         user_id: Any = None,
         role: str = "chatter",
+        attachment: ThreadAttachment | None = None,
     ) -> int:
         """Return ``user``'s unread message count on ``record``'s chatter thread."""
 
-        attachment = _record_attachment(record, role=role)
+        attachment = _record_attachment(record, role=role, attachment=attachment)
         if attachment is None:
             return 0
         return int(self.unread_messages(attachment.thread, party=party, user=user, user_id=user_id).count())
@@ -2037,13 +2038,14 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         user: Any = None,
         user_id: Any = None,
         role: str = "chatter",
+        attachment: ThreadAttachment | None = None,
     ) -> Any:
         """Return delivery rows for ``user`` on ``record`` and ``role``."""
 
         resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
         if resolved_user_id is None:
             return self.none()
-        attachment = _record_attachment(record, role=role)
+        attachment = _record_attachment(record, role=role, attachment=attachment)
         if attachment is None:
             return self.none()
         # Notification bookkeeping bypasses per-row REBAC: the record-level gate has
@@ -2065,13 +2067,14 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         user: Any = None,
         user_id: Any = None,
         role: str = "chatter",
+        attachment: ThreadAttachment | None = None,
     ) -> int:
         """Return the delivery-error count authored by ``user`` on ``record``."""
 
         resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
         if resolved_user_id is None:
             return 0
-        attachment = _record_attachment(record, role=role)
+        attachment = _record_attachment(record, role=role, attachment=attachment)
         if attachment is None:
             return 0
         return int(
@@ -2277,16 +2280,22 @@ def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type:
         )
 
 
-def _record_attachment(record: Any, *, role: str = "chatter") -> ThreadAttachment | None:
+def _record_attachment(
+    record: Any, *, role: str = "chatter", attachment: ThreadAttachment | None = None,
+) -> ThreadAttachment | None:
     """Return the chatter attachment edge for ``record`` via its owning manager.
 
     The resolution logic (content-type lookup, ``select_related`` on the thread,
     unscoped read) lives once on :meth:`ThreadAttachmentManager.for_record`; the
-    follower and notification managers resolve their bookkeeping edge through
-    :meth:`ThreadAttachmentManager.readable_for_record`, so a role other than the
-    record's own chatter also requires the thread's read.
+    message, follower and notification managers resolve their bookkeeping edge
+    through :meth:`ThreadAttachmentManager.readable_for_record`, so a role other
+    than the record's own chatter also requires the thread's read. A request that
+    already resolved that edge for ``record`` and ``role`` passes it as
+    ``attachment`` instead of resolving it again.
     """
 
+    if attachment is not None:
+        return attachment
     return apps.get_model("messaging", "ThreadAttachment").objects.readable_for_record(record, role=role)
 
 
@@ -3339,15 +3348,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         search: str = "",
         message_types: tuple[str, ...] = (),
         trashed: bool = False,
+        attachment: ThreadAttachment | None = None,
     ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
         """The record-gated, hydrated message scope shared by transcript windows."""
 
         rows = self.db_manager(hints={"instance": record}).all()
         using = rows.db
-        attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        attachment = attachment_model.objects.db_manager(hints={"instance": record}).readable_for_record(
-            record, role=role,
-        )
+        attachment = _record_attachment(record, role=role, attachment=attachment)
         if attachment is None:
             return rows.none().annotate(_order_at=self.chronological_time())
         # Chatter reads bypass per-row REBAC: the record-level gate (and, for any other
@@ -3403,6 +3410,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         around: Any | None = None,
         message_types: tuple[str, ...] = (),
         trashed: bool = False,
+        attachment: ThreadAttachment | None = None,
     ) -> tuple[list[Any], int]:
         """Return fetched chatter messages for a record, optionally search-filtered.
 
@@ -3412,7 +3420,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         limit = max(1, min(int(limit or 50), 200))
         queryset = self.record_scope(
-            record, role=role, search=search, message_types=message_types, trashed=trashed,
+            record, role=role, search=search, message_types=message_types, trashed=trashed, attachment=attachment,
         )
         count = int(queryset.count())
         # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
