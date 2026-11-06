@@ -71,7 +71,10 @@ class DataQueryValueMap:
 
 @dataclass(frozen=True, slots=True)
 class DataQueryDrill:
-    """An executable bucket predicate; absence means a summary-only axis.
+    """An executable bucket predicate; only an extraction part may have none.
+
+    A declared server group axis without an executable drill fails the schema
+    build (``ResourceQueryProjection.drill``).
 
     JSON path nulls are values, whereas SQL null buckets use ``isNull``. A
     range is half-open and its boundaries come from the aggregate owner.
