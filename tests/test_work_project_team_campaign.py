@@ -82,7 +82,7 @@ def test_project_roster_hides_seat_identity_without_membership_read(team_case):
     assert hidden.errors is None
     people = hidden.data["project_manager_roster"]["people"]
     assert people and all(person["label"] for person in people)
-    assert all(person["subject"] == "" and person["seat_id"] is None and not person["removable"] for person in people)
+    assert all(person["subject"] is None and person["seat_id"] is None and not person["removable"] for person in people)
 
     team_reader = users["owner"]
     assert team.with_actor(team_reader).has_access("read")

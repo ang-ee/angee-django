@@ -281,7 +281,7 @@ def restore_task(info: strawberry.Info, task: PublicID, expected_revision: int) 
 class ProjectManagerPersonType:
     """One account holding the project's team moderator seat."""
 
-    subject: str
+    subject: str | None
     label: str
     seat_id: PublicID | None
     removable: bool
@@ -379,7 +379,7 @@ class WorkPeopleQuery:
             }
         return ProjectManagerRosterType(offered=offered, people=[
             ProjectManagerPersonType(
-                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))) if seat.can_read else "",
+                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))) if seat.can_read else None,
                 label=user_label(people[seat.party_id]),
                 seat_id=seat.sqid if seat.can_read else None,
                 removable=offered and seat.can_read,
