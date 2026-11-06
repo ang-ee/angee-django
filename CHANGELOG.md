@@ -24,6 +24,10 @@ live in code docstrings.
   REBAC's batched field visibility: one statement per distinct
   `read__<field>` permission instead of one point check per field. A
   depth-uncertain field is redacted instead of raising.
+- Statement-count pins follow 0.31's inline compilation: a scoped read is its
+  revision witness plus one statement, proposal and round lists drop from up
+  to 149 and 43 policy reads to 4, and a recursive scope is one larger
+  statement whose size no longer grows with the rows.
 
 ## Unreleased — jj workspace slots in the templates
 
