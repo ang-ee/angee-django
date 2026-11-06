@@ -26,6 +26,20 @@ const currentUser = {
 };
 
 describe("Angee app auth provider", () => {
+  test("route checks reuse the resolved session while an invalidated observer refreshes it", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const request = vi.fn(async () => ({ current_user: currentUser }));
+    const identityRequest = vi.fn(async () => ({ current_user: currentUser, real_user: currentUser }));
+    const provider = createAngeeAuthProviderFromRequest(request as never, { queryClient, identityRequest: identityRequest as never });
+
+    await queryClient.ensureQueryData(identityQueryOptions(provider, queryClient));
+    await queryClient.invalidateQueries({ queryKey: identityQueryOptions(provider).queryKey, refetchType: "none" });
+    await provider.check();
+    await provider.getPermissions?.();
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(identityRequest).toHaveBeenCalledOnce();
+  });
   test("console IAM supplies the viewed and real identity without enumerating preview candidates", async () => {
     const viewed = { ...currentUser, id: "person-2", username: "grace", firstName: "Grace", lastName: "Hopper", roleRefs: [] };
     const identityRequest = vi.fn(async (document) => {

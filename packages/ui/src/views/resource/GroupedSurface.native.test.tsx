@@ -34,7 +34,7 @@ const { Provider, clients, clearClients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failedRoot?: boolean; page?: number; summaryOnly?: boolean } = {}) {
+function fixture({ failedRoot = false, page = 1, summaryOnly = false, singleGroup = false }: { failedRoot?: boolean; page?: number; summaryOnly?: boolean; singleGroup?: boolean } = {}) {
   const activeResource = summaryOnly ? { ...resource, query: { ...contract, axes: { status: {
     ...contract.axes.status!, identityPath: null, paths: [], drill: null,
   } } } } : resource;
@@ -44,6 +44,8 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   let surface!: GroupedResourceViewSurface<Row>;
   let show!: React.Dispatch<React.SetStateAction<boolean>>;
   let delayPage: number | null = null;
+  let rootGate: Promise<void> | null = null;
+  let releaseRoot = () => {};
   let rowTotal = 120;
   let resolvePage!: (value: { data: { data: Record<string, unknown> } }) => void;
   const lifecycle = { mounts: 0, unmounts: 0 };
@@ -61,6 +63,7 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
     }
     const variables = meta!.gqlVariables as { group_by: { field: string }[]; limit: number; offset: number };
     const field = variables.group_by[0]!.field;
+    if (field === "status" && rootGate) await rootGate;
     if (failedRoot && field === "status") throw new Error("Group query unavailable");
     return { data: { notes_groups: [{ key: { [field]: field === "status" ? "active" : `Title ${variables.offset}` },
       aggregate: { count: rowTotal } }], totalCount: field === "status" ? 1 : 130 } };
@@ -83,7 +86,7 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   render(
     <Provider metadata={activeMetadata} dataProvider={{ custom }}>
       <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
-        <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ ...initialState, page, ...(summaryOnly ? { groupStack: [{ field: "status" }] } : {}) }}><Parent /></ResourceViewProvider>
+        <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ ...initialState, page, ...((summaryOnly || singleGroup) ? { groupStack: [{ field: "status" }] } : {}) }}><Parent /></ResourceViewProvider>
       </OperationDocumentsProvider>
     </Provider>,
   );
@@ -96,8 +99,27 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   return { get view() { return view; }, get surface() { return surface; }, header, show: (visible: boolean) => show(visible),
     custom, leafQueries, groupQueries, lifecycle, refreshCount: async (count: number) => { rowTotal = count; await client.invalidateQueries(); },
     delay: (page: number) => { delayPage = page; },
+    delayRoot: () => { rootGate = new Promise<void>((resolve) => { releaseRoot = resolve; }); },
+    releaseRoot: () => { releaseRoot(); rootGate = null; },
     release: () => resolvePage({ data: { data: { rows: [{ id: "obsolete", title: "Old filter row" }] } } }) };
 }
+
+test("cached group keys let the grouped row read start while headers revalidate", async () => {
+  const f = fixture({ singleGroup: true });
+  await waitFor(() => expect(f.leafQueries()).toHaveLength(1));
+  act(() => f.show(false));
+  const client = clients.at(-1)!;
+  await client.invalidateQueries({ refetchType: "none" });
+  f.delayRoot();
+  const previousRows = f.leafQueries().length;
+  act(() => f.show(true));
+  try {
+    await waitFor(() => expect(f.leafQueries().length).toBeGreaterThan(previousRows));
+    expect(f.groupQueries().length).toBeGreaterThan(1);
+  } finally {
+    await act(async () => f.releaseRoot());
+  }
+});
 
 test("server summary axes without a row identity render buckets without leaf requests", async () => {
   const f = fixture({ summaryOnly: true });

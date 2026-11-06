@@ -32,6 +32,7 @@ import { messageFeedRows } from "./message-feed";
 import { useThreadMessageFeed } from "./thread-message-feed";
 
 const ESTIMATED_ROW_HEIGHT = 96;
+const MATCH_WINDOW_SIZE = 100;
 
 type MessagingT = ReturnType<typeof useMessagingT>;
 
@@ -56,7 +57,7 @@ export interface ThreadTranscriptProps {
   /** Host controls join the transcript's one native pane toolbar. */
   toolbarActions?: readonly PaneToolbarAction[];
   timezone?: string;
-  /** Wrap the visible window with an owner-provided annotation context. */
+  /** Wrap the rendered window with an annotation context over a bounded message window. */
   renderWindow?: (
     messages: readonly ThreadTranscriptRow[],
     children: React.ReactElement,
@@ -302,11 +303,18 @@ function TranscriptBody({
       ) : null}
     </div>
   );
+  // The first loaded page has one stable annotation key while the virtualizer
+  // measures and scrolls to its anchor. Older pages use overlapping bounded
+  // windows so their rendered rows can still be annotated without exceeding
+  // the server's visible-ID limit.
+  const firstVisibleIndex = virtualItems[0]?.index ?? 0;
+  const matchWindowStart = Math.max(0, Math.floor(firstVisibleIndex / (MATCH_WINDOW_SIZE / 2))
+    * (MATCH_WINDOW_SIZE / 2) - MATCH_WINDOW_SIZE / 4);
+  const matchWindow = messages.length <= MATCH_WINDOW_SIZE
+    ? messages : messages.slice(matchWindowStart, matchWindowStart + MATCH_WINDOW_SIZE);
   return renderWindow
     ? renderWindow(
-        virtualItems.flatMap((item) =>
-          messages[item.index] ? [messages[item.index]!] : [],
-        ),
+        matchWindow,
         content,
       )
     : content;

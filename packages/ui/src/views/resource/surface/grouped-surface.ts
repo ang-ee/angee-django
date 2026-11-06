@@ -219,7 +219,9 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   // parent resolves. `useAngeeGroupByBatch` is a single hook, so a dynamic-length
   // array is rules-of-hooks safe.
   const [groupScopes, setGroupScopes] =
-    React.useState<readonly GroupedGroupScope[]>(EMPTY_ARRAY);
+    React.useState<readonly GroupedGroupScope[]>(() => buildGroupedRenderModel<TRow>(
+      new Map(), EMPTY_LEAF_RESULTS, new Map(), renderParams,
+    ).groupScopes);
   const nativeGroupResults = useAngeeGroupByBatch(
     groupOperation.target,
     source ? EMPTY_ARRAY : groupScopes,

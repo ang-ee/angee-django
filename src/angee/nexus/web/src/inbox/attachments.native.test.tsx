@@ -55,7 +55,7 @@ const message = {
   participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [], parent,
 };
 
-function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false, survivor?: string) {
+function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false, survivor?: string, transcriptMessages = [message]) {
   const source = status ? { ...message, title: "", platform: "WHATSAPP",
     thread: { ...message.thread, modality: "STATUS", conversation_label: "Status updates" },
     channel: { id: "acc-one", display_name: "Connected account" } }
@@ -85,7 +85,7 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
       return { data: { inbox_connections: { message_count: fileUses ? 1 : 0 } } };
     }
     return { data: { thread_message_feed: {
-      messages: [message], count: 1, older_cursor: null, has_older: false, has_more_in_window: false,
+      messages: transcriptMessages, count: transcriptMessages.length, older_cursor: null, has_older: false, has_more_in_window: false,
       has_older_than_through: false, newer_cursor: null, has_newer: false, has_newer_than_before: false,
     } } };
   }) } satisfies RefineTestDataProvider;
@@ -119,6 +119,37 @@ test("an attachment in the conversation previews in Related", async () => {
   expect(screen.getAllByRole("toolbar")).toHaveLength(1);
   expect(inbox.navigation.previewFile).toHaveBeenCalledWith("file-2", "message-1");
   expect(inbox.navigation.patch).not.toHaveBeenCalled();
+});
+
+test("transcript matches read the stable loaded window once while virtual rows measure", async () => {
+  const messages = Array.from({ length: 50 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages);
+  render(<InboxConversation {...inbox.props} />, { wrapper: inbox.wrapper });
+
+  await waitFor(() => expect(inbox.custom.mock.calls.filter(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1));
+  const matchesRequest = inbox.custom.mock.calls.find(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)![0];
+  expect(matchesRequest.meta?.gqlVariables?.visible).toHaveLength(50);
+  expect(inbox.custom.mock.calls.filter(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1);
+});
+
+test("transcript matches bound the annotation window after older history loads", async () => {
+  const messages = Array.from({ length: 1001 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages);
+  render(<InboxConversation {...inbox.props} />, { wrapper: inbox.wrapper });
+
+  await waitFor(() => expect(inbox.custom.mock.calls.some(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)).toBe(true));
+  for (const [request] of inbox.custom.mock.calls.filter(([entry]) =>
+    entry.meta?.gqlQuery === InboxTranscriptMatches)) {
+    expect(request.meta?.gqlVariables?.visible.length).toBeLessThanOrEqual(100);
+  }
 });
 
 test("an attachment in the reader previews in Related and leaves the message full width", async () => {

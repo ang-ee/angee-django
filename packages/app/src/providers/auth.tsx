@@ -190,7 +190,9 @@ export function createAngeeAuthProviderFromRequest(
   };
   const sharedIdentity = async (): Promise<AuthIdentity | null> => {
     const query = identityQueryOptions(provider, options.queryClient);
-    return options.queryClient ? options.queryClient.fetchQuery(query) : query.queryFn();
+    // The mounted identity observer refreshes invalidations; route checks reuse
+    // its last answer instead of issuing a second public and preview read.
+    return options.queryClient ? options.queryClient.ensureQueryData(query) : query.queryFn();
   };
   const provider: RefineAuthProvider = {
     async check() {
