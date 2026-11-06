@@ -21,7 +21,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 |---|---|---|
 | `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py:15-63`, `tests/settings.py:29-110`, `tests/conftest.py:645` |
 | `src/angee/iam/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`fixtures.py:22`), `composed_tables` (`fixtures.py:61`), `composed_permissions` (`fixtures.py:73`); `permissions.py` emits merged schema inputs | module docstrings |
-| `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`), `execute_schema` (`:893`), `result_data` (`:913`) | `tests/test_tags.py:46-55` |
+| `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`), `execute_schema` (`:893`), `result_data` (`:913`) | `tests/test_tags.py:7-57` |
 | `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_tags.py`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | the composed-host subprocess that runs consumer `TransactionTestCase` modules in the framework suite | `tests/test_composed_note_workflow.py:17-40` |
 | `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon` (`:101`), `chromeSnapshotForRoute`, `TEST_SCHEMAS` (`:354`); `createUiTestProviders` (`ui:35`) | `src/angee/tags/web/src/index.test.ts` |
