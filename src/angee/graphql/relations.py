@@ -7,6 +7,7 @@ from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
@@ -23,6 +24,7 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.models.base import record_display_label
 from angee.base.models.refs import RecordRefMixin
 from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import RecordRef
@@ -135,6 +137,25 @@ class RecordReferenceNode(AngeeNode):
     def reference_id(self) -> PublicID | None:
         row = cast(Any, self)
         return optional_public_id(row.record_public_id or None) if _record_readable(row) else None
+
+    def reference_label(self) -> str | None:
+        """Return the readable target's own label, read through its actor-scoped manager.
+
+        The batched annotation gates the label exactly as it gates the identity
+        fields, so a hidden target is never loaded. A readable row reads its
+        target once when the label is selected.
+        """
+
+        row = cast(Any, self)
+        actor = current_actor()
+        if actor is None or not _record_readable(row):
+            return None
+        reference: RecordRef = row.record_ref
+        target = (
+            require_rebac_queryset(apps.get_model(reference.model_label))
+            .with_actor(actor).with_action("read").filter(pk=reference.object_id).first()
+        )
+        return record_display_label(target) if target is not None else None
 
 
 def _record_readable(row: Any) -> bool:
