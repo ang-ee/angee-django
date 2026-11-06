@@ -168,14 +168,15 @@ jobs:
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -tAc "SHOW max_locks_per_transaction"
       - name: Verify PostgreSQL contracts execute without skips
+        # Every PostgreSQL-only contract (row and advisory locks, MVCC reads,
+        # two-writer campaigns, vendor branches by node id) with the workflow,
+        # decision and agent-session selection, in six duration-balanced groups.
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
-        # Review concurrency includes simultaneous all seats, a requester-less
-        # first seat, and recovery after a settlement signal skips a busy run.
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
         run: |
-          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=workflow-concurrency.xml \
+          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=postgresql-contracts.xml \
             --splits 6 --group ${{ matrix.group }} --splitting-algorithm least_duration \
             --durations-path .test_durations_postgres \
             tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
@@ -227,7 +228,7 @@ jobs:
             tests/test_projects_wave3_campaign.py tests/test_timeline_concurrency.py \
             tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
             tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
-          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
+          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("postgresql-contracts.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
 
   # One verdict under the check name pull requests and callers already know:
   # a failed, cancelled or timed-out shard fails it.

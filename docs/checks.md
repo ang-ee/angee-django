@@ -369,11 +369,11 @@ pushes to `main`. The current tiers are:
   limit (CI runs 1.9–2.6 times the local timings the map records; six groups
   keep that margin), the named PostgreSQL contract selection runs with
   `-n 4 --dist loadfile --nomigrations` and prints its 25
-  slowest test durations; each shard writes JUnit output and checks that it did
+  slowest test durations; each group writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. The `uv` job passes only
-  when Python quality and every shard of both test suites pass, so callers keep
-  one check name.
+  when Python quality, every SQLite shard and every PostgreSQL group pass, so
+  callers keep one check name.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
@@ -398,7 +398,10 @@ shared `--randomly-seed`.
 
 Refresh `.test_durations_postgres` after changing the PostgreSQL selection or
 when its group balance drifts. Run the selected tests serially on PostgreSQL so
-the map records per-test costs without xdist scheduling effects:
+the map records per-test costs without xdist scheduling effects;
+`--clean-durations` drops the entries of tests the selection no longer
+collects, which pytest-split would otherwise keep when it merges into the
+existing map:
 
 ```bash
 export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/angee
@@ -414,7 +417,7 @@ print(' '.join(arg for arg in shlex.split(run.split('uv run --locked python -c',
 PY
 )
 test -n "$pg_tests"
-uv run --locked python -m pytest -q -n 0 --nomigrations --store-durations --durations-path .test_durations_postgres $pg_tests
+uv run --locked python -m pytest -q -n 0 --nomigrations --store-durations --clean-durations --durations-path .test_durations_postgres $pg_tests
 ```
 
 The current map came from a local serial macOS arm64 run against PostgreSQL
