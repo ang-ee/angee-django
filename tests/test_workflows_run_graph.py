@@ -3,8 +3,9 @@
 import re
 
 import pytest
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.db import connection
+from django.db.models.functions import Now
 from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel
 
@@ -12,7 +13,7 @@ from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepRun, Workflow
+from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.test_workflows_children import child_graph as child_graph
 from tests.test_workflows_review import review as review
@@ -166,9 +167,7 @@ def test_graph_survives_removing_a_published_step_implementation(schema, executi
     actor, _ = execution
     workflow = load_workflow({"nodes": {"entry": {"step": "echo", "label": "Retained step"}}}, actor=actor)
     run = start_run(workflow, actor=actor)
-    settings.ANGEE_WORKFLOW_STEP_CLASSES = {
-        key: value for key, value in settings.ANGEE_WORKFLOW_STEP_CLASSES.items() if key != "echo"
-    }
+    without_step(settings, "echo")
     node = read_graph(schema, run, actor)["graph"]["nodes"][0]
     assert node["label"] == "Retained step" and node["step_label"] == "echo"
     assert node["step_run"]["status"] == "READY"
@@ -180,6 +179,59 @@ def test_graph_survives_removing_a_published_step_implementation(schema, executi
     assert detail.data["workflowrun_by_pk"]["graph"]["nodes"][0]["step_run"] == {
         "status": "READY", "requires_duplicate_acknowledgement": False,
     }
+
+
+def without_step(settings, key):
+    """Unregister one step key, as removing its addon would."""
+    settings.ANGEE_WORKFLOW_STEP_CLASSES = {
+        name: value for name, value in settings.ANGEE_WORKFLOW_STEP_CLASSES.items() if name != key
+    }
+
+
+def test_removed_step_answers_the_fail_closed_effect_default(schema, execution, register_step, settings):
+    """Once an effect started, a step whose implementation is gone requires acknowledgement."""
+    actor, _ = execution
+
+    class IdempotentEcho(Echo):
+        key = "idempotent_echo"
+        effect_idempotent = True
+
+    register_step(IdempotentEcho)
+    run = start_run(load_workflow({"nodes": {"entry": {"step": IdempotentEcho.key}}}, actor=actor), actor=actor)
+    step = StepRun.system_queryset().get(run=run, node_key="entry")
+    assert runner.execute(step.pk)
+    StepAttempt.system_queryset().filter(step_run=step).update(effect_started_at=Now())
+    query = """query($id: String!) { workflowrun_by_pk(id: $id) {
+      graph { nodes { step_run { requires_duplicate_acknowledgement } } }
+    } }"""
+
+    def acknowledgement():
+        result = execute_schema(schema, query, {"id": run.sqid}, user=actor)
+        assert result.errors is None
+        return result.data["workflowrun_by_pk"]["graph"]["nodes"][0]["step_run"]["requires_duplicate_acknowledgement"]
+
+    assert acknowledgement() is False
+    assert not StepRun.system_queryset().get(pk=step.pk).requires_duplicate_acknowledgement
+    without_step(settings, IdempotentEcho.key)
+    assert acknowledgement() is True
+    assert StepRun.system_queryset().get(pk=step.pk).requires_duplicate_acknowledgement
+
+
+def test_removed_entry_step_leaves_the_run_input_unreadable(schema, execution, settings):
+    """A reader cannot classify input references without the consuming step, so they stay hidden."""
+    actor, _ = execution
+    run = start_run(load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor), actor=actor, input={"value": 3})
+    query = "query($id: String!) { workflowrun_by_pk(id: $id) { input } }"
+    readable = execute_schema(schema, query, {"id": run.sqid}, user=actor)
+    assert readable.errors is None and readable.data["workflowrun_by_pk"]["input"] == {"value": 3}
+    without_step(settings, "echo")
+    hidden = execute_schema(schema, query, {"id": run.sqid}, user=actor)
+    assert hidden.errors is None and hidden.data["workflowrun_by_pk"]["input"] is None
+    definition = WorkflowRun.system_queryset().get(pk=run.pk).policy_version.definition
+    assert definition.input_evidence(run.input) == ()
+    assert definition.redacted_input(run.input, set()) is None
+    with pytest.raises(ImproperlyConfigured):
+        definition.validate_input(run.input)
 
 
 def test_failure_routed_error_edge_is_taken(schema, execution):
