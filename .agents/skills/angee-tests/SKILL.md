@@ -21,7 +21,8 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 |---|---|---|
 | `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py:15-63`, `tests/settings.py:29-110`, `tests/conftest.py:645` |
 | `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`:17`), `composed_tables` (`:58`); `composed_permissions` (`permissions.py:41`) | module docstrings |
-| `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`), `execute_schema` (`:893`), `result_data` (`:913`) | `tests/test_tags.py:46-55` |
+| `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`) | `tests/test_tags.py:46-55` |
+| `src/angee/graphql/testing/documents.py` | document execution as an actor and SQL ceilings: `execute_schema`, `result_data`, `measure_graphql_document`, `GraphQLDocumentRead.assert_ceiling` | [GraphQL document budgets](../../../docs/checks.md#graphql-document-budgets) |
 | `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_tags.py`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | the composed-host subprocess that runs consumer `TransactionTestCase` modules in the framework suite | `tests/test_composed_note_workflow.py:17-40` |
 | `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon` (`:101`), `chromeSnapshotForRoute`, `TEST_SCHEMAS` (`:354`); `createUiTestProviders` (`ui:35`) | `src/angee/tags/web/src/index.test.ts` |
@@ -34,9 +35,9 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 - Database and permission lifecycle: `composed_tables` / `composed_permissions` (`angee.base.testing`), native `db` when neither transactions nor REBAC matter; never a private `rebac sync` fixture.
 - Actors: `create_user`, `create_platform_admin`, `rebac.actor_context` / `system_context`, `rebac.roles.grant`, `write_relationships`; a grantee through the model's `grant_record_access`.
 - Stand-in records from owning test apps: `angee.messaging.testing.models` (`Party`), `angee.projects.testing.models` (`Task`), `tests.conftest` (`Page`, `File`, `vault_for`); `tests/mtidemo`, `hierdemo`, `recordrefdemo` for structural probes.
-- Schema execution: `addon_schema` + `execute_schema` + `result_data` over one addon's `schemas`; Django `Client` POSTs to `/graphql/public/` or `/graphql/console/` on a composed host.
+- Schema execution: `addon_schema` + `execute_schema` + `result_data` (`angee.graphql.testing.documents`) over one addon's `schemas`, or over `GraphQLSchemas.from_discovery().build(...)` on a composed host; Django `Client` POSTs to `/graphql/public/` or `/graphql/console/` when the HTTP stack is the subject.
 - Workflow and decision states: `angee.workflows.testing.drivers` (`load_workflow`, `start_run`, `run_until`, `decide`, `capture_tasks`, `observe`), never fabricated step runs ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
-- Query budgets: Django `CaptureQueriesContext` at 1 and 25 rows (`tests/test_tags_field.py:118-143`).
+- Query budgets: Django `CaptureQueriesContext` at 1 and 25 rows (`tests/test_tags_field.py:118-143`); a document's fixed statement and SQL ceilings through `measure_graphql_document` ([GraphQL document budgets](../../../docs/checks.md#graphql-document-budgets)).
 - Frontend: `@angee/app/testing`, `@angee/ui/testing`, `@angee/refine/testing`, `@angee/metadata/testing` (`testDataResource`), `@angee/storybook/testing`, Testing Library, `vi.mock` for one container read.
 - Browser: `@angee/e2e` only (`test`, `expect`, `api`, `requireGraphQLData`, `grantRecordAccess`), Page Objects under `pages/`.
 
