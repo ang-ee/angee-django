@@ -234,6 +234,20 @@ def test_removed_entry_step_leaves_the_run_input_unreadable(schema, execution, s
         definition.validate_input(run.input)
 
 
+def test_run_document_resolves_with_null_input_when_its_entry_step_is_gone(schema, execution, settings):
+    """The run record read keeps resolving; only the unreadable input projects null."""
+    actor, _ = execution
+    run = start_run(load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor), actor=actor, input={"value": 5})
+    without_step(settings, "echo")
+    result = execute_schema(schema, """query($id: String!) {
+      workflowrun_by_pk(id: $id) { id status input output redacted_fields }
+    }""", {"id": run.sqid}, user=actor)
+    assert result.errors is None
+    projected = result.data["workflowrun_by_pk"]
+    assert projected["id"] == run.sqid and projected["input"] is None
+    assert "input" not in projected["redacted_fields"]
+
+
 def test_failure_routed_error_edge_is_taken(schema, execution):
     actor, _ = execution
     workflow = load_workflow({"nodes": {
