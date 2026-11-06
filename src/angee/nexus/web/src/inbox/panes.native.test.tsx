@@ -23,8 +23,8 @@ const message = {
   sender: { display_name: "Ada", value: "ada@example.com", party: null }, thread: { id: "thread-one", title: { text: "A conversation" } },
 };
 
-function fixture(pane: "navigator" | "results" | "related", initialSearch = "", status = false) {
-  const rowMessage = status ? { ...message, platform: "WHATSAPP", channel: { display_name: "Alexis" },
+function fixture(pane: "navigator" | "results" | "related", initialSearch = "", status = false, standalone = false) {
+  const rowMessage = standalone ? { ...message, thread: null } : status ? { ...message, platform: "WHATSAPP", channel: { display_name: "Alexis" },
     thread: { ...message.thread, modality: "STATUS" } } : message;
   let view: ResourceViewContextValue;
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
@@ -42,7 +42,7 @@ function fixture(pane: "navigator" | "results" | "related", initialSearch = "", 
     if (document === InboxNavigatorGroups || document === InboxResultGroups) {
       return { data: { [document === InboxNavigatorGroups ? "inbox_navigator_groups" : "inbox_result_groups"]: {
         count: 30, record_count: 60, message_count: 60,
-        rows: [{ value: "thread:thread-one", label: status ? "Status updates" : `Conversation ${variables.page}`, modality: status ? "status" : "direct", count: 60, message_count: 60 }],
+        rows: [{ value: standalone ? "message:msg-one" : "thread:thread-one", label: standalone ? "Standalone message" : status ? "Status updates" : `Conversation ${variables.page}`, modality: status ? "status" : "direct", count: 60, message_count: 60 }],
       } } };
     }
     const content = variables.options?.lens === "attachments" || variables.options?.lens === "text";
@@ -121,6 +121,19 @@ test("result pane labels expand native groups and page members independently", a
   await waitFor(() => expect(f.router.state.location.search).toHaveProperty("thread", "thread-one"));
 });
 
+test("an admitted message without thread renders as a standalone section", async () => {
+  const f = fixture("results", "", false, true);
+  await screen.findByRole("button", { name: "Collapse Standalone message" });
+  expect(screen.queryByTitle("Open conversation")).toBeNull();
+  const row = await screen.findByRole("button", { name: /Message page 1/ });
+  fireEvent.click(row);
+  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
+  expect(f.router.state.location.search).not.toHaveProperty("thread");
+  fireEvent.click(screen.getByRole("button", { name: "Standalone message" }));
+  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
+  expect(f.router.state.location.search).not.toHaveProperty("thread");
+});
+
 test("related pointers open their message while its pager stays in r", async () => {
   const f = fixture("related", "?related=file:one&sender=party:ada&c.page=3");
   const row = await screen.findByRole("button", { name: /A message/ });
@@ -130,6 +143,14 @@ test("related pointers open their message while its pager stays in r", async () 
   fireEvent.click(row);
   await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
   expect(f.router.state.location.search).toHaveProperty("related", "file:one");
+});
+
+test("Related keeps a standalone message readable without a conversation link", async () => {
+  const f = fixture("related", "?related=file:one", false, true);
+  fireEvent.click(await screen.findByRole("button", { name: /A message/ }));
+  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
+  expect(f.router.state.location.search).not.toHaveProperty("thread");
+  expect(screen.queryByRole("button", { name: "Open conversation" })).toBeNull();
 });
 
 test("circle labels leave focus and activation to the tree", async () => {

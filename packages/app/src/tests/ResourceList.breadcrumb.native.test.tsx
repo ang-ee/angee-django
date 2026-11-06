@@ -22,7 +22,7 @@ const resource = testDataResource("notes.Note", {
           "updated_at": testQueryField("updated_at", { scalar: "DateTime", filter: { field: "updated_at", scalar: "DateTime", values: [], operators: ["exact", "inList", "isNull", "gte", "lt"] }, sort: { field: "updated_at" } }),
           "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: { "updated_at": testQueryAxis("updated_at", { kind: "date", identityPath: "updated_at", paths: ["updated_at"], server: { input: "UPDATED_AT", key: "updated_at" }, extractions: [{ name: "month", input: "MONTH", key: "updated_at_month", rangeKey: "updated_at_month_range", drill: { kind: "range", field: "updated_at", valueKey: "updated_at_month", rangeKey: "updated_at_month_range", nullMode: "isNull", valueMap: [] } }], drill: { kind: "value", field: "updated_at", valueKey: "updated_at", nullMode: "isNull", valueMap: [] } }) }, sort: { default: [] } }),
 
-  roots: { groups: "notes_groups", groupedRows: "notes_grouped_rows", aggregate: "notes_aggregate" }, typeNames: { filter: "notes_bool_exp", order: "notes_order_by", groupBySpec: "NoteGroupBySpec", groupedRowPage: "NoteGroupedRowPage" }, recordRepresentation: "title",
+  roots: { groups: "notes_groups", groupedRows: "notes_grouped_rows", aggregate: "notes_aggregate" }, typeNames: { filter: "notes_bool_exp", order: "notes_order_by", groupBySpec: "NoteGroupBySpec", groupedRowPage: "notes_grouped_rows_page" }, recordRepresentation: "title",
 
   fields: ["id", "title", "updated_at"].map((name) => ({ name, kind: "scalar", scalar: name === "updated_at" ? "DateTime" : "String",
     readable: true,   aggregatable: false,
@@ -47,8 +47,8 @@ async function fixture() {
     custom: vi.fn(async ({ meta }) => {
       const variables = meta?.gqlVariables as Record<string, unknown> | undefined;
       if (variables && Array.isArray(variables.pages)) {
-        const { offset, limit } = (variables.pages as { offset: number; limit: number }[])[0]!;
-        return { data: { data: { rows: rows.slice(offset, offset + limit) } } };
+        return { data: { data: { rows: (variables.pages as { key: unknown; offset: number; limit: number }[])
+          .map(({ key, offset, limit }) => ({ key, rows: rows.slice(offset, offset + limit) })) } } };
       }
       return { data: { notes_groups: [{ key: { updated_at_month: "2021-01-01T00:00:00Z",
         updated_at_month_range: { from: "2021-01-01T00:00:00Z", to: "2021-02-01T00:00:00Z" } }, aggregate: { count: rows.length } }], totalCount: 1 } };

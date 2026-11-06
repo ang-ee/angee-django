@@ -592,13 +592,13 @@ vi.mock("@angee/refine", async (importOriginal) => {
         if (pages && groupBy) {
           const where = variables.where as Record<string, unknown> | undefined;
           const matchingRows = refineRowsForWhere(sdkMocks.rows, where);
-          data.rows = pages.flatMap((page) => {
+          data.rows = pages.map((page) => {
             sdkMocks.listCalls.push({ page: page.offset / page.limit + 1, pageSize: page.limit, filter: where, order: variables.order_by, enabled: true });
             const keyField = groupBy.granularity
               ? `${snakeToCamel(groupBy.field.toLowerCase())}${groupBy.granularity.charAt(0)}${groupBy.granularity.slice(1).toLowerCase()}`
               : snakeToCamel(groupBy.field.toLowerCase());
-            return matchingRows.filter((row) => Object.is(groupValue(row, { input: groupBy.field, granularity: groupBy.granularity }, keyField), page.key))
-              .slice(page.offset, page.offset + page.limit);
+            return { key: page.key, rows: matchingRows.filter((row) => Object.is(groupValue(row, { input: groupBy.field, granularity: groupBy.granularity }, keyField), page.key))
+              .slice(page.offset, page.offset + page.limit) };
           });
         }
         return [key, { data, isFetching: sdkMocks.fetching, error: null, refetch: vi.fn() }];
@@ -692,7 +692,7 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           filter: "NoteFilter",
           order: "NoteOrder",
           groupBySpec: "NoteGroupBySpec",
-          groupedRowPage: "NoteGroupedRowPage",
+          groupedRowPage: "note_grouped_rows_page",
           groupKey: "NoteGroupKey",
           groupOrder: "NoteGroupOrder",
           having: "NoteHaving",
@@ -754,7 +754,7 @@ const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventor
           filter: "notes_bool_exp",
           order: "notes_order_by",
           groupBySpec: "NoteTypeGroupBySpec",
-          groupedRowPage: "NoteTypeGroupedRowPage",
+          groupedRowPage: "notes_grouped_rows_page",
           groupKey: "NoteTypeGroupKey",
           groupOrder: "NoteTypeGroupOrder",
           having: "NoteTypeHaving",
@@ -795,7 +795,7 @@ function groupedListResource(
       order: `${modelName}_order_by`,
       aggregate: `${modelName}_aggregate_fields`,
       groupBySpec: `${modelName}_group_by`,
-      groupedRowPage: `${modelName}_grouped_row_page`,
+      groupedRowPage: `${modelName}_grouped_rows_page`,
       groupKey: `${modelName}_group_key`,
       groupOrder: `${modelName}_group_order`,
       having: `${modelName}_having`,

@@ -57,12 +57,13 @@ export function InboxConversation({
             { icon: "chevron-right", label: t("inbox.nextMatch"), text: true, disabled: matches.count === 0,
               onClick: () => { void navigateMatch.current?.("next"); } },
           ] : undefined}
-          renderWindow={(messages, positioned, viewportMessageId, children) => (
+          renderWindow={(messages, positioned, feedAnchor, viewportMessageId, children) => (
             <MatchWindow
               scope={scope}
               navigation={navigation}
               ids={messages.map((message) => message.id)}
               positioned={positioned}
+              feedAnchor={feedAnchor}
               viewportMessageId={viewportMessageId}
               navigateMatch={navigateMatch}
               onMatches={setMatches}
@@ -90,6 +91,7 @@ function MatchWindow({
   navigation,
   ids,
   positioned,
+  feedAnchor,
   viewportMessageId,
   navigateMatch,
   children,
@@ -100,6 +102,7 @@ function MatchWindow({
   navigation: InboxNavigation;
   ids: string[];
   positioned: boolean;
+  feedAnchor: string;
   viewportMessageId: () => string;
   navigateMatch: MutableRefObject<((direction: "previous" | "next") => Promise<void>) | null>;
   children: ReactElement;
@@ -109,9 +112,9 @@ function MatchWindow({
   const queryClient = useQueryClient();
   const dataProvider = useDataProvider();
   const providerName = useActiveDataProviderName() ?? "default";
-  // Membership and count do not depend on the navigation anchor. Retain the
-  // opening anchor so click navigation does not start a second observer read.
-  const membershipAnchor = useRef(navigation.at.startsWith("message:") ? navigation.at.slice(8) : "").current;
+  // Membership follows the feed's copy-inclusion anchor, not the navigation
+  // anchor, which can move within an already loaded window.
+  const membershipAnchor = feedAnchor.startsWith("message:") ? feedAnchor.slice(8) : "";
   const variables = {
     ...scope,
     thread: navigation.thread,

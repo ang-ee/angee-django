@@ -31,7 +31,7 @@ const fields: DataResourceFieldMetadata[] = Object.entries(query.fields).map(([n
 const resource = testDataResource("messaging.Message", {
   roots: { groups: "messages_groups", groupedRows: "messages_grouped_rows", aggregate: "messages_aggregate", deletePreview: "preview_delete_message", update: undefined, create: undefined },
   capabilities: ["list", "detail", "delete"], fields, query, recordRepresentation: "title",
-  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy", groupBySpec: "MessageGroupBySpec", groupedRowPage: "MessageGroupedRowPage" },
+  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy", groupBySpec: "MessageGroupBySpec", groupedRowPage: "messages_grouped_rows_page" },
 });
 const { Provider, clearClients } = createUiTestProviders({
   resources: [resource, testDataResource("messaging.Thread")], apiUrl: "test://messages",
@@ -78,8 +78,8 @@ function dataProvider({ count = 2, fail = false, transportFailure = false, limit
     }
     const variables = meta?.gqlVariables as Record<string, unknown> | undefined;
     if (Array.isArray(variables?.pages)) {
-      const pages = variables.pages as { offset: number; limit: number }[];
-      return { data: { data: { rows: pages.flatMap(({ offset, limit }) => rows.slice(offset, offset + limit)) } } };
+      const pages = variables.pages as { key: unknown; offset: number; limit: number }[];
+      return { data: { data: { rows: pages.map(({ key, offset, limit }) => ({ key, rows: rows.slice(offset, offset + limit) })) } } };
     }
     return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, label: "Discussion", aggregate: { count } }], totalCount: 1 } };
   });

@@ -22,7 +22,7 @@ for (const field of ["status", "title"]) {
   contract.axes[field]!.drill = { kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [] };
 }
 const resource = testDataResource("notes.Note", {
-  roots: { groups: "notes_groups", groupedRows: "notes_grouped_rows", aggregate: "notes_aggregate" }, typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy", groupBySpec: "NoteGroupBySpec", groupedRowPage: "NoteGroupedRowPage" }, query: contract,
+  roots: { groups: "notes_groups", groupedRows: "notes_grouped_rows", aggregate: "notes_aggregate" }, typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy", groupBySpec: "NoteGroupBySpec", groupedRowPage: "notes_grouped_rows_page" }, query: contract,
   fields: ["id", "title", "status"].map((name) => ({ name, kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
 });

@@ -466,6 +466,7 @@ describe("date and JSON axes", () => {
       "2026-02",
     );
     expect(axis.bucketIdentity(bucket)).toBe("2026-02");
+    expect(axis.bucketIdentity({ key: { sent_at_month: "2026-11-01 00:00:00+09:00" } })).toBe("2026-11");
     expect(query.toWhere(axis.drill(bucket))).toEqual({
       sent_at: {
         _gte: "2026-02-01T00:00:00.000Z",

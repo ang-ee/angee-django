@@ -57,8 +57,6 @@ export interface GroupedRenderParams {
 export interface GroupedLeafScope {
   key: string;
   value: unknown;
-  identity: unknown;
-  legacyRowIdentity: (row: Row) => unknown;
   groupBy: { field: string; granularity?: string };
   parentFilter: ResourceViewFilter | undefined;
   total: number;
@@ -128,8 +126,6 @@ export function buildGroupedRenderModel<TRow extends Row>(
     depth: number,
     groupBy: { field: string; granularity?: string },
     value: unknown,
-    identity: unknown,
-    legacyRowIdentity: (row: Row) => unknown,
     parentFilter: ResourceViewFilter | undefined,
   ): GroupedListPager => {
     const pagination = paginationByScope[bucketKey];
@@ -140,8 +136,6 @@ export function buildGroupedRenderModel<TRow extends Row>(
     leafScopes.push({
       key: bucketKey,
       value,
-      identity,
-      legacyRowIdentity,
       groupBy,
       parentFilter,
       total: bucket.count,
@@ -328,8 +322,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
         ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth,
             { field: projection.dimensions[0]!.input,
               ...(projection.dimensions[0]!.granularity ? { granularity: projection.dimensions[0]!.granularity } : {}) },
-            bucket.key?.[projection.valueKey] ?? null,
-            axis.bucketIdentity(bucket), (row) => axis.identity(row), parentFilter)
+            bucket.key?.[projection.valueKey] ?? null, parentFilter)
         : walkLevel(depth + 1, cumulativeFilter);
     }
     return pager;

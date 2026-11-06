@@ -60,11 +60,12 @@ const message = {
   participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [], parent,
 };
 
-function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false, survivor?: string, transcriptMessages = [message], matchingVisible: string[] = []) {
+function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false, survivor?: string, transcriptMessages = [message], matchingVisible: string[] = [], standalone = false) {
   const source = status ? { ...message, title: "", platform: "WHATSAPP",
     thread: { ...message.thread, modality: "STATUS", conversation_label: "Status updates" },
     channel: { id: "acc-one", display_name: "Connected account" } }
-    : survivor ? { ...message, merged_into: { id: survivor } } : message;
+    : survivor ? { ...message, merged_into: { id: survivor } }
+      : standalone ? { ...message, thread: null, parent: { ...parent, thread: null } } : message;
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     if (meta?.gqlQuery === InboxTranscriptMatches) {
@@ -193,7 +194,8 @@ test("successive Next clicks advance sparse matches in place with one read each"
   }));
   const inbox = fixture([], false, false, undefined, messages,
     [10, 30, 50, 70, 90].map((index) => `message-${index}`));
-  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(200 * 640);
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(96);
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(200 * 96);
   Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true,
     value: function(this: HTMLElement, options: ScrollToOptions) {
       this.scrollTop = options.top ?? 0;
@@ -231,6 +233,19 @@ test("successive Next clicks advance sparse matches in place with one read each"
   expect(matchReads().map(([request]) => request.meta?.gqlVariables?.at)).toEqual(["", "message-0", "message-10"]);
   expect(feedReads()).toHaveLength(1);
   expect(document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement).toBe(transcript);
+
+  fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+  await waitFor(() => expect(inbox.navigation.at).toBe("message:message-10"));
+  expect(matchReads().at(-1)![0].meta?.gqlVariables?.at).toBe("message-30");
+  expect(feedReads()).toHaveLength(1);
+
+  transcript!.scrollTop = 96 * 150;
+  fireEvent.scroll(transcript!);
+  fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+  await waitFor(() => expect(inbox.navigation.at).toBe("message:message-90"));
+  const outOfView = matchReads().at(-1)![0].meta?.gqlVariables?.at as string;
+  expect(Number(outOfView.slice("message-".length))).toBeGreaterThan(100);
+  expect(outOfView).not.toBe("message-10");
 });
 
 test("opening at a message anchor retains the positioned scroll element and lands on the message", async () => {
@@ -297,6 +312,15 @@ test("the reader retains the quoted author and opens the parent in its conversat
   fireEvent.click(await screen.findByRole("button", { name: /Replying to Dane Meet at Casa Cosecha/ }));
 
   expect(inbox.navigation.openInContext).toHaveBeenCalledWith(parent);
+});
+
+test("a readable message with no admitted thread has no conversation breadcrumb or link", async () => {
+  const inbox = fixture([], false, false, undefined, [message], [], true);
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  expect(await screen.findByText("Standalone message")).toBeTruthy();
+  expect(screen.queryByText("Renewals")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open conversation" })).toBeNull();
+  expect(inbox.navigation.conversation).not.toHaveBeenCalled();
 });
 
 test("Related shows a pinned file's preview in the pane", async () => {

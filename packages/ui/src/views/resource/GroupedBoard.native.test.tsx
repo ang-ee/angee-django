@@ -28,7 +28,7 @@ const scalarField = (name: string): DataResourceFieldMetadata => ({
 });
 const resource = testDataResource("messaging.Message", {
   roots: { groups: "messages_groups", groupedRows: "messages_grouped_rows", aggregate: "messages_aggregate", delete: undefined },
-  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy", groupBySpec: "MessageGroupBySpec", groupedRowPage: "MessageGroupedRowPage" }, query,
+  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy", groupBySpec: "MessageGroupBySpec", groupedRowPage: "messages_grouped_rows_page" }, query,
   recordRepresentation: "title", capabilities: ["list"],
   fields: [scalarField("id"), scalarField("title"), scalarField("status"), {
     ...scalarField("channel"), kind: "relation", scalar: null, relationObject: true,
@@ -223,7 +223,7 @@ test("a grouped company header and readable supplier cell use labels selected in
   invoiceQuery.axes.company!.drill = { kind: "identity", field: "company", valueKey: "company_id", nullMode: "isNull", valueMap: [] };
   const invoice = testDataResource("accounting.Invoice", {
     roots: { groups: "invoices_groups", groupedRows: "invoices_grouped_rows", aggregate: "invoices_aggregate" },
-    typeNames: { filter: "InvoiceBoolExp", order: "InvoiceOrderBy", groupBySpec: "InvoiceGroupBySpec", groupedRowPage: "InvoiceGroupedRowPage" }, query: invoiceQuery,
+    typeNames: { filter: "InvoiceBoolExp", order: "InvoiceOrderBy", groupBySpec: "InvoiceGroupBySpec", groupedRowPage: "invoices_grouped_rows_page" }, query: invoiceQuery,
     fields: [scalarField("id"), scalarField("number"), ...["company", "partner"].map((name) => ({
       ...scalarField(name), kind: "relation" as const, scalar: null, relationObject: true,
       relationModelLabel: name === "company" ? "arp.Company" : "parties.Party",
@@ -237,10 +237,10 @@ test("a grouped company header and readable supplier cell use labels selected in
     ], totalCount: 2 } };
     const rows = (variables.pages as { key: string }[]).map((page) => {
       const acme = page.key === "pty_acme";
-      return { id: acme ? "bill-1" : "bill-2", number: "",
+      return { key: page.key, rows: [{ id: acme ? "bill-1" : "bill-2", number: "",
         company: { id: acme ? "pty_acme" : "pty_beta", display_name: acme ? "Acme" : "Beta" },
         partner: { id: acme ? "pty_supplier" : "pty_other", display_name: acme ? "Supplier Inc" : "Other Supplier" },
-      };
+      }] };
     });
     return { data: { data: { rows } } };
   });

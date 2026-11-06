@@ -5482,6 +5482,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "calendarDay",
+    "source": "packages/ui/src/widgets/date-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "calendarVariants",
     "source": "packages/ui/src/ui/calendar.tsx",
     "kind": "token",

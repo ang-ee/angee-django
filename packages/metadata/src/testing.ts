@@ -38,7 +38,7 @@ export function testDataResource(
       filter: `${list}_bool_exp`,
       order: `${list}_order_by`,
       groupBySpec: `${list}GroupBySpec`,
-      groupedRowPage: `${list}_grouped_row_page`,
+      groupedRowPage: `${list}_grouped_rows_page`,
       ...typeNames,
     },
     capabilities: ["list", "detail", "create", "update", "delete"],

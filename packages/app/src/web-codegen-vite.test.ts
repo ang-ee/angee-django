@@ -70,7 +70,7 @@ async function start() {
   const server = await createServer({
     ...await config(), configFile: false, logLevel: "silent",
     optimizeDeps: { noDiscovery: true, entries: [] },
-    server: { middlewareMode: true, ws: false, watch: { ignored: ["**/.jj/**"] } },
+    server: { middlewareMode: true, ws: false, watch: { ignored: ["**/.jj/**"], usePolling: true, interval: 100 } },
   });
   servers.push(server);
   // The codegen plugin registers its directories with the watcher after the

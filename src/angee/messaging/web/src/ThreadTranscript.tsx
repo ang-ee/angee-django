@@ -15,6 +15,7 @@ import {
   PaneToolbar,
   ReactionBar,
   avatarInitials,
+  calendarDay,
   formatDayLabel,
   useReactionGroups,
   useResolvedWidget,
@@ -62,6 +63,7 @@ export interface ThreadTranscriptProps {
   renderWindow?: (
     messages: readonly ThreadTranscriptRow[],
     positioned: boolean,
+    feedAnchor: string,
     viewportMessageId: () => string,
     children: React.ReactElement,
   ) => React.ReactElement;
@@ -216,12 +218,17 @@ function TranscriptBody({
       if (anchorIndex < 0 && feedAnchor !== anchor) return;
       if (anchorIndex >= 0)
         virtualizer.scrollToIndex(anchorIndex, { align: "center" });
-      else if (!anchor)
+      else if (anchor.startsWith("date:")) {
+        const day = anchor.slice(5).split("@")[0]!;
+        const index = messages.findIndex((message) =>
+          calendarDay(new Date(message.sent_at ?? message.created_at), timezone) >= day);
+        virtualizer.scrollToIndex(index < 0 ? messages.length - 1 : index, { align: "center" });
+      } else if (!anchor)
         virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
       positionedAnchorRef.current = anchor;
       setPositioned(true);
     }
-  }, [conversation, messages, totalSize, anchor, feedAnchor, virtualizer]);
+  }, [conversation, messages, totalSize, anchor, feedAnchor, timezone, virtualizer]);
 
   function loadOlder(): void {
     if (!transcript.hasNextPage || transcript.isFetching) return;
@@ -331,7 +338,7 @@ function TranscriptBody({
     const item = virtualizer.getVirtualItemForOffset(offset);
     return messages[item?.index ?? 0]?.id ?? "";
   };
-  return renderWindow ? renderWindow(matchWindow, positioned, viewportMessageId, content) : content;
+  return renderWindow ? renderWindow(matchWindow, positioned, feedAnchor, viewportMessageId, content) : content;
 }
 
 /** The keyset "load more" control, one shape in both directions. */

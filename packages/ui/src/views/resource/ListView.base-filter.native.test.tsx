@@ -23,7 +23,7 @@ for (const field of ["role", "disposition", "status"]) {
 }
 const resource = testDataResource("messaging.Part", {
   roots: { groups: "parts_groups", groupedRows: "parts_grouped_rows", aggregate: "parts_aggregate" },
-  typeNames: { filter: "PartBoolExp", order: "PartOrderBy", groupBySpec: "PartGroupBySpec", groupedRowPage: "PartGroupedRowPage" }, query: contract,
+  typeNames: { filter: "PartBoolExp", order: "PartOrderBy", groupBySpec: "PartGroupBySpec", groupedRowPage: "parts_grouped_rows_page" }, query: contract,
   fields: Object.entries(contract.fields).map(([name, field]) => ({ name,
     kind: field.kind === "enum" ? "enum" : "scalar", scalar: field.scalar, values: field.values,
     readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),

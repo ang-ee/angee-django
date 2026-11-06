@@ -4,7 +4,7 @@ import { groupedListQueryMeta } from "./list-query";
 
 test("grouped list pages share one document and retain independent pagination", () => {
   const meta = groupedListQueryMeta(
-    { root: "workflow_runs", aggregateRoot: "workflow_runs_aggregate", groupedRowsRoot: "workflow_runs_grouped_rows", groupByType: "WorkflowRunGroupBySpec", groupedRowPageType: "WorkflowRunGroupedRowPage", filterType: "WorkflowRunBoolExp", orderType: "WorkflowRunOrderBy" },
+    { root: "workflow_runs", aggregateRoot: "workflow_runs_aggregate", groupedRowsRoot: "workflow_runs_grouped_rows", groupByType: "WorkflowRunGroupBySpec", groupedRowPageType: "workflow_runs_grouped_rows_page", filterType: "WorkflowRunBoolExp", orderType: "WorkflowRunOrderBy" },
     ["id", "subject_model", "subject_id"],
     { field: "STATUS" },
     [
@@ -15,6 +15,7 @@ test("grouped list pages share one document and retain independent pagination", 
   );
   const text = print(meta.document);
   expect(text).toContain("rows: workflow_runs_grouped_rows");
+  expect(text).toContain("$pages: [workflow_runs_grouped_rows_page!]!");
   expect(text).toMatch(/key\s+rows \{\s+id\s+subject_model\s+subject_id\s+\}/);
   expect(text).not.toContain("workflow_runs_aggregate");
   expect(meta.variables).toMatchObject({

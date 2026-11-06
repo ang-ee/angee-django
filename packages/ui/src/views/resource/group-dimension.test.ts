@@ -239,12 +239,23 @@ describe("localized labels over stable identities", () => {
         TEST_T,
       ),
     ).toEqual(["February 2026"]);
+    expect(bucketValueLabels(
+      { key: { createdAtmonth: "2026-11-01 00:00:00+09:00" }, count: 1 },
+      [{ field: "createdAt", granularity: "month" }], metadata, TEST_T,
+    )).toEqual(["November 2026"]);
   });
   test("boolean buckets use the translated yes/no labels", () => {
     const t = (key: string) => ({ "list.yes": "Sí", "list.no": "No" })[key] ?? key;
     expect(groupLabel(false, { field: "is_archived" }, null, t)).toBe("No");
     expect(groupLabel(true, { field: "is_archived" }, null, t)).toBe("Sí");
     expect(groupLabel("false", { field: "status" }, metadata, t)).toBe("false");
+  });
+  test("JSON scalar buckets retain localized boolean and blank labels", () => {
+    const t = (key: string) => ({ "list.yes": "Sí", "list.no": "No", "list.emptyValue": "Sin valor", "list.blankValue": "Vacío" })[key] ?? key;
+    const group = { field: "metadata" };
+    expect(bucketValueLabels({ key: { metadata: false }, count: 1 }, [group], metadata, t)).toEqual(["No"]);
+    expect(bucketValueLabels({ key: { metadata: "" }, count: 1 }, [group], metadata, t)).toEqual(["Vacío"]);
+    expect(bucketValueLabels({ key: { metadata: null }, count: 1 }, [group], metadata, t)).toEqual(["Sin valor"]);
   });
   test("date-like relation labels and scalar text stay verbatim", () => {
     expect(
