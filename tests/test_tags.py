@@ -4,7 +4,9 @@ The vocabulary is an admin-curated surface, so tag rows are created under
 ``system_context``; the scope reads run under ``actor_context`` after
 ``rebac sync`` loads the schema. A tag assignment is authorized by the record it
 tags: each taggable type's app declares its relation on ``tags/tag_assignment``
-from its ``permissions.extends.zed``, which ``composed_permissions`` merges.
+from its ``permissions.extends.zed``. The session fixture emits those fragments
+into the effective schema; the base-declaration check binds the authored tags
+schema explicitly.
 ``parties.Party`` stands in for a taggable record and ``knowledge.Vault`` for a
 type no relation names.
 """
@@ -36,6 +38,7 @@ from rebac.models import active_relationship_model
 from rebac.roles import grant as grant_role
 
 from angee.base.models.identity import public_id_for
+from angee.iam.permissions import bind_rebac_schema, declared_schema_path
 from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
 from angee.tags import schema as tags_schema
@@ -609,8 +612,15 @@ def test_the_check_reports_a_taggable_model_without_a_relation() -> None:
     def forbid_query(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Django model checks must read schema declarations without SQL")
 
-    with connection.execute_wrapper(forbid_query):
-        errors = _tag_errors(TagAssignment.check())
+    config = apps.get_app_config("tags")
+    effective = Path(config.rebac_schema)
+    assert declared_schema_path(config) is not None
+    bind_rebac_schema(config, None)
+    try:
+        with connection.execute_wrapper(forbid_query):
+            errors = _tag_errors(TagAssignment.check())
+    finally:
+        bind_rebac_schema(config, effective)
     assert {error.id for error in errors} == {"tags.E002"}
     assert {error.obj for error in errors} == _taggable_test_models()
 
