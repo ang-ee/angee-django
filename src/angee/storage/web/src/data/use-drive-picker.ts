@@ -4,7 +4,9 @@ import { useMemo } from "react";
 
 const DRIVE_MODEL = "storage.Drive";
 
-/** Storage's initial drive selection composes the same remote relation owner in both upload surfaces. */
+/** Select actor-readable drives through the shared remote relation owner.
+ * Upload admission separately requires write access at the storage model owner.
+ */
 export function useDrivePicker(value: string | null | undefined, enabled = true) {
   const metadata = useModelMetadata(DRIVE_MODEL);
   const relation = useMemo(() => enabled

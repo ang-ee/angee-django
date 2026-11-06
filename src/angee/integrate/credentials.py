@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import base64
-import json
 from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
-
-from angee.integrate.oauth.client import OAuthClientProtocol
 
 
 class CredentialKind(models.TextChoices):
@@ -53,9 +50,7 @@ class CredentialKindHandler:
         """Require the kind's secret material before it is stored."""
 
         missing = {
-            field: "This field is required."
-            for field in self.input_material_fields()
-            if not material.get(field)
+            field: "This field is required." for field in self.input_material_fields() if not material.get(field)
         }
         if missing:
             raise ValidationError(missing)
@@ -73,24 +68,9 @@ class CredentialKindHandler:
     def secret_value(self, credential: Any) -> str:
         """Return the credential's primary secret value."""
 
-        material = self.reveal(credential)
+        material = credential.reveal()
         return str(material.get(self.material_field) or "")
 
-    def can_refresh(self, credential: Any) -> bool:
-        """Return whether this credential can renew its own secret without the user."""
-
-        del credential
-        return False
-
-    def refresh(self, credential: Any) -> None:
-        """Refresh ``credential`` in place when the kind supports it."""
-
-        raise NotImplementedError
-
-    def reveal(self, credential: Any) -> dict[str, Any]:
-        """Return the decrypted JSON material for ``credential``."""
-
-        return json.loads(credential.material or "{}")
 
 
 class OAuthCredentialHandler(CredentialKindHandler):
@@ -130,48 +110,6 @@ class OAuthCredentialHandler(CredentialKindHandler):
         except KeyError, TypeError, ValueError:
             return None
 
-    def can_refresh(self, credential: Any) -> bool:
-        """Return whether a refresh-capable provider and a stored refresh token exist."""
-
-        oauth_client = credential.oauth_client
-        if oauth_client is None or not getattr(oauth_client, "supports_refresh", False):
-            return False
-        return bool(self.reveal(credential).get("refresh_token"))
-
-    def refresh(self, credential: Any) -> None:
-        """Exchange the stored refresh token for fresh material, persisted in place.
-
-        Renews this OAuth credential through the provider's refresh grant and writes the
-        new tokens back under its ``(user, provider)`` identity — the same upsert the
-        login flow uses, so ``expires_at`` and the refresh metadata are recomputed once.
-        The provider may rotate the refresh token; a returned one replaces the stored one
-        (otherwise the existing one is kept). ``credential`` is reloaded from the persisted
-        row so a caller reading :meth:`secret_value` next sees the fresh token. Does not
-        lock or re-check freshness — :meth:`integrate.Credential.ensure_fresh` serializes
-        concurrent refreshes; raises (``OAuthFlowError``/``ValueError``) when the grant is
-        rejected or no refresh token is stored.
-        """
-
-        material = self.reveal(credential)
-        refresh_value = str(material.get("refresh_token") or "")
-        oauth_client = credential.oauth_client
-        if oauth_client is None or not refresh_value:
-            raise ValueError("OAuth credential has no refresh token to renew from.")
-        tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
-        # The response fully describes the new token; only carry the refresh token forward
-        # when the provider didn't rotate it (so a one-time token isn't dropped) — never the
-        # old token's ``expires_in``/``scope``, which describe the token being replaced.
-        renewed_material = dict(tokens)
-        renewed_material.setdefault("refresh_token", refresh_value)
-        type(credential).objects.upsert_for_user(
-            credential.user,
-            oauth_client,
-            self.kind,
-            renewed_material,
-            external_account=credential.external_account,
-            reconnect=False,
-        )
-        credential.refresh_from_db()
 
 
 class StaticTokenCredentialHandler(CredentialKindHandler):
@@ -197,9 +135,6 @@ class StaticTokenCredentialHandler(CredentialKindHandler):
 
         return {"Authorization": f"Bearer {self.secret_value(credential)}"}
 
-    def refresh(self, credential: Any) -> None:
-        """Static tokens do not expire through a refresh flow."""
-
 
 class SshKeyCredentialHandler(CredentialKindHandler):
     """Handler for SSH private-key material used to clone over git+ssh.
@@ -220,9 +155,6 @@ class SshKeyCredentialHandler(CredentialKindHandler):
         del credential
         return {}
 
-    def refresh(self, credential: Any) -> None:
-        """SSH keys do not expire through a refresh flow."""
-
 
 class BasicAuthCredentialHandler(CredentialKindHandler):
     """Handler for HTTP Basic-auth material — a username and a password.
@@ -240,12 +172,9 @@ class BasicAuthCredentialHandler(CredentialKindHandler):
     def auth_headers(self, credential: Any) -> dict[str, str]:
         """Return an HTTP Basic ``Authorization`` header from the username and password."""
 
-        material = self.reveal(credential)
+        material = credential.reveal()
         raw = f"{material.get('username', '')}:{material.get('password', '')}".encode()
         return {"Authorization": f"Basic {base64.b64encode(raw).decode('ascii')}"}
-
-    def refresh(self, credential: Any) -> None:
-        """Basic-auth credentials do not expire through a refresh flow."""
 
 
 class AppKeysCredentialHandler(CredentialKindHandler):
@@ -260,9 +189,6 @@ class AppKeysCredentialHandler(CredentialKindHandler):
 
         del credential
         return {}
-
-    def refresh(self, credential: Any) -> None:
-        """Application registrations do not expire through a refresh flow."""
 
 
 _CREDENTIAL_HANDLERS = {

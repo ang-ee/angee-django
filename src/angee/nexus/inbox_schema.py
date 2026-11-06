@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Generic, TypeVar, cast
 import strawberry
 from django.apps import apps
 
+from angee.base.exceptions import classify_error
+from angee.graphql.introspection import selected_field
 from angee.integrate.schema import IntegrationType
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_groups import InboxGroupScope
@@ -65,6 +67,16 @@ class InboxResultInput:
     if TYPE_CHECKING:
 
         def to_pydantic(self) -> InboxResultOptions: ...
+
+
+@strawberry.input
+class InboxResultPageInput:
+    """One keyed leaf page in a result batch."""
+
+    key: str
+    scope: InboxGroupScopeInput | None = None
+    page: int = 1
+    size: int = 25
 
 
 @strawberry.type
@@ -167,6 +179,15 @@ class InboxResultRow:
 
 
 @strawberry.type
+class InboxResultBatchPage:
+    """Preserve one independently paged result payload under the caller's key."""
+
+    key: str
+    result: InboxPage[InboxResultRow] | None
+    error: str | None = None
+
+
+@strawberry.type
 class InboxRelatedTarget:
     """Pinned target metadata, unaffected by the local connection search/page."""
 
@@ -203,7 +224,6 @@ class InboxMessage:
 
     message: MessageType
     matches: bool
-    uses: list[InboxPartUse]
 
 
 @strawberry.type
@@ -227,6 +247,21 @@ class InboxTranscriptMatches:
     visible: list[str]
     previous: str | None
     next: str | None
+
+
+def _result_collection(
+    coverage: InboxCoverageInput | None, search: InboxSearchInput | None,
+    options: InboxResultInput | None, sender: str, circle: str,
+) -> InboxResults:
+    """Build the common authorized result population for both page transports."""
+
+    inbox = Message.objects.all().explorer()
+    rows = inbox.results(
+        coverage.to_pydantic() if coverage else InboxCoverage(),
+        search.to_pydantic() if search else InboxSearch(),
+        sender=sender, circle=circle,
+    )
+    return InboxResults(inbox, rows, options.to_pydantic() if options else InboxResultOptions())
 
 
 @strawberry.type
@@ -292,17 +327,37 @@ class NexusInboxQuery:
     ) -> InboxPage[InboxResultRow]:
         """Page the chosen result unit inside the common matching-message population."""
 
-        inbox = Message.objects.all().explorer()
-        rows = inbox.results(
-            coverage.to_pydantic() if coverage else InboxCoverage(),
-            search.to_pydantic() if search else InboxSearch(),
-            sender=sender,
-            circle=circle,
-        )
-        result = InboxResults(inbox, rows, options.to_pydantic() if options else InboxResultOptions())
+        result = _result_collection(coverage, search, options, sender, circle)
         return cast(
             InboxPage[InboxResultRow], result.page(scope=scope.to_pydantic() if scope else None, page=page, size=size)
         )
+
+    @strawberry.field
+    def inbox_results_batch(
+        self,
+        info: strawberry.Info,
+        pages: list[InboxResultPageInput],
+        coverage: InboxCoverageInput | None = None,
+        search: InboxSearchInput | None = None,
+        options: InboxResultInput | None = None,
+        sender: str = "",
+        circle: str = "",
+    ) -> list[InboxResultBatchPage]:
+        """Read independently paged result groups through one authorized population."""
+
+        if len(pages) > 100 or len({page.key for page in pages}) != len(pages):
+            raise ValueError("Choose at most 100 result pages with distinct keys.")
+        result = _result_collection(coverage, search, options, sender, circle)
+        reads = result.pages(
+            [(page.scope.to_pydantic() if page.scope else None, page.page, page.size) for page in pages],
+            include_channel=selected_field(info.selected_fields, "result.rows.message.channel"),
+        )
+        return [
+            InboxResultBatchPage(key=page.key, result=None, error=classify_error(read).message)
+            if isinstance(read, ValueError)
+            else InboxResultBatchPage(key=page.key, result=cast(InboxPage[InboxResultRow], read))
+            for page, read in zip(pages, reads, strict=True)
+        ]
 
     @strawberry.field
     def inbox_result_groups(
@@ -444,6 +499,7 @@ class NexusInboxQuery:
     @strawberry.field
     def inbox_message(
         self,
+        info: strawberry.Info,
         id: strawberry.ID,
         coverage: InboxCoverageInput | None = None,
         search: InboxSearchInput | None = None,
@@ -453,18 +509,22 @@ class NexusInboxQuery:
         """Keep the selected message readable when coverage or sender changes."""
 
         inbox = Message.objects.all().explorer()
-        message = inbox.message(str(id))
-        matches = (
-            inbox.results(
-                coverage.to_pydantic() if coverage else InboxCoverage(),
-                search.to_pydantic() if search else InboxSearch(),
-                sender=sender,
-                circle=circle,
-            )
-            .filter(pk=message.pk)
-            .exists()
+        message, matches = inbox.selected_message(
+            str(id),
+            coverage.to_pydantic() if coverage else InboxCoverage(),
+            search.to_pydantic() if search else InboxSearch(),
+            sender=sender,
+            circle=circle,
+            include_title=selected_field(info.selected_fields, "message.title"),
         )
-        return InboxMessage(message=message, matches=matches, uses=cast(list[InboxPartUse], inbox.part_uses(message)))
+        return InboxMessage(message=message, matches=matches)
+
+    @strawberry.field
+    def inbox_message_uses(self, id: strawberry.ID) -> list[InboxPartUse]:
+        """Count exact target uses only when the reader opens Related."""
+
+        uses = Message.objects.all().explorer().message_uses(str(id))
+        return cast(list[InboxPartUse], uses)
 
     @strawberry.field
     def inbox_related(

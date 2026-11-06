@@ -18,12 +18,10 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.settings import ThinkingLevel
 from rebac import to_subject_ref
 
-from angee.agents.backends import InferenceBackend
-from angee.base.permissions import actor_user_id
 from angee.base.validators import validate_value
 from angee.extraction.contracts import (
     DocumentPart,
@@ -33,6 +31,7 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionSourceKind
 from angee.extraction.profiles import ExtractionProfile
+from angee.iam.permissions import actor_user_id
 from angee.storage.models import UploadState
 
 
@@ -44,12 +43,6 @@ class ExtractionRequestConfig(BaseModel):
     max_tokens: int = Field(default=8192, gt=0, le=32768)
     temperature: float = Field(default=0, ge=0, le=2)
     thinking: ThinkingLevel | None = None
-
-    @field_validator("timeout")
-    @classmethod
-    def valid_timeout(cls, value: float) -> float:
-        InferenceBackend.validate_timeout(value)
-        return value
 
 
 class ExtractionConfig(BaseModel):
@@ -74,15 +67,27 @@ class PartCarrier(BaseModel):
 
     @classmethod
     def retain(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> PartCarrier:
+        """Retain one protected carrier using the canonical acquisition factory."""
+
+        return cls.retain_with_status(part, actor=actor, drive_id=drive_id)[0]
+
+    @classmethod
+    def retain_with_status(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> tuple[PartCarrier, Any, bool]:
         """Retain text and structured values under the storage owner's permissions."""
-        file = apps.get_model("storage.File").objects.ingest_bytes(
+        file, created = apps.get_model("storage.File").objects.get_or_ingest_bytes(
             json.dumps(asdict(part), ensure_ascii=False).encode(),
             filename="extraction-part.json",
             owner_id=actor_user_id(to_subject_ref(actor)),
             drive_id=drive_id,
         )
-        return cls(source_position=part.source_position, source_page=part.source_page, kind=part.kind,
-                   file_id=str(file.sqid), content_hash=str(file.content_hash))
+        carrier = cls(
+            source_position=part.source_position,
+            source_page=part.source_page,
+            kind=part.kind,
+            file_id=str(file.sqid),
+            content_hash=str(file.content_hash),
+        )
+        return carrier, file, created
 
     def restore(self, ctx: Any) -> DocumentPart:
         """Read the envelope only after rechecking its file authority and digest."""
@@ -214,7 +219,7 @@ def prepare_pages(
                 parser = _Text()
                 parser.feed(text)
                 text = "\n".join(parser.chunks)
-            parts.append(_text_part(position, 0, text, "native_text"))
+            parts.append(text_part(position, 0, text, "native_text"))
             pages.append(PageCarrier(source_position=position, page_position=0))
         elif mime == "application/pdf":
             with pdfium.PdfDocument(content) as document:
@@ -225,7 +230,7 @@ def prepare_pages(
                     with closing(document[number]) as page, closing(page.get_textpage()) as textpage:
                         text = textpage.get_text_range().strip()
                         if text:
-                            parts.append(_text_part(position, number, text, "pdf_text"))
+                            parts.append(text_part(position, number, text, "pdf_text"))
                             pages.append(PageCarrier(source_position=position, page_position=number))
                         else:
                             dimensions = page.get_size()
@@ -233,9 +238,7 @@ def prepare_pages(
                                 raise ValidationError("A PDF page requires positive dimensions.")
                             scale = min(dpi / 72, max_edge / max(dimensions))
                             with closing(page.render(scale=scale)) as bitmap:
-                                pages.append(
-                                    _raster(bitmap.to_pil(), row, position, number, dpi, max_edge, actor)
-                                )
+                                pages.append(_raster(bitmap.to_pil(), row, position, number, dpi, max_edge, actor))
         elif mime.startswith("image/"):
             with Image.open(io.BytesIO(content)) as image:
                 pages.append(_raster(image, row, position, 0, dpi, max_edge, actor))
@@ -274,8 +277,12 @@ def _raster(
     )
 
 
-def _text_part(
-    source: int, page: int, text: str, method: str, *,
+def text_part(
+    source: int,
+    page: int,
+    text: str,
+    method: str,
+    *,
     kind: ExtractionPartKind = cast(ExtractionPartKind, ExtractionPartKind.NATIVE_TEXT),
     **metadata: Any,
 ) -> DocumentPart:

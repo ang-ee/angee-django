@@ -20,10 +20,12 @@ vi.mock("@angee/metadata", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/metadata")>(),
   refineResourceName: () => "project_milestones",
   useModelMetadata: () => ({ resource: { schemaName: "console" } }),
+  useResourceInvalidates: () => [],
 }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/refine")>(),
   extractActionOutcome: () => ({ ok: true }),
+  useReconcileMutationResponse: () => vi.fn(async () => undefined),
 }));
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/ui")>(),

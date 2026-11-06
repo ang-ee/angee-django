@@ -1,6 +1,6 @@
 ---
 name: angee-tests
-description: "Authors an Angee addon's tests: bare-host test models, composed_tables/composed_permissions, per-actor permission tests, verb and queryset tests, resource loads, schema-driven GraphQL tests, vitest fragment tests, story fixtures and e2e specs. Use for 'write tests for <addon>', 'add e2e'."
+description: "Authors an Angee addon's tests: bare-host test models, composed_tables/composed_permissions, per-actor permission tests, verb and queryset tests, resource loads, schema-driven GraphQL tests, vitest fragment tests, story fixtures and e2e specs. Use for 'write addon tests', 'add e2e'."
 ---
 
 # Angee Tests
@@ -20,8 +20,8 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py:15-63`, `tests/settings.py:29-110`, `tests/conftest.py:645` |
-| `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`:17`), `composed_tables` (`:58`); `composed_permissions` (`permissions.py:41`) | module docstrings |
-| `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`), `execute_schema` (`:893`), `result_data` (`:913`) | `tests/test_tags.py:46-55` |
+| `src/angee/iam/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`fixtures.py:22`), `composed_tables` (`fixtures.py:61`), `composed_permissions` (`fixtures.py:73`); `permissions.py` emits merged schema inputs | module docstrings |
+| `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`), `execute_schema` (`:893`), `result_data` (`:913`) | `tests/test_tags.py:7-57` |
 | `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_tags.py`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | the composed-host subprocess that runs consumer `TransactionTestCase` modules in the framework suite | `tests/test_composed_note_workflow.py:17-40` |
 | `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon` (`:101`), `chromeSnapshotForRoute`, `TEST_SCHEMAS` (`:354`); `createUiTestProviders` (`ui:35`) | `src/angee/tags/web/src/index.test.ts` |
@@ -65,10 +65,10 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
    Then `"angee.tags"` in `tests/settings.py` `INSTALLED_APPS` (`:29-110`) and `from angee.tags.testing import models as tags_models  # noqa: F401` in `tests/conftest.py` after its FK targets (`:645`). If the addon is a consumer → no test models: its tests run on the composed host (step 3). **Owner rule:** Django owns static test-table lifecycle; one concrete model per resource type ([environment and checks](references/environment.md)).
 
-3. **Pick the database contract per module.** Framework modules take a fixture: `composed_tables` for transactional isolation plus REBAC sync, `composed_permissions` when the module needs other addons' `permissions.extends.zed` fragments merged (tags, MTI, placeable fields), native `db` for pure model tests.
+3. **Pick the database contract per module.** Framework modules take `composed_tables` for savepoint isolation with the session-merged REBAC schema (`composed_permissions` remains an alias), or native `db` for pure model tests. Declare `pytest.mark.django_db(transaction=True)` when autocommit, separate connections, committed rows, or an autocommit-measured statement budget is required.
 
    ```python
-   pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_permissions")]
+   pytestmark = pytest.mark.usefixtures("composed_tables")
    ```
 
    Consumer modules are `TransactionTestCase` classes that `call_command("rebac", "sync")` and `call_command("resources", "load", include_demo=True, allow_non_dev=True)` in `setUp` and read `apps.get_model("notes", "Note")` (`examples/src/example/notes/tests/test_rebac.py:23-33`); the framework suite drives them through `tests/composed_host.py --action tests --test-label example.notes.tests.<module>`, consumer CI through `consumer-tests`. Mark PostgreSQL-only modules `pytest.mark.skipif(connection.vendor != "postgresql", …)` (`tests/test_messaging_delivery_concurrency.py:8`). **Owner rule:** pytest-django and the base plugin own setup and flush; `--nomigrations` and PostgreSQL settings belong to the CI selection, never to a module ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
@@ -91,7 +91,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
            assert not TagAssignment.objects.for_record(party_edge.party).exists()
    ```
 
-   Include a non-admin reader and a platform admin (`create_platform_admin`, or `Note.objects.as_user(admin)` reaching every row through the const-backed role, `test_rebac.py:112-140`). **Owner rule:** `permissions.zed` owns the rule; the test proves outcomes per actor, never the zed text ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
+   Include a non-admin reader and a platform admin (`create_platform_admin`, or `Note.objects.with_actor(admin)` reaching every row through the const-backed role, `test_rebac.py:112-140`). **Owner rule:** `permissions.zed` owns the rule; the test proves outcomes per actor, never the zed text ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
 
 5. **Test verbs and querysets on their owner.** Call the manager verb, not a raw `create`, and assert idempotence, fail-fast denial and the constraint.
 
@@ -183,7 +183,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 - Write a private REBAC-sync or table fixture beside `composed_tables`/`composed_permissions` ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
 - Register a second concrete model for a resource type, or create tables by hand instead of `tests/tables.py` `model_tables` ([environment and checks](references/environment.md)).
 - Ship admin-only GraphQL tests, or `force_login` without `backend="angee.iam.auth.ModelBackend"` ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
-- Add a caveated subject to make a conditional grant testable; use a field-backed relation (`angee.E024`, `src/angee/base/checks.py:37`).
+- Add a caveated subject to make a conditional grant testable; use a field-backed relation (`angee.E024`, `src/angee/iam/checks.py:37`).
 - Put `--nomigrations` or PostgreSQL settings into a module; mark PostgreSQL-only modules and let them skip on SQLite ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
 - Pass a per-test timeout for a slow render, or copy provider setup instead of `createUiTestProviders`/`createRefineTestProviders` ([Frontend packages](../../../docs/checks.md#frontend-packages-and-addon-fragments)).
 - Import `test`/`expect` from `@playwright/test` in a spec or Page Object ([what ships](../../../docs/frontend/e2e.md#what-ships-in-the-framework)).
@@ -195,8 +195,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
 Validators: the new modules run standalone, the owning guards (`tests/test_layering.py`, `tests/test_permission_composition.py`, `packages/app/src/architecture-guardrails.test.ts`) stay green, and for UI the live page is exercised; commands and roots in [Python contracts](../../../docs/checks.md#python-and-composition-contracts), [Frontend packages](../../../docs/checks.md#frontend-packages-and-addon-fragments), [Browser verification](../../../docs/checks.md#browser-verification); loop in `.agents/skills/slice/SKILL.md`.
 
-- In a jj lane (no host, database or JS install): each changed Python module alone, then with the addon's other modules; ruff and mypy on touched files; the layering tests. Consumer `TransactionTestCase` modules need a composed host and do not run here.
-- Only on integrated `src`: the composed-host runs (`tests/test_composed_*.py`, consumer modules), per-package `typecheck` (it includes `*.test.tsx`), vitest per fragment, `catalog:check`, the browser suite against a seeded stack, and after a schema change codegen first ([Composition](../../../docs/checks.md#composition-and-schema)).
+- Select lane, integration, and final checks through [Verification phases](../../../docs/checks.md#verification-phases). Composed consumer tests require the matching host and fixture lifecycle; [environment pitfalls](references/environment.md) distinguish setup failures from test failures. Schema-dependent frontend checks require codegen first ([Composition](../../../docs/checks.md#composition-and-schema)).
 - Done means: every actor row in step 4 is asserted (owner, grantee, outsider, non-admin reader, admin), every verb has its deny path, GraphQL covers the denied anonymous write and the 1/25-row budget, `expectValidBaseAddon` passes, and a meaningful UI change was seen in the browser.
 - False greens: a broad run passing while the module alone fails (registry leak); the composed `web` typecheck passing while per-package `tsc` fails on a test file; stale `@angee/gql` until codegen reruns; PostgreSQL-only modules skipping silently on SQLite ([what CI runs](../../../docs/checks.md#what-ci-actually-runs)); CI never runs browser e2e ([e2e CI](../../../docs/frontend/e2e.md#ci)).
 
@@ -206,8 +205,8 @@ Validators: the new modules run standalone, the owning guards (`tests/test_layer
 - An abstract model imported while its app is absent keeps `app_label=None` for the whole process; the roster comment at `tests/settings.py:85-92` exists for that reason.
 - Patch an inherited manager method on `type(manager)`, not the instance; `db_manager()` copies lose an instance patch ([environment and checks](references/environment.md)).
 - A page rendered through the router must `findBy*` past the lazy boundary; importing the page component directly needs no wait ([page pitfalls](../angee-pages/references/pitfalls.md)).
-- A shared pytest plugin must defer model imports until the registry is populated (`src/angee/base/testing/permissions.py:19`, [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
-- `composed_permissions` rewrites the synced schema with a forced overwrite into `tmp_path`; a module that edits a `.zed` on disk must do so under that fixture and never against the stack ([REBAC](../../../docs/backend/guidelines.md#rebac)).
+- A shared pytest plugin must defer model discovery until the registry is populated (`src/angee/iam/testing/permissions.py`, called by session `django_db_setup` in `src/angee/iam/testing/fixtures.py`; [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
+- Session database setup emits the merged addon schema once and resynchronizes it after transactional flushes. A test that edits a `.zed` on disk must bind and sync its temporary schema explicitly, then restore the binding; never edit the stack ([REBAC](../../../docs/backend/guidelines.md#rebac)).
 
 ## Read next
 
@@ -238,7 +237,7 @@ src/angee/tags/web/{vitest.config.ts,package.json,src/index.test.ts,src/views/Ta
 src/RecordTagsWidget.native.test.tsx}; src/angee/money/web/src/widgets/money.test.tsx;
 src/angee/workflows/web/src/{index.test.ts,TriggersPage.stories.tsx,TriggersPage.native.test.tsx,testing.ts};
 templates/addons/web/template/{vitest.config.ts,src/index.test.ts}.jinja; .github/workflows/reusable-checks.yml:60-80,
-240-300,440-520; src/angee/base/checks.py (E024 at :37).
+240-300,440-520; src/angee/iam/checks.py (E024 at :37).
 Doc/code mismatches: examples/e2e/playwright.config.ts cites docs/testing/e2e.md and packages/e2e/src/{index,pom}.ts cite
 docs/e2e.md; the file is docs/frontend/e2e.md. The consumer example ships no fragment tests (notes/web has only
 typecheck). No doc owns a story-authoring guide.

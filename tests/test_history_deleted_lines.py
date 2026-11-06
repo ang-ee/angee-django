@@ -19,7 +19,7 @@ from angee.provenance.querysets import model_history
 from angee.provenance.schema import RecordHistory
 from tests.conftest import create_user
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
 
 Project = apps.get_model("projects", "Project")
 Milestone = apps.get_model("projects", "Milestone")
@@ -96,7 +96,7 @@ def test_deleted_line_shows_prior_values_to_null_and_restores_through_its_parent
     assert entry.can_revert
 
     with actor_context(owner):
-        snapshot.changeset.with_actor(owner).revert()
+        snapshot.history_changeset.with_actor(owner).revert()
 
     restored = Milestone._base_manager.get(pk=pk)
     assert (restored.project_id, restored.name, restored.description) == (project.pk, "Release", "Private scope")
@@ -126,10 +126,10 @@ def test_core_history_owners_scope_changesets_and_admit_one_document(line_policy
     with actor_context(owner), changeset(fresh=True, change_reason="Rename delivery"):
         milestone.name = "Launch"
         milestone.save(update_fields=("name",))
-    edit = milestone.history.latest("history_id").changeset
+    edit = milestone.history.latest("history_id").history_changeset
     with actor_context(owner), changeset(fresh=True, change_reason="Other plan"):
         other = Project.objects.create(title="Other", owner=owner)
-    unrelated = other.history.latest("history_id").changeset
+    unrelated = other.history.latest("history_id").history_changeset
 
     assert project.history_tables() == (Project,)
     assert project.history_scope()[Milestone] == models.Q(project_id=project.pk)
@@ -137,8 +137,8 @@ def test_core_history_owners_scope_changesets_and_admit_one_document(line_policy
         touching = type(edit).objects.touching(project)
         assert touching.filter(pk=edit.pk).exists()
         assert not touching.filter(pk=unrelated.pk).exists()
-    assert project.admits_revert(edit)
-    assert not project.admits_revert(unrelated)
+    assert edit.pk in project.admitted_reverts((edit,))
+    assert unrelated.pk not in project.admitted_reverts((unrelated,))
     assert edit.revertable(project, actor=owner)
     assert not edit.revertable(project, actor=reader)
 
@@ -240,7 +240,7 @@ def test_existing_record_revert_preserves_a_stored_write_grant(line_policy: None
         editable = Project.objects.get(pk=project.pk)
         editable.title = "Edited plan"
         editable.save(update_fields=("title",))
-    edit = project.history.latest("history_id").changeset
+    edit = project.history.latest("history_id").history_changeset
 
     with actor_context(editor):
         edit.with_actor(editor).revert()
@@ -258,7 +258,7 @@ def test_revert_skips_excluded_counters_and_restores_only_the_owning_mti_fields(
     with actor_context(owner), changeset(fresh=True):
         record.first_met_note = "Edited context"
         record.save(update_fields=("first_met_note",))
-    edit = record.history.latest("history_id").changeset
+    edit = record.history.latest("history_id").history_changeset
 
     with actor_context(owner):
         edit.with_actor(owner).revert()

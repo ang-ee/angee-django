@@ -128,8 +128,11 @@ test("retained evidence links readable records and marks redacted records", asyn
   expect((await within(records).findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
   expect(await within(records).findByText("Record unavailable")).toBeTruthy();
   // The header's related read also selects step records; the Records tab's list read pages them.
-  expect(requests.find(({ query, variables }) => query.includes("steprecord(") && variables.limit !== undefined)?.variables.where)
-    .toEqual({ _and: [{ run: { _eq: "wfr_review" } }] });
+  const evidenceRead = requests.find(({ query, variables }) => query.includes("steprecord(") && variables.limit !== undefined);
+  expect(evidenceRead?.variables.where).toEqual({ _and: [{ run: { _eq: "wfr_review" } }] });
+  for (const field of ["record_model", "record_id", "record_label", "label"]) {
+    expect(evidenceRead?.query).toContain(field);
+  }
 });
 
 test("a run waiter shows its target as a normal record reference", async () => {
@@ -155,6 +158,7 @@ test("a record waiter reads its watches on demand and follows the shared record 
   expect(watchRead?.variables.where).toEqual({ _and: [{ step_run: { _eq: "wsr_inspect" } }] });
   expect(watchRead?.query).toContain("record_model");
   expect(watchRead?.query).toContain("record_id");
+  expect(watchRead?.query).toContain("record_label");
 });
 
 test("trigger origin links to its retained admission event", async () => {

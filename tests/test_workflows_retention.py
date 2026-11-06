@@ -11,7 +11,7 @@ from angee.decisions.testing.models import Decision
 from angee.workflows.managers import PRUNE_BATCH_LIMIT
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, WorkflowRun
 from tests.conftest import vault_for
 from tests.tables import model_tables
@@ -230,10 +230,11 @@ def test_retention_setting_keeps_recent_terminal_runs(execution, settings):
     assert WorkflowRun.objects.prune() == 1
 
 def test_run_pruning_retains_decisions_and_releases_the_asking_link(review):
-    _, people, _, _ = review
+    _, people, sent, _ = review
     run, step = start_review(review)
     decision = questions(step)[0]
     answer(decision, people[0])
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     age_runs(run)
     assert WorkflowRun.objects.prune() == 1

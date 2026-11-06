@@ -11,6 +11,8 @@ import { developmentMode } from "../../../lib/development-mode";
 import { SearchControls } from "./SearchControls";
 import { pageSearchShortcuts } from "./shortcuts";
 import { searchFixture } from "./search-fixture.test-support";
+import { activeItems } from "./active";
+import { createResourceViewState } from "../resource-view-model";
 
 vi.mock("../../../lib/development-mode", () => ({ developmentMode: vi.fn() }));
 beforeEach(() => vi.mocked(developmentMode).mockReturnValue(true));
@@ -54,6 +56,22 @@ test("facet declarations override field labels and scalar enum inference remains
   expect(catalog().facets.find((item) => item.field === "status")?.options.map((item) => item.value)).toEqual(["open", "closed"]);
 });
 
+test("closed scalar facets retain active values absent from an empty page", () => {
+  const sourceQuery = ResourceQuery.forRows({ fields: { source: { scalar: "String" } } });
+  const result = catalog({ query: sourceQuery, rows: [], inferOptions: false, columns: [], scalarFacets: [{
+    field: "source", label: "Source", source: "scalar", options: [],
+    optionForValue: (value) => ({ id: `source:${JSON.stringify(value)}`, label: value,
+      filter: { source: { exact: value } }, value }),
+  }] });
+  expect(result.fields.some((field) => field.field === "source")).toBe(true);
+  expect(result.facets[0]?.options).toEqual([]);
+  expect(activeItems(createResourceViewState({ filter: { source: { exact: "api" } } }), result)).toEqual([
+    { id: "facet:source", kind: "facet", field: "source", label: "Source", options: [
+      { id: 'source:"api"', label: "api", filter: { source: { exact: "api" } }, value: "api" },
+    ] },
+  ]);
+});
+
 test("contributed facet labels retain IntegerChoices operands in the shared clause catalogue", () => {
   const numericQuery = ResourceQuery.from(testDataResource("test.Record", { query: testResourceQuery({ fields: {
     priority: testQueryField("priority", { kind: "enum", values: [{ value: "LOW", description: "Low priority" }], filter: {
@@ -86,6 +104,11 @@ test("text defaults and shortcuts deduplicate and require iContains; null remove
   expect(searchTextFields(query, "owner.name", ["title", "owner.name", "amount"])).toEqual(["owner.name", "title"]);
   expect(searchTextFields(query, null, ["owner.name", "amount"])).toEqual(["owner.name"]);
   expect(searchTextFields(query, null)).toEqual([]);
+  // Every declared search field is offered; the page's text field comes first.
+  const searchable = ResourceQuery.from(testDataResource("notes.Note", { query: query.contract, recordSearchFields: ["title", "owner.name", "amount"] }));
+  expect(searchTextFields(searchable)).toEqual(["title", "owner.name"]);
+  expect(searchTextFields(searchable, "owner.name")).toEqual(["owner.name", "title"]);
+  expect(searchTextFields(searchable, null, ["title"])).toEqual(["title"]);
   expect(catalog({ textFilterField: "owner.name" }).text[0]?.field).toBe("owner.name");
   const search = { shortcuts: [{ kind: "text", field: "title" }, { kind: "text", field: "owner.name" }] } as const;
   expect(catalog({ textFilterField: "owner.name", search }).text.map((item) => item.field)).toEqual(["owner.name", "title"]);

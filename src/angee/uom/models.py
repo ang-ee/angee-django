@@ -37,14 +37,19 @@ from django.db import models
 from django.db.models.functions import Abs, Cast, Coalesce, Floor, Log, Power, Round, Sign
 from django.db.models.lookups import Exact
 
-from angee.base.managers import AngeeManager
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.roles import role_anchor
+from angee.iam.querysets import ProtectedQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 _ROUNDING_STEPS = tuple(Decimal(10) ** exponent for exponent in range(-6, 6))
+
+UomRole = role_anchor("uom/role")
+"""The ``uom/role`` anchor: its const ``admin`` arm resolves a platform admin as
+an effective uom manager. See :func:`angee.iam.models.roles.role_anchor`.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +80,7 @@ class UomExpressions:
         )
 
 
-class UomCategory(ResourceLoadMixin, AngeeDataModel, concrete=True):
+class UomCategory(ResourceLoadMixin, ProtectedDataModel, concrete=True):
     """A family of units that measure the same quantity (weight, volume, time)."""
 
     catalogue = True
@@ -101,15 +106,15 @@ class UomCategory(ResourceLoadMixin, AngeeDataModel, concrete=True):
 
 class UomQuerySet(
     ArchiveQuerySet[Any],
-    AngeeQuerySet[Any],
+    ProtectedQuerySet[Any],
 ):
     """Archive read scopes layered over the REBAC-scoped unit queryset."""
 
 
-UomManager = AngeeManager.from_queryset(UomQuerySet)
+UomManager = ProtectedManager.from_queryset(UomQuerySet)
 
 
-class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+class Uom(ResourceLoadMixin, ArchiveMixin, ProtectedDataModel, concrete=True):
     """One unit within a category, mapped affinely onto the reference unit.
 
     ``value_in_reference = qty * ratio + offset``: ``ratio`` is the number of
@@ -283,9 +288,3 @@ class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         if self.category_id != to_uom.category_id:
             raise ValueError(f"cannot convert {self.name!r} to {to_uom.name!r}: units belong to different categories")
         return to_uom.quantize((qty * self.ratio + self.offset - to_uom.offset) / to_uom.ratio)
-
-
-UomRole = role_anchor("uom/role")
-"""The ``uom/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective uom manager. See :func:`angee.base.models.roles.role_anchor`.
-"""

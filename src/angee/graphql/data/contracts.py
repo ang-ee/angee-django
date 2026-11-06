@@ -256,6 +256,8 @@ class DataResourceRoots:
     aggregate_name: Annotated[str | None, Field(serialization_alias="aggregate")] = None
     group_name: Annotated[str | None, Field(serialization_alias="groups")] = None
     group_count_name: Annotated[str | None, Field(serialization_alias="groupsCount")] = None
+    grouped_rows_name: Annotated[str | None, Field(serialization_alias="groupedRows")] = None
+    """Root returning ordered ``{key: JSON, rows: [Node!]!}`` page results."""
     create_name: Annotated[str | None, Field(serialization_alias="create")] = None
     update_name: Annotated[str | None, Field(serialization_alias="update")] = None
     save_name: Annotated[str | None, Field(serialization_alias="save")] = None
@@ -276,6 +278,7 @@ class DataResourceTypeNames:
     grouped: str | None = None
     group_key: str | None = None
     group_by_spec: str | None = None
+    grouped_row_page: str | None = None
     group_order: str | None = None
     having: str | None = None
     create_input: str | None = None
@@ -348,6 +351,8 @@ class DataResourceMetadata:
     """Whether the model composes ``MergeableMixin``, so the shared ``merge_records`` verb serves it."""
     history: bool = False
     """Whether the model keeps native history, so the provenance ``history`` surface serves its records."""
+    field_provenance: bool = False
+    """Whether the model declares field statements served by provenance."""
     row_model: str = "server"
     record_representation: str | None = None
     record_search_fields: tuple[str, ...] = ()

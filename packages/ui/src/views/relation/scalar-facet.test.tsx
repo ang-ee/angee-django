@@ -65,7 +65,61 @@ beforeEach(() => {
 });
 
 describe("useScalarFacets", () => {
-  test("queries categorical scalar facets from resource metadata", () => {
+  test("enum options stay available with server facets disabled", () => {
+    const { result } = renderHook(() => useScalarFacets("notes.Note", [{ field: "status" }], NOTE_METADATA,
+      undefined, {}, false));
+    expect(result.current[0]?.options.map((option) => option.value)).toEqual(["DRAFT", "ACTIVE", undefined]);
+    expect(dataMocks.facets.mock.calls[0]?.[1]).toMatchObject({ facets: [], enabled: false });
+  });
+
+  test("mapped enum symbols drill to canonical filter values without duplicate choices", () => {
+    const query = ResourceQuery.forRows({ fields: { status: { kind: "enum", values: [
+      { value: "FAILED", description: "Failed" },
+    ] } } }).contract;
+    query.fields.status!.filter = { field: "status", scalar: "String", values: [], operators: ["exact"],
+      valueMap: [{ from: "FAILED", to: "failed" }] };
+    query.axes.status!.server = { input: "STATUS", key: "status", valueMap: [{ from: "FAILED", to: "failed" }] };
+    query.axes.status!.drill = { kind: "value", field: "status", valueKey: "status", nullMode: "unavailable",
+      valueMap: [{ from: "FAILED", to: "failed" }] };
+    const metadata = schemaFieldMetadataFromDataResources([testDataResource("workflows.WorkflowRun", {
+      query, fields: [{ name: "status", kind: "enum", scalar: "String", values: query.fields.status!.values,
+        readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+    })]).labels["workflows.WorkflowRun"]!;
+    const { result } = renderHook(() => useScalarFacets("workflows.WorkflowRun", [{ field: "status" }], metadata,
+      undefined, {}, false));
+    const option = { id: 'status:"FAILED"', label: "Failed", filter: { status: { exact: "failed" } }, value: "failed" };
+    expect(result.current[0]?.options).toEqual([option]);
+    expect(result.current[0]?.optionForValue?.("failed")).toEqual(option);
+  });
+
+  test("active scalar chips retain their labels while server facets are off", () => {
+    dataMocks.facets.mockReturnValue(resourceFacets({}));
+    const { result } = renderHook(() => useScalarFacets("notes.Note", [{ field: "source", widget: "statusBadge" }],
+      NOTE_METADATA, undefined, {}, false));
+    const catalog = searchFixture({ catalog: { facets: result.current } }).catalog;
+    expect(result.current.find((facet) => facet.field === "source")?.options).toEqual([]);
+    expect(activeItems(createResourceViewState({ filter: { source: { exact: "api" } } }), catalog)).toEqual([
+      { id: "facet:source", kind: "facet", field: "source", label: "Source", options: [
+        { id: 'source:"api"', label: "api", value: "api", filter: { source: { exact: "api" } } },
+      ] },
+    ]);
+    expect(dataMocks.facets.mock.calls[0]?.[1]).toMatchObject({ enabled: false });
+  });
+
+  test("a nullable enum without an isNull filter does not build an invalid bucket", () => {
+    const query = ResourceQuery.forRows({ fields: { origin: { kind: "enum", values: [{ value: "MANUAL" }] } } }).contract;
+    query.fields.origin!.filter = { field: "origin", scalar: "String", values: [], operators: ["exact"] };
+    query.axes.origin!.server = { input: "ORIGIN", key: "origin" };
+    query.axes.origin!.drill = { kind: "value", field: "origin", valueKey: "origin", nullMode: "isNull", valueMap: [] };
+    const metadata = schemaFieldMetadataFromDataResources([testDataResource("workflows.WorkflowRun", {
+      query, fields: [{ name: "origin", kind: "enum", scalar: "String", values: query.fields.origin!.values,
+        readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+    })]).labels["workflows.WorkflowRun"]!;
+    const { result } = renderHook(() => useScalarFacets("workflows.WorkflowRun", [{ field: "origin" }], metadata));
+    expect(result.current[0]?.options.map((option) => option.value)).toEqual(["MANUAL"]);
+  });
+
+  test("uses metadata for enum choices and queries only free-text scalar buckets", () => {
     const { result } = renderHook(() =>
       useScalarFacets(
         "notes.Note",
@@ -83,14 +137,6 @@ describe("useScalarFacets", () => {
     expect(dataMocks.facets).toHaveBeenCalledWith(GROUPS_TARGET, {
       document: dataMocks.groupsDocument,
       facets: [
-        {
-          id: "status",
-          dimensions: [{ input: "STATUS", key: "status" }],
-          orderBy: [{ field: "status", direction: "ASC", nulls: "LAST" }],
-          valueKey: "status",
-          pageSize: 200,
-          where: { title: { _ilike: "%release%" } },
-        },
         {
           id: "source",
           dimensions: [{ input: "SOURCE", key: "source" }],
@@ -118,6 +164,7 @@ describe("useScalarFacets", () => {
         label: "Active",
         filter: { status: { exact: "ACTIVE" } }, value: "ACTIVE",
       },
+      { id: "status:null", label: "No value", filter: { status: { isNull: true } } },
       {
         // A free-text scalar value renders verbatim — only enum-typed fields
         // get their member names prettified.
@@ -134,6 +181,7 @@ describe("useScalarFacets", () => {
         options: [
           { value: "DRAFT", label: "Draft" },
           { value: "ACTIVE", label: "Active" },
+          { label: "No value" },
         ],
       },
       {
@@ -190,18 +238,25 @@ describe("useScalarFacets", () => {
     ], totalCount: 3 }, "parties_groups", { id: "tax_country", dimensions: [groupDimension("TAX_COUNTRY", "tax_country")] });
     dataMocks.facets.mockReturnValue(resourceFacets({ tax_country: facet.options }));
     const { result } = renderHook(() => useScalarFacets("parties.Party", [{ field: "tax_country", widget: "statusBadge" }], metadata));
-    expect(result.current.flatMap((facet) => facet.options)).toEqual([
+    expect(result.current.flatMap((facet) => facet.options)).toEqual(kind === "choice" ? [
+      { id: 'tax_country:""', label: "Blank", filter: { tax_country: { exact: "" } }, value: "" },
+      { id: 'tax_country:"DE"', label: "Germany", filter: { tax_country: { exact: "DE" } }, value: "DE" },
+      { id: "tax_country:null", label: "No value", filter: { tax_country: { isNull: true } } },
+    ] : [
       { id: 'tax_country:""', label: "Blank", filter: { tax_country: { exact: "" } }, value: "" },
       { id: "tax_country:null", label: "No value", filter: { tax_country: { isNull: true } } },
-      { id: 'tax_country:"DE"', label: kind === "choice" ? "Germany" : "DE", filter: { tax_country: { exact: "DE" } }, value: "DE" },
+      { id: 'tax_country:"DE"', label: "DE", filter: { tax_country: { exact: "DE" } }, value: "DE" },
     ]);
-    expect(result.current.flatMap((facet) => facet.options).map((option) => ResourceQuery.from(metadata).toWhere(option.filter))).toEqual([
-      { tax_country: { _eq: "" } }, { tax_country: { _is_null: true } }, { tax_country: { _eq: "DE" } },
-    ]);
-    expect(result.current[0]?.options[1]?.value).toBeUndefined();
+    expect(result.current.flatMap((facet) => facet.options).map((option) => ResourceQuery.from(metadata).toWhere(option.filter)))
+      .toEqual(kind === "choice" ? [
+        { tax_country: { _eq: "" } }, { tax_country: { _eq: "DE" } }, { tax_country: { _is_null: true } },
+      ] : [
+        { tax_country: { _eq: "" } }, { tax_country: { _is_null: true } }, { tax_country: { _eq: "DE" } },
+      ]);
+    expect(result.current[0]?.options.find((option) => option.id === "tax_country:null")).not.toHaveProperty("value");
     expect(result.current[0]?.source).toBe("scalar");
     const catalog = searchFixture({ catalog: { facets: result.current } }).catalog;
-    for (const option of result.current[0]!.options.slice(0, 2)) {
+    for (const option of result.current[0]!.options) {
       expect(activeItems(createResourceViewState({ filter: option.filter }), catalog)).toEqual([
         { id: "facet:tax_country", kind: "facet", field: "tax_country", label: "Tax Country", options: [option] },
       ]);

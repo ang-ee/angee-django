@@ -70,6 +70,13 @@ function scalarField(name: string, scalar: string) {
   };
 }
 
+// These descriptor/field tests keep the native reconciliation lifecycle in the
+// dedicated record-action native suite; this boundary runs callbacks directly.
+vi.mock("@angee/refine", async (original) => ({
+  ...(await original<object>()),
+  useReconcileMutationResponse: () => Object.assign(async () => undefined, { batch: (run: () => Promise<unknown>) => run() }),
+}));
+
 vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
   return {
@@ -490,7 +497,7 @@ describe("ActionFormDialog", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledWith(
       { amount: "500.00", zero: 0, fallback: "Default" }, context,
     ));
-    expect(onSucceeded).toHaveBeenCalledWith(outcome);
+    expect(onSucceeded).toHaveBeenCalledWith(outcome, { reconciliation: undefined });
   });
 
   test("serializes datetime args with the picked local UTC offset", async () => {

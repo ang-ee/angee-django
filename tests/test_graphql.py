@@ -29,6 +29,7 @@ from rebac import (
     RebacMixin,
     RelationshipTuple,
     SubjectRef,
+    actor_context,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -36,28 +37,26 @@ from rebac import (
 )
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
-from rebac.managers import RebacManager
+from rebac.managers import RebacManager, RebacQuerySet
 from rebac.middleware import ActorMiddleware
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField
-from angee.base.models.base import AngeeModel
-from angee.base.permissions import require_rebac_queryset
-from angee.graphql.actions import session_user
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.graphql.node import AngeeNode
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
     SCHEMA_PART_KEYS,
     AngeeSchema,
     GraphQLSchemas,
 )
-from angee.graphql.view_as import ViewAsReadOnlyExtension
+from angee.iam.graphql.actions import session_user
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.view_as import ViewAsReadOnlyExtension
+from angee.iam.models.base import ProtectedModel
 from tests.conftest import make_addon
-from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode
 
 
@@ -78,7 +77,7 @@ def test_generated_read_root_conceals_missing_and_hidden_ids(composed_tables: No
     ])
 
     @strawberry_django.type(user_model)
-    class PersonNode(AngeeNode):
+    class PersonNode(ProtectedNode):
         username: strawberry.auto
 
     # Every signed-in user reads a name; the directory is the row scope that hides people.
@@ -156,7 +155,7 @@ class ManagedThing(RebacMixin):
         rebac_resource_type = "tests/managed"
 
 
-class GatedWriteThing(AngeeModel):
+class GatedWriteThing(ProtectedModel):
     """Concrete Angee model used to exercise Hasura write authorization."""
 
     owner = models.ForeignKey(ManagedThing, on_delete=models.CASCADE)
@@ -270,35 +269,32 @@ def test_hasura_write_backend_decodes_public_relations_through_write_owner(
 ) -> None:
     """Relation public IDs in writes resolve through the actor-scoped write owner."""
 
-    sentinel_queryset = object()
+    actor = SubjectRef("auth/user", "123")
     related = SimpleNamespace(pk=7)
     calls: dict[str, Any] = {}
-
-    def fake_for_write() -> object:
-        calls["write_model"] = ManagedThing
-        return sentinel_queryset
 
     def fake_require_instance_for_id(
         model: type[models.Model],
         value: str,
         *,
-        queryset: object | None = None,
+        queryset: models.QuerySet[Any] | None = None,
     ) -> object:
-        calls["decode"] = (model, value, queryset)
+        assert isinstance(queryset, RebacQuerySet)
+        assert queryset._rebac_field_deny == "allow"
+        calls["decode"] = (model, value, queryset.model, queryset.effective_actor(strict=True))
         return related
 
-    monkeypatch.setattr(ManagedThing.objects, "for_write", fake_for_write)
     monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
 
-    assert backend._decode_public_id_fields({"owner": "pub-owner", "name": "Row"}) == {
-        "owner_id": related.pk,
-        "name": "Row",
-    }
+    with actor_context(actor):
+        assert backend._decode_public_id_fields({"owner": "pub-owner", "name": "Row"}) == {
+            "owner_id": related.pk,
+            "name": "Row",
+        }
     assert calls == {
-        "write_model": ManagedThing,
-        "decode": (ManagedThing, "pub-owner", sentinel_queryset),
+        "decode": (ManagedThing, "pub-owner", ManagedThing, (actor, False)),
     }
 
 
@@ -718,7 +714,7 @@ def test_build_schema_installs_universal_rebac_extensions() -> None:
         ]
     ).build("public")
 
-    assert schema.extensions == (
+    assert tuple(type(extension) for extension in schema.get_extensions())[:4] == (
         ViewAsReadOnlyExtension,
         RebacExtension,
         CustomExtension,
@@ -908,13 +904,12 @@ def test_unexpected_graphql_errors_log_frames_without_exception_values(caplog: p
 
 
 def test_graphql_identity_exports_public_node() -> None:
-    """The framework exposes one public node seam."""
-
+    """Neutral identity and optional protected projection use native interfaces."""
     from angee.graphql.node import AngeeNode
-
     definition = strawberry.types.get_object_definition(AngeeNode)
     assert definition is not None
     assert definition.name == "Node"
+    assert "redacted_fields" not in {field.python_name for field in definition.fields}
 
 
 @isolate_apps()
@@ -963,15 +958,7 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
         ).build("public")
 
 
-def test_rebac_query_contract_accepts_django_as_manager() -> None:
-    """A native queryset-generated manager retains its model and actor policy."""
-
-    assert not isinstance(OwnedRow._default_manager, RebacManager)
-    actor = SubjectRef("auth/user", "123")
-    rows = require_rebac_queryset(OwnedRow).with_actor(actor)
-    assert rows.model is OwnedRow
-    assert rows.actor() == actor
-    assert type(rows) is type(OwnedRow._default_manager.get_queryset())
+# rebac.E025 disallows plain as_manager() defaults on RebacMixin models.
 
 
 def test_choice_enum_value_descriptions_come_from_django_labels() -> None:

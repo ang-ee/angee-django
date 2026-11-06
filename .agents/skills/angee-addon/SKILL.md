@@ -37,8 +37,9 @@ wires declarations only; the reference example throughout is `examples/src/examp
   [GraphQL schema discovery](../../../src/angee/graphql/schema.py) owns schema references and
   [GraphQL ASGI](../../../src/angee/graphql/asgi.py) owns WebSocket contributions.
 - Native django-compose owns component graphs, generic lifecycle and optional hook dispatch:
-  `django_compose.conf` merges settings, `django_compose.urls` reads explicit `AppConfig.compose_urls`,
-  and `django_compose.asgi` composes `compose_asgi()` contributions. Declare through those owners.
+  `django_compose.conf` merges settings. The serving addon owns the serving seams:
+  `angee.server.urls` reads explicit `AppConfig.compose_urls` and `angee.server.asgi` composes
+  `compose_asgi()` contributions. Declare through those owners.
 - `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts:162,66`), `createNamespaceT`
   (`packages/ui/src/i18n/index.ts:45`), `expectValidBaseAddon` (`packages/app/src/testing.tsx:101`),
   `defineAngeeWebVitestConfig` (`packages/app/config/vitest.ts:90`) own fragment composition.
@@ -177,7 +178,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
 - Model or `django.conf.settings` imports at `apps.py`/`autoconfig.py` module scope: settings merge runs before apps are ready, so only `ready()` and `settings(namespace)` may import ([Autoconfig](../../../docs/composer.md#autoconfig)).
 - A module named for a noun (`statements.py`) when the concern already has an owning module (`models.py`, `managers.py`, a verb module) ([Naming](../../../docs/backend/guidelines.md#naming)).
 - Customer, deployment or product names in framework-level code or fixtures; a consumer addon names its own product ([naming](../../../docs/guidelines.md#name-so-code-can-be-found-not-guessed)).
-- Caveated REBAC subjects in `permissions.zed`: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`src/angee/base/checks.py:37`); use field-backed conditional relations.
+- Caveated REBAC subjects in `permissions.zed`: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`src/angee/iam/checks.py:37`); use field-backed conditional relations.
 - An addon bundle under the `ui` i18n namespace or keys that override shared copy: the addon namespace equals its id and `ui` is reserved ([reserved namespace](../../../docs/frontend/guidelines.md#reserved-translation-namespace)).
 - A manifest typed by annotation (`const x: BaseAddon = {…}`) instead of `defineBaseAddon`, which owns validation of the declared shape ([frontend rules](../../../docs/frontend/guidelines.md#rules)).
 

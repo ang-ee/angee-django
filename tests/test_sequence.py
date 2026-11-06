@@ -117,6 +117,7 @@ def test_preview_never_advances_the_counter(transactional_db: None) -> None:
     assert Sequence.objects.preview_next("draft") == "2"
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(
     os.environ.get("DATABASE_URL", "").split(":", 1)[0] not in {"postgres", "postgresql"},
     reason="gapless numbering is guaranteed only on PostgreSQL (row locks)",

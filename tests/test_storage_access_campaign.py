@@ -1,5 +1,6 @@
 """Parent redaction, bearer revocation, canonical attachment and file audiences."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,14 +13,15 @@ from rebac.actors import NoActorResolvedError
 from rebac.backends import backend as rebac_backend
 from rebac.checks import check_field_backed_relations
 from rebac.errors import PermissionDenied
-from rebac.models import active_relationship_model
+from rebac.models import PermissionAuditEvent, active_relationship_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
-from angee.base.identity import public_subject_ref
-from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
+from angee.iam.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
+from angee.iam.identity import public_subject_ref
+from angee.projects.testing.models import Project, Task
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
-from angee.storage.models import FileAttachmentManager, FileVisibility
+from angee.storage.models import FileAttachmentManager, FileVisibility, UploadState
 from angee.storage.uploads import DOWNLOAD_TOKEN_SALT
 from tests.conftest import (
     Drive,
@@ -28,6 +30,7 @@ from tests.conftest import (
     Folder,
     MimeType,
     addon_schema,
+    authored_graphql_document,
     create_platform_admin,
     create_user,
     execute_schema,
@@ -40,6 +43,131 @@ from tests.test_storage import PNG_BYTES, _proxy_upload
 from tests.test_storage import drive as drive
 
 pytestmark = pytest.mark.django_db(transaction=True)
+RECORD_FILES = authored_graphql_document(
+    Path(__file__).resolve().parents[1] / "src/angee/storage/web/src/data/documents.ts", "StorageRecordFiles"
+)
+FILE_ATTACHMENTS = authored_graphql_document(
+    Path(__file__).resolve().parents[1] / "src/angee/storage/web/src/data/documents.ts", "StorageFileAttachments"
+)
+
+
+@pytest.fixture
+def record_files_reads(drive: Any, capture_graphql_document: Any) -> list[Any]:
+    schema = addon_schema(storage_schema.schemas, "console")
+    variables = {"modelLabel": drive._meta.label, "recordId": str(drive.sqid)}
+    reads = []
+    for index in range(20):
+        author = create_user(f"record-files-author-{index}")
+        with system_context(reason="test.document_budget.record_files"):
+            file = File.objects.create(
+                drive=drive,
+                filename=f"budget-{index}.txt",
+                content_hash=f"{index + 1:064x}",
+                visibility="record",
+                owner=drive.alice,
+                upload_state="ready",
+                created_by=author,
+            )
+            FileAttachment.objects.attach(file, drive)
+        if index in (0, 4, 9, 19):
+            read = capture_graphql_document(schema, RECORD_FILES, variables, actor=drive.alice)
+            assert len(read.data["record_files"]["attachments"]) == index + 1
+            assert all(row["file"]["created_by_label"] for row in read.data["record_files"]["attachments"])
+            reads.append(read)
+    return reads
+
+
+@pytest.mark.postgresql
+def test_record_files_document_batches_nested_file_rows(record_files_reads: list[Any]) -> None:
+    one, five, ten, twenty = record_files_reads
+    for read in (five, ten, twenty):
+        read.assert_flat_from(one)
+    for read in record_files_reads:
+        read.assert_statements(5)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=365_000, largest=315_000)
+        read.assert_no_audit_writes()
+
+
+@pytest.mark.postgresql
+def test_record_files_document_has_no_audit_writes(record_files_reads: list[Any]) -> None:
+    for read in record_files_reads:
+        read.assert_no_audit_writes()
+
+
+@pytest.mark.postgresql
+@pytest.mark.xfail(
+    strict=True,
+    reason="Task read/write policy proofs still exceed the 32 KB page target outside the attachment projection",
+)
+def test_task_record_projects_ten_files_without_file_policy_statements(
+    drive: Any, composed_permissions: None, capture_graphql_document: Any,
+) -> None:
+    """An admitted record with a declared arm carries its file display facts."""
+
+    del composed_permissions
+    with system_context(reason="test.storage.task_record_files"):
+        project = Project.objects.create(title="Record file budget", owner=drive.alice)
+        task = Task.objects.create(project=project, title="Attached task")
+    assert FileAttachment.objects.has_record_arm(generic_target(task))
+    schema = addon_schema(storage_schema.schemas, "console")
+    variables = {"modelLabel": task._meta.label, "recordId": str(task.sqid)}
+    reads = []
+    for index in range(10):
+        with system_context(reason="test.storage.task_record_files"):
+            file = File.objects.create(
+                drive=drive, filename=f"task-{index}.txt", content_hash=f"{index + 1:064x}",
+                visibility=FileVisibility.RECORD, owner=drive.alice, upload_state="ready",
+            )
+            FileAttachment.objects.attach(file, task)
+        if index in (0, 9):
+            read = capture_graphql_document(schema, RECORD_FILES, variables, actor=drive.alice)
+            assert len(read.data["record_files"]["attachments"]) == index + 1
+            reads.append(read)
+    one, ten = reads
+    ten.assert_flat_from(one)
+    for read in reads:
+        read.assert_bytes(total=280_000, largest=32_000)
+        read.assert_no_audit_writes()
+
+
+@pytest.mark.postgresql
+def test_file_attachments_document_stays_flat_at_one_and_five(
+    drive: Any,
+    capture_graphql_document: Any,
+) -> None:
+    schema = addon_schema(storage_schema.schemas, "console")
+    reads = []
+    with system_context(reason="test.document_budget.file_attachments"):
+        project = Project.objects.create(title="Attachment targets", owner=drive.alice)
+        file = File.objects.create(
+            drive=drive,
+            filename="shared.txt",
+            content_hash="f" * 64,
+            visibility="record",
+            owner=drive.alice,
+            upload_state="ready",
+        )
+    for index in range(5):
+        with system_context(reason="test.document_budget.file_attachments"):
+            task = Task.objects.create(project=project, title=f"Target {index}")
+            FileAttachment.objects.attach(file, task)
+        if index in (0, 4):
+            read = capture_graphql_document(
+                schema,
+                FILE_ATTACHMENTS,
+                {"file": str(file.sqid)},
+                actor=drive.alice,
+            )
+            assert len(read.data["file_attachments"]) == index + 1
+            reads.append(read)
+    one, five = reads
+    five.assert_flat_from(one)
+    for read in (one, five):
+        read.assert_statements(5)
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        read.assert_bytes(total=665_000, largest=315_000)
+        read.assert_no_audit_writes()
 
 
 @pytest.mark.parametrize("schema_name", ["public", "console"])
@@ -75,7 +203,9 @@ def test_record_files_query_requires_record_and_file_read_and_uploads_need_the_a
     # covered by record upload tests, and the file edge still scopes itself.
     monkeypatch.setattr(FileAttachmentManager, "has_record_arm", lambda *_: True)
     visible = result_data(execute_schema(schema, query, variables, user=reader))["record_files"]
-    assert visible == {"can_upload": False, "attachments": []}
+    # The patched declaration says this record-visible file follows the parent.
+    # Production requires the actual matching policy arm for this branch.
+    assert visible == {"can_upload": False, "attachments": listed}
     owner_view = result_data(execute_schema(schema, query, variables, user=drive.alice))["record_files"]
     assert owner_view == {"can_upload": True, "attachments": listed}
     assert result_data(execute_schema(schema, query, variables, user=stranger))["record_files"] == {
@@ -228,6 +358,34 @@ def test_download_bearer_rechecks_issuing_actor_before_conditional_response(driv
         assert views.download(request, row.filename).status_code == 403
 
 
+def test_projected_download_rechecks_parent_and_live_attachment(drive: Any) -> None:
+    """A projected token cannot outlive its parent read or attachment link."""
+
+    reader = create_user("projected-download-reader")
+    with system_context(reason="test.storage.projected_download"):
+        file = File.objects.create(
+            drive=drive, filename="parent-bound.txt", content_hash="d" * 64,
+            visibility=FileVisibility.RECORD, owner=drive.alice, upload_state=UploadState.READY,
+        )
+        attachment = FileAttachment.objects.attach(file, drive)
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).grant_record_access("viewer", reader)
+        file.with_actor(drive.alice).grant_record_access("viewer", reader)
+    with actor_context(reader):
+        token = file.issue_download_token(parent=drive)
+    assert File.objects.for_download_token(token).pk == file.pk
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).revoke_record_access("viewer", reader)
+    with pytest.raises(exceptions.UploadDenied, match="download parent"):
+        File.objects.for_download_token(token)
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).grant_record_access("viewer", reader)
+    with system_context(reason="test.storage.projected_download.detach"):
+        FileAttachment.objects.filter(pk=attachment.pk).delete()
+    with pytest.raises(exceptions.UploadDenied, match="no longer attached"):
+        File.objects.for_download_token(token)
+
+
 @pytest.mark.parametrize("actor_claim", [None, "", "not-a-subject", "auth/user:not-a-public-id"])
 def test_download_rejects_legacy_and_malformed_actor_claims(drive: Any, actor_claim: Any) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
@@ -288,7 +446,10 @@ def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
         drive.with_actor(drive.alice).grant_record_access("editor", editor)
         row.with_actor(drive.alice).grant_record_access("viewer", reader)
     with actor_context(editor):
+        before_audit = PermissionAuditEvent.objects.count()
         attachment = FileAttachment.objects.attach(row, target, label="Declared")
+        # Measured after the admitted file reload uses its base manager: 3 -> 2 audit rows.
+        assert PermissionAuditEvent.objects.count() - before_audit == 2
         assert attachment.created_by_id == editor.pk
         assert FileAttachment.objects.attach(row, target).pk == attachment.pk
     with actor_context(reader):

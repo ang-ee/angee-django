@@ -22,7 +22,7 @@ export interface RecordReferenceProps extends RecordTargetSearch {
  */
 export function RecordReference({ model, id, label, tab, search }: RecordReferenceProps): ReactElement {
   const recordHref = useResourceRecordHrefLookup();
-  const content = label || <RecordReferenceLabel model={model} id={id} />;
+  const content = label == null ? <RecordReferenceLabel model={model} id={id} /> : label === "" ? id : label;
   const href = recordHref(model, id);
   const className = "max-w-full whitespace-normal text-left leading-snug [overflow-wrap:anywhere]";
   return href ? <NavLink href={recordTargetHref(href, { tab, search })} variant="inline" className={className}>{content}</NavLink> : <span className={className}>{content}</span>;

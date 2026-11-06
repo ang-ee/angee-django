@@ -1,6 +1,6 @@
 import * as React from "react";
 import * as v from "valibot";
-import { publicGraphQLErrorsFromUnknown, useAuthoredMutation, useAuthoredQuery, stableSerialize } from "@angee/refine";
+import { publicGraphQLErrorsFromUnknown, useAuthoredMutation, useAuthoredQuery, useSetAuthoredQueryData, stableSerialize } from "@angee/refine";
 import type { DocumentType } from "@angee/gql/console";
 import {
   ActionFormProvider, Alert, Button, Chip, DescriptorFieldList, Dialog, ErrorBanner, GraphEditor,
@@ -39,7 +39,7 @@ const configurationsFor = (values: StudioValues, publication: StudioPublication)
 /** Monitor readers inspect drafts; native permissions determine editing. */
 export function WorkflowStudio({ recordId, active = true }: { recordId: string; active?: boolean }): React.ReactElement {
   const t = useWorkflowsT();
-  const read = useAuthoredQuery(WorkflowStudioDocument, { id: recordId, target: recordId }, { models: [MODEL], enabled: active });
+  const read = useAuthoredQuery(WorkflowStudioDocument, { id: recordId, target: recordId }, { models: [MODEL], records: [{ model: MODEL, id: recordId }], enabled: active });
   if (!read.data) return read.error
     ? <ErrorBanner description={errorMessage(read.error, t("studio.loadFailed"))}
         actions={<Button onClick={() => void read.refetch()}>{t("studio.reload")}</Button>} />
@@ -95,8 +95,32 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
   const savedKeys = React.useRef(new Map(initialValues.entries.map((entry) => [entry.key, entry.clientId])));
   const usedKeys = React.useRef(new Set(initialValues.entries.map((entry) => entry.key)));
   const usedIds = React.useRef(new Set(initialValues.entries.map((entry) => entry.clientId)));
-  const [save] = useAuthoredMutation(SaveWorkflowDraftDocument, { invalidateModels: [MODEL] });
-  const [publish, publishing] = useAuthoredMutation(PublishWorkflowDocument, { invalidateModels: [MODEL, "workflows.WorkflowVersion"] });
+  const acceptQuery = useSetAuthoredQueryData();
+  const [save] = useAuthoredMutation(SaveWorkflowDraftDocument, {
+    invalidateModels: [MODEL],
+    records: (_data, input) => [{ model: MODEL, id: input.id }],
+    acceptResponse: async (data, input) => {
+      if (!data) throw new Error(t("studio.saveFailed"));
+      return await acceptQuery(WorkflowStudioDocument, { id: recordId, target: recordId }, (current) => {
+        if (!current?.workflow_by_pk) return current;
+        return { ...current, workflow_by_pk: { ...current.workflow_by_pk,
+          draft_revision: data.save_workflow_draft.revision } };
+      }, { complete: false });
+    },
+  });
+  const [publish, publishing] = useAuthoredMutation(PublishWorkflowDocument, {
+    invalidateModels: [MODEL, "workflows.WorkflowVersion"],
+    records: (_data, input) => [{ model: MODEL, id: input.id }],
+    acceptResponse: async (data, input) => {
+      if (!data) throw new Error(t("studio.publishFailed"));
+      return await acceptQuery(WorkflowStudioDocument, { id: recordId, target: recordId }, (current) => {
+        if (!current?.workflow_by_pk) return current;
+        return { ...current, workflow_by_pk: { ...current.workflow_by_pk, published: {
+          number: data.publish_workflow.number, document: data.publish_workflow.document,
+        } } };
+      }, { complete: false });
+    },
+  });
   const capture = (errors: ValidationErrors, keys: ReadonlyMap<string, string>, origin: IssueOrigin) => setIssues(captureStudioIssues(errors, keys, origin));
   function refusal(cause: unknown, keys: ReadonlyMap<string, string>, fallback: string, origin: IssueOrigin) {
     const result = formSubmitError(cause, fallback);

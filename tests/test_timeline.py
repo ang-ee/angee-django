@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -10,17 +11,20 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context
+from rebac import actor_context, system_context
 
 from angee.base.models.identity import public_id_of
 from angee.base.pagination import KeysetOrder, keyset_signer
+from angee.decisions.timeline import DecisionKind
 from angee.graphql.publishing import mute_changes
+from angee.messaging.testing.models import Message, ThreadAttachment
 from angee.messaging.timeline import CommentKind
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from angee.timeline.kinds import timeline_kinds
 from angee.timeline.reading import Timeline
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data, vault_for
+from tests.messaging_campaign import comment_record as comment_record
 
 KINDS = [
     "angee.provenance.timeline.timeline_kinds",
@@ -92,6 +96,17 @@ def test_observed_fields_reject_reverse_relation_declarations() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_decision_timeline_without_requester_contributors(composed_permissions: None, monkeypatch) -> None:
+    actor = create_platform_admin("decision-only-reader")
+    record = vault_for(actor)
+    decision = apps.get_model("decisions", "Decision")
+    monkeypatch.setattr(decision, "requester_querysets", classmethod(lambda cls: ()))
+    rows, fold = DecisionKind().source(record, actor)
+    assert fold is None
+    assert list(rows) == []
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)
 def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: None) -> None:
@@ -120,12 +135,55 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     assert page["entries"][0]["detail"] == "Second edit"
     assert page["entries"][0]["children"] == []
     assert page["needs_me"] == data["timeline_attention"] == 1
+    tasks = [entry for entry in page["entries"] if entry["kind"] == "projects.task"]
+    assert len(tasks) == 1 and tasks[0]["needs_me"] is True
+    assert all(entry["needs_me"] is False for entry in page["entries"]
+               if entry["kind"] == "provenance.change")
+    attention = read_timeline(vault, owner, needsMe=True)["timeline"]
+    assert [entry["target_id"] for entry in attention["entries"]] == [tasks[0]["target_id"]]
+    assert attention["kinds"] == page["kinds"]
     one = read_timeline(vault, owner, limit=1)["timeline"]
     assert one["has_more"] and one["next_before"]
+    clamped = Timeline(vault, owner).page(limit=0)
+    assert len(clamped.entries) == 1 and clamped.has_more
+    assert {kind.id: kind.count for kind in clamped.kinds} == counts
+    assert clamped.needs_me == page["needs_me"]
     rest = read_timeline(vault, owner, before=one["next_before"])["timeline"]
     assert [one["entries"][0], *rest["entries"]] == page["entries"]
     assert one["kinds"] == rest["kinds"] == page["kinds"]
     assert read_timeline(vault, owner, kinds=["workflows.run"])["timeline"]["entries"] == []
+
+
+@pytest.mark.postgresql
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
+@override_settings(ANGEE_TIMELINE_KINDS=KINDS)
+def test_sparse_non_admin_page_has_one_bounded_selection_statement(comment_record, composed_permissions: None) -> None:
+    record, actor = comment_record.record, comment_record.author
+    assert not actor.is_superuser
+    with system_context(reason="test.timeline.selection.guard"):
+        attachment = ThreadAttachment.objects.ensure_for_record(record)
+        Message.objects.create(
+            thread=attachment.thread, message_type="comment", direction="internal", created_by=actor,
+        )
+    with CaptureQueriesContext(connection) as queries:
+        timeline = Timeline(record, actor)
+        page = timeline.page()
+    assert {kind.id for kind in timeline.kinds} == {kind.id for kind in timeline_kinds()}
+    assert next(kind.count for kind in page.kinds if kind.id == "workflows.run") == 0
+    selections = [
+        query["sql"] for query in queries
+        if 'WITH RECURSIVE "timeline_source" AS' in query["sql"]
+    ]
+    assert len(selections) == 1
+    sql, = selections
+    source_kinds = re.findall(r"'([\w.]+)'(?:::\w+)? AS \"_timeline_kind\"", sql)
+    # With no linked run candidates, its actor-scoped branch compiles to EMPTY;
+    # the public kind still appears with count zero.
+    assert sorted(source_kinds) == sorted(kind.id for kind in timeline.kinds if kind.id != "workflows.run")
+    assert re.findall(r"'(\w+)'(?:::\w+)? AS \"_timeline_row\"", sql) == ["kind", "entry", "child"]
+    assert len(sql.encode("utf-8")) <= 275_000
+    assert all(len(query["sql"].encode("utf-8")) <= 275_000 for query in queries)
 
 
 def timeline_entries(record, actor=None, *, kind=None):

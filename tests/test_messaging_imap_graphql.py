@@ -56,6 +56,7 @@ def test_connect_imap_channel_creates_basic_auth_channel(composed_tables: None) 
         "lifecycle": "CONNECTED",
         "credential_status": "active",
         "runtime_status": "OK",
+        "open_failure_count": 0,
         "config": {
             "host": "imap.example.com",
             "security": "starttls",
@@ -162,7 +163,8 @@ def _schema() -> Any:
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
         for module in (iam_schema, integrate_schema, parties_schema, messaging_schema, imap_schema)
     ]
-    return GraphQLSchemas(addons).build("console")
+    # An addon-only build: donor addons are left out, so it declares itself partial.
+    return GraphQLSchemas(addons, partial_schema=True).build("console")
 
 
 def test_update_imap_channel_credential_replaces_the_login_in_place(
@@ -299,6 +301,7 @@ def _paused_sample_channel(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[s
     return admin, channel, account
 
 
+@pytest.mark.django_db(transaction=True)
 def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -466,6 +469,7 @@ mutation ConnectImap(
     lifecycle
     credential_status
     runtime_status
+    open_failure_count
     config
   }
 }

@@ -11,21 +11,18 @@ import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch, prefetch_related_objects
-from rebac import system_context
+from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry_django.auth.utils import get_current_user
-from strawberry_django.optimizer import optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.fields.identity import SqidField
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.locks import StaleRevisionError
-from angee.graphql.actions import ActionResult, action_guard, session_user
-from angee.graphql.capabilities import permission_expression, permissions_field
+from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata
 from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     declared_hasura_write_relation_fields,
     hasura_model_resource,
@@ -39,21 +36,24 @@ from angee.graphql.ids import (
     require_public_id,
     to_public_id,
 )
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
-from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
-from angee.iam.identity import user_display_label, user_label, user_public_id
-from angee.knowledge.models import (
+from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
+from angee.iam.graphql.actions import session_user
+from angee.iam.graphql.capabilities import permission_expression, permissions_field
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.iam.identity import user_display_label, user_label_annotation, user_public_id
+from angee.iam.permissions import instance_actor
+from angee.knowledge.exceptions import (
     AmbiguousMatchError,
-    PageQuerySet,
-    RecordBindingManager,
     SectionNotFoundError,
-    SectionOp,
     StaleBodyError,
     StructuredEditError,
     UnsupportedPageKindError,
 )
+from angee.knowledge.models.bindings import RecordBindingManager
+from angee.knowledge.models.pages import PageQuerySet, SectionOp
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 if TYPE_CHECKING:
@@ -68,12 +68,9 @@ RecordBinding = apps.get_model("knowledge", "RecordBinding")
 
 
 @strawberry_django.type(Vault)
-class VaultType(TrashedRefMixin, AngeeNode):
+class VaultType(TrashedRefMixin, ProtectedNode):
     """GraphQL projection of a vault."""
 
-    display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
     name: auto
     description: auto
     icon: auto
@@ -90,13 +87,12 @@ class VaultType(TrashedRefMixin, AngeeNode):
 
         return optional_public_id(user_public_id(cast(Any, self).owner_id))
 
-    @strawberry_django.field(only=["owner_id"], prefetch_related=[partial(user_label_prefetch, "owner")])
+    @strawberry_django.field(only=["owner_id"], annotate={"_iam_owner_label": user_label_annotation("owner")})
     def owner_label(self, info: strawberry.Info) -> str | None:
         """Return the owner's display label — no user object exposed."""
 
-        if hasattr(self, "_iam_owner_label_source"):
-            user = cast(Any, self)._iam_owner_label_source
-            return user_label(user) if user is not None else None
+        if "_iam_owner_label" in cast(Any, self).__dict__:
+            return cast(str | None, cast(Any, self)._iam_owner_label)
         return user_display_label(cast(Any, self).owner_id, request=get_request(info))
 
 
@@ -110,7 +106,7 @@ class OutlineEntryType:
 
 
 @strawberry_django.type(MarkdownPage)
-class MarkdownPageType(AngeeNode):
+class MarkdownPageType(ProtectedNode):
     """GraphQL projection of a concrete markdown page."""
 
     revision: auto
@@ -127,7 +123,7 @@ class MarkdownPageType(AngeeNode):
 
         return require_public_id(Page, cast(Any, self).page_ptr_id)
 
-    @strawberry_django.field(only=["body"])
+    @strawberry_django.field(annotate={"_excerpt_body": MarkdownPage.excerpt_expression()})
     def excerpt(self) -> str:
         """Return the leading body characters used for list previews."""
 
@@ -187,12 +183,9 @@ def _wikilinks_prefetch(_info: strawberry.Info) -> Prefetch:
 
 
 @strawberry_django.type(Page)
-class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
+class PageType(AuthoredRefMixin, TrashedRefMixin, ProtectedNode):
     """GraphQL projection of a page."""
 
-    display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
     revision: auto
     title: auto
     icon: auto
@@ -248,9 +241,9 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         page = cast(Any, self)
         if "_vault_label" in page.__dict__:
             return cast(str | None, page._vault_label)
-        # Mutation resolvers return an instance rather than an annotated queryset.
-        with system_context(reason="knowledge.graphql.vault_label"):
-            return str(page.vault)
+        # Mutation resolvers return an instance without the list annotation.
+        # The page already discloses its vault name; fetch that scalar alone.
+        return cast(str, Vault._base_manager.using(page._state.db).values_list("name", flat=True).get(pk=page.vault_id))
 
     @strawberry_django.field(only=["parent_id"])
     def parent(self) -> strawberry.ID | None:
@@ -269,16 +262,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         materializing it inside an actor-scoped resolver would fail.
         """
 
-        rows = (
-            Link._default_manager.filter(
-                target_page_id=cast(Any, self).pk,
-                is_resolved=True,
-                source_page__is_trashed=False,
-            )
-            .scoped()
-            .annotate(source_title=F("source_page__title"))
-            .order_by("source_title", "sqid")
-        )
+        rows = Link.objects.backlinks_to(cast(Any, self))
         return [
             BacklinkType(
                 page=require_public_id(Page, row.source_page_id),
@@ -290,32 +274,35 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
 
 
 @strawberry_django.type(RecordBinding)
-class RecordBindingType(AngeeNode):
+class RecordBindingType(ProtectedNode):
     """Binding metadata visible only to readers of both knowledge and target."""
 
     role: auto
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["page_id", "page__title"])
+    @strawberry_django.field(annotate={"_page_title": F("page__title")})
     def page_title(self) -> str | None:
-        """Return a readable bound page's title, when this edge owns a page."""
+        """Return the bound page title; binding read already requires page read."""
 
+        if hasattr(self, "_page_title"):
+            return cast(str | None, cast(Any, self)._page_title)
         page = cast(Any, self).page
         return None if page is None else str(page.title)
 
-    @strawberry_django.field(only=["page_id"])
-    def page_detail(self) -> PageType | None:
-        """Expose the readable page through its existing content and author projection."""
-
-        return cast(PageType | None, cast(Any, self).page)
+    page_detail: PageType | None = actor_scoped_to_one("page")
 
     @strawberry_django.field(only=["page_id"])
     def page_can_write(self) -> bool:
         """Expose the page end's write permission for binding controls."""
 
-        page = cast(Any, self).page
-        return page is not None and bool(page.has_access("write"))
+        row = cast(Any, self)
+        if row.page_id is None:
+            return False
+        page = Page.from_db(row._state.db, [Page._meta.pk.attname], [row.page_id])
+        if actor := instance_actor(row):
+            page.with_actor(actor)
+        return bool(page.has_access("write"))
 
     @strawberry_django.field(only=["page_id"])
     def page(self) -> PublicID | None:
@@ -391,7 +378,7 @@ def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
     return PageBodyPayload(ok=True, markdown=cast(MarkdownPageType, markdown))
 
 
-class VaultWriteBackend(AngeeHasuraWriteBackend):
+class VaultWriteBackend(ProtectedHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
@@ -404,7 +391,7 @@ class VaultWriteBackend(AngeeHasuraWriteBackend):
         return Vault._default_manager.create_for(user, **fields)
 
 
-class PageWriteBackend(AngeeHasuraWriteBackend):
+class PageWriteBackend(ProtectedHasuraWriteBackend):
     """Write semantics for pages: create belongs to the manager factory."""
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
@@ -550,7 +537,7 @@ class KnowledgeQuery:
             return []
         return cast(
             "list[RecordBindingType]",
-            list(RecordBinding._default_manager.for_record(record, role=role)),
+            RecordBinding._default_manager.for_record(record, role=role),
         )
 
     @strawberry.field(name="record_knowledge_can_bind")
@@ -574,7 +561,7 @@ class KnowledgeQuery:
         source = require_instance_for_id(Page, page)
         return cast(
             "list[RecordBindingType]",
-            list(RecordBinding._default_manager.for_knowledge(source, role=role)),
+            RecordBinding._default_manager.for_knowledge(source, role=role),
         )
 
     @strawberry.field(name="vault_record_bindings")
@@ -588,7 +575,7 @@ class KnowledgeQuery:
         source = require_instance_for_id(Vault, vault)
         return cast(
             "list[RecordBindingType]",
-            list(RecordBinding._default_manager.for_knowledge(source, role=role)),
+            RecordBinding._default_manager.for_knowledge(source, role=role),
         )
 
 

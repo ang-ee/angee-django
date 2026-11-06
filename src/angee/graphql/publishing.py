@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
-import threading
-from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import replace
-from functools import partial
-from typing import Any
+from typing import Any, cast
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -18,82 +16,39 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
-from django.db.models.signals import post_delete, post_save
-from django.dispatch import Signal
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
+from angee.base import signals as model_signals
 from angee.base.refs import RecordRef, record_view_refs
-from angee.base.signals import bulk_updated
+from angee.base.signals import ModelChange
 from angee.graphql.events import ChangePayload, ChangeRelatedRecord, ReadableFields
 from angee.graphql.mixins import ChangeBroadcastMixin
+from angee.graphql.replay import append_change, note_failed_append
 from angee.graphql.sdl import PUBLISHERS_ARTIFACT
 
+# Historical imports retain the one neutral implementation.
+change_published = model_signals.change_published
+changes_muted = model_signals.changes_muted
+connect_observers = model_signals.connect_observers
+mute_changes = model_signals.mute_changes
+publication_ingestion_active = model_signals.publication_ingestion_active
+publication_ingestion_context = model_signals.publication_ingestion_context
+publish_bulk_update = model_signals.publish_bulk_update
+
 _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
-change_published = Signal()
-"""Sent robustly when an owner publishes a model change, inside its transaction.
-
-Receivers are called with ``sender`` set to the model class, a ``payload``
-keyword containing the already-built :class:`ChangePayload`. Delivery uses
-``send_robust``: receiver exceptions are logged by the publisher and are not
-propagated to the save/delete caller or allowed to starve later receivers.
-Observers enqueue effects with ``transaction.on_commit``. The publisher queues
-transport afterward; derived reads can invalidate their related record feeds
-through the same native commit queue.
-"""
-
+_REDIS_CHANNEL_LAYER = "channels_redis.core.RedisChannelLayer"
 logger = logging.getLogger(__name__)
-
 _publisher_model_labels: frozenset[str] = frozenset()
-
-_mute_state = threading.local()
-_publication_ingestion_depth: ContextVar[int] = ContextVar("graphql_publication_ingestion_depth", default=0)
-
-
-@contextmanager
-def publication_ingestion_context() -> Iterator[None]:
-    """Mark emitted change payloads as ingestion while preserving broadcasting."""
-
-    token = _publication_ingestion_depth.set(_publication_ingestion_depth.get() + 1)
-    try:
-        yield
-    finally:
-        _publication_ingestion_depth.reset(token)
+_publisher_fields: dict[type[models.Model], ReadableFields] = {}
+_explicit_readable_fields: ContextVar[tuple[models.Model, ReadableFields] | None] = ContextVar(
+    "graphql_change_readable_fields", default=None,
+)
 
 
-def publication_ingestion_active() -> bool:
-    """Return the ingestion annotation for a change captured in this context."""
-
-    return _publication_ingestion_depth.get() > 0
-
-
-def changes_muted() -> bool:
-    """Whether the current owner suppresses local observation and transport."""
-
-    return bool(getattr(_mute_state, "depth", 0))
-
-
-@contextmanager
-def mute_changes() -> Iterator[None]:
-    """Suppress per-row change publishing for the duration of the block.
-
-    A bulk teardown that deletes thousands of rows fires one ``post_delete``
-    publisher per row; each would lazy-load the row's thread and run an ``exists()``
-    probe inside ``broadcasts_changes()`` before buffering an ``on_commit``
-    ``group_send``. While a whole scope is being purged those per-row events are
-    noise (and their N+1 defeats a count-only preview's scale win), so
-    :func:`publish_change` returns immediately when muted — skipping both the probe
-    and the broadcast. Thread-local and reentrant, and the prior depth is restored in
-    ``finally`` so a nested or failing block never leaks the muted state. This is not
-    :func:`disconnect_publishers`: it does not touch the shared signal registry, so it
-    is safe under concurrent requests. A coarse-grained change the caller still wants
-    observed (the purged root's own row) must run *outside* the block.
-    """
-
-    depth = getattr(_mute_state, "depth", 0)
-    _mute_state.depth = depth + 1
-    try:
-        yield
-    finally:
-        _mute_state.depth = depth
+def connect_change_adapter() -> None:
+    """Project transport only after every synchronous local observer has run."""
+    model_signals.change_observed.connect(_on_change_observed, weak=False, dispatch_uid="angee.graphql.changes")
 
 
 def change_group(model: type[models.Model]) -> str:
@@ -146,198 +101,113 @@ def connect_publishers(
     """Connect a declared transport feed, upgrading any local-only observation."""
 
     disconnect_publishers(model)
-    _connect_changes(model, readable_fields=readable_fields, include_parents=include_parents, broadcast=True)
-
-
-def connect_observers(model: type[models.Model]) -> None:
-    """Observe local writes without enabling a transport feed or replacing one."""
-
-    _connect_changes(model, broadcast=False)
-
-
-def _connect_changes(model: type[models.Model], *, readable_fields: ReadableFields = (),
-                     include_parents: bool = False, broadcast: bool) -> None:
-    """Connect native saves/deletes and optionally the model's parent-backed view.
-
-    GraphQL child views observe parent writes too. Source observers that already
-    bind every observed class disable that mirror to avoid probing child tables.
-    """
-
-    dispatch_uid = f"angee-changes-{model._meta.label}"
-    bulk_updated.connect(partial(publish_bulk_update, broadcast=broadcast), sender=model,
-                         weak=False, dispatch_uid=f"{dispatch_uid}-bulk")
-    save_receiver = partial(
-        _on_save,
-        published_model=model,
-        broadcast=broadcast,
-        readable_fields=(readable_fields if callable(readable_fields) else frozenset(readable_fields)),
-    )
-    senders = (model, *model._meta.get_parent_list()) if include_parents else (model,)
-    for sender in senders:
-        # Django sends only the saved class's signal, including parent writes.
-        post_save.connect(save_receiver, sender=sender, weak=False,
-                          dispatch_uid=f"{dispatch_uid}-save" if sender is model
-                          else f"{dispatch_uid}-save-{sender._meta.label}")
-    post_delete.connect(
-        partial(_on_delete, broadcast=broadcast),
-        sender=model,
-        weak=False,
-        dispatch_uid=f"{dispatch_uid}-delete",
-    )
+    _publisher_fields[model] = readable_fields if callable(readable_fields) else frozenset(readable_fields)
+    connect_change_adapter()
+    connect_observers(model, include_parents=include_parents)
 
 
 def disconnect_publishers(model: type[models.Model]) -> bool:
-    """Disconnect ``model``'s save and delete publishers; return whether any were wired.
-
-    The public inverse of :func:`connect_publishers` — a test that wires a lone
-    publisher to observe a broadcast restores prior state through this seam instead of
-    re-deriving the private dispatch-uid format or probing receiver tuples.
-    """
-
-    dispatch_uid = f"angee-changes-{model._meta.label}"
-    disconnected = post_save.disconnect(sender=model, dispatch_uid=f"{dispatch_uid}-save")
-    for parent in model._meta.get_parent_list():
-        disconnected = post_save.disconnect(
-            sender=parent, dispatch_uid=f"{dispatch_uid}-save-{parent._meta.label}",
-        ) or disconnected
-    disconnected = post_delete.disconnect(sender=model, dispatch_uid=f"{dispatch_uid}-delete") or disconnected
-    disconnected = bulk_updated.disconnect(sender=model, dispatch_uid=f"{dispatch_uid}-bulk") or disconnected
-    return bool(disconnected)
+    """Disconnect a declared transport feed and its native model observers."""
+    _publisher_fields.pop(model, None)
+    return model_signals.disconnect_observers(model)
 
 
 def change_channel_layer() -> Any:
     """Return the configured channel layer after validating deployment safety."""
 
-    _check_channel_layer()
+    validate_channel_layer()
     return get_channel_layer()
 
 
-def _check_channel_layer() -> None:
-    """Fail loudly when the dev-only in-memory layer is used outside dev/test."""
+def validate_channel_layer() -> None:
+    """Refuse channel layers unable to retain and fan out model changes."""
 
     layer_config = getattr(settings, "CHANNEL_LAYERS", {}).get("default", {})
     backend = layer_config.get("BACKEND", "")
+    if not backend:
+        return
+    if backend == _REDIS_CHANNEL_LAYER:
+        return
     if backend != _INMEMORY_CHANNEL_LAYER:
+        raise ImproperlyConfigured(
+            f"GraphQL change replay does not support CHANNEL_LAYERS backend {backend!r}; "
+            "use channels_redis.core.RedisChannelLayer or channels.layers.InMemoryChannelLayer."
+        )
+    if getattr(settings, "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER", False) is True:
         return
-    if getattr(settings, "DEBUG", False):
-        return
-    if getattr(settings, "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER", False):
+    if getattr(settings, "DEBUG", False) is True and (
+        not getattr(settings, "CELERY_BROKER_URL", None)
+        or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) is True
+    ):
         return
     raise ImproperlyConfigured(
-        "channels.layers.InMemoryChannelLayer is dev-only for GraphQL changes; configure a shared channel layer."
+        "channels.layers.InMemoryChannelLayer cannot deliver GraphQL changes across processes. "
+        "Configure a shared CHANNEL_LAYERS backend such as channels_redis.core.RedisChannelLayer "
+        "when Celery tasks are not eager. In-memory delivery requires DEBUG=True and either "
+        "no CELERY_BROKER_URL or CELERY_TASK_ALWAYS_EAGER=True; use ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER "
+        "only for isolated tests."
     )
 
 
-def _on_save(
-    sender: type[models.Model],
-    instance: models.Model,
-    created: bool = False,
-    update_fields: Iterable[str] | None = None,
-    raw: bool = False,
-    readable_fields: ReadableFields = (),
-    published_model: type[models.Model] | None = None,
-    broadcast: bool = True,
-    created_batch: tuple[models.Model, ...] | None = None,
-    **kwargs: Any,
-) -> None:
-    """Publish each row; inherited views read a creation batch on its final send."""
+def validate_replay_redis_version() -> None:
+    """Check the Redis feature required by the replay log at startup."""
 
-    del sender, kwargs
-    if raw:
+    layer_config = getattr(settings, "CHANNEL_LAYERS", {}).get("default", {})
+    if layer_config.get("BACKEND") != _REDIS_CHANNEL_LAYER:
         return
-    instances: Iterable[models.Model] = (instance,)
-    if published_model is not None and type(instance) is not published_model:
-        sources = created_batch if created_batch is not None else (instance,)
-        if not sources or instance is not sources[-1]:
-            return
-        rows = published_model._base_manager.db_manager(instance._state.db).in_bulk(row.pk for row in sources)
-        instances = (rows[row.pk] for row in sources if row.pk in rows)
-        created = False
-    for row in instances:
-        publish_change(
-            row,
-            action="create" if created else "update",
-            update_fields=update_fields,
-            readable_fields=readable_fields,
-            broadcast=broadcast,
-        )
+    from channels_redis.utils import create_pool, decode_hosts
+
+    hosts = layer_config.get("CONFIG", {}).get("hosts", [("127.0.0.1", 6379)])
+
+    async def check_versions() -> None:
+        for host in decode_hosts(hosts):
+            connection = Redis(connection_pool=create_pool(host))
+            try:
+                try:
+                    server_info = cast(Mapping[str, Any], await connection.info("server"))
+                    version = tuple(int(part) for part in server_info["redis_version"].split(".")[:2])
+                except (RedisError, OSError, KeyError, ValueError) as error:
+                    raise ImproperlyConfigured(
+                        f"Cannot verify Redis 6.2+ for GraphQL change replay: {error}"
+                    ) from error
+            finally:
+                await connection.aclose(close_connection_pool=True)
+            if version < (6, 2):
+                raise ImproperlyConfigured("GraphQL change replay requires Redis 6.2 or newer for XTRIM MINID.")
+
+    async_to_sync(check_versions)()
 
 
-def _on_delete(
-    sender: type[models.Model],
-    instance: models.Model,
-    broadcast: bool = True,
-    **kwargs: Any,
-) -> None:
-    """Publish a local delete while its source identity is still available."""
+def publish_change(instance: models.Model, *, action: str, update_fields: Iterable[str] | None,
+                   readable_fields: ReadableFields = (), broadcast: bool = True) -> None:
+    """Compatibility adapter for explicit GraphQL publication of an owner write."""
+    connect_change_adapter()
+    token = _explicit_readable_fields.set((instance, readable_fields))
+    try:
+        model_signals.publish_change(instance, action=action, update_fields=update_fields, broadcast=broadcast)
+    finally:
+        _explicit_readable_fields.reset(token)
 
-    del sender, kwargs
-    publish_change(instance, action="delete", update_fields=None, broadcast=broadcast)
 
-
-def publish_bulk_update(sender: type[models.Model], *, instances: Iterable[models.Model],
-                        update_fields: Iterable[str], broadcast: bool = True, **kwargs: Any) -> None:
-    """Adapt the core's bounded batch notification to the row-change protocol."""
-
-    if changes_muted():
+def _on_change_observed(sender: type[models.Model], *, payload: ModelChange, **kwargs: Any) -> None:
+    """Capture GraphQL-only values/read gates after local write observation."""
+    requested = _explicit_readable_fields.get()
+    explicit = requested[1] if requested is not None and requested[0] is payload.instance else None
+    if explicit is None and sender not in _publisher_fields:
         return
-    coalesce = getattr(sender, "change_batch_targets", None)
-    fields: Iterable[str] | None = update_fields
-    if coalesce is not None:
-        instances = coalesce(instances, update_fields=update_fields)
-        fields = None
-    for instance in instances:
-        publish_change(instance, action="update", update_fields=fields, broadcast=broadcast)
-
-
-def publish_change(
-    instance: models.Model,
-    *,
-    action: str,
-    update_fields: Iterable[str] | None,
-    readable_fields: ReadableFields = (),
-    broadcast: bool = True,
-) -> None:
-    """Publish one local change, then queue transport after local commit effects."""
-
-    # A bulk purge mutes publishing for its whole teardown (see mute_changes): return
-    # before the broadcasts_changes() probe so neither the per-row thread lazy-load /
-    # exists() nor the group_send runs while thousands of rows are being deleted.
-    if changes_muted():
-        return
-    # Broadcast policy governs transport, not local read invalidation observers.
-    # Capture it while the row is live so deletion retains the same boundary.
-    broadcasts = broadcast and (
+    instance = payload.instance
+    broadcasts = payload.broadcasts and (
         not isinstance(instance, ChangeBroadcastMixin) or instance.broadcasts_changes()
     )
-    model = type(instance)
-
-    payload = ChangePayload.from_instance(
-        instance,
-        action=action,
-        update_fields=update_fields,
-        readable_fields=readable_fields if broadcasts else (),
-        during_ingestion=publication_ingestion_active(),
-        broadcasts=broadcasts,
+    fields = explicit if explicit is not None else _publisher_fields[sender]
+    projected = ChangePayload.from_instance(
+        instance, action=payload.action, update_fields=payload.changed_fields,
+        readable_fields=fields if broadcasts else (), during_ingestion=payload.during_ingestion,
+        broadcasts=broadcasts, field_values=payload.changed_values,
     )
-    _send_change(model, payload)
-
-
-def _send_change(model: type[models.Model], payload: ChangePayload) -> None:
-    """Deliver local observations before queuing transport; isolate receiver failures."""
-
-    responses = change_published.send_robust(sender=model, payload=payload)
-    for receiver, response in responses:
-        if not isinstance(response, Exception):
-            continue
-        logger.error(
-            "change_published receiver %r failed for %s %s.",
-            receiver,
-            payload.model,
-            payload.id,
-            exc_info=(type(response), response, response.__traceback__),
-        )
-    _queue_transport(model, payload)
+    _queue_transport(sender, replace(
+        projected, id=payload.id, occurrence_id=payload.occurrence_id, using=payload.using,
+    ))
 
 
 def broadcast_related_records(records: Iterable[models.Model]) -> None:
@@ -368,7 +238,7 @@ def broadcast_related_records(records: Iterable[models.Model]) -> None:
 
 def _queue_transport(model: type[models.Model], payload: ChangePayload) -> None:
     if payload.broadcasts:
-        using = payload.instance._state.db if payload.instance is not None else None
+        using = payload.using
         message = payload.as_message()
 
         def broadcast() -> None:
@@ -378,12 +248,20 @@ def _queue_transport(model: type[models.Model], payload: ChangePayload) -> None:
 
 
 def _broadcast(model: type[models.Model], payload: dict[str, Any]) -> None:
-    """Send ``payload`` to the model's channel-layer change group."""
+    """Retain ``payload`` before sending it to the model's change group."""
 
     layer = change_channel_layer()
     if layer is None:
         return
-    async_to_sync(layer.group_send)(
-        change_group(model),
-        {"type": "angee.change", "payload": payload},
-    )
+    group = change_group(model)
+
+    async def send() -> None:
+        try:
+            await append_change(layer, group, payload)
+        except Exception:
+            logger.exception("Retaining the %s change failed; sending live delivery.", group)
+            with contextlib.suppress(Exception):
+                await note_failed_append(layer, group)
+        await layer.group_send(group, {"type": "angee.change", "payload": payload})
+
+    async_to_sync(send)()

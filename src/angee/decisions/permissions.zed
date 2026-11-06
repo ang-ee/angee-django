@@ -1,8 +1,13 @@
 // @rebac_package: decisions
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 10
 
 definition decisions/decision {
+    // A readable concerned record may display whether an open decision exists;
+    // its timeline may count those open decisions. Neither fact admits the
+    // decision or its protected fields.
+    // record_decision_answers uses the proved record to bound candidates,
+    // then applies this decision's read gate before projecting its answer.
     relation assignee: auth/user // rebac:field=assignees
     relation requester: auth/user // rebac:field=requester
     relation person: iam/kind // rebac:const=person
@@ -18,6 +23,8 @@ definition decisions/decision {
 }
 
 definition decisions/record {
+    // A readable decision implies its retained concern-link membership.
+    // Target identity filters and displayed target fields require target read.
     relation decision: decisions/decision // rebac:field=decision
     relation admin: angee/role // rebac:const=admin
     permission create = admin->member

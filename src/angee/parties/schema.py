@@ -15,33 +15,29 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db.models import Exists, OuterRef, Prefetch
-from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
-from strawberry_django.fields.field import StrawberryDjangoField
-from strawberry_django.queryset import run_type_get_queryset
+from strawberry_django.utils.requests import get_request
 
-from angee.base.identity import public_subject_ref
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
-from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
-    declared_hasura_resource_fields,
-    hasura_model_resource,
-    public_pk_decoder,
-)
+from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
-from angee.iam.identity import user_public_id
+from angee.iam.graphql.actions import authorized_action_target, session_user
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.iam.identity import public_subject_ref, user_public_id
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.managers import DisplayAvatarPrefetches
 from angee.parties.models import Party as PartyModel
 from angee.parties.models import RelationshipKind as RelationshipKindModel
-from angee.storage.schema import FileType
+from angee.storage.models import UploadState
+from angee.storage.schema import FileMimeIdentity, FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Party = apps.get_model("parties", "Party")
+File = apps.get_model("storage", "File")
 Person = apps.get_model("parties", "Person")
 Organization = apps.get_model("parties", "Organization")
 Handle = apps.get_model("parties", "Handle")
@@ -83,22 +79,67 @@ _ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]:
     """Select the named read :meth:`PartyManager.display_avatar_prefetches` batches for a page.
 
-    Avatars load through the actor's readable files, optimized for the selected
-    ``FileType`` fields.
+    The admitted party bounds its avatar projection. File and handle rows keep
+    their own actor read guards.
     """
 
     def prefetch(info: strawberry.Info) -> Prefetch:
         actor = session_user(info)
-        field = cast(StrawberryDjangoField, info._field)
-        files = apps.get_model("storage", "File").objects.with_actor(actor)
-        avatars = optimize(run_type_get_queryset(files, field.django_type, info), info)
+        avatars = apps.get_model("storage", "File").objects.with_actor(actor).select_related(
+            "mime_type"
+        )
         return cast(Prefetch, getattr(Party.objects.display_avatar_prefetches(actor, avatars=avatars), name))
 
     return prefetch
 
 
+@strawberry.type
+class AvatarIdentity:
+    """Only image display facts shown with an admitted party."""
+
+    file: strawberry.Private[Any]
+
+    @strawberry.field
+    def id(self) -> strawberry.ID:
+        return strawberry.ID(self.file.sqid)
+
+    @strawberry.field
+    def filename(self) -> str:
+        return str(self.file.filename)
+
+    @strawberry.field
+    def mime_type(self) -> FileMimeIdentity | None:
+        return FileMimeIdentity.of(self.file)
+
+    @strawberry.field
+    def url(self, info: strawberry.Info) -> str | None:
+        if getattr(get_request(info), "view_as", None) is not None:
+            return None
+        return self.file.download_url() if self.file.upload_state == UploadState.READY else ""
+
+
+@strawberry.type
+class PartyIdentity:
+    """Public identity facts projected by an admitted follower or Need."""
+
+    party: strawberry.Private[Any]
+
+    @strawberry.field
+    def id(self) -> strawberry.ID:
+        return strawberry.ID(self.party.sqid)
+
+    @strawberry.field
+    def display_name(self) -> str:
+        return str(self.party.display_name)
+
+    @strawberry.field
+    def display_avatar(self, info: strawberry.Info) -> AvatarIdentity | None:
+        avatar = Party.objects.display_avatar(self.party, actor=session_user(info))
+        return AvatarIdentity(file=avatar) if avatar is not None else None
+
+
 @strawberry_django.type(Party)
-class PartyType(AuthoredRefMixin, AngeeNode):
+class PartyType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a party (the unified contact)."""
 
     display_name: auto
@@ -106,7 +147,19 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     handle_count: int | None
     first_met_note: str | None
     introduced_by: "PartyType | None" = actor_scoped_to_one("introduced_by")
-    avatar: FileType | None = actor_scoped_to_one("avatar")
+
+    @strawberry_django.field(only=["avatar_id"], prefetch_related=[_display_avatar_prefetch("own")])
+    def avatar(self, info: strawberry.Info) -> AvatarIdentity | None:
+        """Project the admitted party's own avatar identity."""
+
+        row = cast(Any, self)
+        avatar = getattr(row, "_display_own_avatar", None)
+        if not hasattr(row, "_display_own_avatar") and row.avatar_id is not None:
+            avatar = File.objects.with_actor(session_user(info)).select_related("mime_type").filter(
+                pk=row.avatar_id,
+            ).first()
+        return AvatarIdentity(file=avatar) if avatar is not None else None
+
     created_at: auto
     updated_at: auto
 
@@ -114,16 +167,22 @@ class PartyType(AuthoredRefMixin, AngeeNode):
         only=["avatar_id"],
         prefetch_related=[_display_avatar_prefetch(name) for name in DisplayAvatarPrefetches._fields],
     )
-    def display_avatar(self, info: strawberry.Info) -> FileType | None:
+    def display_avatar(self, info: strawberry.Info) -> AvatarIdentity | None:
         """Return the avatar the party shows: its own, else its strongest handle's."""
 
-        return cast(Any, Party.objects.display_avatar(cast(Any, self), actor=session_user(info)))
+        avatar = Party.objects.display_avatar(cast(Any, self), actor=session_user(info))
+        return AvatarIdentity(file=avatar) if avatar is not None else None
 
-    @strawberry.field
+    @strawberry_django.field(annotate={"_concrete_kind": lambda info: Party.concrete_kind_expression()})
     def concrete_kind(parent: strawberry.Parent[PartyModel]) -> RelationshipKindModel.PartyKind | None:
         """Return the native MTI subtype used for canonical Party navigation."""
 
         return parent.concrete_kind
+
+    @strawberry.field
+    def merge_scalar_fields(parent: strawberry.Parent[PartyModel]) -> list[str]:
+        """Expose the row owner's admitted scalar merge choices."""
+        return list(parent.merge_common_scalar_fields)
 
     handles: list["HandleType"]
 
@@ -150,6 +209,11 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 class PersonType(PartyType):
     """GraphQL projection of a person."""
 
+    @strawberry.field
+    def merge_scalar_fields(parent: strawberry.Parent[PartyModel]) -> list[str]:
+        """Include Person choices only in the readable Person projection."""
+        return list(parent.merge_scalar_fields)
+
     name_prefix: auto
     given_name: auto
     additional_name: auto
@@ -163,7 +227,7 @@ class PersonType(PartyType):
     def circle_names(self) -> list[str]:
         """Return manager-prefetched, actor-visible circle names as chip values."""
 
-        return cast("list[str]", Person.objects.circle_names_for(cast(Any, self)))
+        return cast("list[str]", cast(Any, self).visible_circle_names())
 
     @strawberry_django.field(only=["user_id"])
     def user(self) -> strawberry.ID | None:
@@ -181,7 +245,7 @@ class OrganizationType(PartyType):
 
 
 @strawberry_django.type(Handle)
-class HandleType(AngeeNode):
+class HandleType(ProtectedNode):
     """GraphQL projection of a handle (a party's reachable address)."""
 
     platform: auto
@@ -228,7 +292,7 @@ class StatementEvidenceType:
 
 
 @strawberry_django.type(PartyStatement)
-class PartyStatementType(AngeeNode):
+class PartyStatementType(ProtectedNode):
     """Subject-authorized handle assertion; the member retains its read gate."""
 
     subject: PartyType | None = actor_scoped_to_one("subject")
@@ -278,7 +342,7 @@ class PartyStatementType(AngeeNode):
 
 
 @strawberry_django.type(Address)
-class AddressType(AngeeNode):
+class AddressType(ProtectedNode):
     """GraphQL projection of a physical/postal address."""
 
     party: PartyType | None
@@ -296,7 +360,7 @@ class AddressType(AngeeNode):
 
 
 @strawberry_django.type(Folder)
-class ContactFolderType(AngeeNode):
+class ContactFolderType(ProtectedNode):
     """GraphQL projection of a contact folder (a synced address book's parties).
 
     Named distinctly from storage's file ``FolderType`` — a different concept.
@@ -310,14 +374,14 @@ class ContactFolderType(AngeeNode):
 
 
 @strawberry_django.type(Directory)
-class DirectoryType(BridgeTypeMixin, AngeeNode):
+class DirectoryType(BridgeTypeMixin, ProtectedNode):
     """GraphQL projection of a connected contacts directory (e.g. a CardDAV source)."""
 
     poll_interval: auto
 
 
 @strawberry_django.type(Circle)
-class CircleType(AngeeNode):
+class CircleType(ProtectedNode):
     """GraphQL projection of a circle (a private, overlapping grouping of parties)."""
 
     name: auto
@@ -337,7 +401,7 @@ class CircleType(AngeeNode):
 
 
 @strawberry_django.type(CircleMember)
-class CircleMemberType(AngeeNode):
+class CircleMemberType(ProtectedNode):
     """GraphQL projection of a party's circle membership."""
 
     circle: CircleType | None
@@ -349,7 +413,7 @@ class CircleMemberType(AngeeNode):
 
 
 @strawberry_django.type(SameAsStatement)
-class SameAsStatementType(AngeeNode):
+class SameAsStatementType(ProtectedNode):
     """A symmetric identity statement, admitted and read through its endpoints."""
 
     snak: auto
@@ -358,7 +422,7 @@ class SameAsStatementType(AngeeNode):
 
 
 @strawberry_django.type(RelationshipKind)
-class RelationshipKindType(AngeeNode):
+class RelationshipKindType(ProtectedNode):
     """GraphQL projection of a relationship-vocabulary kind."""
 
     slug: auto
@@ -370,7 +434,7 @@ class RelationshipKindType(AngeeNode):
 
 
 @strawberry_django.type(Relationship)
-class PartyRelationshipType(AngeeNode):
+class PartyRelationshipType(ProtectedNode):
     """GraphQL projection of a typed party edge (anchor viewpoint)."""
 
     party: PartyType | None
@@ -564,8 +628,6 @@ class PartiesIdentityMutation:
         return cast(SameAsStatementType, Party.same_as.for_pair(party_a, party_b).dismiss(aspect="same_as"))
 
 
-
-
 _PARTY_RESOURCE = hasura_model_resource(
     PartyType,
     model=Party,
@@ -598,7 +660,7 @@ _PARTY_RESOURCE = hasura_model_resource(
     ),
     insert=False,
     updatable=["display_name", "notes", *_PARTY_EXTENSION_UPDATE_FIELDS],
-    write_backend=AngeeHasuraWriteBackend(Party, public_id_fields=_PARTY_EXTENSION_PUBLIC_ID_FIELDS),
+    write_backend=ProtectedHasuraWriteBackend(Party, public_id_fields=_PARTY_EXTENSION_PUBLIC_ID_FIELDS),
 )
 _PERSON_RESOURCE = hasura_model_resource(
     PersonType,
@@ -661,7 +723,7 @@ _PERSON_RESOURCE = hasura_model_resource(
         *_PERSON_EXTENSION_UPDATE_FIELDS,
     ],
     delete=False,
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Person,
         public_id_fields=_PERSON_EXTENSION_PUBLIC_ID_FIELDS,
     ),
@@ -717,7 +779,7 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
         *_ORGANIZATION_EXTENSION_UPDATE_FIELDS,
     ],
     delete=False,
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Organization,
         public_id_fields=_ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS,
     ),
@@ -778,7 +840,7 @@ _ADDRESS_RESOURCE = hasura_model_resource(
         "is_primary",
     ],
     field_id_decode={"party": public_pk_decoder(Party)},
-    write_backend=AngeeHasuraWriteBackend(Address, public_id_fields=("party",)),
+    write_backend=ProtectedHasuraWriteBackend(Address, public_id_fields=("party",)),
     get_queryset=lambda info: Address.objects.canonical(),
 )
 _PARTY_STATEMENT_RESOURCE = hasura_model_resource(
@@ -806,7 +868,7 @@ _PARTY_STATEMENT_RESOURCE = hasura_model_resource(
     aggregatable=["id", "confidence"],
     # No handle-field axis: a group key would read handle rows the party reader may
     # not read; ``handle`` resolves through its own gate.
-    groupable=["handle", "subject", "subject__display_name", "source_kind"],
+    groupable=["handle", "handle__display_name", "subject", "subject__display_name", "source_kind"],
     insert=False,
     update=False,
     delete=False,
@@ -829,7 +891,7 @@ _CIRCLE_RESOURCE = hasura_model_resource(
     insertable=["name", "description", "color", "icon", "position", "parent"],
     updatable=["name", "description", "color", "icon", "position", "parent"],
     field_id_decode={"parent": public_pk_decoder(Circle)},
-    write_backend=AngeeHasuraWriteBackend(Circle, public_id_fields=("parent",)),
+    write_backend=ProtectedHasuraWriteBackend(Circle, public_id_fields=("parent",)),
     get_queryset=lambda info: Circle.objects.all().with_member_counts(),
 )
 _CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
@@ -848,7 +910,7 @@ _CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
         "circle": public_pk_decoder(Circle),
         "party": public_pk_decoder(Party),
     },
-    write_backend=AngeeHasuraWriteBackend(CircleMember, public_id_fields=("circle", "party")),
+    write_backend=ProtectedHasuraWriteBackend(CircleMember, public_id_fields=("circle", "party")),
 )
 _RELATIONSHIP_KIND_RESOURCE = hasura_model_resource(
     RelationshipKindType,
@@ -876,7 +938,7 @@ _RELATIONSHIP_RESOURCE = hasura_model_resource(
         "other_party": public_pk_decoder(Party),
         "kind": public_pk_decoder(RelationshipKind),
     },
-    write_backend=AngeeHasuraWriteBackend(Relationship, public_id_fields=("party", "other_party", "kind")),
+    write_backend=ProtectedHasuraWriteBackend(Relationship, public_id_fields=("party", "other_party", "kind")),
     get_queryset=lambda info: Relationship.objects.canonical(),
 )
 _CONTACT_FOLDER_RESOURCE = hasura_model_resource(

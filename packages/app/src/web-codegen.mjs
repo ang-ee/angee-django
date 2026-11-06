@@ -853,6 +853,7 @@ function groupFields(resources) {
         groupOrderType,
         havingType,
         keyFields,
+        relationLabels: Object.values(resource?.query?.axes ?? {}).some((axis) => axis.kind === "relation"),
         measures: Array.isArray(resource?.aggregateMeasures)
           ? resource.aggregateMeasures
           : [],
@@ -1011,7 +1012,7 @@ function groupDocument(resource) {
       `${assertGraphQLName(resource.groupsRoot)}(` +
       "group_by: $group_by, where: $where, having: $having, order_by: $order_by, " +
       "limit: $limit, offset: $offset" +
-      `) { key { ${groupKeySelection(resource.keyFields)} } ` +
+      `) { key { ${groupKeySelection(resource.keyFields)} } ${resource.relationLabels ? "label " : ""}` +
       `aggregate { ${aggregateSelection(resource.measures)} } } ` +
       `totalCount: ${assertGraphQLName(resource.groupsCountRoot)}(` +
       "group_by: $group_by, where: $where, having: $having) }",

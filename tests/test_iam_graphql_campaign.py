@@ -17,7 +17,7 @@ from rebac import (
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
-from angee.graphql.view_as import ViewAs
+from angee.iam.graphql.view_as import ViewAs
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, graphql_request, result_data
 from tests.iam_campaign import Person
@@ -84,6 +84,7 @@ def test_graphql_duplicate_creation_returns_only_account_exists_code(iam_admin):
     assert not User._base_manager.filter(username="duplicate").exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_ambiguous_email_refusal_crosses_graphql_with_only_its_wire_code(legacy_person_emails):
     for username in ("private-first", "private-second"):
         User.objects.create_user(username, "ambiguous@example.com")

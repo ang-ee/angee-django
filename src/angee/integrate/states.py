@@ -201,13 +201,31 @@ class SyncFailure(BaseModel):
     def source_label(self) -> str:
         """Identify the failed remote record, or the whole stream for stream failures."""
 
-        return self.link.source_label if self.link is not None else str(self.stream)
+        if (link := self.link) is None:
+            return str(self.stream)
+        return link.source_label
+
+    def get_source_label(self) -> str:
+        """Read one failure's source label outside a projected collection."""
+
+        if (link := self.link) is None:
+            return str(self.stream)
+        return link.get_source_label()
 
     @property
     def source_url(self) -> str | None:
         """Open the provider's own record when this failure belongs to a link."""
 
-        return self.link.source_url if self.link is not None else None
+        if (link := self.link) is None:
+            return None
+        return link.source_url
+
+    def get_source_url(self) -> str | None:
+        """Read one failure's source URL outside a projected collection."""
+
+        if (link := self.link) is None:
+            return None
+        return link.get_source_url()
 
     def resolve(self) -> SyncFailure:
         return self._owner.resolve_failure(self._slot)
@@ -218,6 +236,4 @@ class SyncFailure(BaseModel):
     def resolve_conflict(self, *, keep: ConflictKeep) -> SyncFailure:
         if self.link is None:
             raise ValidationError("Conflict resolution requires a linked conflict.")
-        from angee.integrate.streams import resolve_conflict
-
-        return resolve_conflict(self.link, self._slot, keep)
+        return self.link.resolve_conflict(self._slot, keep)

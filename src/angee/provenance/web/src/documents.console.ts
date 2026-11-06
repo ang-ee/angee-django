@@ -20,7 +20,7 @@ export const HistoryEntrySummaryFields = graphql(`
   }
 `);
 
-/** One record's changesets, newest first, through the record's own read gate. */
+/** One record's admitted history changesets, newest first. */
 export const RecordHistoryDocument = graphql(`
   query RecordHistory($model: String!, $id: ID!, $limit: Int!, $offset: Int!, $selected: ID) {
     history(model: $model, id: $id, limit: $limit, offset: $offset, selected: $selected) {
@@ -60,5 +60,5 @@ export const FieldProvenanceDocument = graphql(`
 
 export type RecordHistory = NonNullable<DocumentType<typeof RecordHistoryDocument>["history"]>;
 export type HistoryEntry = RecordHistory["entries"][number];
-export type HistoryStatement = HistoryEntry["statements"][number];
+export type HistoryStatement = NonNullable<HistoryEntry["statements"]>[number];
 export type FieldProvenance = NonNullable<DocumentType<typeof FieldProvenanceDocument>["field_provenance"]>[number];

@@ -19,6 +19,7 @@ const policy = {
     // TanStack memory histories must own the full Nuqs write snapshot, not window.location.
     "nuqs@2.10.1": path.join(__dirname, "patches/nuqs-2.10.1.patch"),
     "@refinedev/core@5.0.12": path.join(__dirname, "patches/refinedev-core-5.0.12.patch"),
+    "@refinedev/hasura@7.0.1": path.join(__dirname, "patches/refinedev-hasura-7.0.1.patch"),
   },
 };
 

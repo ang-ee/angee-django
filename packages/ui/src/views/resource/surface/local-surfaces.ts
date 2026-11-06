@@ -4,10 +4,10 @@ import { useResourceListQuery } from "./resource-list-query";
 import { errorFromUnknown } from "../../../data/errors";
 import { DEFAULT_TEXT_FILTER_FIELD } from "../resource-view-model";
 import { useBoardLaneState } from "../resource-view-board-lanes";
-import { leafTableRows, modelRowId } from "../resource-view-codecs";
+import { modelRowId, recordTableRows } from "../resource-view-codecs";
 import { useResourceViewPresentationSurface } from "./presentation";
 import { CLIENT_ROW_MODEL_FETCH_CAP } from "./resource-surface";
-import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts } from "./table-state";
+import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts, useSettledPageClamp } from "./table-state";
 import type { ResourceListResult, ResourceViewSurface, RowRecord, RowsResourceViewSurface, StringIdRow, UseResourceViewSurfaceProps, UseRowsResourceViewSurfaceProps } from "./types";
 /**
  * Surface a **client row-model** resource: fetch the whole set once (up to
@@ -18,12 +18,15 @@ import type { ResourceListResult, ResourceViewSurface, RowRecord, RowsResourceVi
  * only the active path issues a query and resolves a data provider.
  */
 export function useClientResourceViewSurface<TRow extends Row = Row>({
+  records,
+  relatedModels,
   columns,
   fields,
   filter,
   resourceView,
   modelMetadata = null,
   groupStack,
+  defaultExpandedGroups,
   laneSource,
   enabled = true,
   onListStateChange,
@@ -45,21 +48,18 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     resource: dataResource,
     scope: { filter: undefined, order: {}, page: 1, pageSize: CLIENT_ROW_MODEL_FETCH_CAP },
     fields: requestedFields,
+    records, relatedModels,
     enabled: active,
   });
   const allRows = React.useMemo(
     () => (run.result.data ?? []) as readonly RowRecord[] as readonly TRow[],
     [run.result.data],
   );
-  const refetchRows = React.useCallback(() => {
-    void run.query.refetch();
-  }, [run.query.refetch]);
   const boardLaneState = useBoardLaneState<TRow>({
     laneSource,
     modelMetadata,
     rows: allRows,
     enabled: active && resourceView.state.view === "board",
-    refetchRows,
   });
   // The fetched page is capped; the only signal the in-browser set is actually
   // incomplete is the resource's own total exceeding the cap (a page that
@@ -90,13 +90,17 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     boardLaneState,
     getRowId: (row, index) => modelRowId(row, index, dataResource),
     filter: mergedFilter,
+    defaultExpandedGroups,
   });
   const pageRows = React.useMemo(
-    () => leafTableRows(presentation.rowModels).map((row) => row.original),
+    () => recordTableRows(presentation.rowModels).map((row) => row.original),
     [presentation.rowModels],
   );
-  const filteredTotal = presentation.table.getFilteredRowModel().rows.length;
+  // The table pages top-level rows (records flat, root groups grouped), so its row count
+  // is the pager's total.
+  const total = presentation.table.getRowCount();
   const pageCount = Math.max(1, presentation.table.getPageCount());
+  useSettledPageClamp(resourceView, pageCount, active && run.query.isSuccess && !run.query.isFetching);
   const list = React.useMemo<ResourceListResult>(
     () =>
       listResultFromTable(presentation.table, {
@@ -104,12 +108,12 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
         fetching,
         refetch,
         rows: pageRows,
-        total: filteredTotal,
+        total,
       }),
     [
       error,
       fetching,
-      filteredTotal,
+      total,
       pageCount,
       pageRows,
       refetch,
@@ -138,6 +142,7 @@ export function useRowsResourceViewSurface<
   resourceView,
   modelMetadata = null,
   groupStack,
+  defaultExpandedGroups,
   fetching = false,
   error = null,
   onListStateChange,
@@ -157,13 +162,15 @@ export function useRowsResourceViewSurface<
     modelMetadata,
     groupStack,
     getRowId: (row, index) => modelRowId(row, index, query ? { query: query.contract } : modelMetadata?.resource),
+    defaultExpandedGroups,
   });
   const pageRows = React.useMemo(
-    () => leafTableRows(presentation.rowModels).map((row) => row.original),
+    () => recordTableRows(presentation.rowModels).map((row) => row.original),
     [presentation.rowModels],
   );
-  const total = presentation.table.getFilteredRowModel().rows.length;
+  const total = presentation.table.getRowCount();
   const pageCount = Math.max(1, presentation.table.getPageCount());
+  useSettledPageClamp(resourceView, pageCount, !fetching && !error);
 
   const listState = useResourceRowsSnapshot<TRow>({
     rows: pageRows,

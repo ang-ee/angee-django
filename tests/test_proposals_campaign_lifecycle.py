@@ -16,7 +16,7 @@ from angee.base.models.locks import StaleRevisionError
 from angee.graphql.deletion import DeletePreview
 from angee.projects.testing.models import Milestone, Project, ProjectBinding, Task
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.engine.exceptions import CreationKeyConflict
 from tests.conftest import Drive
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_campaign import campaign as campaign

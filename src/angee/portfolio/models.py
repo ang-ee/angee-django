@@ -9,16 +9,18 @@ upstream rows only when this addon is composed.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, models, router, transaction
+from django.db.models import OuterRef, Subquery
 from django_compose.models import Composable
 from rebac import (
     current_actor,
+    database_context,
     generic_target,
     system_context,
 )
@@ -26,12 +28,13 @@ from rebac import (
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
+from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.ownership import OwnerMixin
-from angee.base.models.refs import RecordRefMixin
-from angee.base.models.roles import role_anchor
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.models.roles import role_anchor
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -39,6 +42,9 @@ from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
     from angee.projects.models import Project
+
+PortfolioRole = role_anchor("portfolio/role")
+"""Table-less REBAC anchor for the const-backed portfolio-admin namespace."""
 
 
 class ProductLifecycle(models.TextChoices):
@@ -62,8 +68,8 @@ class InitiativeStatus(models.TextChoices):
     DROPPED = "dropped", "Dropped"
 
 
-class InitiativeHealth(models.TextChoices):
-    """Latest reported health denormalized onto an Initiative."""
+class Health(models.TextChoices):
+    """Health assertion shared by reports and their target projection."""
 
     ON_TRACK = "on_track", "On track"
     AT_RISK = "at_risk", "At risk"
@@ -78,14 +84,6 @@ class InitiativeDateResolution(models.TextChoices):
     QUARTER = "quarter", "Quarter"
     HALF_YEAR = "half_year", "Half year"
     YEAR = "year", "Year"
-
-
-class UpdateHealth(models.TextChoices):
-    """Health assertion required from every portfolio Update."""
-
-    ON_TRACK = "on_track", "On track"
-    AT_RISK = "at_risk", "At risk"
-    OFF_TRACK = "off_track", "Off track"
 
 
 class ReleaseStatus(models.TextChoices):
@@ -138,7 +136,7 @@ class ProductManager[ProductT: Product](AngeeHistoryManager[ProductT]):
             return product
 
 
-class Product(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Product(OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """A perpetual subject passing through phases rather than toward fulfillment."""
 
     sqid_prefix = "pdt_"
@@ -186,7 +184,7 @@ class InitiativeQuerySet[InitiativeT: Initiative](HierarchyQuerySet[InitiativeT]
 _InitiativeManager = AngeeHistoryManager.from_queryset(InitiativeQuerySet)
 
 
-class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """A tree-shaped long-horizon intent whose pushes can be fulfilled."""
 
     sqid_prefix = "ini_"
@@ -196,7 +194,7 @@ class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concr
     body = models.TextField(blank=True, default="")
     status = StateField(choices_enum=InitiativeStatus, default=InitiativeStatus.PROPOSED)
     health = StateField(
-        choices_enum=InitiativeHealth,
+        choices_enum=Health,
         null=True,
         blank=True,
         editable=False,
@@ -284,7 +282,7 @@ class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concr
         return self.name
 
 
-class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
+class InitiativeProject(ResourceLoadMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """An ordered Project placement on an ancestry-safe Initiative tree."""
 
     sqid_prefix = "inp_"
@@ -375,12 +373,12 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=
             targets = (
                 (
                     placement.initiative,
-                    "at_risk",
+                    Health.AT_RISK,
                     "Scope is clear; delivery sequencing needs attention.",
                 ),
                 (
                     placement.project,
-                    "on_track",
+                    Health.ON_TRACK,
                     "The current push is progressing as planned.",
                 ),
             )
@@ -400,7 +398,35 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=
                 report.sudo(reason="portfolio.demo.report").save(using=placement._state.db)
 
 
-class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
+class UpdateQuerySet[UpdateT: Update](AngeeHistoryQuerySet[UpdateT]):
+    """Report ordering and mutation admission for the target health projection."""
+
+    def for_target(self, target: models.Model) -> UpdateQuerySet[UpdateT]:
+        """Select this target's reports in deterministic projection order."""
+
+        return self.filter(**generic_target(target).lookups(self.model, "target")).order_by(
+            "-updated_at", "-created_at", "-pk",
+        )
+
+    def update(self, **kwargs: Any) -> int:
+        """Require instance saves for writes that change projected health or order."""
+
+        if {"health", "created_at", "updated_at", "content_type", "content_type_id", "object_id"} & kwargs.keys():
+            raise ValidationError("Report health and target changes require an instance save.")
+        return super().update(**kwargs)
+
+    def bulk_create(self, objs: Iterable[UpdateT], *args: Any, **kwargs: Any) -> list[UpdateT]:
+        """Reports require row validation and serialized target projection."""
+
+        if rows := tuple(objs):
+            raise ValidationError("Report creation requires an instance save.")
+        return super().bulk_create(rows, *args, **kwargs)
+
+
+_UpdateManagerBase = AngeeHistoryManager.from_queryset(UpdateQuerySet)
+
+
+class UpdateManager[UpdateT: Update](_UpdateManagerBase[UpdateT]):
     """Own target validation and health-report creation.
 
     ``permissions.zed`` backs the update's ``project`` and ``initiative``
@@ -413,7 +439,7 @@ class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
         self,
         *,
         target: Project | Initiative,
-        health: str | UpdateHealth,
+        health: str | Health,
         body: str = "",
     ) -> UpdateT:
         """Create one report on a Project or Initiative; its ``create`` requires write on the target."""
@@ -421,23 +447,28 @@ class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
         if target.pk is None:
             raise ValidationError({"target": "A saved project or initiative is required."})
         self.model.validate_target(target)
-        with transaction.atomic():
-            locked_target = type(target).system_queryset(lock=("self",)).get(pk=target.pk)
+        using = self._db or target._state.db or router.db_for_write(self.model, instance=target)
+        self = self.db_manager(using)
+        with database_context(using), transaction.atomic(using=using):
+            locked_target = type(target).system_queryset(lock=("self",)).using(using).get(pk=target.pk)
             report = self.model(health=health, body=body, **generic_target(locked_target).lookups(self.model, "target"))
             report.full_clean(validate_unique=False, validate_constraints=False)
             return self.insert(report)
 
 
-class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
+class Update(
+    ImmutableFieldsMixin, HistoryMixin, AuditMixin, ProtectedRecordRefMixin, ProtectedDataModel, concrete=True
+):
     """A required-health report on a Project or Initiative, never a Product."""
 
     merge_policy = MergePolicy.MOVE
     sqid_prefix = "upd_"
+    immutable_fields = ("content_type_id", "object_id")
 
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
-    health = StateField(choices_enum=UpdateHealth)
+    health = StateField(choices_enum=Health)
     body = models.TextField(blank=True, default="")
 
     objects = UpdateManager()
@@ -467,6 +498,8 @@ class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=
         the denormalized health belongs to the target the report was made on.
         """
 
+        if kwargs.get("update_fields") is not None and not kwargs["update_fields"]:
+            return
         if self.health in (None, ""):
             raise ValidationError({"health": "A portfolio update must assert health."})
         target = self.target
@@ -476,52 +509,59 @@ class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=
         canonical = generic_target(target)
         self.content_type = canonical.content_type
         self.object_id = canonical.object_id
-        if not self._state.adding:
-            persisted = type(self)._base_manager.filter(pk=self.pk).values_list("content_type_id", "object_id").first()
-            if persisted is not None and persisted != (self.content_type_id, self.object_id):
-                raise ValidationError({"target": "An update's target is immutable."})
-        with transaction.atomic():
+        using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            # Serialize reports on the target; read committed report values after
+            # partial saves so unsaved instance fields never enter the projection.
+            type(target).system_queryset(lock=("self",)).using(using).get(pk=target.pk)
             super().save(*args, **kwargs)
-            # Django QuerySet.update() bypasses save-path re-denormalization by nature;
-            # the API routes through instance saves, and internal bulk writers are on their honor.
-            type(target)._base_manager.filter(pk=target.pk).update(
-                health=self.health,
-                health_updated_at=self.updated_at,
+            type(self).refresh_target_health(target, using=using)
+
+    @classmethod
+    def refresh_target_health(cls, target: Project | Initiative, *, using: str) -> None:
+        """Project the latest persisted report, including after collector deletes."""
+
+        latest = (
+            cls.objects.sudo(reason="portfolio.update.project_health").using(using).for_target(target)
+            .values("health", "updated_at").first()
+        )
+        target.health = latest["health"] if latest else None
+        target.health_updated_at = latest["updated_at"] if latest else None
+        type(target)._base_manager.using(using).filter(pk=target.pk).update(
+            health=target.health, health_updated_at=target.health_updated_at,
+        )
+
+    @classmethod
+    def refresh_deleted_targets(cls, instances: tuple[Update, ...], *, using: str) -> None:
+        """Project surviving reports once per target model before a collected batch is deleted."""
+
+        deleted_ids = [instance.pk for instance in instances]
+        targets: dict[int, set[int]] = {}
+        for instance in instances:
+            targets.setdefault(instance.content_type_id, set()).add(instance.object_id)
+        for content_type_id, ids in targets.items():
+            target_model = ContentType.objects.db_manager(using).get_for_id(content_type_id).model_class()
+            if target_model is None:
+                continue
+            protected_target_model = cast(type[ProtectedDataModel], target_model)
+            tuple(
+                protected_target_model.system_queryset(lock=("self",))
+                .using(using)
+                .filter(pk__in=ids)
+                .order_by("pk")
+                .values_list("pk", flat=True)
             )
-        target.health = self.health
-        target.health_updated_at = self.updated_at
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Delete the report and restore its target's surviving latest health."""
-
-        target = self.target
-        content_type_id = self.content_type_id
-        object_id = self.object_id
-        with transaction.atomic():
-            if target is not None:
-                with system_context(reason="portfolio.update.delete.target"):
-                    target = type(target).objects.lock_if_supported().get(pk=target.pk)
-            result = super().delete(*args, **kwargs)
-            if target is not None:
-                with system_context(reason="portfolio.update.delete.latest"):
-                    latest = next(
-                        iter(
-                            type(self)
-                            ._base_manager.filter(content_type_id=content_type_id, object_id=object_id)
-                            .order_by("-updated_at", "-created_at")
-                            .values("health", "updated_at")[:1]
-                        ),
-                        None,
-                    )
-                health = latest["health"] if latest is not None else None
-                health_updated_at = latest["updated_at"] if latest is not None else None
-                type(target)._base_manager.filter(pk=target.pk).update(
-                    health=health,
-                    health_updated_at=health_updated_at,
-                )
-                target.health = health
-                target.health_updated_at = health_updated_at
-        return result
+            latest = (
+                cls.objects.sudo(reason="portfolio.update.project_health")
+                .using(using)
+                .filter(content_type_id=content_type_id, object_id=OuterRef("pk"))
+                .exclude(pk__in=deleted_ids)
+                .order_by("-updated_at", "-created_at", "-pk")
+            )
+            target_model._base_manager.using(using).filter(pk__in=ids).update(
+                health=Subquery(latest.values("health")[:1]),
+                health_updated_at=Subquery(latest.values("updated_at")[:1]),
+            )
 
     def __str__(self) -> str:
         """Return a readable target-qualified health assertion."""
@@ -529,7 +569,7 @@ class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=
         return f"{self.record_model_label}:{self.record_public_id} {self.health}"
 
 
-class Release(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Release(HistoryMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """The named artifact a ship Project leaves on a Product timeline."""
 
     sqid_prefix = "rls_"
@@ -594,7 +634,7 @@ class ProjectPortfolio(Composable, extends="projects.Project"):
         related_name="projects",
     )
     health = StateField(
-        choices_enum=InitiativeHealth,
+        choices_enum=Health,
         null=True,
         blank=True,
         editable=False,
@@ -652,7 +692,3 @@ class TaskPortfolio(Composable, extends="projects.Task"):
         """Abstract donor options folded into the concrete Task table."""
 
         abstract = True
-
-
-PortfolioRole = role_anchor("portfolio/role")
-"""Table-less REBAC anchor for the const-backed portfolio-admin namespace."""

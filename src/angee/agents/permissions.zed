@@ -1,9 +1,13 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 17
+// @rebac_schema_revision: 21
 
 definition agents/agent {
+    // An admitted agent may expose whether its own sessions have active turns;
+    // the correlated turn read returns only that boolean.
+    // Chat selection reads only the actor's own admitted running agents;
+    // its model handle requires the inference model's separate read.
     relation owner: auth/user // rebac:field=owner
     relation actor: auth/user // rebac:field=user
     relation reader: auth/user | auth/group#member
@@ -41,8 +45,8 @@ definition agents/toolrole {
 // The public server/tool-name pair resolves that row at the API boundary.
 // Agent selections resolve live through `selected_agent`; independent direct
 // and group grants remain tuple-backed in `grantee`, while bundles use `role`.
-// Advertisement and execution check `use`. `use_approved` is a separate
-// standing-approval arm; requires_approval still drives per-call Decisions.
+// Advertisement and execution check `use` only for enabled tools that do not
+// require an unimplemented approval decision. `use_approved` is separate.
 definition agents/tool_grant {
     relation server: agents/mcp_server // rebac:field=server
     relation selected_agent: auth/user // rebac:field={"path":"agents__user"}
@@ -104,6 +108,8 @@ definition agents/mcp_server {
 }
 
 definition agents/session {
+    // The calling user may structurally select their own current session for
+    // an admitted in-process agent; both agent and account ids bound the read.
     relation user: auth/user // rebac:field=user
     relation agent: agents/agent // rebac:field=agent
     relation admin: angee/role // rebac:const=admin
@@ -122,4 +128,13 @@ definition agents/turn {
     permission read = session->read
     permission write = session->write
     permission delete = session->delete
+}
+
+definition agents/turn_update {
+    relation turn: agents/turn // rebac:field=turn
+
+    permission create = turn->write
+    permission read = turn->read
+    permission write = turn->write
+    permission delete = turn->delete
 }

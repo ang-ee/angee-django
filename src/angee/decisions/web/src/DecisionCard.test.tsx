@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { AppRuntimeProvider, createRouteHref, defaultWidgets, ModalsHost, ToastProvider } from "@angee/ui";
 import { afterEach, expect, test, vi } from "vitest";
@@ -10,24 +10,61 @@ import { useState } from "react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 
 const decide = vi.hoisted(() => vi.fn());
-vi.mock("@angee/ui", async (original) => ({ ...await original<typeof import("@angee/ui")>(), useAuthoredResourceMutation: () => [decide] }));
+const mutationOptions = vi.hoisted(() => vi.fn());
+vi.mock("@angee/ui", async (original) => ({ ...await original<typeof import("@angee/ui")>(),
+  useAuthoredResourceMutation: (_document: unknown, options: unknown) => { mutationOptions(options); return [decide]; },
+}));
 const { Provider, clearClients } = createUiTestProviders();
 afterEach(() => { cleanup(); clearClients(); vi.clearAllMocks(); });
 
-test("choices reset with the revision and an accepted answer remains locked until it closes", async () => {
-  decide.mockResolvedValue({ decide: { ok: true, message: "" } });
+test("Decide declares exact decision, concern and chosen-action effects for record reconciliation", () => {
+  const decision = decisionFixture({ proposal: { alternatives: [
+    { key: "accept", label: "Accept", outcome: "accepted", actions: {
+      nte_chosen: { model: "notes.Note" },
+    } },
+    { key: "reject", label: "Reject", outcome: "rejected", actions: {
+      nte_unchosen: { model: "notes.Note" },
+    } },
+  ] } });
+  render(<Provider><DecisionCard decision={decision} /></Provider>);
+  const options = mutationOptions.mock.lastCall?.[0] as {
+    invalidateModels: string[];
+    records: (_data: unknown, variables: { chosen: string[] }) => unknown[];
+  };
+  expect(options.invalidateModels).toEqual(["decisions.Decision", "notes.Note"]);
+  expect(options.records(undefined, { chosen: ["accept"] })).toEqual([
+    { model: "decisions.Decision", id: "dcn_review", relatedRecords: [{ model: "notes.Note", id: "nte_7" }] },
+    { model: "notes.Note", id: "nte_7" },
+    { model: "notes.Note", id: "nte_chosen" },
+  ]);
+  expect(options.records(undefined, { chosen: ["reject"] })).toEqual([
+    { model: "decisions.Decision", id: "dcn_review", relatedRecords: [{ model: "notes.Note", id: "nte_7" }] },
+    { model: "notes.Note", id: "nte_7" },
+    { model: "notes.Note", id: "nte_unchosen" },
+  ]);
+});
+
+test("choices reset with the revision and an external answer leaves focus alone", () => {
+  const decision = decisionFixture();
+  const view = render(<Provider><button>Elsewhere</button><DecisionCard decision={decision} /></Provider>);
+  fireEvent.click(screen.getByRole("radio", { name: /^Accept/ }));
+  view.rerender(<Provider><button>Elsewhere</button><DecisionCard decision={{ ...decision, revision: 4 }} /></Provider>);
+  expect((screen.getByRole("button", { name: "Confirm" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("radio", { name: /^Accept/ }).getAttribute("aria-checked")).toBe("false");
+  screen.getByRole("button", { name: "Elsewhere" }).focus();
+  view.rerender(<Provider><button>Elsewhere</button><DecisionCard decision={{ ...decision, revision: 4, is_open: false, verdict: ["accept"], verdict_label: "Accept" }} /></Provider>);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Elsewhere" }));
+});
+
+test.each([{ decision: null }, {}])("a locally accepted answer focuses its summary and locks the submitted revision (%o)", async (answer) => {
+  decide.mockResolvedValue({ decide: { ok: true, message: "", ...answer } });
   const decision = decisionFixture();
   const view = render(<Provider><DecisionCard decision={decision} /></Provider>);
   fireEvent.click(screen.getByRole("radio", { name: /^Accept/ }));
-  view.rerender(<Provider><DecisionCard decision={{ ...decision, revision: 4 }} /></Provider>);
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Confirm" })); });
   expect((screen.getByRole("button", { name: "Confirm" }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.getByRole("radio", { name: /^Accept/ }).getAttribute("aria-checked")).toBe("false");
-  fireEvent.click(screen.getByRole("radio", { name: /^Accept/ }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-  await waitFor(() => expect(decide).toHaveBeenCalledExactlyOnceWith({ id: decision.id, revision: 4, chosen: ["accept"], values: {} }));
-  await waitFor(() => expect((screen.getByRole("button", { name: "Confirm" }) as HTMLButtonElement).disabled).toBe(true));
-  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-  expect(decide).toHaveBeenCalledTimes(1);
+  expect(decide).toHaveBeenCalledOnce();
   view.rerender(<Provider><DecisionCard decision={{ ...decision, revision: 4, is_open: false, verdict: ["accept"], verdict_label: "Accept" }} /></Provider>);
   expect(document.activeElement?.textContent).toContain("Chose: Accept");
 });
@@ -120,8 +157,9 @@ test.each([false, true])("a many-to-many choose renders the multi widget and sub
   render(<ChooseHarness initial={initial} dataProvider={{ getList }} />);
   fireEvent.click(screen.getByRole("radio", { name: /^Select contacts/ }));
   expect(confirmDisabled()).toBe(true);
-  await waitFor(() => expect(getList.mock.calls.at(-1)?.[0]).toMatchObject({ meta: { gqlVariables: { where } } }));
   const search = await screen.findByRole("combobox", { name: "Contacts" });
+  fireEvent.keyDown(search, { key: "ArrowDown" });
+  await waitFor(() => expect(getList.mock.calls.at(-1)?.[0]).toMatchObject({ meta: { gqlVariables: { where } } }));
   for (const contact of contacts) {
     // The chips field searches as the reader types and adds the picked option as a chip.
     fireEvent.input(search, { target: { value: contact.name }, inputType: "insertText" });

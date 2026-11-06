@@ -186,8 +186,11 @@ export function formatMonth(value: DateFormatValue, options: HumanDateOptions = 
   }).format(date);
 }
 
-/** The calendar day of an instant in a zone, as a sortable key ("2026-09-30"). */
-function calendarDay(date: Date, timeZone?: string): string {
+/** The calendar day of an instant in a zone, as a sortable key ("2026-09-30").
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function calendarDay(date: Date, timeZone?: string): string {
   return new Intl.DateTimeFormat("en-CA", {
     year: "numeric", month: "2-digit", day: "2-digit",
     ...(timeZone ? { timeZone } : {}),

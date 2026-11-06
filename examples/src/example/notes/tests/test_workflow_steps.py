@@ -12,7 +12,14 @@ from rebac.roles import grant as grant_role
 
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
-from angee.workflows.testing.drivers import capture_tasks, load_workflow, register_steps, run_until, start_run
+from angee.workflows.testing.drivers import (
+    capture_tasks,
+    deliver_decision_wakes,
+    load_workflow,
+    register_steps,
+    run_until,
+    start_run,
+)
 from example.notes.steps import NotePublicationOutput, PublishNote, ReviewNotePublication, ValidateNotePublication
 
 Note = apps.get_model("notes", "Note")
@@ -168,12 +175,12 @@ class NoteWorkflowStepTests(TransactionTestCase):
             decision = Decision.objects.get(requesting_steps=step_run)
             self.assertEqual(decision.requester_id, self.owner.pk)
             self.assertEqual(list(decision.assignees.values_list("pk", flat=True)), [self.reviewer.pk])
-        return Decision.objects.decide(
-            decision.pk,
-            actor=self.reviewer,
+        answered = decision.decide(actor=self.reviewer,
             revision=decision.revision,
             chosen=[action],
         )
+        self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
+        return answered
 
     def start_parent(self, note):
         """Load the shipped parent and reach a real wait on its owned child."""
@@ -306,7 +313,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             parent = StepRun.objects.get(run=run, node_key="reviews")
             bodies = list(parent.map_rows().order_by("map_index"))
             decisions = [Decision.objects.get(requesting_steps=body) for body in bodies]
-            self.assertEqual((parent.map_total, parent.map_settled), (2, 0))
+            self.assertEqual((parent.get_map_total(), parent.get_map_settled()), (2, 0))
             self.assertEqual([body.map_index for body in bodies], [0, 1])
             self.assertTrue(all(body.status == StepRunStatus.WAITING for body in bodies))
             self.assertTrue(all(body.waiting_kind == WaitingKind.DECISION for body in bodies))
@@ -315,24 +322,25 @@ class NoteWorkflowStepTests(TransactionTestCase):
                 [decision.records.get().record_public_id for decision in decisions],
                 [note.sqid for note in notes],
             )
-        Decision.objects.decide(
-            decisions[0].pk, actor=self.reviewer, revision=decisions[0].revision, chosen=["approve"]
+        decisions[0].decide(actor=self.reviewer, revision=decisions[0].revision, chosen=["approve"]
         )
+        self.assertEqual(deliver_decision_wakes(self.sent, decisions[0].pk), [1])
         run_until(run)
         with system_context(reason="mapped note review partial settlement assertions"):
             parent.refresh_from_db()
             decisions[1].refresh_from_db()
-            self.assertEqual((parent.map_total, parent.map_settled), (2, 1))
+            self.assertEqual((parent.get_map_total(), parent.get_map_settled()), (2, 1))
             self.assertTrue(decisions[1].is_open)
             self.assertFalse(StepRun.objects.filter(run=run, node_key="summarize").exists())
-        Decision.objects.decide(decisions[1].pk, actor=self.reviewer, revision=decisions[1].revision, chosen=["reject"])
+        decisions[1].decide(actor=self.reviewer, revision=decisions[1].revision, chosen=["reject"])
+        self.assertEqual(deliver_decision_wakes(self.sent, decisions[1].pk), [1])
         run_until(run)
         self.assertEqual(run.status, RunStatus.SUCCEEDED)
         self.assertEqual(run.output, {"approved": 1, "rejected": 1})
         with system_context(reason="mapped note review result assertions"):
             parent.refresh_from_db()
             self.assertEqual([item["output"]["id"] for item in parent.output], [note.sqid for note in notes])
-            self.assertEqual((parent.map_total, parent.map_settled), (2, 2))
+            self.assertEqual((parent.get_map_total(), parent.get_map_settled()), (2, 2))
             self.assertEqual(StepRun.objects.get(run=run, node_key="summarize").input, parent.output)
 
     def test_rejection_preserves_the_note_and_returns_the_review_result(self) -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 from django.apps import apps
@@ -22,7 +22,7 @@ from django.db.models.functions import Coalesce
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
-from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
+from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError
 
 
@@ -209,32 +209,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Discover folders and seed per-collection policy on their first epoch."""
 
-        folders = apps.get_model("parties", "Folder").objects
-        policies = self.bridge.config.get("streams", {}).get("contacts", {})
         for book in sorted(self.discover(), key=lambda item: item.href):
-            folders.update_or_create(
-                directory_id=self.bridge.pk,
-                source_href=book.href,
-                defaults={"name": book.name, "created_by_id": self.bridge.owner_id},
-            )
-            policy = {
-                "local_delete": "conflict",
-                "remote_delete": "retain",
-                **policies.get(book.href, {}),
-            }
-            if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
-                "retain",
-                "propagate",
-            }:
-                raise ValueError("Unknown Directory deletion policy.")
-            yield StreamDefinition(
-                "contacts",
-                partition=book.href,
-                kind=StreamKind.RECORD_REPLICA,
-                direction=StreamDirection.BIDIRECTIONAL,
-                reconcile_interval=timedelta(days=1),
-                config=policy,
-            )
+            yield self.bridge.addressbook_stream(book)
 
     def _folder(self, stream: Any) -> Any:
         return apps.get_model("parties", "Folder").objects.get(
@@ -274,14 +250,19 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             return {}
         linked = {link.external_key: link for link in links if link.external_key in keys}
         parties = apps.get_model("parties", "Party").objects.db_manager(
-            stream._state.db, hints={"instance": stream},
+            stream._state.db,
+            hints={"instance": stream},
         )
         prefetch_related_objects(
             list(linked.values()),
-            GenericPrefetch("target", [
-                parties.model._base_manager.db_manager(stream._state.db, hints={"instance": stream})
-                .select_related("person"),
-            ]),
+            GenericPrefetch(
+                "target",
+                [
+                    parties.model._base_manager.db_manager(stream._state.db, hints={"instance": stream}).select_related(
+                        "person"
+                    ),
+                ],
+            ),
         )
         targets = {key: parties.contact_person(link) for key, link in linked.items()}
         people = tuple(

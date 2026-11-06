@@ -12,7 +12,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import actor_context, system_context
 
-from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.iam.querysets import ProtectedQuerySet, ProtectedUnscopedQuerySet
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import (
     ConflictKeep,
@@ -57,9 +57,9 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
             assert model._default_manager is model.objects
             for manager in (model.objects, model._base_manager):
                 queryset = manager.filter(pk=row.pk).order_by("pk").lock_if_supported()
-                expected = AngeeQuerySet
+                expected = ProtectedQuerySet
                 if manager is model._base_manager:
-                    expected = AngeeUnscopedQuerySet
+                    expected = ProtectedUnscopedQuerySet
                 assert isinstance(queryset, expected)
                 assert queryset.query.select_for_update is True
                 assert list(queryset) == [row]
@@ -67,7 +67,7 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
                 assert manager.from_public_id(str(row.sqid)) == row
         for manager, row in ((replica.links, link),):
             queryset = manager.filter(pk=row.pk).lock_if_supported()
-            assert isinstance(queryset, AngeeQuerySet)
+            assert isinstance(queryset, ProtectedQuerySet)
             assert list(queryset) == [row]
 
 
@@ -113,7 +113,8 @@ def test_public_target_updates_replace_callers_cached_none(replica: Any, operati
             RecordLink.objects.revalidate(link, **target)
     stored = RecordLink.objects.get(pk=link.pk)
     assert (link.target_content_type_id, link.target_object_id) == (
-        stored.target_content_type_id, stored.target_object_id,
+        stored.target_content_type_id,
+        stored.target_object_id,
     )
     if selection == "clear":
         assert link.target is None
@@ -212,6 +213,7 @@ def test_baseline_completion_is_independent_of_actor_visibility(composed_tables:
         assert not deferred.has_completed_baseline()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     replica.direction = StreamDirection.BIDIRECTIONAL
     replica.save(update_fields=["direction"])
@@ -220,6 +222,9 @@ def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monke
     retained_conflict = next(
         (row for row in SyncStream.objects.get(pk=replica.pk).sync_failures(open_only=False) if row.id == conflict.pk)
     )
+    stream = SyncStream.objects.get(pk=replica.pk)
+    assert stream.sync_failures(kind=SyncFailureKind.CONFLICT) == (retained_conflict,)
+    assert stream.sync_failures(kind=SyncFailureKind.REMOTE_REJECTED) == ()
     retained_link = RecordLink.objects.filter(pk=link.pk).values().get()
     adapter = Mock(spec=BridgeImpl, supports_identity_reads=True)
     monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
@@ -532,3 +537,24 @@ def test_stream_and_links_follow_the_integration_foreign_key_owner(composed_tabl
     for model, row in ((SyncStream, stream), (RecordLink, link)):
         assert not model.objects.with_actor(owner).filter(pk=row.pk).exists()
         assert model.objects.with_actor(other).filter(pk=row.pk).exists()
+
+
+def test_internal_record_target_resolution_refreshes_native_cache(replica):
+    """Internal reconciliation gets fresh base-manager facts, not an old GFK cache."""
+    target = MtiChild.objects.create(title="Before")
+    link = RecordLink.objects.observe(replica, "target:fresh")
+    with transaction.atomic():
+        RecordLink.objects.bind_target(link, target)
+    assert link.target.title == "Before"
+    MtiParent._base_manager.filter(pk=target.pk).update(title="After")
+    assert link.resolve_target().title == "After"
+    selected = RecordLink.objects.filter(pk=link.pk).current_for_bridge(replica.integration).for_target(target)
+    assert selected.get() == link
+
+
+def test_compound_link_uses_root_application_evidence(replica):
+    root = RecordLink.objects.observe(replica, "aggregate:root")
+    RecordLink.objects.promote(root, source_payload={}, source_hash="one", mapped_payload={})
+    child = RecordLink.objects.observe(replica, "aggregate:child", parent=root)
+    assert child.aggregate_root.pk == root.pk
+    assert child.aggregate_root.applied_base_id == root.applied_base_id

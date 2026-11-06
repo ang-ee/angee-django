@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from textwrap import dedent
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test.utils import isolate_apps
 from rebac import system_context
 
-from angee.base.managers import AngeeManager
-from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.base.testing.packages import write_addon_distribution
 from angee.messaging.testing.models import Handle, Organization, Party
 from angee.parties.managers import PartyQuerySet
-from tests.tables import model_tables
+from tests.composed_host import run_composed_tests
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -169,32 +169,50 @@ def test_named_respects_the_legal_name_owners_read_scope(owner: Any) -> None:
     assert not Party.objects.with_actor(owner).named("Northstar Studio").exists()
 
 
-def test_named_excludes_archived_rows_in_an_archivable_composition(owner: Any) -> None:
-    """An archive-aware party queryset composes its native archive predicate."""
+def test_named_excludes_archived_rows_in_an_archivable_composition(tmp_path: Path) -> None:
+    """A real archive contribution retains its parent/history relation targets."""
 
-    with isolate_apps():
+    addon = tmp_path / "addons" / "example" / "archivable_party"
+    addon.mkdir(parents=True)
+    (addon / "__init__.py").touch()
+    write_addon_distribution(addon, "example.archivable_party", depends_on=("angee.parties",))
+    (addon / "models.py").write_text(dedent("""
+        from django_compose.models import Composable
+        from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+        from angee.parties.managers import PartyManager, PartyQuerySet
 
         class ArchivablePartyQuerySet(ArchiveQuerySet, PartyQuerySet):
-            """A party composition that adds the shared archive lifecycle."""
+            pass
 
-        class ArchivableParty(ArchiveMixin, Party):
-            """Alternate concrete party composition for archive-scope coverage."""
-
-            objects = AngeeManager.from_queryset(ArchivablePartyQuerySet)()
+        class Party(ArchiveMixin, Composable, extends="parties.Party"):
+            objects = PartyManager.from_queryset(ArchivablePartyQuerySet)()
 
             class Meta:
-                """Keep this alternate test table outside installed app setup."""
+                abstract = True
+    """))
+    (addon / "tests.py").write_text(dedent("""
+        from django.apps import apps
+        from django.contrib.auth import get_user_model
+        from django.test import TransactionTestCase
+        from rebac import system_context
 
-                app_label = "party_lookup"
-                rebac_resource_type = "parties/party"
-
-        with (
-            model_tables((ArchivableParty, ArchivableParty.history.model)),
-            system_context(reason="test archived party names"),
-        ):
-            active = ArchivableParty.objects.create(display_name="Alex Example", created_by=owner)
-            ArchivableParty.objects.create(display_name="Alex Example", is_archived=True, created_by=owner)
-            assert list(ArchivableParty.objects.named("alex example")) == [active]
+        class ArchivablePartyContract(TransactionTestCase):
+            def test_named_excludes_archived_rows(self):
+                Party = apps.get_model("parties", "Party")
+                owner = get_user_model().objects.create_user(username="party-lookup-owner")
+                with system_context(reason="test archived party names"):
+                    active = Party.objects.create(display_name="Alex Example", created_by=owner)
+                    archived = Party.objects.create(
+                        display_name="Alex Example", is_archived=True, created_by=owner,
+                    )
+                    self.assertEqual(list(Party.objects.named("alex example")), [active])
+                    self.assertTrue(Party._base_manager.filter(pk=archived.pk).exists())
+                    self.assertTrue(Party.history.filter(id=archived.pk).exists())
+    """))
+    run_composed_tests(
+        tmp_path, "example.archivable_party.tests", app="example.archivable_party",
+        addon_dirs=(addon.parent.parent,),
+    )
 
 
 @pytest.mark.parametrize(

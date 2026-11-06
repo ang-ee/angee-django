@@ -20,7 +20,6 @@ from django.core.management.base import BaseCommand
 from django.db import close_old_connections, connections
 from django.http import HttpResponse
 from django.test import RequestFactory
-from django_compose import management as manage
 from fastmcp.exceptions import ToolError
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.middleware import ActorMiddleware
@@ -38,6 +37,7 @@ from angee.provenance.context import (
 from angee.provenance.contrib.angee.context import SERVER_COMMANDS
 from angee.provenance.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
 from angee.provenance.tasks import Task
+from angee.server import management as manage
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow
 
@@ -48,7 +48,7 @@ pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db(transacti
 def management_changeset_context(settings):
     """Select the optional provenance policy for these attribution contracts."""
 
-    settings.COMPOSE_COMMAND_CONTEXT = ("angee.provenance.contrib.angee.context.management_context",)
+    settings.ANGEE_SERVER_COMMAND_CONTEXT = ("angee.provenance.contrib.angee.context.management_context",)
 
 
 def write(title: str = "captured") -> Any:
@@ -63,7 +63,7 @@ def changesets() -> list[Any]:
 
 
 def changeset_of(row: Any) -> Any:
-    return row.history.get(history_type="+").changeset
+    return row.history.get(history_type="+").history_changeset
 
 
 def test_require_changeset_refuses_missing_storage_and_returns_the_open_owner(settings) -> None:
@@ -110,6 +110,35 @@ def test_main_attributes_a_command_to_one_closed_changeset(monkeypatch, command)
     assert (context.state, context.outcome) == ("closed", "success")
 
 
+def test_iam_and_provenance_factories_wrap_the_same_native_command(monkeypatch, settings):
+    """The server setting composes both enabled command context contributions."""
+    settings.ANGEE_SERVER_COMMAND_CONTEXT = (
+        "angee.iam.context.command_context",
+        "angee.provenance.contrib.angee.context.management_context",
+    )
+    observed = []
+    from angee.iam import context as iam_context
+
+    original_system_context = iam_context.system_context
+
+    def system_context(*args, **kwargs):
+        observed.append("iam")
+        return original_system_context(*args, **kwargs)
+
+    monkeypatch.setattr(iam_context, "system_context", system_context)
+
+    def operation():
+        observed.append("handle")
+        write()
+
+    _native_command(monkeypatch, operation)
+    manage.execute(["manage.py", "createsuperuser"])
+    (context,) = changesets()
+    assert observed == ["iam", "handle"]
+    assert context.change_reason == "manage.createsuperuser"
+    assert context.state == "closed"
+
+
 def test_a_thread_a_command_starts_writes_under_the_command_boundary(monkeypatch):
     """Plain threads share the process attribution intent while storing their own rows."""
 
@@ -130,7 +159,7 @@ def test_a_thread_a_command_starts_writes_under_the_command_boundary(monkeypatch
 
 def test_a_write_without_a_boundary_names_the_manage_py_remedy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["/srv/app/manage.py", "seed_lorem_notes"])
-    with pytest.raises(ChangesetRequired, match=r"manage\.py must call django_compose\.management\.execute\(\)"):
+    with pytest.raises(ChangesetRequired, match=r"manage\.py must call angee\.server\.management\.execute\(\)"):
         write()
     monkeypatch.setattr(sys, "argv", ["celery", "worker"])
     with pytest.raises(ChangesetRequired) as error:
@@ -243,7 +272,8 @@ def test_each_actor_under_one_boundary_records_its_own_changeset() -> None:
     }
     # Each user's storage Trash folder keeps history, so creating the users records its own boundary.
     assert {(context.change_reason, context.state, context.outcome) for context in changesets()} == {
-        ("loop", "closed", "success"), ("storage.trash_folder", "closed", "success"),
+        ("loop", "closed", "success"),
+        ("storage.trash_folder", "closed", "success"),
     }
 
 
@@ -300,12 +330,10 @@ def test_graphql_operation_attributes_direct_and_transport_execution(errors, asy
 
     schema = AngeeSchema(query=AsyncQuery if asynchronous else Query)
     with changeset(fresh=True) if join else nullcontext():
-        result = (async_to_sync(schema.execute)("{ready}") if asynchronous
-                  else schema.execute_sync("{ready}"))
+        result = async_to_sync(schema.execute)("{ready}") if asynchronous else schema.execute_sync("{ready}")
         assert bool(result.errors) == errors
     (context,) = changesets()
     assert (context.state, context.outcome) == ("closed", "failure" if errors else "success")
-
 
 
 @pytest.mark.parametrize("boundary_outer", [True, False])
@@ -325,8 +353,11 @@ def test_request_captures_actor_in_either_boundary_order(boundary_outer, asynchr
         return HttpResponse()
 
     endpoint = async_response if asynchronous else response
-    endpoint = (ChangesetMiddleware(ActorMiddleware(endpoint)) if boundary_outer
-                else ActorMiddleware(ChangesetMiddleware(endpoint)))
+    endpoint = (
+        ChangesetMiddleware(ActorMiddleware(endpoint))
+        if boundary_outer
+        else ActorMiddleware(ChangesetMiddleware(endpoint))
+    )
     if asynchronous:
         async_to_sync(endpoint)(request)
     else:
@@ -334,6 +365,38 @@ def test_request_captures_actor_in_either_boundary_order(boundary_outer, asynchr
     context = changeset_of(OwnedRow.system_queryset().get(title="request-actor"))
     assert context.actor_ref == str(to_subject_ref(user))
     assert (context.state, context.outcome) == ("closed", "success")
+
+
+@pytest.mark.parametrize("transport", ["http", "websocket"])
+def test_boundary_actor_does_not_replace_rebac_attribution(transport: str) -> None:
+    with changeset(fresh=True):
+        rebac_actor = create_user("rebac-actor")
+        connection_user = create_user("connection-user")
+
+    with actor_context(rebac_actor):
+        if transport == "http":
+            request = RequestFactory().get("/")
+            request.user = connection_user
+
+            def response(request: Any) -> HttpResponse:
+                write("rebac-owned-http")
+                return HttpResponse()
+
+            ChangesetMiddleware(response)(request)
+            title = "rebac-owned-http"
+        else:
+
+            async def consumer(scope: Any, receive: Any, send: Any) -> None:
+                await database_sync_to_async(write)("rebac-owned-websocket")
+
+            async_to_sync(ChangesetScopeMiddleware(consumer))(
+                {"type": "websocket", "user": connection_user}, None, None
+            )
+            title = "rebac-owned-websocket"
+
+    stored = changeset_of(OwnedRow.system_queryset().get(title=title))
+    assert stored.actor_ref == str(to_subject_ref(rebac_actor))
+    assert stored.actor_ref != str(to_subject_ref(connection_user))
 
 
 def test_direct_mcp_graphql_keeps_partial_writes_and_failed_attribution():

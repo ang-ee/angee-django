@@ -10,10 +10,10 @@ Commands live in [Python and composition contracts](../../../../docs/checks.md#p
 
 ## Verification procedure
 
-Run focused tests while editing, the applicable broad checks before handoff,
-and report any check that could not run with its blocker. Which command and
-execution root each check takes is in
-[Checks](../../../../docs/checks.md); what CI covers is in
+Use [Verification phases](../../../../docs/checks.md#verification-phases) to
+separate lane checks, integrated-host checks, and final verification. Report
+pending checks with their required environment. Commands and execution roots
+belong to [Checks](../../../../docs/checks.md); CI coverage belongs to
 [What CI actually runs](../../../../docs/checks.md#what-ci-actually-runs).
 
 Before deploying writer tiers, run the default system checks (`manage.py
@@ -25,6 +25,17 @@ builds its schemas lazily on its first observable write.
 
 ## Pitfalls
 
+- **Source changes can invalidate the generated host's receipt.** Recompose
+  through the host's native lifecycle before loading changed composition inputs;
+  a separate virtualenv does not refresh an existing host's generated artifacts.
+  Follow [Composition and schema](../../../../docs/checks.md#composition-and-schema).
+  Do not bypass receipt verification or patch generated output.
+- **The runner must execute the test's fixture contract.** Django's test runner
+  does not execute pytest fixtures. Read the selected tests and existing harness
+  before choosing a composed-host runner. A host-preparation or fixture mismatch
+  before collection is a setup failure, not a failed behavior assertion. Repair
+  the prerequisite at its owner before rerunning; do not change application
+  behavior to accommodate a mismatched harness.
 - **Localhost ports do not isolate browser cookies.** Two development stacks on
   different ports replace each other's login cookies unless the session and
   CSRF cookie names differ; the project template's project-scoped names are the

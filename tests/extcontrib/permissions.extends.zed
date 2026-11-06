@@ -20,7 +20,7 @@ definition messaging/thread {
 }
 
 // Account actions follow the bound team's live roster. Preview authority stays
-// with the target's seat paths; this constant deliberately contributes no arm.
+// with IAM's platform-admin rule; this fragment contributes no preview arm.
 // The role manages people: `list` admits it to the whole directory and to every
 // account's restricted fields. `write` reaches only the name fields: IAM's
 // field gates keep identity, credential and authority columns with administrators.

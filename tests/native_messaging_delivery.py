@@ -1506,7 +1506,10 @@ class FeedDeliveryContracts(DeliveryFixtures):
         with system_context(reason="nested plain-body projection"):
             Part = apps.get_model("messaging", "Part")
             for message in (row, other):
-                message.parts.all().delete()
+                system_message = Message.objects.system_context(reason="nested plain-body projection").get(
+                    pk=message.pk,
+                )
+                system_message.parts.all().delete()
                 Message.objects._build_parts(message, ParsedPart(type="multipart/mixed", children=(
                     ParsedPart(text="One"), ParsedPart(type="multipart/alternative", children=(
                         ParsedPart(text="Two"), ParsedPart(type="text/html", text="<p>Two</p>"),

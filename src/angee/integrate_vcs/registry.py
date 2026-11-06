@@ -8,7 +8,7 @@ from django.db import models
 from angee.integrate.registry import models_with
 
 
-class VcsOutputManager(models.Manager):
+class VcsOutputManager[T: models.Model](models.Manager[T]):
     """Manager contract for reconciling one VCS discovery output kind."""
 
     def sync_from_source(self, source: Any) -> int:

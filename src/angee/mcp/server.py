@@ -3,8 +3,8 @@
 Enabled addons contribute a conventional ``mcp_tools.register(server)`` callable.
 The server authenticates inbound bearers through RebacTokenVerifier and carries
 the actor through ActorMiddleware. MCPConfig supplies the HTTP mount and native
-FastMCP lifespan to django-compose's ASGI contribution owner. The inner HTTP
-application serves its root; the native mount owns the external ``/mcp`` prefix.
+FastMCP lifespan to ``angee.server.asgi``. The inner HTTP application serves its
+root; the server mount owns the external ``/mcp`` prefix.
 
 ``stateless_http`` keeps each call independent and ``json_response`` returns a
 buffered JSON body the agent's HTTP client folds without an SSE reader (both passed
@@ -44,8 +44,9 @@ Non-GraphQL tools must explicitly declare ``ToolAnnotations.readOnlyHint``.
 Compiled GraphQL tools carry their root ``op_type`` as the structural actor-posture
 fact (their annotation must agree). Builtins also run through the in-process
 pydantic runtime, so their callable may not depend on FastMCP's request-scoped
-``Context`` or ``get_access_token``; the native toolset asserts these contracts
-when it advertises a granted tool.
+``Context`` or ``get_access_token``. Declare
+``meta={"angee": {"execution_context": "actor"}}`` for that capability;
+MCP's public actor_tool_read_only contract validates it before advertisement.
 """
 
 MOUNT_PATH = "/mcp"

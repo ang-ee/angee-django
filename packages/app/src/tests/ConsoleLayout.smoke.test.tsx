@@ -9,6 +9,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   useCallback,
   useEffect,
@@ -179,6 +180,7 @@ function renderInRouter(
   initialPath = "/notes",
   runtime?: Partial<AppRuntime>,
 ) {
+  const queryClient = new QueryClient();
   const rootRoute = createRootRoute({
     component: () => <Outlet />,
   });
@@ -221,9 +223,11 @@ function renderInRouter(
   });
 
   return render(
-    <ConsoleTestRuntime runtime={runtime}>
-      <RouterProvider router={router} />
-    </ConsoleTestRuntime>,
+    <QueryClientProvider client={queryClient}>
+      <ConsoleTestRuntime runtime={runtime}>
+        <RouterProvider router={router} />
+      </ConsoleTestRuntime>
+    </QueryClientProvider>,
   );
 }
 
@@ -620,6 +624,17 @@ describe("ConsoleLayout", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Activity 2" }));
     expect(screen.getByText("Revision one")).toBeTruthy();
+  });
+
+  test("a compact chatter drawer stays closed on first registration", async () => {
+    largeViewport = false;
+    renderInRouter(<ConsoleLayout>
+      <ChatterPublisher />
+      <section aria-label="Page body">Compact body</section>
+    </ConsoleLayout>);
+    await screen.findByText("Compact body");
+    expect(await screen.findByRole("button", { name: "Open chatter" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Context" })).toBeNull();
   });
 });
 

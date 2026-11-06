@@ -23,7 +23,7 @@ from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.querysets import ProtectedQuerySet
 from tests.hierdemo.models import HierNode, PlainManagerHierNode, ScopedHierNode
 from tests.scopedemo.models import Scope
 
@@ -85,6 +85,49 @@ def test_create_under_parent_derives_path_shape() -> None:
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("write", ["save", "forest"])
+def test_hierarchy_rejects_path_beyond_column_width_on_create(write: str) -> None:
+    """Both creation paths reject level 20 before PostgreSQL sees varchar overflow."""
+
+    with system_context(reason="test hierarchy maximum path length on create"):
+        parent = None
+        for level in range(19):
+            parent = HierNode.objects.create(name=f"level-{level}", parent=parent)
+        assert parent is not None
+        assert len(parent.path) <= HierNode._meta.get_field("path").max_length
+
+        with pytest.raises(ValidationError, match="depth exceeds.*maximum length") as excinfo:
+            if write == "save":
+                HierNode.objects.create(name="overflow", parent=parent)
+            else:
+                HierNode.objects.create_forest([HierNode(name="overflow", parent=parent)])
+        assert "parent" in excinfo.value.message_dict
+        assert HierNode.objects.count() == 19
+
+
+@pytest.mark.django_db
+def test_reparent_rejects_descendant_path_beyond_column_width() -> None:
+    """A move fails before writing when its root fits but a child would overflow."""
+
+    with system_context(reason="test hierarchy maximum path length on move"):
+        destination = None
+        for level in range(18):
+            destination = HierNode.objects.create(name=f"destination-{level}", parent=destination)
+        assert destination is not None
+        moved = HierNode.objects.create(name="moved")
+        child = HierNode.objects.create(name="child", parent=moved)
+        old_paths = (moved.path, child.path)
+        moved.parent = destination
+        with pytest.raises(ValidationError, match="depth exceeds.*maximum length") as excinfo:
+            moved.save()
+        assert "parent" in excinfo.value.message_dict
+        moved.refresh_from_db()
+        child.refresh_from_db()
+        assert moved.parent_id is None
+        assert (moved.path, child.path) == old_paths
+
+
+@pytest.mark.django_db
 def test_direct_path_update_cannot_bypass_the_saved_row_owner() -> None:
     """Public and cloned querysets reject writes to the derived path."""
 
@@ -108,7 +151,7 @@ def test_hierarchy_path_writes_preserve_downstream_queryset_guards(monkeypatch: 
     def deny(*args: Any, **kwargs: Any) -> int:
         raise PermissionDenied("downstream write guard")
 
-    monkeypatch.setattr(AngeeQuerySet, "update", deny)
+    monkeypatch.setattr(ProtectedQuerySet, "update", deny)
     with pytest.raises(PermissionDenied, match="downstream write guard"):
         HierNode()._write_hierarchy_path(HierNode.objects.filter(pk=1), "/000000000001/")
 
@@ -477,6 +520,7 @@ def test_path_index_declares_pattern_ops() -> None:
         assert len(path_indexes) == 1, f"{model.__name__} must carry one path pattern-ops index"
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(
     os.environ.get("DATABASE_URL", "").split(":", 1)[0] not in {"postgres", "postgresql"},
     reason="requires DATABASE_URL backed by PostgreSQL",

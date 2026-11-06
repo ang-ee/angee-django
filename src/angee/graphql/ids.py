@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, TypeVar
 
 import strawberry
+import strawberry_django
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from strawberry.types import get_object_definition
@@ -43,6 +44,32 @@ def require_public_id(model: type[models.Model], fk_id: Any) -> PublicID:
     if public_id is None:
         raise ValueError(f"{model._meta.object_name} reference is unexpectedly unset")
     return public_id
+
+
+def public_id_field(field_name: str, *, nullable: bool = False) -> Any:
+    """Project a PK-targeting forward FK without loading or authorizing its target.
+
+    Use only where the containing row may disclose the reference independently
+    of target readability. Actor-scoped references use ``actor_scoped_public_id``.
+    Explicit nullable output preserves shared/unassigned reference semantics.
+    The model field owns its target and stored attname; native ``only`` retains
+    the existing scalar projection's query optimization. Non-PK ``to_field``
+    relations are unsupported: their stored value is not the target's primary key.
+    """
+    def resolve(root: models.Model) -> Any:
+        field = root._meta.get_field(field_name)
+        if not isinstance(field, models.ForeignKey):
+            raise ImproperlyConfigured(f"{root._meta.label}.{field_name} must be a forward foreign key.")
+        if not field.target_field.primary_key:
+            raise ImproperlyConfigured(
+                f"{root._meta.label}.{field_name} must target a primary key "
+                "to project a public id without loading its target."
+            )
+        value = field.value_from_object(root)
+        return to_public_id(field.related_model, value) if nullable else require_public_id(field.related_model, value)
+
+    resolve.__annotations__["return"] = PublicID | None if nullable else PublicID
+    return strawberry_django.field(resolver=resolve, only=[field_name])
 
 
 def optional_public_id(value: str | None) -> PublicID | None:

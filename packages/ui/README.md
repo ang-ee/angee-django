@@ -126,7 +126,17 @@ disabling before enabling preview in a host.
 edit baseline's revision and create retries reuse one key until acceptance or a
 `CREATION_KEY_CONFLICT`. A stale revision keeps local edits until an explicit reload
 and discard. Custom submit owners receive `baselineRecord` and `idempotencyKey`
-and retain responsibility for their own operation arguments.
+and retain responsibility for their own operation arguments and mutation effects.
+Native saves immediately adopt complete returned selections in the native cache
+and RHF baseline. An earlier exact read is never cancelled; if its stale result
+settles later, the accepted response is restored. Collection and dependent reads
+reconcile through Refine's shared owner. Later edits remain dirty. Partial
+responses update only complete selected fields in an existing cache, leave that
+query stale and request an authoritative read; they never seed a complete detail.
+Authored resource mutations compose the same lifecycle through `acceptResponse`
+and explicit `records`, retaining broad invalidation for unknown effects.
+Authored-only models retain their effects on authored reads; only exposed CRUD
+resources enter native resource invalidation.
 
 `GraphView` automatically lays out unpositioned nodes using measured sizes and
 preserves explicit positions. Layout debt: `GraphEditor` still lays out from
@@ -201,3 +211,17 @@ the toolbar's record page. Bounded client resources and `RowsListView` group the
 loaded collection through TanStack Table.
 
 [React documentation](https://docs.angee.ai/react/) · [Package reference](https://docs.angee.ai/react/reference/ui/)
+
+Native `FormView` supplies its exact selected detail key to record actions.
+Default successful action completion coalesces that read with declared mutation
+effects, including typed action dialogs. Complete accepted projections skip only
+their own automatic fallback. `refresh: true` requests an explicit reload;
+`refresh: false` omits default completion. Custom acknowledged sources keep their
+opaque imperative reload contract.
+
+Generic record action runners and typed action submitters receive an explicit
+`context.reconciliation` collector. Forward it when calling another mutation:
+`mutate(variables, { reconciliation: context.reconciliation })` or generated
+`action(id, args, { reconciliation: context.reconciliation })`. The shared
+record action and dialog owners establish that command's lifetime; unrelated
+commands and live changes continue independently.

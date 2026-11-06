@@ -2,10 +2,11 @@
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { ResourceViewProvider, ToastProvider, createRouteHref, type ChatterViewContext } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
+import { authoredQueryReadsLiveChange } from "@angee/refine";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("@angee/app", async (original) => ({
@@ -14,13 +15,14 @@ vi.mock("@angee/app", async (original) => ({
 }));
 
 import { InboxConversation } from "./Conversation";
-import { InboxConnections, InboxMessage, InboxRelatedTarget, InboxTranscriptMatches } from "./documents";
+import { InboxConnections, InboxConnectionsCount, InboxMessage, InboxMessageUses, InboxRelatedTarget, InboxTranscriptMatches } from "./documents";
 import { InboxMessageReader } from "./MessageReader";
 import { InboxRelatedPane } from "./Related";
 import { FileMessages, useFileMessageCount } from "./FileMessages";
 import type { InboxNavigation, InboxScope } from "./state";
 
 const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://inbox-files", providerNames: [] });
+const originalScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
 // The transcript virtualizes its rows over the measured viewport, which happy-dom
 // reports as zero-sized; give elements a 640 x 640 viewport so the rows render,
 // whichever box the virtualizer measures (@tanstack/virtual-core reads the client
@@ -31,7 +33,11 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(640);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(640);
 });
-afterEach(() => { cleanup(); clearClients(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup(); clearClients(); vi.restoreAllMocks();
+  if (originalScrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScrollTo);
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+});
 
 const pdf = (n: number) => ({
   id: `part-${n}`, name: `renewal-${n}.pdf`, type: "application/pdf", position: n, role: "BODY",
@@ -54,20 +60,30 @@ const message = {
   participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [], parent,
 };
 
-function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false) {
+function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false, survivor?: string, transcriptMessages = [message], matchingVisible: string[] = [], standalone = false) {
   const source = status ? { ...message, title: "", platform: "WHATSAPP",
     thread: { ...message.thread, modality: "STATUS", conversation_label: "Status updates" },
-    channel: { id: "acc-one", display_name: "Connected account" } } : message;
+    channel: { id: "acc-one", display_name: "Connected account" } }
+    : survivor ? { ...message, merged_into: { id: survivor } }
+      : standalone ? { ...message, thread: null, parent: { ...parent, thread: null } } : message;
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     if (meta?.gqlQuery === InboxTranscriptMatches) {
+      const at = meta.gqlVariables?.at;
+      const anchorIndex = transcriptMessages.findIndex((row) => row.id === at);
+      const matching = matchingVisible.map((id) => transcriptMessages.findIndex((row) => row.id === id))
+        .filter((index) => index >= 0).sort((left, right) => left - right);
       return { data: { inbox_transcript_matches: {
-        thread: { id: "thread-1", conversation_label: "Renewals" }, count: 0, total: 1, visible: [], previous: null, next: null,
+        thread: { id: "thread-1", conversation_label: "Renewals" }, count: matchingVisible.length,
+        total: transcriptMessages.length, visible: matchingVisible.filter((id) => meta?.gqlVariables?.visible.includes(id)),
+        previous: transcriptMessages[(anchorIndex < 0 ? matching.at(-1) : matching.filter((index) => index < anchorIndex).at(-1)) ?? -1]?.id ?? null,
+        next: transcriptMessages[(anchorIndex < 0 ? matching[0] : matching.find((index) => index > anchorIndex)) ?? -1]?.id ?? null,
       } } };
     }
     if (meta?.gqlQuery === InboxMessage) {
-      return { data: { inbox_message: { matches: !status, uses, message: source } } };
+      return { data: { inbox_message: { matches: !status, message: source } } };
     }
+    if (meta?.gqlQuery === InboxMessageUses) return { data: { inbox_message_uses: uses } };
     if (meta?.gqlQuery === InboxRelatedTarget) {
       const part = pdf(2);
       return { data: { inbox_related_target: {
@@ -78,8 +94,11 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
     if (meta?.gqlQuery === InboxConnections) {
       return { data: { inbox_connections: { rows: fileUses ? [{ id: "use-1", message: source, part: pdf(2) }] : [], count: fileUses ? 1 : 0, message_count: fileUses ? 1 : 0 } } };
     }
+    if (meta?.gqlQuery === InboxConnectionsCount) {
+      return { data: { inbox_connections: { message_count: fileUses ? 1 : 0 } } };
+    }
     return { data: { thread_message_feed: {
-      messages: [message], count: 1, older_cursor: null, has_older: false, has_more_in_window: false,
+      messages: transcriptMessages, count: transcriptMessages.length, older_cursor: null, has_older: false, has_more_in_window: false,
       has_older_than_through: false, newer_cursor: null, has_newer: false, has_newer_than_before: false,
     } } };
   }) } satisfies RefineTestDataProvider;
@@ -97,6 +116,7 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
   const scope = { coverage: { timezone: "UTC" }, search: {}, sender: "", circle: "" };
   return {
     custom: dataProvider.custom,
+    client,
     wrapper: Providers,
     navigation,
     props: { navigation: navigation as unknown as InboxNavigation, scope: scope as unknown as InboxScope },
@@ -112,6 +132,166 @@ test("an attachment in the conversation previews in Related", async () => {
   expect(screen.getAllByRole("toolbar")).toHaveLength(1);
   expect(inbox.navigation.previewFile).toHaveBeenCalledWith("file-2", "message-1");
   expect(inbox.navigation.patch).not.toHaveBeenCalled();
+});
+
+test("a 200-message conversation reads matches once after positioning", async () => {
+  const messages = Array.from({ length: 200 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages);
+  render(<InboxConversation {...inbox.props} />, { wrapper: inbox.wrapper });
+
+  await waitFor(() => expect(inbox.custom.mock.calls.filter(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1));
+  const matchesRequest = inbox.custom.mock.calls.find(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)![0];
+  expect(matchesRequest.meta?.gqlVariables?.visible).toHaveLength(200);
+  expect(matchesRequest.meta?.gqlVariables?.at).toBe("");
+  await waitFor(() => expect(screen.getByText("Renewals")).toBeTruthy());
+  expect(inbox.custom.mock.calls.filter(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1);
+});
+
+test("scrolling a 200-message transcript sends no matches read; previous and next use the viewport", async () => {
+  const messages = Array.from({ length: 200 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages, messages.slice(1).map((row) => row.id));
+  render(<InboxConversation {...inbox.props} />, { wrapper: inbox.wrapper });
+
+  await waitFor(() => expect(inbox.custom.mock.calls.some(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)).toBe(true));
+  const matchReads = inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches);
+  expect(matchReads[0]![0].meta?.gqlVariables?.visible).toHaveLength(200);
+  const transcript = document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement;
+  expect(transcript).toBeTruthy();
+  transcript!.scrollTop = 96 * 150;
+  fireEvent.scroll(transcript!);
+  expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+  await waitFor(() => expect(inbox.navigation.patch).toHaveBeenCalledTimes(1));
+  const viewportId = inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches).at(-1)![0].meta?.gqlVariables?.at as string;
+  const viewportIndex = Number(viewportId.slice("message-".length));
+  expect(viewportIndex).toBeGreaterThan(1);
+  expect(viewportIndex).toBeLessThan(199);
+  expect(inbox.navigation.patch).toHaveBeenCalledWith({ at: `message:message-${viewportIndex - 1}` });
+  fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+  await waitFor(() => expect(inbox.navigation.patch).toHaveBeenCalledTimes(2));
+  const nextViewportId = inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches).at(-1)![0].meta?.gqlVariables?.at as string;
+  const nextViewportIndex = Number(nextViewportId.slice("message-".length));
+  expect(inbox.navigation.patch).toHaveBeenCalledWith({ at: `message:message-${nextViewportIndex + 1}` });
+  expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(3);
+  transcript!.scrollTop = 1_000_000;
+  fireEvent.scroll(transcript!);
+  await waitFor(() => expect(document.querySelector('li[data-index="199"]')).toBeTruthy());
+  expect(screen.getAllByText("Matches current filters").length).toBeGreaterThan(0);
+  expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(3);
+});
+
+test("successive Next clicks advance sparse matches in place with one read each", async () => {
+  const messages = Array.from({ length: 200 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages,
+    [10, 30, 50, 70, 90].map((index) => `message-${index}`));
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(96);
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(200 * 96);
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true,
+    value: function(this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? 0;
+      queueMicrotask(() => this.dispatchEvent(new Event("scroll")));
+    },
+  });
+  function NavigationHarness() {
+    const [at, setAt] = useState("");
+    inbox.navigation.at = at;
+    inbox.navigation.patch.mockImplementation(({ at: next }: { at?: string }) => setAt(next ?? ""));
+    return <InboxConversation {...inbox.props} />;
+  }
+  render(<NavigationHarness />, { wrapper: inbox.wrapper });
+  const matchReads = () => inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches);
+  const feedReads = () => inbox.custom.mock.calls.filter(([request]) =>
+    request.meta?.gqlVariables?.threadId === "thread-1" && request.meta?.gqlVariables?.limit === 50);
+  await waitFor(() => expect(matchReads()).toHaveLength(1));
+  expect(feedReads()).toHaveLength(1);
+  const transcript = document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement;
+  expect(transcript).toBeTruthy();
+  transcript!.scrollTop = 0;
+  fireEvent.scroll(transcript!);
+
+  fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+  await waitFor(() => expect(inbox.navigation.at).toBe("message:message-10"));
+  await waitFor(() => expect(document.querySelector('li[data-index="10"] [aria-current="true"]')).toBeTruthy());
+  expect(screen.getByText("Full conversation · 200 messages · 5 match your filters")).toBeTruthy();
+  expect(matchReads()).toHaveLength(2);
+  expect(feedReads()).toHaveLength(1);
+  expect(document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement).toBe(transcript);
+
+  fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+  await waitFor(() => expect(inbox.navigation.at).toBe("message:message-30"));
+  expect(screen.getByText("Full conversation · 200 messages · 5 match your filters")).toBeTruthy();
+  expect(matchReads().map(([request]) => request.meta?.gqlVariables?.at)).toEqual(["", "message-0", "message-10"]);
+  expect(feedReads()).toHaveLength(1);
+  expect(document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement).toBe(transcript);
+
+  fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+  await waitFor(() => expect(inbox.navigation.at).toBe("message:message-10"));
+  expect(matchReads().at(-1)![0].meta?.gqlVariables?.at).toBe("message-30");
+  expect(feedReads()).toHaveLength(1);
+
+  transcript!.scrollTop = 96 * 150;
+  fireEvent.scroll(transcript!);
+  fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+  await waitFor(() => expect(inbox.navigation.at).toBe("message:message-90"));
+  const outOfView = matchReads().at(-1)![0].meta?.gqlVariables?.at as string;
+  expect(Number(outOfView.slice("message-".length))).toBeGreaterThan(100);
+  expect(outOfView).not.toBe("message-10");
+});
+
+test("opening at a message anchor retains the positioned scroll element and lands on the message", async () => {
+  const messages = Array.from({ length: 200 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages);
+  inbox.navigation.at = "message:message-150";
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(200 * 640);
+  const positionedElements: HTMLElement[] = [];
+  const matchesAtPosition: number[] = [];
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: function(this: HTMLElement, options: ScrollToOptions) {
+    positionedElements.push(this);
+    matchesAtPosition.push(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches).length);
+    this.scrollTop = options.top ?? 0;
+    queueMicrotask(() => this.dispatchEvent(new Event("scroll")));
+  } });
+  render(<InboxConversation {...inbox.props} />, { wrapper: inbox.wrapper });
+
+  await waitFor(() => expect(document.querySelector('li[data-index="150"] [aria-current="true"]')).toBeTruthy());
+  const transcript = document.querySelector('li[data-index="150"]')?.parentElement?.parentElement;
+  expect(positionedElements[0]).toBe(transcript);
+  expect(matchesAtPosition[0]).toBe(0);
+  expect(transcript?.scrollTop).toBeGreaterThan(0);
+  expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1);
+  expect(inbox.custom.mock.calls.find(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches)?.[0].meta?.gqlVariables?.at)
+    .toBe("message-150");
+});
+
+test("transcript matches bound the annotation window after older history loads", async () => {
+  const messages = Array.from({ length: 1001 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages);
+  render(<InboxConversation {...inbox.props} />, { wrapper: inbox.wrapper });
+
+  await waitFor(() => expect(inbox.custom.mock.calls.some(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)).toBe(true));
+  const reads = () => inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches);
+  expect(reads()).toHaveLength(1);
+  expect(reads()[0]![0].meta?.gqlVariables?.visible).toHaveLength(1000);
+  const transcript = document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement;
+  expect(transcript).toBeTruthy();
+  transcript!.scrollTop = 96 * 700;
+  fireEvent.scroll(transcript!);
+  expect(reads()).toHaveLength(1);
 });
 
 test("an attachment in the reader previews in Related and leaves the message full width", async () => {
@@ -132,6 +312,15 @@ test("the reader retains the quoted author and opens the parent in its conversat
   fireEvent.click(await screen.findByRole("button", { name: /Replying to Dane Meet at Casa Cosecha/ }));
 
   expect(inbox.navigation.openInContext).toHaveBeenCalledWith(parent);
+});
+
+test("a readable message with no admitted thread has no conversation breadcrumb or link", async () => {
+  const inbox = fixture([], false, false, undefined, [message], [], true);
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  expect(await screen.findByText("Standalone message")).toBeTruthy();
+  expect(screen.queryByText("Renewals")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open conversation" })).toBeNull();
+  expect(inbox.navigation.conversation).not.toHaveBeenCalled();
 });
 
 test("Related shows a pinned file's preview in the pane", async () => {
@@ -156,19 +345,107 @@ test("repeated parts of one target keep the server's distinct message count", as
     { part_id: "part-3", target: "fragment:single", count: 1 },
   ]);
   render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  expect(inbox.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxMessageUses)).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Show message links" }));
   const use = await screen.findByRole("button", { name: "renewal-2.pdf 2 accessible message uses" });
   expect(screen.getAllByRole("button", { name: /accessible message uses/ })).toHaveLength(1);
   fireEvent.click(use);
   expect(inbox.navigation.connect).toHaveBeenCalledWith("file:file-2", "message-1");
 });
 
+const fileContext: ChatterViewContext = {
+  pathname: "/storage/file-2", params: { id: "file-2" },
+  route: { name: "storage.file", path: "/storage/$id", viewType: "storage/file", modelLabel: "storage.File" },
+  view: { kind: "record", type: "storage/file", sqid: "file-2" },
+};
+
+test("the message read names its own thread, party and files for live invalidation", async () => {
+  const inbox = fixture();
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  await waitFor(() => {
+    const read = inbox.client.getQueryCache().findAll().find((entry) =>
+      (entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread")
+      && (entry.meta?.angeeRecords as { model: string; id: string }[] | undefined)?.some((record) => record.id === "message-1"));
+    expect(read?.meta?.angeeRecords).toEqual(expect.arrayContaining([
+      { model: "messaging.Message", id: "message-1" },
+      { model: "messaging.Thread", id: "thread-1" },
+      { model: "storage.File", id: "file-2" },
+    ]));
+    expect(read?.meta?.angeeBroadModels).toEqual(expect.arrayContaining([
+      "messaging.Part", "messaging.Participant", "messaging.MessageStar", "messaging.MessageEdge",
+    ]));
+  });
+});
+
+test.each(["messaging.Part", "messaging.Participant", "messaging.MessageStar", "messaging.MessageEdge"])(
+  "%s changes retain the reader's model fallback", async (model) => {
+    const inbox = fixture();
+    render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+    await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+    const read = inbox.client.getQueryCache().findAll().find((entry) =>
+      (entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread")
+      && (entry.meta?.angeeRecords as { model: string; id: string }[] | undefined)?.some((record) => record.id === "message-1"));
+    expect(read?.meta?.angeeBroadModels).toContain(model);
+    expect(authoredQueryReadsLiveChange(read?.meta, { model, id: "new-child" })).toBe(true);
+  },
+);
+
+test("a new reply naming the selected parent refreshes the reader", async () => {
+  const inbox = fixture();
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  const read = inbox.client.getQueryCache().findAll().find((entry) =>
+    (entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread")
+    && (entry.meta?.angeeRecords as { model: string; id: string }[] | undefined)?.some((record) => record.id === "message-1"));
+  expect(authoredQueryReadsLiveChange(read?.meta, {
+    model: "messaging.Message", id: "new-reply",
+    relatedRecords: [{ model: "messaging.Message", id: "message-1" }],
+  })).toBe(true);
+});
+
+test("a selected copy names its survivor for live refresh", async () => {
+  const inbox = fixture([], false, false, "survivor-1");
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  const read = inbox.client.getQueryCache().findAll().find((entry) =>
+    (entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread")
+    && (entry.meta?.angeeRecords as { model: string; id: string }[] | undefined)?.some((record) => record.id === "message-1"));
+  expect(read?.meta?.angeeRecords).toEqual(expect.arrayContaining([
+    { model: "messaging.Message", id: "survivor-1" },
+  ]));
+  expect(authoredQueryReadsLiveChange(read?.meta, { model: "messaging.Message", id: "survivor-1" })).toBe(true);
+});
+
+test("a new use refreshes the lazy Links counts", async () => {
+  const inbox = fixture([{ part_id: "part-1", target: "file:file-1", count: 2 }]);
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  fireEvent.click(screen.getByRole("button", { name: "Show message links" }));
+  await screen.findByRole("button", { name: /accessible message uses/ });
+  const uses = inbox.client.getQueryCache().findAll().find((entry) =>
+    (entry.meta?.angeeBroadModels as string[] | undefined)?.includes("messaging.Part")
+    && !(entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread"));
+  expect(authoredQueryReadsLiveChange(uses?.meta, { model: "messaging.Part", id: "new-use" })).toBe(true);
+});
+
+test("Files backlinks count selects only message_count without inbox rows", async () => {
+  const inbox = fixture([], true);
+  function Count() {
+    return <span>Related messages: {useFileMessageCount(fileContext)}</span>;
+  }
+  const root = createRootRoute({ component: Count });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<ShellPageTestProviders><ToastProvider><RouterProvider router={router} /></ToastProvider></ShellPageTestProviders>, { wrapper: inbox.wrapper });
+  await screen.findByText("Related messages: 1");
+  expect(inbox.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxConnectionsCount)).toBe(true);
+  expect(inbox.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxConnections)).toBe(false);
+});
+
 test("Files backlinks count readable message uses and link to their exact part with the file pinned", async () => {
   const inbox = fixture([], true);
-  const context: ChatterViewContext = {
-    pathname: "/storage/file-2", params: { id: "file-2" },
-    route: { name: "storage.file", path: "/storage/$id", viewType: "storage/file", modelLabel: "storage.File" },
-    view: { kind: "record", type: "storage/file", sqid: "file-2" },
-  };
+  const context = fileContext;
   function Messages() {
     const count = useFileMessageCount(context);
     return <><span>Related messages: {count}</span><FileMessages context={context} /></>;
@@ -183,6 +460,8 @@ test("Files backlinks count readable message uses and link to their exact part w
   const target = new URL(link.getAttribute("href")!, "https://example.test");
   expect(target.pathname).toBe("/nexus/inbox");
   expect(Object.fromEntries(target.searchParams)).toEqual({ message: "message-1", part: "part-2", related: "file:file-2", relatedFrom: "message-1" });
+  expect(inbox.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxConnectionsCount
+    && request.meta?.gqlVariables?.target === "file:file-2")).toBe(true);
   expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxConnections)
     .every(([request]) => request.meta?.gqlVariables?.target === "file:file-2")).toBe(true);
 });

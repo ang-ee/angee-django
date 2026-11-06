@@ -1,8 +1,10 @@
 """Source conversations attach to a record through the messaging schema's target arms."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
+from django.test import override_settings
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -14,13 +16,18 @@ from rebac import (
     write_relationships,
 )
 
+from angee.messaging import schema as messaging_schema
 from angee.messaging.testing.models import Thread, ThreadAttachment
 from angee.projects.testing.models import Project, Task
+from angee.timeline.reading import Timeline
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
-from tests.conftest import create_user, execute_schema, result_data, vault_for
+from tests.conftest import addon_schema, authored_graphql_document, create_user, execute_schema, result_data, vault_for
 from tests.test_messaging_graphql import _schema
 
 pytestmark = pytest.mark.django_db(transaction=True)
+SOURCE_THREADS = authored_graphql_document(
+    Path(__file__).resolve().parents[1] / "src/angee/messaging/web/src/documents.ts", "RecordSourceThreadsDocument"
+)
 
 
 def _grant(resource: Any, relation: str, user: Any) -> None:
@@ -45,6 +52,36 @@ def sourced(composed_permissions: None) -> dict[str, Any]:
     for user in (reader, outsider):
         _grant(thread, "reader", user)
     return {"owner": owner, "reader": reader, "outsider": outsider, "task": task, "thread": thread}
+
+
+@pytest.mark.postgresql
+def test_record_source_threads_document_batches_nested_threads(
+    sourced: dict[str, Any], capture_graphql_document: Any,
+) -> None:
+    owner, reader, task = sourced["owner"], sourced["reader"], sourced["task"]
+    schema = addon_schema(messaging_schema.schemas, "console")
+    variables = {"modelLabel": task._meta.label, "recordId": str(task.sqid)}
+    reads = []
+    for index in range(5):
+        if index == 0:
+            thread = sourced["thread"]
+        else:
+            with system_context(reason="test.document_budget.source_threads"):
+                thread = Thread.objects.create()
+            _grant(thread, "editor", owner)
+            _grant(thread, "reader", reader)
+        with actor_context(owner):
+            ThreadAttachment.objects.bind_source_thread(task, thread, label=f"Source {index}")
+        if index in (0, 4):
+            read = capture_graphql_document(schema, SOURCE_THREADS, variables, actor=reader)
+            assert len(read.data["record_source_threads"]) == index + 1
+            reads.append(read)
+    one, five = reads
+    five.assert_flat_from(one)
+    for read in (one, five):
+        read.assert_statements(10)
+        read.assert_bytes(total=1_300_000, largest=300_000)
+        read.assert_no_audit_writes()
 
 
 def test_source_edge_takes_write_on_the_record_and_lists_in_one_scoped_statement(sourced: dict[str, Any]) -> None:
@@ -91,6 +128,34 @@ def test_source_threads_project_their_record_through_the_reference_gate(sourced:
         "id": str(edge.sqid), "label": "Original request", "record_model": "projects.Task",
         "record_id": str(task.sqid), "thread": {"id": str(thread.sqid)},
     }]
+
+
+def test_source_threads_require_thread_read_through_the_attachment_edge(sourced: dict[str, Any]) -> None:
+    owner, task, thread = sourced["owner"], sourced["task"], sourced["thread"]
+    record_reader = create_user("record-only-reader")
+    with actor_context(owner):
+        task.project.grant_record_access("reader", record_reader)
+        ThreadAttachment.objects.bind_source_thread(task, thread)
+    with actor_context(record_reader):
+        assert task.with_actor(record_reader).has_access("read")
+        assert not thread.with_actor(record_reader).has_access("read")
+        assert not ThreadAttachment.objects.source_threads_for_record(task)
+
+
+@override_settings(ANGEE_TIMELINE_KINDS=["angee.messaging.timeline.timeline_kinds"])
+def test_source_edge_reader_without_thread_read_sees_no_conversation(sourced: dict[str, Any]) -> None:
+    owner, task, thread = sourced["owner"], sourced["task"], sourced["thread"]
+    edge_reader = create_user("source-edge-only-reader")
+    with actor_context(owner):
+        task.project.grant_record_access("reader", edge_reader)
+        edge = ThreadAttachment.objects.bind_source_thread(task, thread, label="Edge label")
+    with system_context(reason="test.source_threads.edge_reader"):
+        _grant(edge, "reader", edge_reader)
+    with actor_context(edge_reader):
+        assert edge.with_actor(edge_reader).has_access("read")
+        assert not thread.with_actor(edge_reader).has_access("read")
+        assert not ThreadAttachment.objects.source_threads_for_record(task)
+        assert not Timeline(task, edge_reader).page().entries
 
 
 def test_source_edge_accepts_a_long_display_label(sourced: dict[str, Any]) -> None:

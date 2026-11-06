@@ -73,11 +73,6 @@ on:
         required: false
         type: string
         default: "[]"
-      consumer-pytest-plugins:
-        description: JSON array of additional owning test-fixture plugins for the consumer.
-        required: false
-        type: string
-        default: "[]"
     secrets:
       ADDON_SOURCES_TOKEN:
         description: Token with read access to every private consumer dependency source.
@@ -96,6 +91,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
@@ -103,6 +105,87 @@ jobs:
       - run: uv run --locked python -m mypy src
         env:
           PYTHONPATH: src
+      - name: Check isolated settings contracts
+        run: |
+          env -u DATABASE_URL uv run --locked python -m pytest -q --noconftest --ds=tests.permissionless_settings tests/test_permissionless_base.py
+          env -u DATABASE_URL uv run --locked python -m pytest -q --noconftest --ds=tests.iam_only_settings tests/test_permissionless_iam_composition.py
+          env -u DATABASE_URL uv run --locked python -m pytest -q --noconftest --ds=tests.permissionless_graphql_settings tests/test_permissionless_graphql.py
+          env -u DATABASE_URL uv run --locked python -m pytest -q --noconftest --ds=tests.permissioned_graphql_settings tests/test_permissioned_graphql.py
+      - name: Check generated adapters
+        run: uv run --locked python .agents/tools/sync-adapters.py --check
+      - name: Type-check the isolated provenance engine
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: src:.
+        run: uv run --locked python -m mypy --config-file tests/provenance_engine/mypy.toml -p angee.provenance.engine
+      - name: Check the isolated provenance engine host
+        if: ${{ !cancelled() }}
+        run: |
+          env -u DATABASE_URL uv run --locked python -m django check --settings=tests.provenance_engine.settings
+          env -u DATABASE_URL uv run --locked python -m django makemigrations --check --dry-run --settings=tests.provenance_engine.settings
+      - name: Test the provenance engine on SQLite
+        if: ${{ !cancelled() }}
+        run: >-
+          env -u DATABASE_URL uv run --locked python -m pytest -q -p no:cacheprovider
+          --confcutdir=tests/provenance_engine --ds=tests.provenance_engine.settings
+          tests/provenance_engine
+
+  uv-notes:
+    if: ${{ inputs.uv-enabled }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Test the notes example package
+        run: |
+          mkdir -p test-results
+          env -u DATABASE_URL uv run --locked python tests/composed_host.py \
+            --runtime-dir test-results/notes_runtime --action tests \
+            --test-label example.notes.tests --output test-results/notes-report.json
+
+  uv-redis:
+    if: ${{ inputs.uv-enabled }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Test worker publication through Redis
+        env:
+          ANGEE_TEST_CHANNEL_REDIS_URL: redis://127.0.0.1:6379/0
+        run: |
+          mkdir -p test-results
+          env -u DATABASE_URL uv run --locked python -m pytest -q --junitxml=test-results/redis.xml tests/test_workflows_worker_publication.py
+          uv run --locked python -c 'import xml.etree.ElementTree as ET; cases = list(ET.parse("test-results/redis.xml").getroot().iter("testcase")); assert len(cases) == 1 and not any(case.find("skipped") is not None for case in cases), "Redis publication contract did not execute"'
 
   # The suite runs as six contiguous shards of equal stored time
   # (.test_durations, pytest-split); a test missing from it still runs in one.
@@ -119,24 +202,30 @@ jobs:
         group: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v5
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
       - run: >-
-          uv run pytest -q -n auto --dist loadfile --durations=25
+          env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25
           --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }}
 
-  # The PostgreSQL selection is split the same way: every worker flushes the
-  # whole schema between transactional tests, so one job no longer fits.
+  # PostgreSQL timings balance the six groups across marked contracts.
   uv-postgres:
-    name: uv postgres ${{ matrix.group }}/3
+    name: uv postgres ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3]
+        group: [1, 2, 3, 4, 5, 6]
     services:
       postgres:
         image: postgres:17
@@ -153,6 +242,13 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v5
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
@@ -164,60 +260,49 @@ jobs:
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -tAc "SHOW max_locks_per_transaction"
-      - name: Verify workflow, decision and agent session contracts execute on PostgreSQL
+      - name: Verify PostgreSQL contracts execute without skips
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
+        # The four isolated-settings modules run in python-quality; collecting
+        # them under the full host settings records module-level skips here.
         # Review concurrency includes simultaneous all seats, a requester-less
         # first seat, and recovery after a settlement signal skips a busy run.
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
         run: |
-          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=workflow-concurrency.xml \
-            --splits 3 --group ${{ matrix.group }} \
-            tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
-            tests/test_workflows_runtime.py tests/test_workflows_install.py \
-            tests/test_workflows_subject.py tests/test_workflows_publication.py \
-            tests/test_workflows_testing.py tests/test_testing.py \
-            tests/test_workflows_io.py tests/test_workflows_contract.py tests/test_workflows_graphql.py \
-            tests/test_workflows_fix_round.py tests/test_workflows_run_graph.py \
-            tests/test_workflows_cancel.py tests/test_workflows_cancel_concurrency.py \
-            tests/test_workflows_review.py tests/test_workflows_review_concurrency.py \
-            tests/test_workflows_review_graphql.py tests/test_decisions_inbox.py \
-            tests/test_timeline_workflows.py \
-            tests/test_decision_display_nested.py \
-            tests/test_workflows_map_definition.py tests/test_workflows_map.py \
-            tests/test_workflows_map_concurrency.py tests/test_workflows_map_surface.py \
-            tests/test_workflows_await_definition.py tests/test_workflows_children.py \
-            tests/test_workflows_children_concurrency.py tests/test_workflows_children_surface.py \
-            tests/test_workflows_retention.py \
-            tests/test_workflows_triggers.py tests/test_workflows_triggers_surface.py \
-            tests/test_workflows_triggers_concurrency.py tests/test_workflows_messaging.py \
-            tests/test_workflows_posts.py \
-            tests/test_workflows_watches.py tests/test_workflows_watch_concurrency.py \
-            tests/test_workflows_parties.py \
-            tests/test_composed_note_workflow.py \
-            tests/test_extraction_steps.py tests/test_extraction_decisions.py \
-            tests/test_composed_extraction_workflow.py \
-            tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
-            tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
-            tests/test_integrate_discovery_concurrency.py \
-            tests/test_framework_integration.py \
-            tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py
-          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
+          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --create-db --durations=25 --junitxml=workflow-concurrency.xml \
+            --splits 6 --group ${{ matrix.group }} --splitting-algorithm least_duration \
+            --durations-path .test_durations_postgres -m postgresql \
+            tests
+          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" and child.get("type") != "pytest.xfail" for child in case) for case in cases); assert len(cases) > 0 and skipped == 0, f"expected marked PostgreSQL tests, got marked={len(cases)}, skipped={skipped}"; print(f"PostgreSQL marked={len(cases)}, skipped={skipped}")'
+      - name: Test the full provenance engine on PostgreSQL
+        if: ${{ !cancelled() && matrix.group == 1 }}
+        env:
+          PROVENANCE_TEST_DATABASE_HOST: 127.0.0.1
+          PROVENANCE_TEST_DATABASE_NAME: angee
+          PROVENANCE_TEST_DATABASE_USER: postgres
+          PROVENANCE_TEST_DATABASE_PASSWORD: postgres
+        run: |
+          env -u DATABASE_URL uv run --locked python -m pytest -q -p no:cacheprovider \
+            --confcutdir=tests/provenance_engine --ds=tests.provenance_engine.settings \
+            --junitxml=provenance-engine-postgres.xml tests/provenance_engine
+          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("provenance-engine-postgres.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert len(cases) == 120 and skipped == 0, f"expected 120 executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print("Provenance engine PostgreSQL tests=120, skipped=0")'
 
   # One verdict under the check name pull requests and callers already know:
   # a failed, cancelled or timed-out shard fails it.
   uv:
     if: ${{ always() && inputs.uv-enabled }}
-    needs: [python-quality, uv-shard, uv-postgres]
+    needs: [python-quality, uv-shard, uv-postgres, uv-notes, uv-redis]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - run: |
-          echo "quality=${{ needs.python-quality.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
+          echo "quality=${{ needs.python-quality.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }} notes=${{ needs.uv-notes.result }} redis=${{ needs.uv-redis.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.uv-shard.result }}" = success
           test "${{ needs.uv-postgres.result }}" = success
+          test "${{ needs.uv-notes.result }}" = success
+          test "${{ needs.uv-redis.result }}" = success
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
@@ -235,6 +320,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --filter './packages/**' typecheck
+      - run: pnpm check:form-spec
       - run: pnpm -r --filter './packages/**' test
       - run: pnpm -r --filter './packages/**' --filter '!@angee/storybook' build
       - run: node packages/scripts/check-dist-imports.mjs
@@ -285,6 +371,13 @@ jobs:
           ref: ${{ github.repository == 'ang-ee/angee-messaging-bridges' && github.sha || inputs.bridges-ref }}
           path: stack/workspaces/src/angee-messaging-bridges
           token: ${{ secrets.BRIDGES_TOKEN || github.token }}
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
       - name: Check out declared consumer addon sources
         if: ${{ inputs.consumer-path != '' }}
         env:
@@ -317,6 +410,10 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
+      - name: Test native project template inputs
+        if: ${{ inputs.uv-enabled && matrix.group == 1 }}
+        working-directory: stack/workspaces/src/angee
+        run: env -u DATABASE_URL uv run --locked python -m pytest -q tests/test_project_template_inputs.py
       - uses: pnpm/action-setup@v5
         with:
           version: 11.1.3
@@ -349,6 +446,10 @@ jobs:
           path = Path("settings.yaml")
           settings = yaml.safe_load(path.read_text())
           settings["INSTALLED_APPS"] = roots
+          # The rendered consumer test host runs its suite in one process with an
+          # in-memory channel layer, the same isolated-test opt-in the framework's
+          # composed hosts carry (tests/composed_host.py).
+          settings["ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER"] = True
           path.write_text(yaml.safe_dump(settings, sort_keys=False))
           path = Path("pnpm-workspace.yaml")
           workspace = yaml.safe_load(path.read_text())
@@ -358,7 +459,7 @@ jobs:
           path.write_text(yaml.safe_dump(workspace, sort_keys=False))
           # Native uv reads each collection's pyproject and workspace sources.
           subprocess.run([
-              "uv", "add", "--editable",
+              "uv", "add", "--editable", "--no-workspace",
               *(str(Path("workspaces/src") / source["path"]) for source in sources),
           ], check=True)
           PY
@@ -384,6 +485,10 @@ jobs:
         working-directory: stack
         # One environment keeps plugin entry points consistent with imported code.
         run: uv add --dev --requirements "$GITHUB_WORKSPACE/check-tools.txt" --no-sync
+      - name: Include the blank-choice composition fixture
+        if: ${{ inputs.addons-profile == 'full' && matrix.group == 1 }}
+        working-directory: stack
+        run: uv add --dev --editable --no-workspace "$GITHUB_WORKSPACE/stack/workspaces/src/angee/tests/blankchoices" --no-sync
       - name: Compose the runtime and SDL (no database needed)
         working-directory: stack
         run: |
@@ -397,6 +502,10 @@ jobs:
         working-directory: stack
         run: |
           uv run --no-sync python manage.py provision
+      - name: Check the full installed model graph
+        if: ${{ inputs.addons-profile == 'full' && matrix.group == 1 }}
+        working-directory: stack/workspaces/src/angee
+        run: uv run --no-sync --project "$GITHUB_WORKSPACE/stack" python -m pytest -q -p no:cacheprovider tests/test_full_model_graph.py
       - name: Lint the consumer with the framework policy
         if: ${{ inputs.consumer-path != '' && matrix.group == 1 }}
         working-directory: stack
@@ -465,7 +574,6 @@ jobs:
           DJANGO_SETTINGS_MODULE: settings
           CONSUMER_PATH: ${{ inputs.consumer-path }}
           CONSUMER_TESTS: ${{ inputs.consumer-tests }}
-          CONSUMER_PYTEST_PLUGINS: ${{ inputs.consumer-pytest-plugins }}
           CONSUMER_SPLITS: ${{ strategy.job-total }}
           CONSUMER_GROUP: ${{ matrix.group }}
         run: |
@@ -490,14 +598,10 @@ jobs:
           # Populate the authored host before collecting consumer fixture plugins.
           # Native installed distributions already own addon importability.
           django.setup()
-          plugins = json.loads(os.environ["CONSUMER_PYTEST_PLUGINS"])
           raise SystemExit(pytest.main([
               "-c", "/dev/null", "--rootdir", str(slot), "--confcutdir", str(slot),
               "--import-mode=importlib", "--nomigrations", "-o", "python_files=test*.py",
-              # Register pytest-django before the shared django_db_setup override.
-              "-p", "django", "-p", "angee.base.testing.fixtures", "-p", "angee.provenance.testing.fixtures",
-              "-p", "angee.parties.testing.fixtures",
-              *(arg for plugin in plugins for arg in ("-p", plugin)),
+              "-p", "django",
               "-p", "no:randomly", "-n", "4", "--dist", "worksteal", "-q",
               "--splits", os.environ["CONSUMER_SPLITS"], "--group", os.environ["CONSUMER_GROUP"],
               "--splitting-algorithm", "least_duration", "--durations=25",

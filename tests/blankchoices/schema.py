@@ -5,25 +5,25 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 
 Party = apps.get_model("parties", "Party")
 Address = apps.get_model("parties", "Address")
 
 
 @strawberry_django.type(Party)
-class BillingPartyType(AngeeNode):
-    tax_country: auto
+class BlankChoicePartyType(ProtectedNode):
+    blank_choice_country: auto
 
 
 @strawberry_django.type(Address)
-class CountryAddressType(AngeeNode):
+class CountryAddressType(ProtectedNode):
     country: auto
 
 
 party_resource = hasura_model_resource(
-    BillingPartyType, model=Party, name="billing_parties",
-    filterable=["tax_country"], sortable=["tax_country"], groupable=["tax_country"],
+    BlankChoicePartyType, model=Party, name="blank_choice_parties",
+    filterable=["blank_choice_country"], sortable=["blank_choice_country"], groupable=["blank_choice_country"],
     aggregatable=["id"], insert=False, update=False, delete=False,
 )
 address_resource = hasura_model_resource(
@@ -33,5 +33,5 @@ address_resource = hasura_model_resource(
 )
 schemas = {"blank_choices": {
     "query": [party_resource.query, address_resource.query],
-    "types": [BillingPartyType, CountryAddressType, *party_resource.types, *address_resource.types],
+    "types": [BlankChoicePartyType, CountryAddressType, *party_resource.types, *address_resource.types],
 }}

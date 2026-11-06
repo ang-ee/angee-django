@@ -26,9 +26,10 @@ from rebac import (
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.models.locks import StaleRevisionError
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project, Task
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.engine.exceptions import CreationKeyConflict
 from tests.conftest import Backend, Drive, create_platform_admin
 from tests.proposals_models import Answer, Proposal, Round, Topic
 from tests.test_project_access import project_access_schema as project_access_schema
@@ -135,17 +136,17 @@ def test_proposals_follow_admission_and_scope_hierarchy(
     with pytest.raises(PermissionDenied):
         _create_proposal(actor=bob, round=round, responder=alice)
 
-    assert set(Proposal.objects.as_user(alice).values_list("pk", flat=True)) == {alice_proposal.pk}
-    assert set(Proposal.objects.as_user(bob).values_list("pk", flat=True)) == {bob_proposal.pk}
-    assert set(Proposal.objects.as_user(admin).values_list("pk", flat=True)) == {
+    assert set(Proposal.objects.with_actor(alice).values_list("pk", flat=True)) == {alice_proposal.pk}
+    assert set(Proposal.objects.with_actor(bob).values_list("pk", flat=True)) == {bob_proposal.pk}
+    assert set(Proposal.objects.with_actor(admin).values_list("pk", flat=True)) == {
         alice_proposal.pk,
         bob_proposal.pk,
     }
-    assert not Proposal.objects.as_user(diego).exists()
-    assert not Proposal.objects.as_user(service).exists()
-    assert set(Answer.objects.as_user(alice).values_list("pk", flat=True)) == {alice_answer.pk}
-    assert set(Answer.objects.as_user(bob).values_list("pk", flat=True)) == {bob_answer.pk}
-    assert not Answer.objects.as_user(diego).exists()
+    assert not Proposal.objects.with_actor(diego).exists()
+    assert not Proposal.objects.with_actor(service).exists()
+    assert set(Answer.objects.with_actor(alice).values_list("pk", flat=True)) == {alice_answer.pk}
+    assert set(Answer.objects.with_actor(bob).values_list("pk", flat=True)) == {bob_answer.pk}
+    assert not Answer.objects.with_actor(diego).exists()
 
     with system_context(reason="tests.proposals.project_viewer"):
         _grant(project, "editor", project_editor)
@@ -157,24 +158,24 @@ def test_proposals_follow_admission_and_scope_hierarchy(
         project.with_actor(project_editor).grant_record_access("proposal_viewer", diego)
         project.with_actor(project_editor).grant_record_access("proposal_viewer", service)
     for viewer in (diego, service):
-        assert set(Proposal.objects.as_user(viewer).values_list("pk", flat=True)) == {
+        assert set(Proposal.objects.with_actor(viewer).values_list("pk", flat=True)) == {
             alice_proposal.pk,
             bob_proposal.pk,
         }
-        assert set(Answer.objects.as_user(viewer).values_list("pk", flat=True)) == {
+        assert set(Answer.objects.with_actor(viewer).values_list("pk", flat=True)) == {
             alice_answer.pk,
             bob_answer.pk,
         }
         assert not alice_proposal.with_actor(viewer).has_access("read__cost")
-    assert set(Proposal.objects.as_user(round_viewer).values_list("pk", flat=True)) == {
+    assert set(Proposal.objects.with_actor(round_viewer).values_list("pk", flat=True)) == {
         alice_proposal.pk,
         bob_proposal.pk,
     }
-    assert set(Proposal.objects.as_user(carla).values_list("pk", flat=True)) == {alice_proposal.pk}
-    assert set(Answer.objects.as_user(carla).values_list("pk", flat=True)) == {alice_answer.pk}
+    assert set(Proposal.objects.with_actor(carla).values_list("pk", flat=True)) == {alice_proposal.pk}
+    assert set(Answer.objects.with_actor(carla).values_list("pk", flat=True)) == {alice_answer.pk}
     assert not alice_proposal.with_actor(carla).has_access("read__cost")
     if target_kind == "task":
-        assert set(Proposal.objects.as_user(task_viewer).values_list("pk", flat=True)) == {
+        assert set(Proposal.objects.with_actor(task_viewer).values_list("pk", flat=True)) == {
             alice_proposal.pk,
             bob_proposal.pk,
         }
@@ -193,11 +194,11 @@ def test_proposals_follow_admission_and_scope_hierarchy(
                 )
             ]
         )
-    assert set(Proposal.objects.as_user(global_viewer).values_list("pk", flat=True)) == {
+    assert set(Proposal.objects.with_actor(global_viewer).values_list("pk", flat=True)) == {
         alice_proposal.pk,
         bob_proposal.pk,
     }
-    assert set(Answer.objects.as_user(global_viewer).values_list("pk", flat=True)) == {
+    assert set(Answer.objects.with_actor(global_viewer).values_list("pk", flat=True)) == {
         alice_answer.pk,
         bob_answer.pk,
     }
@@ -374,7 +375,9 @@ def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
         with pytest.raises(ValidationError, match="surrendered"):
             round.with_actor(admin).pass_clarification(question, recipient)
         passed = round.pass_clarification(question, recipient, audience="asker")
-        assert passed.clarification_waiting() == [{"id": recipient.pk, "name": recipient.username}]
+        with CaptureQueriesContext(connection) as waiting_queries:
+            assert passed.get_clarification_waiting() == [{"id": recipient.pk, "name": recipient.username}]
+        assert sum(is_permission_audit_insert(query["sql"], connection) for query in waiting_queries) == 0
     assert passed.created_by_id is None
     assert passed.updated_by_id is None
     with system_context(reason="tests.proposals.immutable_donors"):

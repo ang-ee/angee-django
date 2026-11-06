@@ -2,16 +2,62 @@
 
 import pytest
 import strawberry_django
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from pydantic import ValidationError
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionRequest
+from angee.decisions.schema import _admitted_records
 from angee.decisions.testing.drivers import seed_decision
+from angee.decisions.testing.models import DecisionRecord
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.node import AngeeNode
-from tests.conftest import addon_schema, create_user, execute_schema, result_data
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import _actor_scoped_to_one_resolver
+from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
+
+
+def test_decision_record_root_prefetches_nested_decision_records(composed_tables):
+    """DecisionRecordType.decision retains the selected concern-link page."""
+    owner = create_user("nested-concern-owner")
+    vault = vault_for(owner)
+    decision = seed_decision(actor=owner, assignees=(owner,), reference=vault, requester=None)
+    link = DecisionRecord.system_queryset().get(decision=decision)
+    schema = addon_schema(decision_schema.schemas, "console")
+    query = "{ decision_records { id decision { id records { id } } } }"
+    data = result_data(execute_schema(schema, query, user=owner))
+    assert data == {"decision_records": [{
+        "id": link.sqid,
+        "decision": {
+            "id": decision.sqid,
+            "records": [{"id": link.sqid}],
+        },
+    }]}
+
+
+def test_unprefetched_decision_record_parent_loads_its_decision_records_once(composed_tables):
+    """The to-one fallback can deliver records from one unprefetched parent."""
+    owner = create_user("unprefetched-concern-owner")
+    vault = vault_for(owner)
+    decision = seed_decision(actor=owner, assignees=(owner,), reference=vault, requester=None)
+    link = DecisionRecord.system_queryset().get(decision=decision)
+    with actor_context(owner):
+        unprefetched = DecisionRecord._base_manager.get(pk=link.pk)
+        related = _actor_scoped_to_one_resolver("decision")(unprefetched)
+        assert related is not None and "records" not in getattr(related, "_prefetched_objects_cache", {})
+        with CaptureQueriesContext(connection) as captured:
+            records = _admitted_records(related)
+    assert [record.pk for record in records] == [link.pk]
+    assert len(captured) == 1
+
+
+def test_decision_changed_payload_exposes_identity_not_nested_records(composed_tables):
+    """The subscription event refetches decisions; it never resolves DecisionType.records."""
+    schema = addon_schema(decision_schema.schemas, "console")
+    assert "decisionChanged" in schema._schema.subscription_type.fields
+    assert "records" not in schema._schema.get_type("ChangeEvent").fields
 
 
 @pytest.mark.parametrize(
@@ -67,7 +113,7 @@ def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(compos
     decision = seed_decision(actor=issuer, assignees=(reviewer,), reference=child)
 
     @strawberry_django.type(MtiParent)
-    class InboxSubjectType(AngeeNode):
+    class InboxSubjectType(ProtectedNode):
         title: str
 
     subjects = hasura_model_resource(
@@ -98,7 +144,7 @@ def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(compos
             schema,
             """
         query {
-          decisions { id records { record_model record_id } }
+          decisions { id records { record_model record_id record_label } }
         }
     """,
             user=reviewer,
@@ -108,7 +154,8 @@ def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(compos
         "decisions": [
             {
                 "id": str(decision.sqid),
-                "records": [{"record_model": MtiParent._meta.label, "record_id": str(parent.sqid)}],
+                "records": [{"record_model": MtiParent._meta.label, "record_id": str(parent.sqid),
+                             "record_label": str(parent)}],
             }
         ]
     }

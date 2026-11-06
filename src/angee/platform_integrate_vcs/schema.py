@@ -8,7 +8,7 @@ Two contributions onto the platform console, both one-way (this tier reaches up 
 - ``MarketplaceSourceMutation`` adds the *source* controls (admin-gated): ``addSource``
   inventories a repository on an existing ``VcsBridge`` and points an addon ``Source``
   at it; ``scan`` runs the existing ``Source.refresh()`` (→ ``AddonCatalog`` reconcile)
-  that discovers ``pyproject.toml`` rows into ``platform.Addon``. Both compose integrate's
+  that discovers built wheel distributions into ``platform.Addon``. Both compose integrate's
   existing owners (``VcsBridge.import_repository``, ``Source``); neither re-implements
   bridge/repo creation or the discovery walk.
 """
@@ -20,9 +20,10 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult, action_target
+from angee.graphql.actions import ActionResult
 from angee.graphql.ids import PublicID
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.graphql.actions import action_target
 
 _Addon = apps.get_model("platform", "Addon")
 _VcsBridge = apps.get_model("integrate_vcs", "VcsBridge")

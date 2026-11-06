@@ -3,6 +3,7 @@
 from typing import Any
 
 import tablib
+from django.apps import apps
 from django.db.models.fields import NOT_PROVIDED
 
 from angee.resources.loader import AngeeResource
@@ -17,7 +18,5 @@ class AgentResource(AngeeResource):
         if any(value is not NOT_PROVIDED and value not in (None, "", [], ())
                for name in selections for value in dataset[name]):
             # Source models import this adapter before Django finishes population.
-            from angee.agents.grants import sync_builtin_tool_catalogue
-
-            sync_builtin_tool_catalogue()
+            apps.get_model("agents", "MCPTool").objects.sync_builtin()
         super().before_import(dataset, **kwargs)

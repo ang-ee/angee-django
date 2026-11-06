@@ -34,12 +34,11 @@ from django.db import connections, models, transaction
 from django.utils import timezone
 from django_compose.models import Composable
 from rebac import PermissionDenied, system_context
-from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.timestamps import update_fields_with_auto_now
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.integrate.models import IntegrationCreateMode
 from angee.posts.backends import FeedBackend
 from angee.posts.managers import (
@@ -64,7 +63,7 @@ def validate_reply_hold(hours: float | None) -> None:
             raise ValidationError("Reply hold is too large.") from error
 
 
-class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
+class Feed(ProtectedModel, inherits="messaging.Channel"):
     """A connected public-content source that polls an external platform for posts.
 
     A ``messaging.Channel`` child (identity, bridge state and message access from
@@ -155,7 +154,7 @@ class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
         return timezone.now() + timedelta(hours=hours)
 
 
-class FeedFollow(AuditMixin, AngeeDataModel, concrete=True):
+class FeedFollow(AuditMixin, ProtectedDataModel, concrete=True):
     """A follow of a :class:`Feed` by a ``parties.Handle`` — the timeline subscription.
 
     The following edge behind a public timeline: a handle subscribes to a feed's
@@ -223,7 +222,7 @@ class FeedFollow(AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.handle_id} → {self.feed_id}"
 
 
-class PostMetrics(AuditMixin, AngeeDataModel, concrete=True):
+class PostMetrics(AuditMixin, ProtectedDataModel, concrete=True):
     """Rolled-up public engagement counts for one message (the platform snapshot).
 
     Flat one-to-one, not MTI — the counter set overlaps heavily across platforms;
@@ -261,7 +260,7 @@ class PostMetrics(AuditMixin, AngeeDataModel, concrete=True):
         return f"metrics:{self.message_id}"
 
 
-class Quota(AuditMixin, AngeeDataModel, concrete=True):
+class Quota(AuditMixin, ProtectedDataModel, concrete=True):
     """A provider-scoped API-unit ledger for one billing period.
 
     Feed backends spend platform API units (search, list, insert) against a per-period
@@ -336,6 +335,12 @@ class ThreadPublic(Composable, extends="messaging.Thread"):
 
         abstract = True
 
+    def set_public_subject_url(self, subject_url: str) -> None:
+        """Persist this public thread's canonical URL when the source supplies it."""
+        if subject_url and self.subject_url != subject_url:
+            self.subject_url = subject_url
+            self.save(update_fields=("subject_url", "updated_at"))
+
 
 class CommentAnswered(ValidationError):
     """The comment already has an answer; a new reply is unnecessary."""
@@ -353,6 +358,34 @@ class MessagePublic(Composable, extends="messaging.Message"):
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("is_original_post",)
 
     is_original_post = models.BooleanField(default=False)
+
+    PROVIDER_TRASH_REASON = "Hidden by the source."
+
+    def apply_public_post(self, post: Any) -> None:
+        """Apply posts-owned payload to the landed message and its thread owner."""
+        if self.is_original_post != post.is_original_post:
+            self.is_original_post = post.is_original_post
+            self.save(update_fields=("is_original_post", "updated_at"))
+        if post.is_original_post and self.thread is not None:
+            self.thread.set_public_subject_url(post.subject_url)
+
+    def apply_provider_visibility(self, *, hidden: bool) -> None:
+        """Restore only provider-stamped trash; retain independent operator removal."""
+        with system_context(reason="posts.ingest.moderation"):
+            local = self.local_metadata
+            if hidden and not self.is_trashed:
+                self.trash(reason=self.PROVIDER_TRASH_REASON)
+                local = self.local_metadata
+                assert self.trashed_at is not None
+                local["provider_hidden"] = self.trashed_at.isoformat()
+            elif not hidden and self.provider_hidden:
+                self.restore()
+                local = self.local_metadata
+            if not hidden:
+                local.pop("provider_hidden", None)
+            if local != self.local_metadata:
+                self.metadata = {**(self.metadata or {}), "local": local}
+                self.save(update_fields=("metadata", "updated_at"))
 
     @property
     def provider_hidden(self) -> bool:

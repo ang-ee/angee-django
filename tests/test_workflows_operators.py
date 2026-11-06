@@ -5,11 +5,13 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from rebac import to_subject_ref
 
-from angee.base.identity import public_subject_ref
-from angee.graphql import records
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.graphql import records
+from angee.iam.identity import public_subject_ref
 from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks
+from angee.workflows.runner import runner
+from angee.workflows.steps import StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
@@ -56,9 +58,9 @@ def test_workflow_operator_reads_only_its_workflow_and_operates_without_editing(
     assert not workflow.with_actor(operator).has_access("monitor")
     assert set(Workflow.objects.with_actor(operator).values_list("pk", flat=True)) == {workflow.pk}
     assert set(WorkflowRun.objects.with_actor(operator).values_list("pk", flat=True)) == {run.pk}
-    assert not unrelated_run.can_cancel(operator)
-    assert not run.can_cancel(other)
-    assert run.can_cancel(operator)
+    assert not unrelated_run.get_can_cancel(operator)
+    assert not run.get_can_cancel(other)
+    assert run.get_can_cancel(operator)
     with pytest.raises(PermissionDenied):
         workflow.with_actor(operator).grant_record_access("operator", other)
     with pytest.raises(PermissionDenied):
@@ -72,8 +74,8 @@ def test_workflow_operator_retries_and_reprocesses_another_users_run(operator_ru
     _workflow, run, _author, starter, operator, other = operator_run
     run_until(run)
     step = StepRun.system_queryset().get(run=run)
-    assert run.status == "failed" and step.can_retry(operator)
-    assert not step.can_retry(other)
+    assert run.status == "failed" and step.get_can_retry(operator)
+    assert not step.get_can_retry(other)
     with pytest.raises(PermissionDenied):
         StepRun.objects.retry_step(step, actor=other)
     retried = StepRun.objects.retry_step(step, actor=operator)
@@ -87,6 +89,52 @@ def test_workflow_operator_retries_and_reprocesses_another_users_run(operator_ru
     assert replacement.reprocess_of_id == run.pk
 
 
+def test_non_admin_retry_plans_successor_of_settled_io_sibling(execution, register_step):
+    """Reopening a failed run plans work settled by an IO sibling after failure."""
+    admin, _sent = execution
+    starter = create_user("retry-successor-starter")
+    operator = create_user("retry-successor-operator")
+
+    class FinishingSibling(Echo):
+        key = "retry_successor_sibling"
+        mode = StepMode.IO
+
+        def run(self, ctx):
+            failed = StepRun.system_queryset().get(run=ctx.run, node_key="failed")
+            assert runner.execute(failed.pk)
+            return ctx.done(ctx.input)
+
+    register_step(FinishingSibling)
+    workflow = load_workflow(
+        {
+            "nodes": {
+                "entry": {"step": "echo", "next": {"done": ["failed", "sibling"]}},
+                "failed": {"step": "reject"},
+                "sibling": {"step": FinishingSibling.key, "next": {"done": "successor"}},
+                "successor": {"step": "echo"},
+            },
+            "results": [{"from": "successor"}],
+        },
+        key="retry-successor", actor=admin,
+    )
+    workflow.with_actor(admin).grant_record_access("starter", starter)
+    workflow.with_actor(admin).grant_record_access("operator", operator)
+    run = start_run(workflow, actor=starter)
+    assert runner.execute(StepRun.system_queryset().get(run=run, node_key="entry").pk)
+    assert runner.execute(StepRun.system_queryset().get(run=run, node_key="sibling").pk)
+    run.refresh_from_db()
+    assert run.status == "failed"
+    assert not StepRun.system_queryset().filter(run=run, node_key="successor").exists()
+
+    failed = StepRun.system_queryset().get(run=run, node_key="failed")
+    retried = StepRun.objects.retry_step(failed, actor=operator)
+    assert not operator.is_superuser
+    assert retried.status == "ready"
+    run.refresh_from_db()
+    assert run.status == "running"
+    assert StepRun.system_queryset().get(run=run, node_key="successor").status == "ready"
+
+
 @pytest.mark.parametrize("revoke_before_delivery", [False, True])
 def test_workflow_operator_deferred_cancel_rechecks_the_workflow_grant(
     operator_run, execution, revoke_before_delivery,
@@ -94,9 +142,9 @@ def test_workflow_operator_deferred_cancel_rechecks_the_workflow_grant(
     workflow, run, author, _starter, operator, other = operator_run
     _admin, sent = execution
     with pytest.raises(PermissionDenied):
-        WorkflowRun.objects.cancel_on_commit(run, other)
+        run.cancel_on_commit(other)
     with transaction.atomic():
-        WorkflowRun.objects.cancel_on_commit(run, operator)
+        run.cancel_on_commit(operator)
         assert cancellations(sent) == []
     assert len(cancellations(sent)) == 1
     if revoke_before_delivery:
@@ -120,7 +168,7 @@ def test_context_cancellation_uses_workflow_operator_authority(operator_run, exe
         key = "operator_cancel_target"
 
         def run(self, ctx):
-            ctx.cancel_run(ctx.load(WorkflowRun, target.sqid))
+            ctx.load(WorkflowRun, target.sqid).cancel_on_commit(ctx.actor)
             return ctx.done(ctx.input)
 
     register_step(CancelTarget)

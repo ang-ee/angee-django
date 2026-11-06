@@ -1,3 +1,4 @@
+import type { AuthoredQueryOptions } from "@angee/refine";
 import type { Row, QueryFilter, ResourceFilter, ResourceOrder } from "@angee/metadata";
 import type { ListSearchDeclaration } from "./search/shortcuts";
 import type {
@@ -203,7 +204,7 @@ export function listChromeState(
   };
 }
 
-export interface ListViewProps<TRow extends Row = Row> {
+export interface ListViewProps<TRow extends Row = Row> extends Pick<AuthoredQueryOptions, "records" | "relatedModels"> {
   /** Model label rendered by this list, e.g. `"notes.Note"`. */
   resource: string;
   /** Show or hide list chrome while preserving the resource view's query. */

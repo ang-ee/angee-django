@@ -9,7 +9,7 @@ actor: the edge's own gates require write on the tagged record, whoever curates
 the vocabulary.
 
 Owners of taggable models compose :class:`TaggedNode` onto their console node
-type to read a row's tags as a batched, actor-scoped relation list, and
+type to read a row's tags as a batched relation list on admitted rows, and
 :func:`tags_input_extensions` onto that resource's insert and set inputs, so a
 record form edits ``tags`` like any field and the row's save writes them
 (:class:`~angee.tags.models.TaggedModel`).
@@ -31,9 +31,15 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.refs import canonical_link_path
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
+from angee.graphql.data.hasura import (
+    declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
+    hasura_model_resource,
+)
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.iam.querysets import structural_prefetch
 from angee.tags.models import Tag as TagModel
 
 Tag = apps.get_model("tags", "Tag")
@@ -41,7 +47,7 @@ TagAssignment = apps.get_model("tags", "TagAssignment")
 
 
 @strawberry_django.type(Tag)
-class TagType(AngeeNode):
+class TagType(ProtectedNode):
     """Admin projection of one tag in the vocabulary."""
 
     name: auto
@@ -53,7 +59,7 @@ class TagType(AngeeNode):
 
 
 @strawberry_django.type(TagAssignment)
-class TagAssignmentType(AngeeNode):
+class TagAssignmentType(ProtectedNode):
     """Admin projection of one polymorphic tag edge, with its target addressed publicly."""
 
     tag: TagType
@@ -63,7 +69,7 @@ class TagAssignmentType(AngeeNode):
     def target_type(self) -> str:
         """Return the target row's REBAC resource type (e.g. ``parties/party``)."""
 
-        return cast(Any, self).record_ref.resource_type
+        return cast(Any, self).record_resource_type
 
     @strawberry_django.field(only=["content_type_id", "object_id"])
     def target_id(self) -> PublicID:
@@ -77,11 +83,11 @@ _TAG_EDGES_ATTR = "_angee_tag_edges"
 
 
 def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
-    """Prefetch each selected row's readable tag edges with their tags, once per page.
+    """Prefetch admitted rows' tag edges and readable tags, once per page.
 
-    Both querysets are actor-scoped, so an edge whose tag or record the actor
-    cannot read never reaches the row, and the inner tag queryset carries the
-    selected ``TagType`` hints. The REBAC optimizer stamps and rescopes the outer lookup.
+    The parent query proves row read. The structural edge queryset runs after
+    that admission, while the inner tag
+    queryset keeps the vocabulary's actor read guard and selected type hints.
     A multi-table child's edges key on its canonical ancestor, which declares
     ``tag_assignments``, so the lookup climbs the child's parent links to it.
     """
@@ -95,12 +101,12 @@ def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
     edges = (
         TagAssignment._base_manager.none()
         if actor is None
-        else TagAssignment.objects.with_actor(actor).with_action("read").by_tag()
+        else TagAssignment._base_manager.filter(tag__in=tags.values("pk")).order_by("tag__name", "tag__sqid")
     ).prefetch_related(
         models.Prefetch("tag", queryset=tags),
     )
     links = canonical_link_path(field.origin_django_type.model) if field.origin_django_type else ()
-    return models.Prefetch("__".join((*links, "tag_assignments")), queryset=edges, to_attr=_TAG_EDGES_ATTR)
+    return structural_prefetch("__".join((*links, "tag_assignments")), queryset=edges, to_attr=_TAG_EDGES_ATTR)
 
 
 def _prefetched_tag_edges(row: models.Model) -> Any:
@@ -116,7 +122,7 @@ def _prefetched_tag_edges(row: models.Model) -> Any:
 class TaggedNode:
     """Project a model's tags as a relation list on its node type.
 
-    Compose alongside the node base, e.g. ``class FileType(TaggedNode, AngeeNode)``,
+    Compose alongside the node base, e.g. ``class FileType(TaggedNode, ProtectedNode)``,
     or through a console ``type_extensions`` donor when the node type is shared
     with another schema; the model composes :class:`~angee.tags.models.TaggedModel`.
     With :func:`tags_input_extensions` on the resource's inputs, resource metadata
@@ -175,47 +181,28 @@ def tags_input_extensions(resource: Any) -> list[type]:
     return donors
 
 
-_TAG_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(Tag, "hasura_readable_fields")
-_TAG_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Tag, "hasura_insertable_fields")
-_TAG_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Tag, "hasura_updatable_fields")
-_TAG_EXTENSION_WRITE_FIELDS = tuple(dict.fromkeys((*_TAG_EXTENSION_INSERT_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS)))
-_TAG_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name for name in _TAG_EXTENSION_WRITE_FIELDS if Tag._meta.get_field(name).is_relation
-)
-
-_TAG_FILTERABLE_FIELDS = (
-    "id",
-    "name",
-    "attention",
-    "is_archived",
-    *_TAG_EXTENSION_READ_FIELDS,
-)
-_TAG_GROUPABLE_FIELDS = (
-    "attention",
-    "is_archived",
-    *_TAG_EXTENSION_READ_FIELDS,
-)
-_TAG_BASE_WRITABLE_FIELDS = (
-    "name",
-    "color",
-    "attention",
-    "is_archived",
-)
+# Historical tag donors used readable fields as filter/group contributions.
+# Keep that Tag-specific extension contract alongside explicit query declarations.
+_TAG_READABLE_CONTRIBUTIONS = declared_hasura_resource_fields(Tag, "hasura_readable_fields")
 
 _TAG_RESOURCE = hasura_model_resource(
     TagType,
     model=Tag,
     name="tags",
     get_queryset=lambda info: Tag.objects.canonical(),
-    filterable=list(_TAG_FILTERABLE_FIELDS),
-    sortable=["name", "created_at", "updated_at"],
-    aggregatable=["id"],
-    groupable=list(_TAG_GROUPABLE_FIELDS),
-    insertable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_INSERT_FIELDS],
-    updatable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS],
-    write_backend=AngeeHasuraWriteBackend(
+    filterable=tuple(dict.fromkeys((
+        *declared_hasura_resource_fields(Tag, "hasura_filterable_fields"), *_TAG_READABLE_CONTRIBUTIONS,
+    ))),
+    sortable=...,
+    aggregatable=...,
+    groupable=tuple(dict.fromkeys((
+        *declared_hasura_resource_fields(Tag, "hasura_groupable_fields"), *_TAG_READABLE_CONTRIBUTIONS,
+    ))),
+    insertable=...,
+    updatable=...,
+    write_backend=ProtectedHasuraWriteBackend(
         Tag,
-        public_id_fields=_TAG_EXTENSION_PUBLIC_ID_FIELDS,
+        public_id_fields=declared_hasura_write_relation_fields(Tag),
     ),
     id_column="sqid",
 )

@@ -44,7 +44,7 @@ from angee.provenance.statements import (
 )
 from angee.workflows.runner import runner
 from angee.workflows.steps import Retryable, Wait
-from angee.workflows.testing.drivers import decide, load_workflow, run_until
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from angee.workflows_integrate import steps
 from angee.workflows_integrate.steps import ConflictReview, CoverageInput, Rescan, StreamStage
@@ -52,6 +52,8 @@ from angee.workflows_integrate.testing.models import SyncCycleTestBridge
 from tests.conftest import make_integration
 from tests.integrate_fixtures import ConnectionBridge
 from tests.stream_adapters import applied_history, failure_state
+
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 class WorkerLost(BaseException):
@@ -61,7 +63,7 @@ class WorkerLost(BaseException):
 @pytest.fixture
 def cycle(execution, register_step, monkeypatch):
     """A real owner-scoped bridge with deterministic bounded transport."""
-    administrator, _ = execution
+    administrator, sent = execution
     bridge = make_integration("workflow-stream", model=SyncCycleTestBridge)
     extracted, applied, rescanned, declared = [], [], [], []
     local_keys = set()
@@ -156,6 +158,7 @@ def cycle(execution, register_step, monkeypatch):
         applied=applied,
         rescanned=rescanned,
         declared=declared,
+        sent=sent,
     )
 
 
@@ -247,6 +250,7 @@ def test_busy_bridge_wait_preserves_checkpoint_without_beginning_an_effect(cycle
     closed.assert_called_once()
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Separate PostgreSQL advisory-lock sessions required.")
 def test_two_partition_runs_wait_without_retry_or_effect_while_bridge_io_is_owned(cycle, monkeypatch):
     """The execution lock covers independent runs, beyond a single map planner."""
@@ -537,6 +541,7 @@ def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     decision = Decision.system_queryset().get(pk=row.decision_id)
     assert decision.records.with_actor(cycle.bridge.owner).count() == 2 and row.waiting_kind == "decision"
     decide(decision, actor=cycle.bridge.owner, chosen=[record.link.public_id for record in conflicts])
+    assert deliver_decision_wakes(cycle.sent, decision.pk) == [1]
     run_until(run)
     assert run.status == "failed"
     assert len(SyncStream.objects.with_actor(cycle.bridge.owner).get(pk=stream.pk).sync_failures(open_only=True)) == 2
@@ -556,6 +561,7 @@ def test_unresolved_conflict_fails_without_asking_another_question(cycle):
     run_until(run)
     decision = Decision.system_queryset().get(pk=step_row(run).decision_id)
     decide(decision, actor=cycle.bridge.owner, chosen=[decision.proposal["alternatives"][0]["key"]])
+    assert deliver_decision_wakes(cycle.sent, decision.pk) == [1]
     run_until(run)
     assert run.status == "failed" and Decision.system_queryset().count() == 1
     assert len(SyncStream.objects.with_actor(cycle.bridge.owner).get(pk=stream.pk).sync_failures(open_only=True)) == 1

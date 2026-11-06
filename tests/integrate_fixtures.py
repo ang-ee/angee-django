@@ -81,6 +81,9 @@ class LiveConnectionAdapter(ConnectionAdapter, LiveBridgeImpl):
 class ConnectionBridge(Bridge, Integration):
     """Use real Integration and Bridge admission and settlement."""
 
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
+
     connection_impl = ImplClassField(ConnectionAdapter, default="connection")
     live_impl_field = "connection_impl"
 

@@ -61,7 +61,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
   }, [input.declaredFacets, input.scalarFacets]);
   const fields = React.useMemo(() => mergeFilterFields(input.customFilterFields,
     mergeFilterFields(input.contributedCustomFilterFields,
-      mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0).map(facetField), inferredFields)))
+      mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0 || facet.optionForValue).map(facetField), inferredFields)))
     .filter((field) => Boolean(query.fields[field.field ?? field.id]?.filter?.operators.length)),
   [input.customFilterFields, input.contributedCustomFilterFields, contributedFacets, inferredFields, query]);
   const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, input.contributedFilterOptions ?? EMPTY, query, reported), [input.filterOptions, input.contributedFilterOptions, query, reported]);
@@ -95,7 +95,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
           const bucket = { key: { [axis.groupBy().valueKey]: value } };
           const filter = axis.drill(bucket);
           return filter ? { id: axis.bucketId(bucket), label, filter, value } : undefined;
-        } } : {}),
+        } } : contributed?.optionForValue ? { optionForValue: contributed.optionForValue } : {}),
         options: merged.flatMap((option) => {
           const key = JSON.stringify(query.toWhere(option.filter));
           if (predicates.has(key)) return [];
@@ -121,10 +121,14 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
     [query, text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites]);
 }
 
-/** Null removes only the default; explicitly requested text fields still apply. */
+/**
+ * The page's text field first (the default target), then every search field the
+ * resource declares, then shortcuts. Null removes only the defaults; explicitly
+ * requested text fields still apply.
+ */
 export function searchTextFields(query: ResourceQuery, field?: string | null, shortcuts: readonly string[] = EMPTY): readonly string[] {
-  const first = field === null ? undefined : field ?? query.textSearchFields()[0];
-  return [...new Set([...(first ? [first] : EMPTY), ...shortcuts])].filter((name) => query.fields[name]?.filter?.operators.includes("iContains"));
+  const defaults = field === null ? EMPTY : [...(field ? [field] : EMPTY), ...query.textSearchFields()];
+  return [...new Set([...defaults, ...shortcuts])].filter((name) => query.fields[name]?.filter?.operators.includes("iContains"));
 }
 
 function facetField(facet: SearchFacet): FilterClauseField {

@@ -19,6 +19,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -45,8 +46,11 @@ import type {
 
 const CONSOLE_SCHEMA = "console";
 /** Schedule rotation from the daemon-issued expiry, with a shrinking safety window. */
-export function operatorConnectionRefresh(data: unknown): number {
-  const expiry = recordValue(recordValue(data)?.operator_connection)?.expires_at;
+export function operatorConnectionRefresh(data: unknown, hadConnection = false, error: unknown = null): number | false {
+  if (error) return 30_000;
+  const connection = recordValue(recordValue(data)?.operator_connection);
+  if (!connection) return hadConnection ? 30_000 : false;
+  const expiry = connection.expires_at;
   const expiresAt = typeof expiry === "string" ? Date.parse(expiry) : NaN;
   return Number.isFinite(expiresAt) ? Math.max(1000, (expiresAt - Date.now()) * 0.8) : 30_000;
 }
@@ -94,8 +98,9 @@ export interface OperatorConnection {
   token: string;
   restartJob: string | null;
 }
+const INITIAL_OPERATOR_STATE: OperatorConnectionState = { kind: "loading" };
 const OperatorConnectionContext = createContext<OperatorConnection | null>(null);
-const OperatorConnectionStateContext = createContext<OperatorConnectionState>({ kind: "loading" });
+const OperatorConnectionStateContext = createContext<OperatorConnectionState | null>(null);
 
 export interface OperatorTransportProviderProps {
   children: ReactNode;
@@ -104,11 +109,20 @@ export interface OperatorTransportProviderProps {
 export function OperatorTransportProvider({
   children,
 }: OperatorTransportProviderProps): ReactNode {
+  const parent = useContext(OperatorConnectionStateContext);
+  return parent ? children : <OperatorTransportOwner>{children}</OperatorTransportOwner>;
+}
+
+function OperatorTransportOwner({ children }: OperatorTransportProviderProps): ReactNode {
   const t = useOperatorT();
   const queryClient = useQueryClient();
+  const connectedOnce = useRef(false);
   const connectionQuery = useAuthoredQuery(OperatorConnectionQuery, undefined, {
     dataProviderName: CONSOLE_SCHEMA,
-    refetchInterval: (query) => operatorConnectionRefresh(query.state.data),
+    refetchInterval: (query) => {
+      if (recordValue(recordValue(query.state.data)?.operator_connection)) connectedOnce.current = true;
+      return operatorConnectionRefresh(query.state.data, connectedOnce.current, query.state.error);
+    },
   });
 
   const state = useMemo<OperatorConnectionState>(() => {
@@ -184,7 +198,7 @@ export function OperatorTransportProvider({
 }
 
 export function useOperatorConnectionState(): OperatorConnectionState {
-  return useContext(OperatorConnectionStateContext);
+  return useContext(OperatorConnectionStateContext) ?? INITIAL_OPERATOR_STATE;
 }
 
 /** The daemon connection (endpoint + bearer) for non-GraphQL transports (log sockets). */

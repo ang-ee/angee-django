@@ -13,11 +13,14 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
+from rebac.graphql.strawberry_django import optimize
+from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.exceptions import exception_text
-from angee.graphql.actions import ActionResult, action_target, authorized_action_target, session_user
+from angee.graphql.actions import ActionResult
 from angee.graphql.ids import PublicID
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
+from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES
+from angee.iam.graphql.actions import action_target, authorized_action_target, session_user
 from angee.messaging.schema import ChannelType
 from angee.messaging_integrate_imap.backend import (
     ImapError,
@@ -29,7 +32,6 @@ from angee.messaging_integrate_imap.backend import (
 from angee.messaging_integrate_imap.connect import (
     ImapConnectError,
     connect_imap_channel,
-    update_imap_channel_credential,
 )
 
 Channel = apps.get_model("messaging", "Channel")
@@ -179,7 +181,8 @@ class MessagingImapMutation:
                     "IMAP integration is not configured.",
                     extensions={"code": "BAD_USER_INPUT"},
                 ) from error
-        return cast(ChannelType, channel)
+        rows = Channel.objects.with_actor(session_user(info)).filter(pk=channel.pk)
+        return cast(ChannelType, optimize(run_type_get_queryset(rows, ChannelType, info), info).get())
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
     @sensitive_variables("password")
@@ -195,7 +198,10 @@ class MessagingImapMutation:
             _imap_errors(),
             action_target(Channel, id, reason="messaging_integrate_imap.graphql.update_credential") as channel,
         ):
-            update_imap_channel_credential(channel, username=username, password=password)
+            try:
+                channel.update_imap_credential(username=username, password=password)
+            except ValueError as error:
+                raise ImapConnectError(str(error)) from error
         return ActionResult(ok=True, message="Credential updated.")
 
 

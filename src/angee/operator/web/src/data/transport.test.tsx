@@ -88,6 +88,17 @@ afterEach(() => {
 });
 
 describe("OperatorTransportProvider bearer lifetime", () => {
+  test("nested consumers reuse the host bearer when they unmount", () => {
+    const view = renderTransport(
+      <OperatorTransportProvider>{null}</OperatorTransportProvider>,
+    );
+    expect(operatorToken.get()).toBe("first-token");
+    expect(createOperatorClient).toHaveBeenCalledTimes(1);
+    view.rerender(<OperatorTransportProvider>{null}</OperatorTransportProvider>);
+    expect(operatorToken.get()).toBe("first-token");
+    expect(createOperatorClient).toHaveBeenCalledTimes(1);
+  });
+
   test("keeps the bearer while a new translator and a page commit together", () => {
     const seen: (string | null)[] = [];
     const view = renderTransport();
@@ -207,5 +218,8 @@ test("connection refresh follows minted short expiry with safety skew", () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
   expect(operatorConnectionRefresh({ operator_connection: { expires_at: new Date(now + 60_000).toISOString() } })).toBe(48_000);
   expect(operatorConnectionRefresh({ operator_connection: { expires_at: new Date(now - 1000).toISOString() } })).toBe(1000);
+  expect(operatorConnectionRefresh({ operator_connection: null })).toBe(false);
+  expect(operatorConnectionRefresh({ operator_connection: null }, true)).toBe(30_000);
+  expect(operatorConnectionRefresh(undefined, false, new Error("Daemon unavailable"))).toBe(30_000);
   clock.mockRestore();
 });

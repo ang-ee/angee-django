@@ -55,31 +55,32 @@ class ProvenancePlugin(Plugin):
         if isinstance(receiver, TypeVarType):
             receiver = get_proper_type(erase_to_bound(receiver))
         if isinstance(receiver, UnionType):
-            return make_simplified_union([
-                self.history_manager(ctx._replace(type=get_proper_type(item)), name=name) for item in receiver.items
-            ])
+            return make_simplified_union(
+                [self.history_manager(ctx._replace(type=get_proper_type(item)), name=name) for item in receiver.items]
+            )
         if not isinstance(receiver, Instance):
             return ctx.default_attr_type
         module = sys.modules.get(receiver.type.module_name)
         source = vars(module).get(receiver.type.name) if module is not None else None
         if source is models.Model or not isinstance(source, type) or not issubclass(source, models.Model):
             return ctx.default_attr_type
-        if source._meta.abstract:
-            declaration = getattr_static(source, name, None)
-            if not isinstance(declaration, HistoricalRecords):
+        runtime_name = receiver.type.metadata.get("django_compose", {}).get("runtime_model")
+        model = None
+        if isinstance(runtime_name, str):
+            module_name, _, model_name = runtime_name.rpartition(".")
+            runtime_module = sys.modules.get(module_name)
+            model = vars(runtime_module).get(model_name) if runtime_module is not None else None
+            if not isinstance(model, type) or not issubclass(model, models.Model):
+                ctx.api.fail(f"Unavailable native composed model {runtime_name}", ctx.context)
                 return ctx.default_attr_type
-            runtime_manager = declaration.history_manager
-            runtime_queryset = declaration.historical_queryset
-            history_info = None
-        else:
+        elif not source._meta.abstract:
             try:
-                # The runtime source owns the identity of its registered row.
                 model = apps.get_model(source._meta.app_label, source._meta.model_name)
             except LookupError:
                 return ctx.default_attr_type
-            descriptor = getattr_static(model, name, None)
-            if not isinstance(descriptor, HistoryDescriptor):
-                return ctx.default_attr_type
+        descriptor = getattr_static(model, name, None) if model is not None else None
+        history_info: TypeInfo | None
+        if isinstance(descriptor, HistoryDescriptor):
             runtime_manager = descriptor.manager_class
             runtime_queryset = descriptor.queryset_class
             history_name = helpers.get_class_fullname(descriptor.model)
@@ -88,6 +89,15 @@ class ProvenancePlugin(Plugin):
                 ctx.api.fail(f"Unavailable native history model {history_name}", ctx.context)
                 return ctx.default_attr_type
             history_info = history.node
+        elif source._meta.abstract:
+            declaration = getattr_static(source, name, None)
+            if not isinstance(declaration, HistoricalRecords):
+                return ctx.default_attr_type
+            runtime_manager = declaration.history_manager
+            runtime_queryset = declaration.historical_queryset
+            history_info = None
+        else:
+            return ctx.default_attr_type
         manager_name = helpers.get_class_fullname(runtime_manager)
         manager = self.lookup_fully_qualified(manager_name)
         if manager is None or not isinstance(manager.node, TypeInfo):
@@ -160,9 +170,9 @@ class ProvenancePlugin(Plugin):
         if symbol is None or not isinstance(symbol.node, TypeInfo):
             return ctx.default_return_type
         instance = Instance(symbol.node, [])
-        if fullname == "angee.provenance.context.changeset_model":
+        if fullname.rsplit(".", 1)[-1] == "changeset_model":
             return TypeType(instance)
-        if fullname == "angee.provenance.context.current_changeset":
+        if fullname.rsplit(".", 1)[-1] == "current_changeset":
             return make_simplified_union([instance, NoneType()])
         return instance
 

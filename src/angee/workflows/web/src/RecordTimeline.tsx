@@ -11,9 +11,13 @@ import { useRunCancelActions } from "./run-cancel";
 
 export interface TimelineRecord { model: string; id: string }
 export interface RecordTimelineProps { record: TimelineRecord | readonly TimelineRecord[]; /** Show this run alone (the drill-in's target). */ runId?: string }
-export type TimelineSelection = DocumentType<typeof RecordTimelineDocument>["record_timeline"];
-export type TimelineData = TimelineSelection["records"];
-export type TimelineDecision = TimelineData[number]["decisions"][number];
+type TimelineRead = DocumentType<typeof RecordTimelineDocument>["record_timeline"];
+type TimelineRecordRead = TimelineRead["records"][number];
+export type TimelineDecision = NonNullable<TimelineRecordRead["decisions"]>[number];
+export type TimelineData = (Omit<TimelineRecordRead, "decisions"> & { decisions: TimelineDecision[] })[];
+export type TimelineSelection = Omit<TimelineRead, "records" | "open_decision_count"> & {
+  records: TimelineData; open_decision_count: number;
+};
 type TimelineRun = TimelineData[number]["runs"][number];
 type TimelineStep = NonNullable<TimelineRun["graph"]["nodes"][number]["step_run"]>;
 type MappedStep = TimelineStep["map_steps"][number];
@@ -24,10 +28,14 @@ const runSteps = (run: TimelineRun) => run.graph.nodes.flatMap(({ step_run }) =>
 /** One input: a record or a selection. The contributing surface chooses placement. */
 export function RecordTimeline({ record, runId }: RecordTimelineProps): ReactElement {
   const t = useWorkflowsT();
-  const query = useRecordTimelineQuery(record);
+  const query = useRecordTimelineQuery(record, undefined, undefined, Boolean(runId));
   const records = query.data?.record_timeline?.records ?? EMPTY_TIMELINE;
   const data = useMemo(
-    () => runId ? records.map((entry) => ({ ...entry, runs: entry.runs.filter((run) => run.id === runId), decisions: [] })) : records,
+    () => records.map((entry) => ({
+      ...entry,
+      runs: runId ? entry.runs.filter((run) => run.id === runId) : entry.runs,
+      decisions: runId ? [] : entry.decisions ?? [],
+    })),
     [records, runId],
   );
   if (query.isLoading) return <LoadingPanel />;
@@ -35,9 +43,9 @@ export function RecordTimeline({ record, runId }: RecordTimelineProps): ReactEle
   return <RecordTimelineView data={data} openCount={query.data?.record_timeline?.open_decision_count ?? 0} set={Array.isArray(record)} drillIn={Boolean(runId)} />;
 }
 
-export function useRecordTimelineQuery(record: RecordTimelineProps["record"], enabled = true, runLimit = 20) {
+export function useRecordTimelineQuery(record: RecordTimelineProps["record"], enabled = true, runLimit = 20, drillIn = false) {
   const records = useMemo(() => Array.isArray(record) ? record : [record as TimelineRecord], [record]);
-  return useAuthoredQuery(RecordTimelineDocument, { records, runLimit }, {
+  return useAuthoredQuery(RecordTimelineDocument, { records, runLimit, drillIn }, {
     models: [...RUN_MODELS, "decisions.Decision", "decisions.DecisionRecord"],
     records, relatedModels: [...RUN_MODELS, "decisions.Decision"], enabled: enabled && records.length > 0 && records.every((item) => Boolean(item.id)),
   });

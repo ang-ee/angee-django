@@ -10,7 +10,7 @@ import { buildColumns, withQueryOnlyColumnsHidden } from "../resource-view-list-
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
-import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths } from "../resource-view-codecs";
+import { defaultResourceOrder, groupingStateFromResourceGroups, leafTableRows, requestedFieldPaths, resourceColumnVisibility } from "../resource-view-codecs";
 import type { ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
 
@@ -18,7 +18,7 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
   list: ResourceRowsSnapshotSource,
   options: UseResourceRowsSnapshotOptions<TRow> = {},
 ): ResourceListSnapshot<TRow> {
-  const { navigation, onListStateChange } = options;
+  const { navigation, queryFields, onListStateChange } = options;
   const rows = list.rows as readonly TRow[];
   const navigationScope = React.useMemo<ListViewNavigationScope | undefined>(
     () => navigation
@@ -39,9 +39,11 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       pageCount: list.pageCount,
       hasNext: list.hasNext,
       hasPrev: list.hasPrev,
+      ...(list.records ? { records: list.records } : {}),
       fetching: list.fetching,
       error: list.error,
       ...(navigationScope ? { navigationScope } : {}),
+      ...(queryFields ? { queryFields } : {}),
     }),
     [
       rows,
@@ -51,9 +53,11 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       list.pageCount,
       list.hasNext,
       list.hasPrev,
+      list.records,
       list.fetching,
       list.error,
       navigationScope,
+      queryFields,
     ],
   );
   // Collection consumers publish the snapshot back into parent state. Some
@@ -148,8 +152,16 @@ export function useResourceViewQueryFacts<TRow extends Row>({
   sortOrder: ResourceListOrder | undefined;
 } {
   const requestedFields = React.useMemo(
-    () => requestedFieldPaths(columns, fields, modelMetadata, laneSource, groupStack),
-    [columns, fields, laneSource, modelMetadata, groupStack],
+    () => {
+      const visibility = resourceColumnVisibility(columns, resourceView.state.columnVisibility);
+      if (resourceView.state.view === "board") {
+        for (const column of columns.filter((item) => !groupStack.some((group) => group.field === item.field)).slice(0, 4)) {
+          visibility[column.id ?? column.field] = true;
+        }
+      }
+      return requestedFieldPaths(columns, fields, modelMetadata, laneSource, groupStack, visibility);
+    },
+    [columns, fields, laneSource, modelMetadata, groupStack, resourceView.state.columnVisibility, resourceView.state.view],
   );
   const mergedFilter = React.useMemo(
     () => filterForResourceTextSearch(
@@ -209,12 +221,9 @@ export function useResourceViewTableState<TRow extends Row>({
       buildColumns(columns, { groupStack, metadata: modelMetadata, clientOperations, query }),
     [columns, groupStack, modelMetadata, clientOperations, query],
   );
-  const columnVisibility = React.useMemo(() => ({
-    ...Object.fromEntries(columns.map((column) => [column.id ?? column.field, !column.hiddenByDefault])),
-    ...resourceView.state.columnVisibility,
-    ...Object.fromEntries(columns.filter((column) => column.hideable === false)
-      .map((column) => [column.id ?? column.field, true])),
-  }), [columns, resourceView.state.columnVisibility]);
+  const columnVisibility = React.useMemo(() =>
+    resourceColumnVisibility(columns, resourceView.state.columnVisibility),
+  [columns, resourceView.state.columnVisibility]);
   const setColumnVisibility = resourceView.setColumnVisibility;
   const effectiveColumnVisibility = React.useMemo(
     () => withQueryOnlyColumnsHidden(tableColumns, columnVisibility),
@@ -277,12 +286,38 @@ export function useResourceViewTableState<TRow extends Row>({
 }
 
 
+/**
+ * Keep the view's page inside the settled page count: a page beyond it (a stale URL, a
+ * set that shrank) moves to the last page. Nothing moves while a read is in flight —
+ * the count is not known yet, and clamping then would discard the page the URL asked for.
+ */
+export function useSettledPageClamp(
+  resourceView: ResourceViewContextValue,
+  pageCount: number | undefined,
+  settled: boolean,
+): void {
+  const page = resourceView.state.pagination.pageIndex + 1;
+  const { setPage } = resourceView;
+  React.useEffect(() => {
+    if (!settled || pageCount === undefined || page <= pageCount) return;
+    setPage(pageCount);
+  }, [page, pageCount, settled, setPage]);
+}
+
 /** Presentation projection over the native table/query owners; no paging state. */
 export function listResultFromTable<TRow extends Row>(
   table: Table<TRow>,
   { rows, total, fetching, error, refetch }: Pick<ResourceListResult, "rows" | "total" | "fetching" | "refetch"> & { error: unknown },
 ): ResourceListResult {
   const { pageIndex, pageSize } = table.getState().pagination;
+  // A grouping client table pages its root groups: the record pager needs the records
+  // behind the pages and how many precede this page.
+  const records = !table.options.manualPagination && table.getState().grouping.length > 0
+    ? {
+        total: table.getFilteredRowModel().rows.length,
+        before: leafTableRows(table.getPrePaginationRowModel().rows.slice(0, pageIndex * pageSize)).length,
+      }
+    : undefined;
   return {
     rows, total, fetching, error: errorFromUnknown(error), refetch,
     page: pageIndex + 1,
@@ -291,6 +326,7 @@ export function listResultFromTable<TRow extends Row>(
     pageCount: total === undefined ? undefined : Math.max(1, table.getPageCount()),
     hasNext: total !== undefined && table.getCanNextPage(),
     hasPrev: table.getCanPreviousPage(),
+    ...(records ? { records } : {}),
     setPage: (page) => table.setPageIndex(page - 1),
     firstPage: table.firstPage,
     nextPage: table.nextPage,

@@ -22,9 +22,15 @@ class PartiesConfig(AppConfig):
         """Run parties ready-time hooks after app population."""
 
         super().ready()
+        assert self.apps is not None
         # App population phase 1 imports AppConfig before the models exist; defer.
         from angee.parties import signals
 
         checks.register(check_settings, checks.Tags.models)
 
         signals.connect()
+        if self.apps.is_installed("angee.graphql"):
+            from angee.graphql.field_types import register_field_type
+            from angee.parties.fields import CountryCodeField
+
+            register_field_type(CountryCodeField, str)

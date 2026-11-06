@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
-from itertools import groupby
-from typing import TYPE_CHECKING, Any, ClassVar, Self
+from typing import Any, ClassVar, Self
 
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
@@ -17,9 +16,9 @@ from rebac import (
     RebacMixin,
     RebacTrackedMixin,
     database_context,
+    is_sudo,
     system_context,
 )
-from rebac.actors import is_sudo
 from rebac.errors import SchemaError
 from rebac.field_backing import resolve_field_backing
 from rebac.field_visibility import gated_read_fields, redacted_fields
@@ -30,25 +29,23 @@ from simple_history.exceptions import NotHistoricalModelError
 from simple_history.manager import HistoryManager
 from simple_history.utils import get_history_manager_for_model
 
+import angee.provenance.history as native_history
 from angee.base.lineage import concrete_child_models, concrete_lineage
 from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
-from angee.base.models.trash import TrashMixin
-from angee.base.permissions import candidate_relationships
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import candidate_relationships
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
+from angee.provenance.engine.replay import HistoryScopeMixin
 from angee.provenance.history import (
     _UNLOADED,
-)
-from angee.provenance.history import (
-    HistoryMixin as CaptureHistoryMixin,
-)
-from angee.provenance.history import (
-    ModelHistory as CaptureHistory,
+    CaptureHistoryMixin,
+    HistoryAttribution,
 )
 from angee.provenance.querysets import model_history
 
 
-class HistoryDocumentMixin(models.Model):
+class HistoryDocumentMixin(HistoryScopeMixin):
     """Noncapturing document-history extension contract for sibling capabilities.
 
     Declaring document contributions does not install a history descriptor or
@@ -66,7 +63,12 @@ class HistoryDocumentMixin(models.Model):
 
     @classmethod
     def history_related_scopes(
-        cls, predicate: Q, root_pk: Any, *, direct: bool, using: str | None,
+        cls,
+        predicate: Q,
+        root_pk: Any,
+        *,
+        direct: bool,
+        using: str | None,
     ) -> dict[type[models.Model], Q]:
         """Predicates on owned representations admitted with this document."""
 
@@ -95,7 +97,7 @@ def record_history(model: type[models.Model]) -> HistoryManager | None:
         return None
 
 
-class ModelHistory(CaptureHistory):
+class ModelHistory(native_history.ModelHistory):
     """Native history adapted to abstract sources and generated module names.
 
     Every concrete descendant of a tracked source owns a history table, including
@@ -114,6 +116,7 @@ class ModelHistory(CaptureHistory):
                 "Angee ModelHistory requires use_base_model_db=True for Changeset and replay storage."
             )
         kwargs["use_base_model_db"] = True
+        kwargs.setdefault("bases", (HistoryAttribution,))
         super().__init__(*args, **kwargs)
         self.bases = (*self.bases, HistoricalReferenceMixin)
 
@@ -131,18 +134,9 @@ class ModelHistory(CaptureHistory):
 
         history = model.history.using(using)
         key = model._meta.pk.attname
-        rows = history.filter(changeset_id=changeset.pk).order_by(key, "history_id")
         seen = set()
-        for pk, grouped in groupby(rows.iterator(), key=lambda row: getattr(row, key)):
-            seen.add(pk)
-            versions = list(grouped)
-            first, last = versions[0], versions[-1]
-            timeline = history.filter(**{key: pk})
-            if timeline.filter(history_id__gt=last.history_id).exists():
-                raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
-            previous = timeline.filter(history_id__lt=first.history_id).order_by("-history_id").first()
-            if previous is None and first.history_type != "+":
-                raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
+        for first, last, previous in super().changeset_states(model, changeset, using=using):
+            seen.add(getattr(first, key))
             yield first, last, previous
         # An unchanged merge survivor has no new snapshot. Its touched owner and
         # origin still define a boundary, without an artificial stamp-only save.
@@ -158,6 +152,7 @@ class ModelHistory(CaptureHistory):
                     raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
                 if timeline.filter(history_date__gt=changeset.recorded_at).exists():
                     raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
+                self.require_complete_state(boundary)
                 yield boundary, boundary, boundary
 
     def redacted(
@@ -259,6 +254,24 @@ class ModelHistory(CaptureHistory):
             # Neither grants access when native preflight cannot resolve it.
             return False
 
+    def lock_revert_subject(self, target: models.Model, *, using: str) -> None:
+        if not isinstance(target, PersistenceMixin):
+            raise ImproperlyConfigured("Protected replay requires the native persistence owner.")
+        try:
+            target.lock_subject()
+        except ObjectDoesNotExist:
+            # Deleted rows synchronize through their retained versions instead.
+            pass
+
+    def revert_removal_collector(self, first: Any, last: Any, previous: Any) -> None:
+        """Angee retained snapshots survive removal; the row owner admits live references/grants.
+
+        Native replay still authorizes every current/proposed snapshot before writes.
+        The actual removal calls that row's protected revert_removal inside the same
+        transaction, so a live-reference refusal rolls back the whole replay.
+        """
+        return None
+
     def authorize_revert(self, first: Any, last: Any, previous: Any, actor: Any) -> None:
         """Admit both the current row and the snapshot's proposed relationships."""
 
@@ -299,14 +312,22 @@ class ModelHistory(CaptureHistory):
         row = model._base_manager.using(using).filter(pk=first.instance.pk).first()
         if previous is None or previous.history_type == "-":
             if row is not None:
-                row.revert_removal(reason=f"Revert changeset {first.changeset_id}")
+                row.revert_removal(reason=f"Revert changeset {first.history_changeset_id}")
             return []
         restored = previous.instance
         if row is None:
             for parent in model._meta.get_parent_list():
-                stored = parent._base_manager.using(using).filter(pk=restored.pk).first()
+                stored = (
+                    parent._base_manager.using(using)
+                    .filter(
+                        pk=restored._get_pk_val(parent._meta),
+                    )
+                    .first()
+                )
                 if stored is None:
-                    raise ValidationError(f"{parent._meta.label} {restored.pk}: the MTI parent is unavailable.")
+                    raise ValidationError(
+                        f"{parent._meta.label} {restored._get_pk_val(parent._meta)}: the MTI parent is unavailable."
+                    )
                 for field in parent._meta.local_concrete_fields:
                     setattr(restored, field.attname, getattr(stored, field.attname))
             restored.save(using=using)
@@ -323,7 +344,7 @@ class ModelHistory(CaptureHistory):
                 and not (field.is_relation and field.remote_field.parent_link)
                 and getattr(last, field.attname) != getattr(previous, field.attname)
             }
-            if isinstance(row, TrashMixin) and "is_trashed" in changed:
+            if isinstance(row, ProtectedTrashMixin) and "is_trashed" in changed:
                 row.revert_removal(previous)
                 changed.difference_update(row.TRASH_FIELDS)
             for name in changed:
@@ -361,9 +382,6 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
     history = ModelHistory(inherit=True)
     objects: ClassVar[RebacManager[Self]] = AngeeHistoryManager()
     _angee_base: ClassVar[models.Manager[Self]] = AngeeHistoryUnscopedManager()
-    if TYPE_CHECKING:
-        save_without_historical_record = models.Model.save
-
     history_revert_permission: ClassVar[str] = "write"
     """Permission admitting replay; immutable edges use their unlink/relink authority."""
     history_relations: ClassVar[tuple[str, ...]] = ()
@@ -406,9 +424,18 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
             get_history_manager_for_model(cls).db_manager(using).bulk_history_create(rows)
 
     def history_tables(self) -> tuple[type[models.Model], ...]:
-        """Return the concrete tables participating in this record's history."""
+        """Extend native ancestor history with Angee's sibling/descendant document views.
 
-        return tuple(table for table in concrete_lineage(type(self)) if model_history(table) is not None)
+        Native standalone scopes deliberately cover ancestors only. Angee's
+        record views also retain each installed concrete view of that identity.
+        """
+
+        tables = {*super().history_tables(), *concrete_lineage(type(self))}
+        return tuple(
+            table
+            for table in sorted(tables, key=lambda table: table._meta.label_lower)
+            if model_history(table) is not None
+        )
 
     def history_identity_columns(self) -> dict[type[models.Model], tuple[str, ...]]:
         """Columns in each retained history table identifying this document.
@@ -417,18 +444,15 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
         declaration, including concrete ancestors, owned rows and pair endpoints.
         """
 
-        columns: dict[type[models.Model], tuple[str, ...]] = {
-            table: (table._meta.pk.attname,) for table in self.history_tables()
-        }
+        columns = super().history_identity_columns()
         for name in self.history_relations:
             relation = self._meta.get_field(name)
-            if not isinstance(relation, ManyToOneRel) or relation.field.remote_field.parent_link:
-                raise ImproperlyConfigured(f"{self._meta.label}.{name}: history requires an owned reverse FK.")
+            # The native scope owner already validated the reverse-FK contract.
+            assert isinstance(relation, ManyToOneRel)
             child = relation.related_model
             assert child is not None
             if model_history(child) is None:
                 raise ImproperlyConfigured(f"{child._meta.label}: an owned history relation must keep history.")
-            columns[child] = (*columns.get(child, ()), relation.field.attname)
         for owner in self.history_tables():
             if issubclass(owner, HistoryDocumentMixin):
                 for related, names in owner.history_related_columns().items():
@@ -438,29 +462,40 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
     def history_scope(self) -> dict[type[models.Model], Q]:
         """Snapshot predicates for this record's concrete tables and owned lines."""
 
-        scopes = {}
-        for table, columns in self.history_identity_columns().items():
-            scope = Q()
-            for column in columns:
-                scope |= Q(**{column: self.pk})
-            scopes[table] = scope
-        return scopes
+        return super().history_scopes()
 
     def history_scopes(self) -> dict[type[models.Model], Q]:
         """Return document and generated-statement predicates for this record."""
 
         scopes = self.history_scope()
         related: dict[type[models.Model], Q] = {}
-        tables = frozenset(self.history_tables())
+        lineage = (type(self), *self._meta.get_parent_list())
         for model, predicate in scopes.items():
             if not issubclass(model, HistoryDocumentMixin):
                 continue
             for representation, scope in model.history_related_scopes(
-                predicate, self.pk, direct=model in tables, using=self._state.db,
+                predicate,
+                self._get_pk_val(model._meta) if model in lineage else self.pk,
+                direct=model in lineage,
+                using=self._state.db,
             ).items():
                 related[representation] = related[representation] | scope if representation in related else scope
         return {**scopes, **related}
 
+    def _history_table_keys(self, table: type[models.Model]) -> set[Any]:
+        """Resolve only this document's retained/live concrete-view identities."""
+
+        if table in (type(self), *self._meta.get_parent_list()):
+            return {self._get_pk_val(table._meta)}
+        predicate = self.history_scope()[table]
+        keys = set(table._base_manager.using(self._state.db).filter(predicate).values_list("pk", flat=True))
+        keys.update(
+            get_history_manager_for_model(table)
+            .using(self._state.db)
+            .filter(predicate)
+            .values_list(table._meta.pk.attname, flat=True)
+        )
+        return keys
 
     def admitted_reverts(self, changesets: Iterable[Any]) -> frozenset[Any]:
         """Return page changeset keys belonging wholly to this history document.
@@ -477,13 +512,25 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
             and changeset.state == changeset.State.CLOSED
             and changeset.outcome == changeset.Outcome.SUCCESS
         }
-        table_labels = {table._meta.label_lower for table in self.history_tables()}
+        merge_labels = {
+            changeset.record_ref.model_label.lower()
+            for changeset in page.values()
+            if changeset.activity == changeset.Activity.MERGE
+        }
+        table_keys = {
+            table._meta.label_lower: {str(key) for key in self._history_table_keys(table)}
+            for table in self.history_tables()
+            if table._meta.label_lower in merge_labels
+        }
         admitted = {
             changeset.pk
             for changeset in page.values()
             if changeset.activity == changeset.Activity.MERGE
-            and changeset.record_ref.model_label.lower() in table_labels
-            and str(changeset.record_ref.object_id) == str(self.pk)
+            and str(changeset.record_ref.object_id)
+            in table_keys.get(
+                changeset.record_ref.model_label.lower(),
+                set(),
+            )
         }
         candidates = {pk: changeset for pk, changeset in page.items() if pk not in admitted}
         scopes = self.history_scopes()
@@ -497,28 +544,23 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
             model = apps.get_model(label)
             if model_history(model) is None:
                 raise ValidationError(f"{label}: the history owner is unavailable.")
-            rows = model.history.using(self._state.db).filter(changeset_id__in=changeset_ids)
+            rows = model.history.using(self._state.db).filter(history_changeset_id__in=changeset_ids)
             predicate = scopes.get(model)
             if predicate is None:
-                present = set(rows.values_list("changeset_id", flat=True).distinct())
+                present = set(rows.values_list("history_changeset_id", flat=True).distinct())
                 touched.update(present)
                 refused.update(present)
                 continue
-            for totals in rows.values("changeset_id").annotate(
+            for totals in rows.values("history_changeset_id").annotate(
                 total=models.Count("history_id"),
-                admitted=models.Count("history_id", filter=predicate),
+                admitted=models.Count("history_id", filter=predicate & Q(history_source_complete=True)),
             ):
-                changeset_id = totals["changeset_id"]
+                changeset_id = totals["history_changeset_id"]
                 touched.add(changeset_id)
                 if totals["total"] != totals["admitted"]:
                     refused.add(changeset_id)
         admitted.update(pk for pk in candidates if pk in touched and pk not in refused)
         return frozenset(admitted)
-
-    def admits_revert(self, changeset: Any) -> bool:
-        """Return whether one successful changeset belongs wholly to this document."""
-
-        return changeset.pk in self.admitted_reverts((changeset,))
 
     def revertable_changesets(self, changesets: Iterable[Any], *, actor: Any = None) -> frozenset[Any]:
         """Return admitted page keys when the reader may replay this record."""

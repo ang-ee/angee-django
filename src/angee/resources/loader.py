@@ -17,16 +17,17 @@ from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
 from import_export.utils import get_related_model
 
-from angee.base.models.identity import instances_from_public_ids, public_id_of
+from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.implementations import ImplDefaultsMixin
-from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.transitions import StateTransitions
 from angee.base.serialization import ASCII_JSON, canonical_json_sha256, json_safe
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.kinds import ResourceKindDeclarations
 from angee.resources.mixins import ResourceLoadMixin
+from angee.resources.validators import normalize_xref
 from angee.resources.widgets import (
     ContentTypeForeignKeyWidget,
     ContentTypeManyToManyWidget,
@@ -135,27 +136,6 @@ class AngeeResource(resources.ModelResource):
         self._row_hashes[xref] = self._row_content_hash(row)
         super().before_import_row(row, **kwargs)
 
-    def bind_instance(self, xref: str, instance: models.Model, *, replace: bool = False) -> None:
-        """Ledger an owner-created identity; retarget only through an explicit owner verb."""
-
-        xref = self._row_xref(xref, row_number=0)
-        identity = str(public_id_of(instance))
-        defaults = self._ledger_defaults(instance, self._row_content_hash({"identity": identity}))
-        manager = self.ledger_model._default_manager.db_manager(self.get_db_connection_name())
-        if replace:
-            ledger, _created = manager.update_or_create(
-                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
-            )
-        else:
-            ledger, _created = manager.get_or_create(
-                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
-            )
-        self._check_ledger_target(xref, ledger)
-        if ledger.target_id != identity:
-            raise ResourceLoadError(f"{self.entry.addon.name}.{xref} already identifies another record.")
-        self._existing_ledgers[xref] = ledger
-        self._instances[xref] = instance
-
     @functools.cached_property
     def _transition_state_fields(self) -> tuple[fields.Field, ...]:
         """Project model-owned state names onto native import fields."""
@@ -216,10 +196,11 @@ class AngeeResource(resources.ModelResource):
 
         xref = self._row_xref(row.get("_xref"), row_number=kwargs["row_number"])
         self._restore_auto_fields(instance, row)
-        self._upsert_ledger(
-            xref=xref,
-            instance=instance,
-            row_hash=self._row_hashes[xref],
+        self._existing_ledgers[xref] = self.ledger_model._default_manager.db_manager(
+            self.get_db_connection_name(),
+        ).upsert_target(
+            source_addon=self.entry.addon.name, xref=xref, instance=instance, model=self._meta.model,
+            source=self.entry.source, tier=self.entry.tier, content_hash=self._row_hashes[xref],
         )
         self._instances[xref] = instance
 
@@ -242,7 +223,7 @@ class AngeeResource(resources.ModelResource):
             for field in instance._meta.concrete_fields
             if not field.primary_key and (field.name in imported_fields or field.attname in imported_fields)
         }
-        if isinstance(instance, RecordRefMixin):
+        if isinstance(instance, ProtectedRecordRefMixin):
             reference = instance.record_ref_field()
             if reference.name in imported_fields:
                 self._update_fields.update((reference.ct_field, reference.fk_field))
@@ -358,7 +339,8 @@ class AngeeResource(resources.ModelResource):
             for xref, ledger in resource._existing_ledgers.items():
                 target = targets.get((addon, xref))
                 try:
-                    resource._check_ledger_target(xref, ledger)
+                    if ledger is not None:
+                        ledger.require_target_model(resource._meta.model)
                 except ResourceLoadError:
                     # Import reports collisions with the source-row context.
                     continue
@@ -400,9 +382,7 @@ class AngeeResource(resources.ModelResource):
     def _row_xref(self, value: Any, *, row_number: int) -> str:
         """Return the normalized xref for one import row."""
 
-        if not isinstance(value, str) or not value.strip():
-            raise ResourceLoadError(f"{self.entry.display} row {row_number}: missing _xref")
-        return value.strip()
+        return normalize_xref(value, location=f"{self.entry.display} row {row_number}")
 
     def _row_content_hash(self, row: Mapping[str, Any]) -> str:
         """Hash updateable seed values, excluding identity and initial state."""
@@ -427,27 +407,9 @@ class AngeeResource(resources.ModelResource):
                 .first()
             )
             self._existing_ledgers[xref] = cast("Resource | None", ledger)
-        self._check_ledger_target(xref, ledger)
+        if ledger is not None:
+            ledger.require_target_model(self._meta.model)
         return ledger
-
-    def _check_ledger_target(
-        self,
-        xref: str,
-        ledger: Resource | None,
-    ) -> None:
-        """Raise when an existing xref belongs to another target model."""
-
-        if ledger is None:
-            return
-        model = self._meta.model
-        expected = model._meta.label
-        # A row moved onto a multi-table child keeps its parent's ledger until saved.
-        parents = {parent._meta.label for parent in model._meta.get_parent_list()}
-        if ledger.target_model != expected and ledger.target_model not in parents:
-            raise ResourceLoadError(
-                f"xref collision in {self.entry.addon.name}: {xref!r} "
-                f"already targets {ledger.target_model}, not {expected}"
-            )
 
     def _declared_instance(self, instance: models.Model | None) -> models.Model | None:
         """Return the entry model's row for a ledger target recorded as its concrete parent.
@@ -460,33 +422,6 @@ class AngeeResource(resources.ModelResource):
         if instance is None or isinstance(instance, model):
             return instance
         return model._base_manager.using(self.get_db_connection_name()).filter(pk=instance.pk).first()
-
-    def _upsert_ledger(
-        self,
-        *,
-        xref: str,
-        instance: models.Model,
-        row_hash: str,
-    ) -> None:
-        """Create or update the ledger row for an imported object."""
-
-        ledger, _ = self.ledger_model._default_manager.db_manager(self.get_db_connection_name()).update_or_create(
-            source_addon=self.entry.addon.name,
-            xref=xref,
-            defaults=self._ledger_defaults(instance, row_hash),
-        )
-        self._existing_ledgers[xref] = ledger
-
-    def _ledger_defaults(self, instance: models.Model, row_hash: str) -> dict[str, Any]:
-        """Project ledger metadata once for file imports and owner-created identities."""
-
-        return {
-            "source_path": self.entry.source,
-            "target_model": self._meta.model._meta.label,
-            "content_hash": row_hash,
-            "target_id": public_id_of(instance),
-            "tier": self.entry.tier,
-        }
 
     def _ledger_resolution_is_stale(
         self,
@@ -855,7 +790,7 @@ def build_resource(
     if not isinstance(resource_class, type) or not issubclass(resource_class, AngeeResource):
         raise ImproperlyConfigured(f"{model._meta.label}.resource_class must subclass AngeeResource")
     custom_fields = {"_xref": fields.Field(attribute=None, column_name="_xref", readonly=True)}
-    if issubclass(model, RecordRefMixin):
+    if issubclass(model, ProtectedRecordRefMixin):
         prefix = model.record_ref_field().name
         if prefix in resource_class.fields:
             raise ImproperlyConfigured(f"{model._meta.label}: resource field {prefix!r} is owned by RecordRefMixin")

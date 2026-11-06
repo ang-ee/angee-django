@@ -97,6 +97,7 @@ export type AggregateMeasureValues = Record<string, unknown>;
 
 export interface AggregateBucket {
   key: Record<string, unknown> | null;
+  label?: string | null;
   count: number;
   sum?: AggregateMeasureValues;
   avg?: AggregateMeasureValues;
@@ -505,8 +506,10 @@ function facetResult(
       // key is not a bucket.
       const value = raw === "" ? "" : stringValue(raw);
       if (value === null && raw !== null) return [];
-      const labelKey = facet.labelKey ?? valueKey;
-      const label = (labelKey ? stringValue(key[labelKey]) : value) ?? value ?? "";
+      // A relation bucket carries its admitted target's label beside the key; a
+      // label dimension in the key labels the rest; a bare value labels itself.
+      const keyLabel = facet.labelKey ? stringValue(key[facet.labelKey]) : null;
+      const label = (typeof bucket.label === "string" ? bucket.label : null) ?? keyLabel ?? value ?? "";
       return [{ value, label, count: bucket.count, key }];
     }),
   };
@@ -551,6 +554,7 @@ function groupBucket(group: Record<string, unknown>): AggregateBucket {
   const aggregate = recordValue(group.aggregate) ?? {};
   return {
     key: recordValue(group.key) ?? {},
+    ...(typeof group.label === "string" || group.label === null ? { label: group.label as string | null } : {}),
     count: countOf(aggregate.count),
     ...extractMeasures(aggregate),
   };

@@ -23,20 +23,18 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
+import angee.iam.graphql.actions as protected_actions_module
 from angee.base.exceptions import RecordAccessSubjectRefused, TransitionNotAllowed
 from angee.base.models.locks import StaleRevisionError
-from angee.graphql.actions import (
-    ActionResult,
-    ActionSelectionInput,
-    action_guard,
+from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard, many_actions
+from angee.graphql.schema import AngeeSchema
+from angee.iam.graphql.actions import (
     action_target,
     authorized_action_target,
     authorized_permission_target,
-    many_actions,
     resolve_action_target,
 )
-from angee.graphql.schema import AngeeSchema
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.engine.exceptions import CreationKeyConflict
 from tests.conftest import create_user
 from tests.linesdemo.models import Document
 
@@ -314,7 +312,7 @@ def test_resolve_action_target_elevates_lookup(
         reasons.append(reason)
         return Context()
 
-    monkeypatch.setattr(actions_module, "system_context", system_context)
+    monkeypatch.setattr(protected_actions_module, "system_context", system_context)
 
     target = resolve_action_target(
         Group,
@@ -394,7 +392,7 @@ def test_action_target_wraps_lookup_and_body_in_system_context(
 
         return Context(reason)
 
-    monkeypatch.setattr(actions_module, "system_context", system_context)
+    monkeypatch.setattr(protected_actions_module, "system_context", system_context)
 
     with action_target(Group, str(group.pk), reason="tests.action.context") as target:
         assert target == group

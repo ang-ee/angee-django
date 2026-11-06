@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { AuthoredQueryOptions } from "@angee/refine";
 import { type ModelMetadata, type QueryFilter, type Row } from "@angee/metadata";
 import { type BaseRecord } from "@refinedev/core";
 import { type ColumnDef, type Row as TableRowModel, type Table as TableModel, type VisibilityState } from "@tanstack/react-table";
@@ -17,6 +18,15 @@ export type ResourceFilterInput = Record<string, unknown>;
 
 export type StringIdRow = Row & { id: string };
 
+/**
+ * The records behind pages that are not records (a grouped client list pages its root
+ * groups): their total and how many precede the current page.
+ */
+export interface ListRecordFacts {
+  total: number | undefined;
+  before: number;
+}
+
 export interface ResourceListSnapshot<TRow extends Row = Row> {
   rows: readonly TRow[];
   total: number | undefined;
@@ -25,9 +35,13 @@ export interface ResourceListSnapshot<TRow extends Row = Row> {
   pageCount: number | undefined;
   hasNext: boolean;
   hasPrev: boolean;
+  /** Present only when pages are not records. */
+  records?: ListRecordFacts;
   fetching: boolean;
   error?: Error | null;
   navigationScope?: ListViewNavigationScope;
+  /** The native page projection that supplied these rows, for pager cache reuse. */
+  queryFields?: readonly string[];
 }
 
 export interface ListViewNavigationScope {
@@ -37,7 +51,7 @@ export interface ListViewNavigationScope {
   pageSize: number;
 }
 
-export interface UseResourceViewSurfaceProps<TRow extends Row = Row> {
+export interface UseResourceViewSurfaceProps<TRow extends Row = Row> extends Pick<AuthoredQueryOptions, "records" | "relatedModels"> {
   resource: string;
   source?: CollectionSource<TRow>;
   columns: readonly ColumnDescriptor<TRow>[];
@@ -62,6 +76,7 @@ export interface UseRowsResourceViewSurfaceProps<
   resourceView: ResourceViewContextValue;
   modelMetadata?: ModelMetadata | null;
   groupStack?: readonly ResourceViewGroup[];
+  defaultExpandedGroups?: "all" | "none";
   fetching?: boolean;
   error?: Error | null;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
@@ -77,6 +92,8 @@ export interface ResourceListResult {
   pageInfo: undefined;
   hasNext: boolean;
   hasPrev: boolean;
+  /** Present only when pages are not records. */
+  records?: ListRecordFacts;
   setPage: (page: number) => void;
   firstPage: () => void;
   nextPage: () => void;
@@ -180,11 +197,13 @@ export interface ResourceRowsSnapshotSource {
   pageCount: number | undefined;
   hasNext: boolean;
   hasPrev: boolean;
+  records?: ListRecordFacts;
   fetching: boolean;
   error: Error | null;
 }
 
 export interface UseResourceRowsSnapshotOptions<TRow extends Row> {
   navigation?: Pick<ListViewNavigationScope, "filter" | "order">;
+  queryFields?: readonly string[];
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
 }

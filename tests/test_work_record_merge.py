@@ -27,8 +27,8 @@ class RecordMergeTests(WorkCase):
         self.assertIn(source.pk, need.history.values_list("task_id", flat=True))
         task_version = source.history.order_by("-history_id").first()
         need_version = need.history.order_by("-history_id").first()
-        self.assertEqual(need_version.changeset_id, task_version.changeset_id)
-        self.assertEqual(task_version.changeset.activity, "merge")
+        self.assertEqual(need_version.history_changeset_id, task_version.history_changeset_id)
+        self.assertEqual(task_version.history_changeset.activity, "merge")
         self.assertFalse(apps.get_model("projects", "TaskRelation")._base_manager.exists())
 
     def test_a_fold_refuses_what_removal_refuses_before_anything_moves(self):

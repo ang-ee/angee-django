@@ -26,7 +26,7 @@ through the same ambient actor.
 | `angee.mcp.server` | The one process-wide `FastMCP`, registrar discovery in install order, `MOUNT_PATH` | `src/angee/mcp/server.py:38,49,54,92` |
 | `angee.mcp.graphql` | `GraphQLTool` declaration, compiler, limits, actor-scoped execution | `src/angee/mcp/graphql.py:70,73,83,189,226,368,518` |
 | `angee.mcp.middleware`, `angee.mcp.verifier` | Actor bracketing per call; bearer→`SubjectRef` through `ANGEE_MCP_ACTOR_VERIFIER` | `src/angee/mcp/middleware.py:20`, `src/angee/mcp/verifier.py:23,27` |
-| `angee.mcp.apps.MCPConfig.compose_asgi` | Native `AsgiContribution` mount and lifespan factories, entered per serving process | `src/angee/mcp/apps.py`, `django_compose.asgi` |
+| `angee.mcp.apps.MCPConfig.compose_asgi` | Server `AsgiContribution` mount and lifespan factories, entered per serving process | `src/angee/mcp/apps.py`, `angee.server.asgi` |
 | `angee.mcp.resource_tools`, `angee.mcp.apps` | Generated console readers, `RESOURCE_READER_TOOL_TAG`, check `angee.mcp.E001` | `src/angee/mcp/resource_tools.py:35,49,136`, `src/angee/mcp/apps.py:16` |
 | `angee.base.addons` | Optional addon-module discovery; MCP owns registrar validation | [Base adapter](../../../base/addons.py), [MCP server](../../server.py) |
 | `tests/test_<addon>_mcp.py`, `<consumer>/tests/test_mcp.py` | Compile-and-register tests; StreamableHTTP round trip | `tests/test_knowledge_mcp.py:56,197`, `examples/src/example/notes/tests/test_mcp.py:67,148` |
@@ -43,9 +43,9 @@ through the same ambient actor.
   only for a projection, write or search the generated pair cannot express.
 - Hand-written FastMCP tools (`server.add_tool(Tool.from_function(...))`) are reserved for data no GraphQL
   operation owns (the catalogue reader `list_resources`, `src/angee/mcp/resource_tools.py:53-60`); they read
-  through model verbs and the actor-scoped querysets `ActorMiddleware` pins, set `ToolAnnotations(readOnlyHint=...)`
-  and avoid request-scoped FastMCP context (`src/angee/mcp/server.py:38-47`, asserted at
-  `src/angee/agents_runtime_pydantic/toolsets.py:302`).
+  through model verbs and the actor-scoped querysets `ActorMiddleware` pins, set `ToolAnnotations(readOnlyHint=...)` and native `meta={"angee": {"execution_context": "actor"}}`
+  and avoid request-scoped FastMCP context (`src/angee/mcp/server.py:38-47`, validated by
+  `angee.mcp.graphql.actor_tool_read_only`).
 
 ## Steps
 
@@ -104,8 +104,8 @@ through the same ambient actor.
 
 5. **Mount and lifespan are inherited.** `angee.mcp.asgi.http_mounts()` mounts the StreamableHTTP app at
    `/mcp` and `lifespans()` contributes FastMCP's `app.lifespan` only when any addon registers tools
-   (`src/angee/mcp/asgi.py:19-35`); `MCPConfig.compose_asgi()` returns them through native `AsgiContribution`
-   factories; `django_compose.asgi` enters them per serving process.
+   (`src/angee/mcp/asgi.py:19-35`); `MCPConfig.compose_asgi()` returns them through server `AsgiContribution`
+   factories; `angee.server.asgi` enters them per serving process.
    An addon contributes no `asgi.py` for MCP. **Owner rule:** [Serving](../../../../../docs/composer.md#serving)
    owns mounts; the stack row owns the serve mode ([stack](../../../../../docs/stack.md#backend), the channels and FastMCP rows).
 
@@ -128,7 +128,7 @@ through the same ambient actor.
 - A second FastMCP instance, mount or lifespan in an addon: `angee.mcp.server.mcp_server` is the process-wide owner (`src/angee/mcp/server.py:54`; [Serving](../../../../../docs/composer.md#serving)).
 - A tool registry, decorator or settings list beside `mcp_tools.register`: [MCP server](../../server.py) discovers and validates registrars through Base's optional-module reader ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
 - Hand-rolled CRUD readers for a console resource: generated readers already exist and the agents catalogue grants them (`src/angee/mcp/resource_tools.py:49`, `src/angee/agents/grants.py:116`; [DRY](../../../../../docs/guidelines.md#dont-repeat-yourself-dry)).
-- A list query without `limit_arg` or a page bound above `MAX_QUERY_LIMIT`: the compiler refuses the first and clamps the second (`src/angee/mcp/graphql.py:73,528`).
+- A list query without `limit_arg` or a page bound above `MAX_QUERY_LIMIT`: the compiler refuses both (`src/angee/mcp/graphql.py:73,528`).
 - Projecting owner-gated or nullable-sensitive fields in a tool every actor may call: field gates redact, the projection then fails (`examples/src/example/notes/mcp_tools.py:17-19`; [field-backed conditional access](../../../../../docs/backend/guidelines.md#rebac)).
 - A base-level `ANGEE_MCP_ACTOR_VERIFIER` default in an addon autoconfig: the catalogue owner supplies it and an empty default clobbers it (`src/angee/mcp/autoconfig.py:5-10`; [Autoconfig](../../../../../docs/composer.md#autoconfig)).
 - `get_access_token()` or FastMCP `Context` inside a tool callable: a granted tool also runs in-process through the pydantic runtime, outside any FastMCP request, which asserts both (`src/angee/mcp/server.py:41-46`, `src/angee/agents_runtime_pydantic/toolsets.py:302`).

@@ -6,14 +6,18 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import router, transaction
 from django_compose.models import Composable
 from rebac import actor_context, system_context
 
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.locks import bridge_advisory_lock
+from angee.integrate.streams import open_stream, reset_stream
+from angee.messaging.events import historical_import
 from angee.messaging_integrate_imap.backend import (
     NEW_MAIL_DELIVERY_MODE,
     ImapChannelBackend,
+    ImapDeliveryBoundary,
     ImapSampleImport,
     ImapSamplePreview,
     ImapSamplePreviewRequest,
@@ -38,6 +42,46 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
             raise ValidationError("Mailbox positioning is available for IMAP channels.")
         return backend
 
+    def imap_delivery_boundary(self) -> dict[str, Any]:
+        """Return this row's retained future-only delivery intent."""
+        return self.config if self.config.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE else {}
+
+    def select_imap_new_mail_boundary(
+        self, snapshot: ImapDeliveryBoundary, backend: ImapChannelBackend,
+    ) -> ImapDeliveryBoundary:
+        """Reuse committed same-epoch intent rather than skipping newer arrivals."""
+        streams = tuple(
+            open_stream(self, "messages", name, backend, definition=backend._mailbox_stream(name))
+            for name in sorted(snapshot.cursors)
+        )
+        retained = {stream.partition: stream.cursor for stream in streams}
+        intent = self.imap_delivery_boundary()
+        same_epochs = (
+            intent.get("source_identity") == snapshot.source_identity
+            and intent.get("mailbox_selection") == sorted(snapshot.cursors)
+            and all(retained[name].get("uidvalidity") == value["uidvalidity"]
+                    for name, value in snapshot.cursors.items())
+        )
+        return ImapDeliveryBoundary(
+            snapshot.source_identity, retained if same_epochs else snapshot.cursors, streams, not same_epochs,
+        )
+
+    def install_imap_new_mail_boundary(self, boundary: ImapDeliveryBoundary) -> None:
+        """Install desired mailbox boundaries through native stream/epoch owners."""
+        for stream in boundary.streams:
+            cursor = boundary.cursors[stream.partition]
+            if stream.cursor != cursor:
+                reset_stream(stream, cursor=cursor)
+
+    def update_imap_credential(self, *, username: str, password: str) -> None:
+        """Replace this IMAP channel's native Basic-auth material in place."""
+        credential = self.credential
+        if credential is None:
+            raise ValueError("This channel has no credential; connect it again.")
+        if credential.kind != CredentialKind.BASIC_AUTH:
+            raise ValueError("Only a username/password IMAP login can be re-entered here.")
+        credential.replace_material({"username": str(username).strip(), "password": str(password)})
+
     def prepare_imap_new_mail(self, *, actor: Any) -> tuple[int, bool]:
         """Atomically exclude the selected mailboxes' current contents from live sync.
 
@@ -47,8 +91,9 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
         """
 
         channel_model = type(self)
+        using = self._state.db or router.db_for_write(channel_model, instance=self)
         with actor_context(actor):
-            current = channel_model._base_manager.select_related(
+            current = channel_model._base_manager.using(using).select_related(
                 "credential__external_account",
                 "credential__oauth_client",
             ).get(pk=self.pk)
@@ -56,10 +101,10 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
             with bridge_advisory_lock(current) as acquired:
                 if not acquired:
                     raise ValidationError("The channel is busy. Retry when its current operation finishes.")
-                boundary = backend.prepare_new_mail_boundary()
-                with transaction.atomic():
+                snapshot = backend.prepare_new_mail_boundary()
+                with transaction.atomic(using=using):
                     locked = (
-                        channel_model.objects.sudo(
+                        channel_model.objects.using(using).sudo(
                             reason="messaging.imap.new_mail.lock",
                         )
                         .lock_if_supported(of=())
@@ -68,6 +113,7 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
                     locked_backend = locked._require_paused_imap(actor)
                     if locked.config != current.config or locked.credential_id != current.credential_id:
                         raise ValidationError("The channel configuration changed. Set the starting point again.")
+                    boundary = locked.select_imap_new_mail_boundary(snapshot, locked_backend)
                     locked.config = {
                         **locked.config,
                         "delivery_mode": NEW_MAIL_DELIVERY_MODE,
@@ -75,7 +121,7 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
                         "mailbox_selection": sorted(boundary.cursors),
                     }
                     locked.save(update_fields=["config", "updated_at"])
-                    locked_backend.apply_new_mail_boundary(boundary)
+                    locked.install_imap_new_mail_boundary(boundary)
             return len(boundary.cursors), boundary.changed
 
     def preview_imap_sample(
@@ -142,11 +188,10 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
                 locked._require_paused_imap(actor)
                 if locked.config != current.config or locked.credential_id != current.credential_id:
                     raise ValidationError("The channel configuration changed. Preview the sample again.")
-                with system_context(reason="messaging_integrate_imap.historical_sample"):
+                with system_context(reason="messaging_integrate_imap.historical_sample"), historical_import():
                     messages = apps.get_model("messaging", "Message").objects.ingest(
                         parsed,
                         channel=locked,
-                        historical=True,
                     )
             return ImapSampleImport(
                 message_ids=[str(message.sqid) for message in messages],

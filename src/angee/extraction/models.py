@@ -5,19 +5,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 from django.core.exceptions import ValidationError
 from django.db import models
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
-from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel, AngeeModel
-from angee.base.models.derived import DerivedFrom
+from angee.base.models.persistence import require_projection
 from angee.base.refs import RecordRef
 from angee.base.serialization import canonical_json
+from angee.extraction.acquisition import PartCarrier
 from angee.extraction.contracts import (
     CorrectionRef,
     DocumentPart,
@@ -32,10 +31,9 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionSourceKind, ExtractionStatus
 from angee.extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
-from angee.extraction.managers import EvidenceManager, ExtractionManager
+from angee.extraction.managers import EvidenceManager, ExtractionManager, ExtractionPartManager
 from angee.extraction.pointers import (
     JSON_POINTER_MISSING,
-    fact_pointers,
     json_pointer_value,
     json_pointer_value_or_missing,
     materialize_missing_json_pointer_path,
@@ -43,10 +41,13 @@ from angee.extraction.pointers import (
     set_json_pointer,
 )
 from angee.extraction.profiles import ExtractionProfile
+from angee.iam.models.append_only import ProtectedAppendOnlyModel
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
+from angee.iam.models.derived import ProtectedDerivedFrom
 from angee.provenance.evidence import FactAuthority
 
 
-class RetainedEvidence(AppendOnlyModel):
+class RetainedEvidence(ProtectedAppendOnlyModel):
     """Let the retention owner admit inserts while generic insertion stays closed."""
 
     class Meta:
@@ -57,7 +58,7 @@ class RetainedEvidence(AppendOnlyModel):
         self._owner_insert()
 
 
-class ExtractionLineage(RetainedEvidence, AngeeModel, concrete=True):
+class ExtractionLineage(RetainedEvidence, ProtectedModel, concrete=True):
     """Private row locked while allocating a revision and advancing its head."""
 
     identity = models.CharField(max_length=64, unique=True, editable=False)
@@ -75,7 +76,7 @@ class ExtractionLineage(RetainedEvidence, AngeeModel, concrete=True):
         self.head = extraction
 
 
-class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
+class Extraction(RetainedEvidence, AuditMixin, ProtectedDataModel, concrete=True):
     """One immutable schema candidate and the evidence supporting its facts."""
 
     sqid_prefix = "ext_"
@@ -87,8 +88,7 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
     schema = models.JSONField(editable=False)
-    profile = ImplClassField(ExtractionProfile, editable=False
-    )
+    profile = ImplClassField(ExtractionProfile, editable=False)
     model = models.ForeignKey(
         "agents.InferenceModel", null=True, blank=True, on_delete=models.PROTECT, related_name="extraction_evidence"
     )
@@ -100,14 +100,6 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
         related_name="recognition_extraction_evidence",
     )
     profile_config = models.JSONField(default=dict, editable=False)
-    correction_decision = models.ForeignKey(
-        "decisions.Decision",
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="extraction_corrections",
-        editable=False,
-    )
     result = models.JSONField(editable=False)
     document_map = models.JSONField(default=list, editable=False)
     retired_identities = models.JSONField(default=list, editable=False)
@@ -149,11 +141,20 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
 
     @property
     def record_model_label(self) -> str:
-        return RecordRef.from_instance(self.target).model_label
+        return self.target_ref.model_label
 
     @property
     def record_public_id(self) -> str:
-        return RecordRef.from_instance(self.target).public_id
+        return self.target_ref.public_id
+
+    @property
+    def target_ref(self) -> RecordRef:
+        """Project the exclusive target from its stored key without loading it."""
+
+        name = "file" if self.file_id is not None else "message"
+        model = type(self)._meta.get_field(name).related_model
+        assert model is not None
+        return RecordRef.from_model(model, getattr(self, f"{name}_id"))
 
     def retain(self) -> None:
         """Validate the exclusive outcome before inserting immutable evidence."""
@@ -322,32 +323,6 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
             raise ValueError("The document selector does not point to an object.")
         return value, reference
 
-    def reviewed_facts(
-        self,
-        value: Mapping[str, Any],
-        *,
-        identity_mapping: Mapping[str, str],
-        retired_identities: Mapping[str, str],
-        confirmed_paths: tuple[str, ...],
-    ) -> tuple[dict[str, Any], list[str]]:
-        """Carry unchanged source claims and attribute changed or confirmed scalar facts."""
-        unchanged = {}
-        for pointer in fact_pointers(self.result):
-            destination = self._authority_destination(pointer, identity_mapping, retired_identities)
-            if destination is not None:
-                after = json_pointer_value_or_missing(value, destination)
-                if after is not JSON_POINTER_MISSING and canonical_json(self.fact(pointer)) == canonical_json(after):
-                    unchanged[destination] = pointer
-        paths = set(fact_pointers(value))
-        if not set(confirmed_paths) <= paths:
-            raise ValidationError("Confirmed paths must name retained scalar facts.")
-        claims = {
-            destination: deepcopy(self.claims[pointer])
-            for destination, pointer in unchanged.items()
-            if pointer in self.claims and destination not in confirmed_paths
-        }
-        return claims, sorted(paths - unchanged.keys() | set(confirmed_paths))
-
     def selected_line(self, document_identity: str, line_identity: str) -> tuple[Mapping[str, Any], LineRef]:
         """Resolve a line within its owning document without positional fallback."""
         _document, document_ref = self.selected_document(document_identity)
@@ -400,8 +375,7 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
     def document_parts(self) -> tuple[DocumentPart, ...]:
         """Return retained raw carriers without rereading or preparing source bytes."""
         return tuple(
-            row.document_part()
-            for row in self.parts.select_related("source", "carrier_file").order_by("position")
+            row.document_part() for row in self.parts.select_related("source", "carrier_file").order_by("position")
         )
 
     def authority_carrier_positions(self, current: Extraction) -> dict[int, int]:
@@ -409,13 +383,27 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
 
         Required non-retired claims fail in ``preserve_authority`` when their
         position is absent. Source ordering and acquisition telemetry are not identity.
+        It reads under the caller's system context and ignores instance actor pins.
         """
         positions: dict[tuple[Any, ...], list[int]] = {}
-        for part in current.parts.order_by("position"):
+        part_model = type(self)._meta.apps.get_model("extraction", "ExtractionPart")
+        current_parts = (
+            part_model._default_manager.db_manager(current._state.db)
+            .filter(extraction_id=current.pk)
+            .select_related("source", "source__file", "source__message_part")
+            .order_by("position")
+        )
+        for part in current_parts:
             positions.setdefault(part.carrier_identity, []).append(part.position)
+        own_parts = (
+            part_model._default_manager.db_manager(self._state.db)
+            .filter(extraction_id=self.pk)
+            .select_related("source", "source__file", "source__message_part")
+            .order_by("position")
+        )
         return {
             part.position: matches[0]
-            for part in self.parts.order_by("position")
+            for part in own_parts
             if len(matches := positions.get(part.carrier_identity, [])) == 1
         }
 
@@ -432,6 +420,12 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
             )
             for row in self.sources.order_by("position")
         )
+
+    def require_request_digest(self, digest: str) -> None:
+        """Refuse reuse of a request identity for different retained evidence."""
+
+        if self.outcome.get("request_digest") != digest:
+            raise ValidationError("This request key already owns different evidence.")
 
     def require_target(self, target: Any) -> None:
         """Reject reinterpretation of retained evidence against another target."""
@@ -466,13 +460,42 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
             and self.outcome.get("code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
         )
 
+    def inference_admission(
+        self,
+        *,
+        allow_inference: bool,
+        identity_mapping: Mapping[str, str],
+    ) -> Literal["correspondence_required", "unchanged", "correspondence", "infer"]:
+        """Choose the retained candidate's next act without source IO or mutation.
+
+        A held candidate not yet read by the mapping model still owes inference;
+        correspondence is then judged on the inferred candidate.
+        """
+
+        profile = self.get_profile_impl()()
+        corresponding = self.awaiting_correspondence and not (
+            allow_inference
+            and not identity_mapping
+            and ExtractionRole.MAPPING not in self.used_model_roles
+            and profile.inference_required(self.result, self.unresolved_reasons)
+        )
+        if corresponding and not identity_mapping:
+            return "correspondence_required"
+        if not self.awaiting_correspondence and (
+            not allow_inference or not profile.inference_required(self.result, self.unresolved_reasons)
+        ):
+            return "unchanged"
+        return "correspondence" if corresponding else "infer"
+
+    def retained_inference_parts(self) -> tuple[DocumentPart, ...]:
+        """Return retained inference carriers, refusing a held acquisition source."""
+
+        return () if self.outcome.get("code") == "source_hold" else self.document_parts()
+
     @property
     def failed_at_inference(self) -> bool:
         """Whether the retained failure is explicitly attributed to inference."""
-        return (
-            self.outcome["kind"] == ExtractionStatus.FAILED
-            and self.outcome.get("stage") == "inference"
-        )
+        return self.outcome["kind"] == ExtractionStatus.FAILED and self.outcome.get("stage") == "inference"
 
     @property
     def corrections(self) -> tuple[CorrectionRef, ...]:
@@ -509,7 +532,7 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
         return None
 
 
-class ExtractionSource(DerivedFrom, concrete=True):
+class ExtractionSource(ProtectedDerivedFrom, concrete=True):
     """One derived-from source with retained position, digest and REBAC links."""
 
     sqid_prefix = "exs_"
@@ -555,7 +578,7 @@ class ExtractionSource(DerivedFrom, concrete=True):
         )
 
 
-class ExtractionPage(RetainedEvidence, AngeeDataModel, concrete=True):
+class ExtractionPage(RetainedEvidence, ProtectedDataModel, concrete=True):
     """One ordered page's recognized content and safe provider metadata."""
 
     sqid_prefix = "exp_"
@@ -583,7 +606,7 @@ class ExtractionPage(RetainedEvidence, AngeeDataModel, concrete=True):
         )
 
 
-class ExtractionPart(RetainedEvidence, AngeeDataModel, concrete=True):
+class ExtractionPart(RetainedEvidence, ProtectedDataModel, concrete=True):
     """One immutable text or structured carrier supporting a candidate."""
 
     sqid_prefix = "exr_"
@@ -604,22 +627,29 @@ class ExtractionPart(RetainedEvidence, AngeeDataModel, concrete=True):
     carrier_digest = models.CharField(max_length=64, editable=False)
     metadata = models.JSONField(default=dict, editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
-    objects = EvidenceManager()
+    objects = ExtractionPartManager()
 
     def document_part(self) -> DocumentPart:
         """Recover the exact part from its retained, digest-bound file."""
-        from angee.extraction.acquisition import PartCarrier
+
+        return self._document_part_from(self.source, self.carrier_file)
+
+    def _document_part_from(self, source: Any, file: Any) -> DocumentPart:
+        """Validate one retained carrier with its already selected structural rows."""
 
         carrier = PartCarrier(
-            source_position=self.source.position,
+            source_position=source.position,
             source_page=self.source_page,
             kind=self.kind,
-            file_id=str(self.carrier_file.sqid),
+            file_id=str(file.sqid),
             content_hash=self.carrier_digest,
         )
-        part = carrier.read(self.carrier_file)
+        part = carrier.read(file)
         if (part.source_position, part.source_page, part.kind, part.content_hash) != (
-            self.source.position, self.source_page, self.kind, self.content_hash
+            source.position,
+            self.source_page,
+            self.kind,
+            self.content_hash,
         ):
             raise ValidationError("The retained part carrier differs from its evidence row.")
         return replace(part, metadata=self.metadata)
@@ -627,6 +657,14 @@ class ExtractionPart(RetainedEvidence, AngeeDataModel, concrete=True):
     @property
     def value(self) -> Any:
         """Read content from the single protected carrier shared by revisions."""
+        if "_part_source" not in self.__dict__ or "_part_carrier_file" not in self.__dict__:
+            require_projection(self, "_part_source/_part_carrier_file")
+            return self.get_value()
+        return self._document_part_from(self.__dict__["_part_source"], self.__dict__["_part_carrier_file"]).value
+
+    def get_value(self) -> Any:
+        """Read one retained part explicitly outside a projected list."""
+
         return self.document_part().value
 
     @property

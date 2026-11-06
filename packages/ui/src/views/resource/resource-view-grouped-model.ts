@@ -34,6 +34,9 @@ const EMPTY_ARRAY = [] as const;
 export interface GroupedRenderParams {
   query?: ResourceQuery;
   leafPageSize?: number;
+  /** Root groups that default open can request their full page immediately. */
+  autoExpandRoot?: boolean;
+  collapsedKeys?: ReadonlySet<string>;
   groupStack: readonly ResourceViewGroup[];
   baseFilter: ResourceViewFilter | undefined;
   expandedKeys: ReadonlySet<string>;
@@ -53,6 +56,10 @@ export interface GroupedRenderParams {
 /** Semantic leaf scope; the surface projects it once before transport. */
 export interface GroupedLeafScope {
   key: string;
+  value: unknown;
+  groupBy: { field: string; granularity?: string };
+  parentFilter: ResourceViewFilter | undefined;
+  total: number;
   filter: ResourceViewFilter;
   order: ResourceListOrder | undefined;
   page: number;
@@ -117,6 +124,9 @@ export function buildGroupedRenderModel<TRow extends Row>(
     cumulativeFilter: ResourceViewFilter,
     bucket: AggregateBucket,
     depth: number,
+    groupBy: { field: string; granularity?: string },
+    value: unknown,
+    parentFilter: ResourceViewFilter | undefined,
   ): GroupedListPager => {
     const pagination = paginationByScope[bucketKey];
     const leafPageSize =
@@ -125,6 +135,10 @@ export function buildGroupedRenderModel<TRow extends Row>(
     const currentPage = Math.min((pagination?.pageIndex ?? 0) + 1, pageCount);
     leafScopes.push({
       key: bucketKey,
+      value,
+      groupBy,
+      parentFilter,
+      total: bucket.count,
       filter: cumulativeFilter,
       order: leafOrder,
       page: currentPage,
@@ -277,8 +291,9 @@ export function buildGroupedRenderModel<TRow extends Row>(
         scope: levelScopeKey,
         bucket: bucket.key ?? null,
       });
-      const expanded = expandable && expandedKeys.has(bucketKey);
-      const label = bucketLabel(
+      const expanded = expandable && (expandedKeys.has(bucketKey)
+        || (depth === 0 && params.autoExpandRoot === true && !params.collapsedKeys?.has(bucketKey)));
+      const label = bucket.label ?? bucketLabel(
         bucket,
         axisGroup,
         modelMetadata,
@@ -300,10 +315,14 @@ export function buildGroupedRenderModel<TRow extends Row>(
         bucket,
       };
       items.push(header);
-      if (!expanded || bucketFilter === undefined) continue;
+      if (bucketFilter === undefined) continue;
       const cumulativeFilter = Filter.combine(parentFilter ?? {}, bucketFilter);
+      if (!expanded) continue;
       header.pager = isLeafLevel
-        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth)
+        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth,
+            { field: projection.dimensions[0]!.input,
+              ...(projection.dimensions[0]!.granularity ? { granularity: projection.dimensions[0]!.granularity } : {}) },
+            bucket.key?.[projection.valueKey] ?? null, parentFilter)
         : walkLevel(depth + 1, cumulativeFilter);
     }
     return pager;

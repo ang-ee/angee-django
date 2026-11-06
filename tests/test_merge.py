@@ -13,7 +13,7 @@ import pytest
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import router
+from django.db import models, router
 from django.db.models import DO_NOTHING
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
@@ -22,6 +22,7 @@ from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
 from angee.base.models import merge as merge_module
+from angee.base.models import merge_references as reference_owner
 from angee.base.models.identity import public_id_of
 from angee.base.models.merge_references import (
     EdgeReference,
@@ -30,8 +31,12 @@ from angee.base.models.merge_references import (
     MergePolicy,
     references,
 )
-from angee.base.models.refs import RecordRefMixin
-from angee.graphql import records
+from angee.base.signals import bulk_updated
+from angee.iam import refs as iam_refs
+from angee.iam.graphql import records
+from angee.iam.models import base as iam_model_base
+from angee.iam.models import merge as iam_model_merge
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance.context import changeset, changeset_model, current_changeset
@@ -132,6 +137,30 @@ def test_several_records_merge_into_one_survivor() -> None:
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
 
 
+def test_native_reference_move_without_batch_projection_keeps_the_single_update_path(monkeypatch) -> None:
+    survivor, duplicate, _ada, _bob = _vocabulary()
+    observed = []
+
+    def observe(sender, **kwargs):
+        observed.append(kwargs)
+
+    def unexpected_batch(_query):
+        raise AssertionError("A model without bulk target projection entered observed batching")
+
+    monkeypatch.setattr(reference_owner, "query_batch_size", unexpected_batch)
+    reference = next(
+        item for item in references(Tag) if item.model is TagAssignment and isinstance(item, ForeignKeyReference)
+    )
+    bulk_updated.connect(observe, sender=TagAssignment, weak=False)
+    try:
+        with changeset(), system_context(reason="test.merge.unobserved_reference"):
+            reference.move(reference.rows(duplicate), survivor=survivor)
+    finally:
+        bulk_updated.disconnect(observe, sender=TagAssignment)
+    assert observed == []
+    assert _tagged_parties(survivor) == sorted([_ada.pk, _bob.pk])
+
+
 def test_a_retained_alias_protects_its_survivor_from_deletion() -> None:
     mobile, mobil, ada, bob = _vocabulary()
     with actor_context(_curator("merge-protected")):
@@ -142,15 +171,16 @@ def test_a_retained_alias_protects_its_survivor_from_deletion() -> None:
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
 
 
+@pytest.mark.django_db(transaction=True)
 def test_reverting_a_merge_restores_exact_assignment_identities_and_clears_the_alias() -> None:
     curator = _curator("merge-revert")
     mobile, mobil, _ada, _bob = _vocabulary(owner=curator)
     before = set(TagAssignment._base_manager.values_list("pk", "tag_id", "content_type_id", "object_id"))
     with actor_context(curator):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
-        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().history_changeset
         changed_assignments = set(
-            TagAssignment.history.filter(changeset=boundary).values_list("id", flat=True)
+            TagAssignment.history.filter(history_changeset=boundary).values_list("id", flat=True)
         )
         assert changed_assignments == {pk for pk, tag, _kind, _record in before if tag == mobil.pk}
         reverted = boundary.with_actor(curator).revert()
@@ -159,6 +189,7 @@ def test_reverting_a_merge_restores_exact_assignment_identities_and_clears_the_a
     assert set(TagAssignment._base_manager.values_list("pk", "tag_id", "content_type_id", "object_id")) == before
 
 
+@pytest.mark.django_db(transaction=True)
 def test_a_second_merge_flattens_aliases_and_revert_restores_the_previous_survivor() -> None:
     curator = _curator("merge-flatten")
     mobile, mobil, ada, bob = _vocabulary(owner=curator)
@@ -167,9 +198,9 @@ def test_a_second_merge_flattens_aliases_and_revert_restores_the_previous_surviv
     with actor_context(curator):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
         Tag.objects.get(pk=phones.pk).merge(records=[public_id_of(mobile)])
-        boundary = Tag.history.filter(id=mobile.pk).order_by("-history_id").first().changeset
+        boundary = Tag.history.filter(id=mobile.pk).order_by("-history_id").first().history_changeset
         assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == phones.pk
-        assert Tag.history.filter(id=mobil.pk, changeset=boundary, merged_into_id=phones.pk).exists()
+        assert Tag.history.filter(id=mobil.pk, history_changeset=boundary, merged_into_id=phones.pk).exists()
         assert Tag.objects.get(pk=mobil.pk).canonical().pk == phones.pk
         boundary.with_actor(curator).revert()
         assert Tag.objects.get(pk=mobil.pk).canonical().pk == mobile.pk
@@ -179,12 +210,13 @@ def test_a_second_merge_flattens_aliases_and_revert_restores_the_previous_surviv
     assert _tagged_parties(phones) == []
 
 
+@pytest.mark.django_db(transaction=True)
 def test_a_later_survivor_write_refuses_merge_revert_before_edges_move() -> None:
     curator = _curator("merge-revert-later-write")
     mobile, mobil, ada, bob = _vocabulary(owner=curator)
     with actor_context(curator):
         survivor = Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
-        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().history_changeset
         survivor.name = "Mobile phones"
         survivor.save(update_fields=("name",))
         with pytest.raises(ValidationError, match="later write prevents revert"):
@@ -267,7 +299,7 @@ def test_an_edge_without_a_merge_policy_blocks_and_its_blockers_project(monkeypa
 
     mobile, mobil, _ada, _bob = _vocabulary()
     _tag_on_tag(mobile, mobil)
-    monkeypatch.setattr(TagAssignment, "merge_policy", RecordRefMixin.merge_policy)
+    monkeypatch.setattr(TagAssignment, "merge_policy", ProtectedRecordRefMixin.merge_policy)
     blocked = {tag.pk for condition, _message in Tag.merge_blockers() for tag in Tag._base_manager.filter(condition)}
     assert blocked == {mobil.pk}
     with actor_context(_curator("merge-blocked")), pytest.raises(ValidationError, match="tag assignments"):
@@ -349,10 +381,11 @@ def test_a_share_on_a_multi_table_child_row_is_seen_from_its_parent() -> None:
     with system_context(reason="merge test mti share"):
         child = MtiChild.objects.create(title="Shared", detail="child")
         parent = MtiParent._base_manager.get(pk=child.pk)
-        assert not merge_module.named_in_relationships(parent)
+        # c7732c91a moved stored relationship retention to IAM.
+        assert not iam_refs.named_in_relationships(parent)
         share = RelationshipTuple(resource=to_object_ref(child), relation="reader", subject=to_subject_ref(reader))
         write_relationships([share])
-        assert merge_module.named_in_relationships(parent)
+        assert iam_refs.named_in_relationships(parent)
 
 
 def _links(tag: Any, title: str) -> Any:
@@ -447,14 +480,21 @@ def test_a_record_named_in_stored_relationships_is_retained_by_its_merge(monkeyp
     owner, reader = create_user("merge-share-owner"), create_user("merge-share-reader")
     with system_context(reason="merge test share"):
         project = Project.objects.create(title="Shared", owner=owner)
-        assert not merge_module.named_in_relationships(project)
+        # c7732c91a moved the relationship reader and retained() hook to IAM.
+        assert not iam_refs.named_in_relationships(project)
         project.system_grant_record_access("reader", reader)
-        assert merge_module.named_in_relationships(project)
+        assert iam_refs.named_in_relationships(project)
 
     mobile, mobil, _ada, _bob = _vocabulary()
-    monkeypatch.setattr(merge_module, "named_in_relationships", lambda record: record.pk == mobil.pk)
-    # A record with evidence (`retained()`) is kept as a redirect instead of deleted,
-    # so the stored relationship outlives the merge and nothing refuses it.
+
+    # c7732c91a moved the merge refusal and retained() checks to separate IAM bindings.
+    def named(record: models.Model) -> bool:
+        return record.pk == mobil.pk
+
+    monkeypatch.setattr(iam_model_base, "named_in_relationships", named)
+    monkeypatch.setattr(iam_model_merge, "named_in_relationships", named)
+    # A named record with retention evidence stays as a redirect; the IAM merge
+    # refusal must consult that retention before rejecting its stored relationship.
     with actor_context(_curator("merge-shared")):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
     with system_context(reason="merge test read"):
@@ -574,7 +614,7 @@ def test_a_reverted_stance_gets_its_recency_back_so_the_tie_break_returns_to_its
             statements._base_manager.filter(pk=older.pk).update(display_name="Ada K.", updated_at=timezone.now())
         older.refresh_from_db()
         assert min((older, newer), key=lambda row: row.sort_key()).pk == older.pk
-        redated = statements.history.filter(id=older.pk).order_by("-history_id").first().changeset
+        redated = statements.history.filter(id=older.pk).order_by("-history_id").first().history_changeset
 
         with changeset(fresh=True, change_reason="test.revert"):
             redated.revert()
@@ -651,7 +691,8 @@ def test_an_unsaved_fold_changeset_still_honors_its_native_write_router(monkeypa
 
     monkeypatch.setattr(router, "db_for_write", route)
     with system_context(reason="test routed fold refusal"), changeset(fresh=True):
-        assert current_changeset()._state.db is None
+        assert current_changeset().pk is None
+        assert current_changeset()._state.db == "secondary"
         with pytest.raises(ValidationError, match="share the database"):
             survivor.fold([merged])
         assert set(MergeReferenceNode._base_manager.values_list("pk", flat=True)) == {survivor.pk, merged.pk}

@@ -1,22 +1,18 @@
 """Tests for the markdown-structure methods on :class:`MarkdownPage`.
 
-These are pure-text behaviours (outline, section range, splice) that need no
-database: they exercise the staticmethods directly, plus the ``outline``
-property on a (in-memory, unsaved) concrete instance.
+These pure-text behaviours exercise the static methods without a database.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from angee.knowledge.models import (
+from angee.knowledge.exceptions import (
     AmbiguousMatchError,
-    MarkdownPage,
-    OutlineEntry,
     SectionNotFoundError,
     StructuredEditError,
 )
-from tests.conftest import MarkdownPage as ConcreteMarkdownPage
+from angee.knowledge.models.pages import MarkdownPage, OutlineEntry
 
 # Ported verbatim from the proven spike (scratchpad/md_spike.py): a nested
 # outline with code blocks so splices can prove byte-for-byte round-trips.
@@ -68,13 +64,6 @@ def test_parse_outline_order_levels_and_slugs() -> None:
         OutlineEntry(level=3, text="CLI", slug="cli", line=20),
         OutlineEntry(level=2, text="Notes", slug="notes", line=24),
     ]
-
-
-def test_outline_property_delegates_to_parse_outline() -> None:
-    """The instance ``outline`` property reads ``self.body`` through the staticmethod."""
-
-    page = ConcreteMarkdownPage(body=SAMPLE)
-    assert page.outline == MarkdownPage.parse_outline(SAMPLE)
 
 
 def test_parse_outline_skips_setext_headings() -> None:

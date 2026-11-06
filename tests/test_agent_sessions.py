@@ -22,7 +22,7 @@ from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, Tu
 from angee.agents.runners import SessionUpdateSink, TurnOutcome
 from angee.agents.tasks import run_session
 from angee.agents.testing.drivers import FakeRunner
-from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared provider fixture
+from angee.agents.testing.drivers import runner as runner
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn
 from angee.base.exceptions import TransitionNotAllowed
@@ -48,6 +48,7 @@ def session(composed_tables: None, capture_tasks: list[Any]) -> Iterator[AgentSe
         yield AgentSession.objects.start(agent, user=owner, context={"label": "Session context"})
 
 
+@pytest.mark.django_db(transaction=True)
 def test_turns_drain_in_order_one_per_task(
     session: AgentSession,
     runner: FakeRunner,
@@ -128,6 +129,7 @@ def test_post_refuses_non_object_context_before_insertion(
     assert capture_tasks == []
 
 
+@pytest.mark.django_db(transaction=True)
 def test_post_during_execution_preserves_the_running_turn(session: AgentSession, runner: FakeRunner) -> None:
     first = session.post("First")
     posted: list[Any] = []
@@ -154,6 +156,7 @@ def test_post_during_execution_preserves_the_running_turn(session: AgentSession,
     assert runner.prompts == ["First", "Arrived while running"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_running_turn_is_never_reclaimed(session: AgentSession, runner: FakeRunner) -> None:
     first = session.post("First")
     second = session.post("Second")
@@ -179,11 +182,12 @@ def test_stale_turn_delete_refuses_a_claim_by_another_session_instance(session: 
     assert stale.status == TurnStatus.PENDING
     with pytest.raises(ValidationError) as refused:
         stale.delete()
-    assert refused.value.messages == ["An agent turn is still running or awaiting approval; stop it first."]
+    assert refused.value.messages == ["An agent turn is still running; stop it first."]
     stale.refresh_from_db()
     assert stale.status == TurnStatus.RUNNING
 
 
+@pytest.mark.django_db(transaction=True)
 def test_session_delete_refuses_a_hidden_turn_claimed_after_collection(session: AgentSession) -> None:
     """A collected pending turn may become active before the session delete guard runs."""
 
@@ -200,12 +204,13 @@ def test_session_delete_refuses_a_hidden_turn_claimed_after_collection(session: 
     assert claimed is not None and claimed.pk == pending.pk
     with pytest.raises(ValidationError) as refused:
         collector.delete()
-    assert refused.value.messages == ["An agent turn is still running or awaiting approval; stop it first."]
+    assert refused.value.messages == ["An agent turn is still running; stop it first."]
     with system_context(reason="test.agents.hidden_claim.verify"):
         assert AgentSession.objects.filter(pk=session.pk).exists()
         assert AgentTurn.objects.filter(pk=pending.pk, status=TurnStatus.RUNNING).exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_stop_idles_active_turn_and_dispatches_pending(
     session: AgentSession,
     runner: FakeRunner,
@@ -267,6 +272,7 @@ def test_stale_outcome_cannot_settle_a_later_running_turn(session: AgentSession)
     assert session.last_error == "" and session.usage == {}
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("close", [False, True])
 def test_stop_or_close_keeps_emitted_updates_and_ends_the_stream_at_its_next_flush(
     session: AgentSession,
@@ -286,7 +292,8 @@ def test_stop_or_close_keeps_emitted_updates_and_ends_the_stream_at_its_next_flu
                 session.close()
             else:
                 session.cancel_turn(running)
-        clock[0] += 1
+        # The sink's default factory captured the real clock before this callback.
+        clock[0] = time.monotonic() + 1
         emit(_chunk("Before observing stop"))
         after_stop.append("runner continued")
 
@@ -302,6 +309,7 @@ def test_stop_or_close_keeps_emitted_updates_and_ends_the_stream_at_its_next_flu
     assert session.status == (SessionStatus.CLOSED if close else SessionStatus.IDLE)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_close_cancels_open_turns_and_refuses_future_posts(
     session: AgentSession,
     runner: FakeRunner,
@@ -326,6 +334,7 @@ def test_close_cancels_open_turns_and_refuses_future_posts(
     assert runner.prompts == []
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "error",
     [TimeoutError(), SoftTimeLimitExceeded(), RuntimeError("Provider unavailable"), asyncio.CancelledError()],
@@ -357,6 +366,7 @@ def test_runtime_failure_is_retained_and_session_remains_usable(
     assert runner.prompts == ["Fail once", "Try a new message"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_missing_model_is_a_failed_turn(session: AgentSession) -> None:
     turn = session.post("No configured model")
     run_session.run(session.pk)
@@ -368,6 +378,7 @@ def test_missing_model_is_a_failed_turn(session: AgentSession) -> None:
     assert session.post("Another message").status == TurnStatus.PENDING
 
 
+@pytest.mark.django_db(transaction=True)
 def test_missing_agent_principal_is_a_failed_turn(session: AgentSession, runner: FakeRunner) -> None:
     turn = session.post("No service user")
     with system_context(reason="test missing service principal"):
@@ -381,34 +392,6 @@ def test_missing_agent_principal_is_a_failed_turn(session: AgentSession, runner:
     assert turn.error == "Agent runtime failed."
     assert session.status == SessionStatus.ERROR
     assert runner.prompts == []
-
-
-def test_tool_approval_outcome_fails_readably(session: AgentSession, runner: FakeRunner) -> None:
-    session.post("Before approval")
-    run_session.run(session.pk)
-    session.refresh_from_db()
-    prior_replay = session.replay_state
-    completed = runner.outcome
-    turn = session.post("Needs approval")
-    runner.outcome = TurnOutcome(
-        kind="needs_approval",
-        approval_requests=[{"tool_call_id": "call-1", "name": "read_document", "args": {}}],
-        replay_state=[{"deferred": "call-1"}],
-        usage={"requests": 1},
-    )
-    run_session.run(session.pk)
-    turn.refresh_from_db()
-    session.refresh_from_db()
-    assert turn.status == TurnStatus.FAILED
-    assert turn.error == "Tool approvals are not available yet."
-    assert session.status == SessionStatus.ERROR
-    assert session.usage == {"requests": 2, "tokens": 3}
-    assert session.replay_state == prior_replay
-    runner.outcome = completed
-    continued = session.post("Continue")
-    run_session.run(session.pk)
-    continued.refresh_from_db()
-    assert continued.status == TurnStatus.COMPLETED
 
 
 def test_append_updates_publishes_and_keeps_the_final_stopped_batch(session: AgentSession) -> None:
@@ -434,6 +417,7 @@ def test_append_updates_publishes_and_keeps_the_final_stopped_batch(session: Age
             connect_publishers(AgentTurn)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_broker_error_leaves_committed_turn_first_in_queue(session: AgentSession, runner: FakeRunner) -> None:
     with capture_task_sends(error=RuntimeError("Broker unavailable")):
         with pytest.raises(RuntimeError, match="Broker unavailable"):
@@ -448,34 +432,12 @@ def test_broker_error_leaves_committed_turn_first_in_queue(session: AgentSession
     assert runner.prompts == ["Committed before failed send"]
 
 
-@pytest.mark.parametrize("other_status", [TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL])
-def test_database_allows_only_one_active_turn(session: AgentSession, other_status: str) -> None:
+def test_database_allows_only_one_active_turn(session: AgentSession) -> None:
     session.post("Active")
     pending = session.post("Also active")
     session.claim_turn()
     with system_context(reason="test active turn constraint"), pytest.raises(IntegrityError), transaction.atomic():
-        AgentTurn.objects.filter(pk=pending.pk).update(status=other_status)
-
-
-@pytest.mark.parametrize("close", [False, True])
-def test_legacy_awaiting_approval_is_released_only_by_stop_or_close(session: AgentSession, close: bool) -> None:
-    turn = session.post("Legacy approval")
-    claimed = session.claim_turn()
-    with system_context(reason="test legacy approval state"):
-        claimed.mark_awaiting_approval()
-        session.refresh_from_db()
-        session.mark_awaiting_approval()
-    assert session.claim_turn() is None
-    with pytest.raises(ValidationError, match="approval"):
-        session.post("Blocked while awaiting")
-    if close:
-        session.close()
-    else:
-        session.cancel_turn(turn)
-    turn.refresh_from_db()
-    session.refresh_from_db()
-    assert turn.status == TurnStatus.CANCELED
-    assert session.status == (SessionStatus.CLOSED if close else SessionStatus.IDLE)
+        AgentTurn.objects.filter(pk=pending.pk).update(status=TurnStatus.RUNNING)
 
 
 def test_start_and_post_enforce_call_at_the_model_verbs(session: AgentSession) -> None:
@@ -529,7 +491,7 @@ def test_start_requires_an_available_in_process_runtime(
 def test_deprovision_closes_sessions(session: AgentSession) -> None:
     turn = session.post("Open during deprovision")
     session.claim_turn()
-    result = provisioning.deprovision_agent(session.agent.sqid)
+    result = provisioning.deprovision_agent(session.agent)
     session.refresh_from_db()
     turn.refresh_from_db()
     session.agent.refresh_from_db()
@@ -542,7 +504,7 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
     """A stale ready instance cannot open a session after teardown closed them."""
 
     stale_agent = Agent.objects.get(pk=session.agent_id)
-    result = provisioning.deprovision_agent(stale_agent.sqid)
+    result = provisioning.deprovision_agent(stale_agent)
     assert result.ok
     assert stale_agent.can_chat
 
@@ -554,6 +516,7 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
     assert AgentSession.objects.filter(agent=stale_agent).count() == 1
 
 
+@pytest.mark.django_db(transaction=True)
 def test_stream_updates_do_no_database_work_before_the_flush_interval(
     session: AgentSession,
     runner: FakeRunner,
@@ -579,6 +542,7 @@ def test_stream_updates_do_no_database_work_before_the_flush_interval(
     assert turn.updates == [_chunk(str(index)) for index in range(20)]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_final_flush_uses_the_agent_principal(
     session: AgentSession,
     runner: FakeRunner,
@@ -622,6 +586,33 @@ def test_append_reads_only_lock_and_save_fields_without_system_audits(session: A
     assert turn.updates == [_chunk("First batch"), _chunk("Second batch")]
 
 
+def test_update_flush_and_follower_delta_stay_flat_as_transcript_grows(session: AgentSession) -> None:
+    """A flush writes one batch and a follower reads only the unseen batch."""
+    turn = session.post("A long streamed turn")
+    claimed = session.claim_turn()
+    assert claimed is not None and claimed.pk == turn.pk
+    samples: list[tuple[int, int]] = []
+    with actor_context(session.agent.principal_subject()):
+        for size in (10, 50, 200):
+            for index in range(claimed.update_count, size - 1):
+                claimed.append_updates([_chunk(f"{index:04d}")])
+            with CaptureQueriesContext(connection) as queries:
+                assert claimed.append_updates([_chunk(f"{size - 1:04d}")])
+            writes = [query["sql"] for query in queries if query["sql"].startswith(("INSERT", "UPDATE"))]
+            assert len(writes) <= 3
+            samples.append((len(queries), sum(len(sql.encode()) for sql in writes)))
+            fresh = AgentTurn.objects.get(pk=turn.pk)
+            with CaptureQueriesContext(connection) as delta_queries:
+                updates, _previous, _segment = fresh.updates_since(size - 1)
+            assert updates == [_chunk(f"{size - 1:04d}")]
+            assert len(delta_queries) <= 8
+    assert all(count <= 40 for count, _bytes in samples)
+    assert all(size <= 2_000 for _count, size in samples)
+    print(f"Agent flush SQL: {samples}")
+    assert len(AgentTurn.objects.get(pk=turn.pk).updates) == 200
+
+
+@pytest.mark.django_db(transaction=True)
 def test_failed_runner_outcome_keeps_completed_replay_history(session: AgentSession, runner: FakeRunner) -> None:
     session.post("Complete first")
     run_session.run(session.pk)
@@ -638,11 +629,10 @@ def test_failed_runner_outcome_keeps_completed_replay_history(session: AgentSess
     assert session.replay_state == history
 
 
-@pytest.mark.parametrize("kind", ["failed", "needs_approval"])
+@pytest.mark.django_db(transaction=True)
 def test_failed_settlement_does_not_rewrite_replay_state(
     session: AgentSession,
     runner: FakeRunner,
-    kind: Any,
 ) -> None:
     session.post("Retain a completed answer")
     run_session.run(session.pk)
@@ -653,7 +643,7 @@ def test_failed_settlement_does_not_rewrite_replay_state(
     assert turn is not None
 
     with CaptureQueriesContext(connection) as queries:
-        session.settle_turn(turn, TurnOutcome(kind=kind, replay_state=["Discard"], usage={"tokens": 1}))
+        session.settle_turn(turn, TurnOutcome(kind="failed", replay_state=["Discard"], usage={"tokens": 1}))
 
     session_updates = [
         query["sql"] for query in queries if query["sql"].startswith(f'UPDATE "{AgentSession._meta.db_table}" ')
@@ -664,6 +654,7 @@ def test_failed_settlement_does_not_rewrite_replay_state(
     assert session.replay_state == history
 
 
+@pytest.mark.django_db(transaction=True)
 def test_stray_delivery_preserves_the_last_failed_turn_error(session: AgentSession, runner: FakeRunner) -> None:
     session.post("Complete first")
     second = session.post("Fail second")
@@ -681,18 +672,16 @@ def test_stray_delivery_preserves_the_last_failed_turn_error(session: AgentSessi
     assert runner.prompts == ["Complete first", "Fail second"]
 
 
-@pytest.mark.parametrize("awaiting_approval", [False, True])
-def test_claim_transition_only_accepts_pending_turns(session: AgentSession, awaiting_approval: bool) -> None:
+def test_claim_transition_only_accepts_pending_turns(session: AgentSession) -> None:
     session.post("Already claimed")
     turn = session.claim_turn()
     assert turn is not None
     with system_context(reason="test repeated claim"):
-        if awaiting_approval:
-            turn.mark_awaiting_approval()
         with pytest.raises(TransitionNotAllowed):
             turn.mark_running()
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("stop", [False, True])
 def test_stop_and_settle_keep_their_result_when_the_next_wakeup_fails(
     session: AgentSession,
@@ -719,6 +708,7 @@ def test_stop_and_settle_keep_their_result_when_the_next_wakeup_fails(
     assert runner.prompts == ["Pending turn"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_dropped_connection_before_final_flush_still_settles_the_turn(
     session: AgentSession,
     runner: FakeRunner,
@@ -741,6 +731,7 @@ def test_dropped_connection_before_final_flush_still_settles_the_turn(
     assert session.status == SessionStatus.IDLE
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     ("runtime_class", "runtime_status"),
     [("none", RuntimeStatus.RUNNING), ("pydantic", RuntimeStatus.STOPPED)],
@@ -771,13 +762,30 @@ def test_start_cannot_assign_another_session_user(session: AgentSession) -> None
         AgentSession.objects.start(session.agent, user=stranger, context={}, actor=session.user)
 
 
+def test_selected_queryset_close_keeps_other_sessions_open(session: AgentSession) -> None:
+    selected_turn = session.post("Close this conversation")
+    other = AgentSession.objects.start(session.agent, user=session.user, context={})
+    other_turn = other.post("Keep this conversation")
+
+    AgentSession.objects.filter(pk=session.pk).close_as_system(reason="test.selected_session_close")
+
+    session.refresh_from_db()
+    selected_turn.refresh_from_db()
+    other.refresh_from_db()
+    other_turn.refresh_from_db()
+    assert session.status == SessionStatus.CLOSED
+    assert selected_turn.status == TurnStatus.CANCELED
+    assert other.status == SessionStatus.IDLE
+    assert other_turn.status == TurnStatus.PENDING
+
+
 def test_deprovision_closes_sessions_of_another_person(session: AgentSession) -> None:
     session.post("A historical session of another person")
     other = get_user_model().objects.create_user(username="historical-session-user")
     with system_context(reason="test historical session user"):
         AgentSession.objects.filter(pk=session.pk).update(user=other)
 
-    result = provisioning.deprovision_agent(session.agent.sqid)
+    result = provisioning.deprovision_agent(session.agent)
 
     assert result.ok
     with system_context(reason="test deprovisioned session"):
@@ -785,6 +793,7 @@ def test_deprovision_closes_sessions_of_another_person(session: AgentSession) ->
     assert session.status == SessionStatus.CLOSED
 
 
+@pytest.mark.django_db(transaction=True)
 def test_provider_exception_detail_is_logged_without_being_shown_to_readers(
     session: AgentSession,
     runner: FakeRunner,
@@ -808,6 +817,7 @@ def _delete_session_as(user: Any, session_id: int) -> None:
         AgentSession.objects.get(pk=session_id).delete()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_delivery_after_session_deletion_is_a_quiet_noop(
     session: AgentSession,
     runner: FakeRunner,
@@ -825,6 +835,7 @@ def test_delivery_after_session_deletion_is_a_quiet_noop(
     assert not any(record.name == "angee.agents.sessions" for record in caplog.records)
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("delete_session", [False, True])
 def test_stop_then_delete_during_streaming_is_a_quiet_cancellation(
     session: AgentSession,
@@ -847,7 +858,8 @@ def test_stop_then_delete_during_streaming_is_a_quiet_cancellation(
                 _delete_session_as(admin, session.pk)
             else:
                 AgentTurn.objects.get(pk=running.pk).delete()
-        clock[0] += 1
+        # Advance past the sink's real-clock start even after a slow database call.
+        clock[0] = time.monotonic() + 1
         emit(_chunk("Before observing deletion"))
         after_stop.append("runner continued")
 
@@ -914,6 +926,7 @@ def test_executor_refuses_a_transaction_without_touching_caller_work(
     assert runner.prompts == []
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     ("error", "message"),
     [
@@ -978,8 +991,6 @@ def test_session_cancels_active_work_without_canceling_queued_turns(session: Age
     assert first.status == TurnStatus.CANCELED and second.status == TurnStatus.PENDING
     claimed = session.claim_turn()
     assert claimed.pk == second.pk
-    with system_context(reason="test suspended state projection"):
-        claimed.mark_awaiting_approval()
     session.cancel_active_turn()
     claimed.refresh_from_db()
     assert claimed.status == TurnStatus.CANCELED

@@ -9,20 +9,22 @@ from __future__ import annotations
 
 import shlex
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connections, models
 from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, When, Window
 from django.db.models.functions import RowNumber
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from rebac import current_actor
 
-from angee.base.permissions import actor_user_id
+from angee.base.identity import public_data_id_field
+from angee.iam.permissions import actor_user_id, instance_actor
 
 
 class InboxCoverage(BaseModel):
@@ -149,7 +151,7 @@ class MessageInbox:
     """Query owner for personal inbox reads, composed from a MessageQuerySet."""
 
     def __init__(self, queryset: Any) -> None:
-        self.actor = queryset.actor() or current_actor()
+        self.actor = instance_actor(queryset)
         self.user_id = actor_user_id(self.actor)
         self.messages = (
             queryset.inbox()
@@ -183,10 +185,10 @@ class MessageInbox:
             .order_by("display_name", "pk")
         )
 
-    def coverage(self, coverage: InboxCoverage) -> Any:
+    def coverage(self, coverage: InboxCoverage, rows: Any | None = None) -> Any:
         """Apply source/date coverage without silently relaxing contradictions."""
 
-        rows = self.messages
+        rows = self.messages if rows is None else rows
         if coverage.platforms:
             rows = rows.filter(platform__in=coverage.platforms)
         if coverage.accounts:
@@ -272,8 +274,10 @@ class MessageInbox:
             handles = self.handles.filter(party_id__in=Subquery(members.values("pk")), party_link_confirmed=True)
         return self.involving_handles(rows, handles)
 
-    def matching(self, rows: Any, search: InboxSearch) -> Any:
+    def matching(self, rows: Any, search: InboxSearch, *, part_rows: Any | None = None) -> Any:
         """Search readable part uses with native Postgres full text and filename matching."""
+
+        part_rows = self.parts if part_rows is None else part_rows
 
         if search.direction:
             if search.direction not in ("inbound", "outbound"):
@@ -289,7 +293,7 @@ class MessageInbox:
                 return rows.none()
             stars = apps.get_model("messaging", "MessageStar").objects.filter(user_id=self.user_id)
             rows = rows.filter(pk__in=Subquery(stars.values("message_id")))
-        parts = self.parts.filter(message_id=OuterRef("pk"))
+        parts = part_rows.filter(message_id=OuterRef("pk"))
         if search.attachment:
             attachments = parts.filter(disposition="attachment")
             if search.attachment in ("image", "video", "audio"):
@@ -315,9 +319,9 @@ class MessageInbox:
             # Independent candidate paths let PostgreSQL start at the fragment
             # GIN index. A correlated text-or-filename predicate instead probes
             # parts for every message before it can narrow the population.
-            text_matches = self.parts.filter(Q(role__in=roles) & text).order_by().values("message_id")
+            text_matches = part_rows.filter(Q(role__in=roles) & text).order_by().values("message_id")
             filenames = (
-                self.parts.filter(name__icontains=term, disposition="attachment").order_by().values("message_id")
+                part_rows.filter(name__icontains=term, disposition="attachment").order_by().values("message_id")
             )
             rows = rows.filter(pk__in=Subquery(text_matches.union(filenames)))
         if search.relations:
@@ -357,11 +361,8 @@ class MessageInbox:
         return self.matching(scoped, search).canonical()
 
     def _conversation_rows(self, rows: Any) -> Any:
-        # A conversation groups under the readable survivor of its thread's
-        # redirect. An unreadable thread is not an exposed grouping identity: its
-        # readable messages remain independently reachable as standalone sections.
-        # Redirects are flattened to one hop, so the survivor and the row's own thread
-        # are each one primary-key probe of the readable inbox threads.
+        # Both the original and redirected thread keep their own read gate.
+        # A message in an unreadable thread remains a standalone section.
         return rows.alias(
             _survivor_visible=Exists(self.threads.filter(pk=rows.survivor_id("thread__", ref=OuterRef))),
             _thread_visible=Exists(self.threads.filter(pk=OuterRef("thread_id"))),
@@ -373,6 +374,40 @@ class MessageInbox:
                 output_field=models.BigIntegerField(),
             ),
         )
+
+    def readable_threads(self, public_ids: Iterable[str]) -> dict[str, Any]:
+        """Resolve a bounded page of public thread IDs through thread read once."""
+
+        field = public_data_id_field(self.threads.model)
+        if field is None:
+            raise ImproperlyConfigured("messaging.Thread requires a public data ID field")
+        decoded = {}
+        for public_id in public_ids:
+            try:
+                pk = field.public_id_to_value(public_id)
+            except (TypeError, ValueError, ValidationError):
+                continue
+            if pk is not None:
+                decoded[public_id] = pk
+        threads = {
+            thread.pk: thread for thread in self.threads.filter(pk__in=decoded.values()).select_related("title")
+        }
+        return {public_id: threads[pk] for public_id, pk in decoded.items() if pk in threads}
+
+    def cache_readable_threads(self, messages: Iterable[Any], *, known: Iterable[Any] = ()) -> None:
+        """Seed the shared relation cache from one actor-scoped read of a bounded page."""
+
+        rows = list(messages)
+        known_rows = list(known)
+        threads = {thread.pk: thread for thread in known_rows}
+        if not known_rows:
+            ids = {message.thread_id for message in rows if message.thread_id is not None}
+            if ids:
+                threads = {
+                    thread.pk: thread for thread in self.threads.filter(pk__in=ids).select_related("title")
+                }
+        for message in rows:
+            message._state.fields_cache["thread"] = threads.get(message.thread_id)
 
     def conversations(self, rows: Any, *, page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
         """Page logical sections, then select at most three matches in each using SQL windows."""
@@ -425,13 +460,54 @@ class MessageInbox:
         ]
         return InboxPage(result, count, matches.count())
 
-    def message(self, public_id: str) -> Any:
-        """Read a message independently of the current result filters."""
+    def message(self, public_id: str, *, include_title: bool = True) -> Any:
+        """Read a message independently of result filters, projecting its title when requested."""
 
-        message = self.messages.from_public_id(public_id)
+        messages = self.messages.with_title_text() if include_title else self.messages
+        message = messages.from_public_id(public_id)
         if message is None:
             raise ValueError("Message unavailable.")
+        self.cache_readable_threads((message,))
         return message
+
+    def selected_message(
+        self, public_id: str, coverage: InboxCoverage, search: InboxSearch, *,
+        sender: str = "", circle: str = "", include_title: bool = False,
+    ) -> tuple[Any, bool]:
+        """Admit one public message before checking its result membership."""
+
+        message = self.message(public_id, include_title=include_title)
+        return (
+            message,
+            self._matches_message(message, coverage, search, sender=sender, circle=circle),
+        )
+
+    def message_uses(self, public_id: str) -> list[InboxPartUse]:
+        """Admit one public message before counting its eligible target uses."""
+
+        return self._part_uses(self.message(public_id, include_title=False))
+
+    def _matches_message(
+        self, message: Any, coverage: InboxCoverage, search: InboxSearch, *, sender: str = "", circle: str = ""
+    ) -> bool:
+        """Check one admitted message against the same result predicates."""
+
+        # The row was admitted by message(). A structural candidate may test its
+        # own fields and part links without recompiling Message.read a second time.
+        candidate = self.messages.model._base_manager.filter(pk=message.pk).annotate(
+            _order_at=self.messages.chronological_time()
+        )
+        selected_parts = self.parts.model._base_manager.filter(message_id=message.pk)
+        matches = self.matching(
+            self.scoped(self.coverage(coverage, candidate), sender=sender, circle=circle),
+            search,
+            part_rows=selected_parts,
+        ).exists()
+        if not matches or message.merged_into_id is None:
+            return matches
+        return not self.results(coverage, search, sender=sender, circle=circle).filter(
+            pk=message.merged_into_id
+        ).exists()
 
     def target_parts(self, target: str) -> Any:
         """Authorize a file through Storage, or shared text through an eligible use.
@@ -454,37 +530,60 @@ class MessageInbox:
             raise ValueError("Related content unavailable.")
         return parts
 
-    def part_uses(self, message: Any) -> list[InboxPartUse]:
-        """Batch both target counts; selecting more parts does not add count queries."""
+    def _part_uses(self, message: Any) -> list[InboxPartUse]:
+        """Count selected targets through readable messages, without re-gating their parts."""
 
-        parts = list(self.parts.filter(message=message).select_related("fragment"))
-        files = {
-            row.pk: str(row.sqid)
-            for row in self.collection("storage", "File").filter(
-                pk__in=[part.file_id for part in parts if part.file_id]
-            )
+        # Part.read inherits Message.read. These structural rows belong to the
+        # admitted message; their target IDs only select candidates below.
+        part_model = apps.get_model("messaging", "Part")
+        parts = list(part_model._base_manager.filter(message_id=message.pk).select_related("fragment"))
+        readable_uses = part_model._base_manager.order_by().filter(
+            message_id__in=Subquery(self.messages.order_by().values("pk"))
+        )
+        file_ids = {part.file_id for part in parts if part.file_id is not None}
+        file_count = (
+            readable_uses.filter(file_id=OuterRef("pk"))
+            .values("file_id")
+            .annotate(total=Count("message_id", distinct=True))
+            .values("total")[:1]
+        )
+        file_rows = {
+            row.pk: row for row in self.collection("storage", "File")
+            .filter(pk__in=file_ids or {0})
+            .select_related("mime_type")
+            .annotate(_inbox_use_count=Subquery(file_count))
         }
-        targets = {"file_id": list(files), "fragment_id": [part.fragment_id for part in parts if part.fragment_id]}
-        counts = {
-            field: dict(
-                self.parts.order_by()
-                .filter(**{f"{field}__in": ids})
-                .values(field)
+        message._inbox_part_files = file_rows
+        message._inbox_part_file_ids = file_ids
+        message._inbox_part_files_actor = self.actor
+        files = {pk: str(row.sqid) for pk, row in file_rows.items()}
+        fragment_ids = [part.fragment_id for part in parts if part.fragment_id]
+        fragment_counts = (
+            dict(
+                readable_uses.filter(fragment_id__in=fragment_ids)
+                .values("fragment_id")
                 .annotate(total=Count("message_id", distinct=True))
-                .values_list(field, "total")
+                .values_list("fragment_id", "total")
             )
-            for field, ids in targets.items()
-        }
+            if fragment_ids
+            else {}
+        )
         result = []
         for part in parts:
             if part.file_id in files:
                 result.append(
-                    InboxPartUse(str(part.sqid), f"file:{files[part.file_id]}", counts["file_id"].get(part.file_id, 0))
+                    InboxPartUse(
+                        str(part.sqid), f"file:{files[part.file_id]}", file_rows[part.file_id]._inbox_use_count or 0
+                    )
                 )
             if part.fragment_id:
+                fragment = part.fragment
+                assert fragment is not None
                 result.append(
                     InboxPartUse(
-                        str(part.sqid), f"fragment:{part.fragment.sqid}", counts["fragment_id"].get(part.fragment_id, 0)
+                        str(part.sqid),
+                        f"fragment:{fragment.sqid}",
+                        fragment_counts.get(part.fragment_id, 0),
                     )
                 )
         return result

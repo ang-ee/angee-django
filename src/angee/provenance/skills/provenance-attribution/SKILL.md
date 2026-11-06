@@ -22,10 +22,10 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 |---|---|---|
 | `<addon>/models.py` | `HistoryMixin` composition, captured manager, `history_revert_permission`, `history_relations`, `statements` declaration | `src/angee/tags/models.py:58-77`, `tests/statement_models.py:16` |
 | `<addon>/pyproject.toml` | `[project].dependencies = [..., "angee-provenance>=3,<4"]` | `src/angee/tags/pyproject.toml` |
-| `src/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:346), `ModelHistory` (:97), `HistoryDocumentMixin` (:50), `record_history` (:86) | docstrings |
+| `src/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:379), `ModelHistory` (:100), `HistoryDocumentMixin` (:48), `record_history` (:89) | docstrings |
 | `src/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager` (:20), `AngeeHistoryUnscopedManager` (:24), `AngeeHistoryMergeableUnscopedManager` (:33); `AngeeHistoryQuerySet` (:16) | docstrings |
-| `src/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (:132), `HistoryMixin` (:438); `changeset()` (:334), `current_changeset` (:224), `ChangesetRequired` (:28) | [README](../../README.md) |
-| `src/angee/provenance/models.py`, `managers.py` | `Changeset` (:102) with `ambient_attribution` (:188), `revert` (:370), `document` (:349); `Rule` (:78), `Seed` (:90); `ChangesetQuerySet.touching` (:30), `ChangesetManager.claim` (:134) | docstrings |
+| `src/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (`history.py:150`), `CaptureHistoryMixin` (`history.py:514`); `changeset()` (`context.py:335`), `current_changeset` (`context.py:214`), `ChangesetRequired` (`context.py:70`) | [README](../../README.md) |
+| `src/angee/provenance/models/`, `managers.py`, `changeset_querysets.py` | protected native Changeset storage/attribution/export, rule and seed principals, native claim adaptations and document/merge query contributions | owner docstrings; generic engines live in `angee.provenance.engine` |
 | `src/angee/provenance/statements.py` | `StatementRecords` (:1424), `Aspect` (:730), `PairAspect` (:1624), `StatementsMixin` (:798), `StatementSourceMixin` (:678), `StatementLinkMixin` (:710), `SourceKind` (:664) | module docstring |
 | `src/angee/provenance/tasks.py`, `middleware.py`, `contrib/angee/context.py` | the entrypoint boundaries: `Task` (:12), `ChangesetMiddleware`, `management_context` (:25), `merge_context` (:34) | [README: Boundaries](../../README.md#boundaries) |
 | `src/angee/provenance/evidence.py`, `src/angee/base/models/derived.py` | `EvidenceReference` (:38), `EvidenceFact` (:28), `FactAuthority` (:20), `readable_records` (:127); `DerivedFrom` (:13) | docstrings |
@@ -33,8 +33,8 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
 ## Reuse first
 
-- `HistoryMixin` from `angee.provenance.contrib.angee.history` (never the native `angee.provenance.history` one or
-  `simple_history.models.HistoricalRecords` directly) and the three captured managers above.
+- `HistoryMixin` from `angee.provenance.contrib.angee.history` (rather than
+  `CaptureHistoryMixin` or `simple_history.models.HistoricalRecords` directly) and the three captured managers above.
 - `AuditMixin` (`src/angee/base/models/audit.py`) for `created_by`/`updated_by` stamps; `OwnerMixin` for transferable
   access; `TrashMixin` so a created-row revert can use retained removal.
 - The entrypoint boundaries in the README table: request, connection, task, command, bridge session, test.
@@ -77,7 +77,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
    [project migration history](../../../../../docs/composer.md#project-migration-history).
 
 4. **Write under the entrypoint's boundary; attribute, and open only a distinct logical write.** Attribution is ambient: the
-   changeset projects REBAC's current actor and sudo reason (`Changeset.ambient_attribution`, `models.py:188`), so domain code
+   changeset projects REBAC's current actor and sudo reason (`Changeset.ambient_attribution`, `models/changesets.py`), so domain code
    sets the actor with `actor_context`/`system_context(reason="<label>.<verb>")` and writes. A deliberately separate logical
    write (merge, revert, seed, an MCP tool call, a bridge session or stream pull) opens its own, nested inside the entrypoint's:
 
@@ -86,7 +86,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
        ...
    ```
 
-   Machine reasons use the `a.b` form so presentation stays silent (`MACHINE_REASON`, `models.py:61,215`); a human
+   Machine reasons use the `a.b` form so presentation stays silent (`MACHINE_REASON`, `models/changesets.py`); a human
    sentence passes through. Keyed creation claims first: `Changeset.objects.claim(scope, key, fingerprint=...)`.
    **Owner rule:** entrypoints own boundaries, one per unit of work; strict mode refuses a captured write without one
    ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives), "Every captured write…").
@@ -137,7 +137,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
 8. **Serve nothing new.** `history(model, id)` and `revert_changeset` live in provenance's `console` schema, resource metadata
    marks `history: true`, and the web fragment renders the timeline and drill-in ([README: History surface](../../README.md#history-surface)).
-   **Owner rule:** history reads follow the record's `read` gate and field gates; an addon exposes no history type of its own.
+   **Owner rule:** history reads follow the record and field gates; changeset selection follows [`permissions.zed`](../../permissions.zed). An addon exposes no history type of its own.
 
 9. **Test history and statements.** Hosts list `angee.provenance.testing` and register `angee.provenance.testing.fixtures`
    (autouse `captured_changeset`); a test that exercises a production boundary is marked `entrypoint_boundaries` and opens
@@ -161,7 +161,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 ## Verify
 
 Done means: the generated runtime model exposes `history` (and `statements`) descriptors; a save in a test creates a
-historical row whose changeset is `current_changeset()`; `Changeset.objects.touching(record)` lists it; `angee.E038`
+historical row whose `history_changeset` is `current_changeset()`; `Changeset.objects.touching(record)` lists it; `angee.E038`
 (middleware order, `checks.py:34`) and the base `angee.E*` checks are clean; the fresh migration adds only the history and
 statement tables.
 
@@ -171,14 +171,14 @@ statement tables.
 - Only on integrated `src`: build, migration autodetection, permission sync, the native host proof
   (`tests/test_provenance_native.py`), the console history drill-in — [composition and schema](../../../../../docs/checks.md#composition-and-schema).
 - Loop: [slice](../../../../../.agents/skills/slice/SKILL.md#workflow). False greens: with `REBAC_STRICT_MODE` off a missing
-  boundary is never refused (`Changeset.context_required`, `models.py:195`); the generic base test plugin installs no
+  boundary is never refused (`Changeset.context_required`, `models/changesets.py`); the generic base test plugin installs no
   boundary, only the provenance fixtures do ([source-addon test models](../../../../../docs/checks.md#source-addon-test-models)).
 
 ## Pitfalls
 
 - A queryset update writing only excluded columns records no version; an MTI child save records the child's history only ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives), "`HistoryMixin` excludes `GeneratedField`").
 - One changeset row per writing thread and actor: a pool thread needs `copy_context().run` or a `process=True` boundary ([README: Boundaries](../../README.md#boundaries)).
-- Management commands need the native launcher and provenance's `COMPOSE_COMMAND_CONTEXT` contribution; re-render an obsolete entrypoint ([README: Boundaries](../../README.md#boundaries)).
+- Management commands need the server launcher and provenance's `ANGEE_SERVER_COMMAND_CONTEXT` contribution; re-render an obsolete entrypoint ([README: Boundaries](../../README.md#boundaries)).
 - `history_relations` are document parts with their own capture and read gates, not arbitrary references (`history.py:357-361`).
 - Revert refuses any later touch of a row and reuses trash for created subjects; without `TrashMixin` retained references block removal ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives)).
 - A seed load, merge, revert, MCP tool call or bridge session is a distinct logical write with its own `fresh=True` boundary nested inside the entrypoint's; a write that is not a distinct unit stays under the entrypoint boundary ([README: Boundaries](../../README.md#boundaries) "Separate logical writes").

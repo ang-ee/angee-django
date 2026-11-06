@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { GetListParams } from "@refinedev/core";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { ResourceQuery, type DataResourceFieldMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
@@ -28,8 +27,8 @@ const scalarField = (name: string): DataResourceFieldMetadata => ({
   aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
 });
 const resource = testDataResource("messaging.Message", {
-  roots: { groups: "messages_groups", aggregate: "messages_aggregate", delete: undefined },
-  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy" }, query,
+  roots: { groups: "messages_groups", groupedRows: "messages_grouped_rows", aggregate: "messages_aggregate", delete: undefined },
+  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy", groupBySpec: "MessageGroupBySpec", groupedRowPage: "messages_grouped_rows_page" }, query,
   recordRepresentation: "title", capabilities: ["list"],
   fields: [scalarField("id"), scalarField("title"), scalarField("status"), {
     ...scalarField("channel"), kind: "relation", scalar: null, relationObject: true,
@@ -59,14 +58,34 @@ type Where = {
   status?: { _eq: string };
 };
 type GroupVariables = { where?: Where; group_by: { field: string }[]; limit: number; offset: number };
+type LeafRequest = { where?: Where; orderBy?: unknown; limit: number; offset: number; document: unknown };
 const terms = (where: Where = {}): Where[] => [where, ...(where._and ?? []).flatMap(terms)];
+function leafRequests(calls: { meta?: Record<string, unknown> }[][]): LeafRequest[] {
+  return calls.flatMap(([request]) => {
+    const variables = request?.meta?.gqlVariables as Record<string, unknown> | undefined;
+    if (!Array.isArray(variables?.pages)) return [];
+    const field = (variables.group_by as { field: string }).field;
+    return (variables.pages as { key: string | null; limit: number; offset: number }[]).map((page) => {
+      const term = field === "CHANNEL"
+        ? { channel: { id: page.key === null ? { _is_null: true } : { _eq: page.key } } }
+        : { status: { _eq: page.key } };
+      return {
+        where: { _and: [variables.where as Where ?? {}, term] } as Where,
+        orderBy: variables.order_by,
+        limit: page.limit,
+        offset: page.offset,
+        document: request?.meta?.gqlQuery,
+      };
+    });
+  });
+}
 const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://grouped-board",
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested = false, customIdentity = false, refreshAction = false }: {
+function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested = false, customIdentity = false, refreshAction = false, noGroupKeyLabel = false }: {
   pageSize?: number;
   error?: "root" | "leaf";
   baseFilter?: Record<string, unknown>;
@@ -74,33 +93,23 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
   nested?: boolean;
   customIdentity?: boolean;
   refreshAction?: boolean;
+  noGroupKeyLabel?: boolean;
 } = {}) {
-  const activeResource = customIdentity ? { ...resource,
+  const baseResource = customIdentity ? { ...resource,
     fields: [scalarField("public_key"), ...resource.fields!.filter((field) => field.name !== "id")],
     query: { ...query, identity: { field: "public_key" }, fields: { ...query.fields,
       ...ResourceQuery.forRows({ fields: { public_key: { scalar: "ID" } } }).contract.fields,
     } },
   } : resource;
+  const activeResource = noGroupKeyLabel ? { ...baseResource, query: {
+    ...baseResource.query, axes: { ...baseResource.query.axes, channel: {
+      ...baseResource.query.axes.channel!, server: { input: "CHANNEL", key: "channel_id" },
+    } },
+  } } : baseResource;
   const activeRows: MessageRow[] = customIdentity ? rows.map(({ id, ...row }) => ({ ...row, public_key: id })) : rows;
   let refreshedTitle: string | undefined;
-  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    if (error === "root") throw new Error("Channel groups unavailable");
-    const variables = meta!.gqlVariables as GroupVariables;
-    if (variables.group_by[0]?.field === "STATUS") {
-      const channelId = terms(variables.where).find((term) => term.channel)?.channel?.id;
-      const channel = channels.find((channel) => channel.id === (channelId?._is_null ? null : channelId?._eq));
-      return { data: { messages_groups: [{ key: { status: "active" }, aggregate: { count: channel!.count } }], totalCount: 1 } };
-    }
-    const filtered = terms(variables.where).some((term) => term.title)
-      ? channels.filter((channel) => channel.id === "signal") : channels;
-    return { data: {
-      messages_groups: filtered.slice(variables.offset, variables.offset + variables.limit).map((channel) => ({
-        key: { channel_id: channel.id, channel_name: channel.label }, aggregate: { count: channel.count },
-      })), totalCount: filtered.length,
-    } };
-  });
-  const getList = vi.fn(async ({ pagination, meta }: GetListParams) => {
-    const clauses = terms(meta?.gqlVariables?.where as Where | undefined);
+  const selectRows = (where: Where | undefined, offset: number, limit: number) => {
+    const clauses = terms(where);
     const identity = clauses.find((term) => term.channel)?.channel?.id;
     if (error === "leaf" && identity?._eq === "mail") throw new Error("Mail records unavailable");
     const needle = clauses.find((term) => term.title)?.title?._ilike.replaceAll("%", "");
@@ -108,10 +117,33 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
     const filtered = activeRows.filter((row) =>
       (!identity || (identity._is_null ? row.channel === null : row.channel?.id === identity._eq))
       && (!needle || row.title.includes(needle)) && (!status || row.status === status));
-    const size = pagination?.pageSize ?? 50;
-    const offset = ((pagination?.currentPage ?? 1) - 1) * size;
-    return { data: filtered.slice(offset, offset + size).map((row) => refreshedTitle && row.id === "mail-1"
+    return { rows: filtered.slice(offset, offset + limit).map((row) => refreshedTitle && row.id === "mail-1"
       ? { ...row, title: refreshedTitle } : row), total: filtered.length };
+  };
+  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    if (error === "root") throw new Error("Channel groups unavailable");
+    const leaves = leafRequests([[{ meta }]]);
+    if (leaves.length > 0) {
+      const pages = (meta!.gqlVariables as { pages: { key: string | null }[] }).pages;
+      const rows = leaves.map((leaf, index) => ({
+        key: pages[index]!.key,
+        rows: selectRows(leaf.where, leaf.offset, leaf.limit).rows,
+      }));
+      return { data: { data: { rows } } };
+    }
+    const groupVariables = meta!.gqlVariables as GroupVariables;
+    if (groupVariables.group_by[0]?.field === "STATUS") {
+      const channelId = terms(groupVariables.where).find((term) => term.channel)?.channel?.id;
+      const channel = channels.find((channel) => channel.id === (channelId?._is_null ? null : channelId?._eq));
+      return { data: { messages_groups: [{ key: { status: "active" }, aggregate: { count: channel!.count } }], totalCount: 1 } };
+    }
+    const filtered = terms(groupVariables.where).some((term) => term.title)
+      ? channels.filter((channel) => channel.id === "signal") : channels;
+    return { data: {
+      messages_groups: filtered.slice(groupVariables.offset, groupVariables.offset + groupVariables.limit).map((channel) => ({
+        key: { channel_id: channel.id, ...(!noGroupKeyLabel ? { channel_name: channel.label } : {}) }, label: channel.label, aggregate: { count: channel.count },
+      })), totalCount: filtered.length,
+    } };
   });
   let view!: ResourceViewContextValue;
   const rowHref = vi.fn((row: MessageRow, _scope?: ListViewNavigationScope) => `/?record=${row.public_key ?? row.id}`);
@@ -128,12 +160,15 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
       view: viewKind, pageSize, groupStack: [{ field: "channel" }, ...(nested ? [{ field: "status" }] : [])], sorting: [{ id: "title", desc: true }],
     }}><Inbox /></ResourceViewProvider> });
   const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Provider resources={[activeResource]} dataProvider={{ custom, getList }}>
+  render(<Provider resources={[activeResource]} dataProvider={{ custom }}>
     <OperationDocumentsProvider documents={{ console: { groups: { "messaging.Message":
       "query MessageGroups { messages_groups { key { channel_id channel_name } aggregate { count } } totalCount }",
     } } }}><ToastProvider><RouterProvider router={router} /></ToastProvider></OperationDocumentsProvider>
   </Provider>);
-  return { get view() { return view; }, custom, getList, rowHref, onListStateChange,
+  return { get view() { return view; }, custom,
+    groupRequests: () => custom.mock.calls.map(([request]) => request.meta?.gqlVariables as GroupVariables)
+      .filter((variables) => Array.isArray(variables?.group_by)),
+    leafRequests: () => leafRequests(custom.mock.calls), rowHref, onListStateChange,
     changeTitle: (title: string) => { refreshedTitle = title; } };
 }
 
@@ -152,12 +187,85 @@ test("server board discovers all channel buckets before fetching bounded card pa
   expect(screen.getByRole("button", { name: "Groups 1-6 / 6 groups" })).toBeTruthy();
   expect(within(mail).getByRole("button", { name: "Mail records 1-20 / 67" })).toBeTruthy();
   expect(f.custom).toHaveBeenCalled();
-  expect(f.getList.mock.calls.every(([request]) => terms(request.meta?.gqlVariables?.where).some((term) => term.channel))).toBe(true);
+  expect(f.leafRequests().length).toBeGreaterThan(0);
+  expect(f.leafRequests().every((request) => terms(request.where).some((term) => term.channel))).toBe(true);
 
   // Labels never become identity: collapsing one namesake leaves the other open.
   fireEvent.click(within(shared[0]!).getByRole("button", { name: "Shared name" }));
   await waitFor(() => expect(within(shared[0]!).queryByRole("article")).toBeNull());
   expect(within(shared[1]!).getByText("shared-second message 1")).toBeTruthy();
+});
+
+test("a relation group without a key label uses the server group label, including while collapsed", async () => {
+  const f = fixture({ noGroupKeyLabel: true });
+  const mail = await screen.findByRole("region", { name: "Mail" });
+  expect(await screen.findByRole("region", { name: "Signal" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "mail" })).toBeNull();
+  const leaf = f.leafRequests();
+  expect(leaf.length).toBeGreaterThan(1);
+  expect(JSON.stringify(leaf[0]?.document)).toContain("display_name");
+  expect(JSON.stringify(leaf[0]?.document)).toContain("channel");
+  fireEvent.click(within(mail).getByRole("button", { name: "Mail" }));
+  await waitFor(() => expect(within(mail).queryByRole("article")).toBeNull());
+  expect(screen.getByRole("region", { name: "Mail" })).toBeTruthy();
+  expect(f.leafRequests().some((request) => request.limit === 1)).toBe(false);
+});
+
+test("a grouped company header and readable supplier cell use labels selected in the same leaf document", async () => {
+  const invoiceQuery = ResourceQuery.forRows({ fields: {
+    id: { scalar: "ID" }, number: { scalar: "String" },
+    company: { kind: "relation", identityPath: "company.id", labelPath: "company.display_name" },
+    partner: { kind: "relation", identityPath: "partner.id", labelPath: "partner.display_name" },
+  } }).contract;
+  invoiceQuery.fields.company!.relation = { model: "arp.Company", identityPath: "company.id", labelPath: "company.display_name" };
+  invoiceQuery.fields.partner!.relation = { model: "parties.Party", identityPath: "partner.id", labelPath: "partner.display_name" };
+  invoiceQuery.axes.company!.server = { input: "COMPANY", key: "company_id" };
+  invoiceQuery.axes.company!.drill = { kind: "identity", field: "company", valueKey: "company_id", nullMode: "isNull", valueMap: [] };
+  const invoice = testDataResource("accounting.Invoice", {
+    roots: { groups: "invoices_groups", groupedRows: "invoices_grouped_rows", aggregate: "invoices_aggregate" },
+    typeNames: { filter: "InvoiceBoolExp", order: "InvoiceOrderBy", groupBySpec: "InvoiceGroupBySpec", groupedRowPage: "invoices_grouped_rows_page" }, query: invoiceQuery,
+    fields: [scalarField("id"), scalarField("number"), ...["company", "partner"].map((name) => ({
+      ...scalarField(name), kind: "relation" as const, scalar: null, relationObject: true,
+      relationModelLabel: name === "company" ? "arp.Company" : "parties.Party",
+    }))],
+  });
+  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    const variables = meta!.gqlVariables as Record<string, unknown>;
+    if (Array.isArray(variables.group_by)) return { data: { invoices_groups: [
+      { key: { company_id: "pty_acme" }, label: "Acme", aggregate: { count: 1 } },
+      { key: { company_id: "pty_beta" }, label: "Beta", aggregate: { count: 1 } },
+    ], totalCount: 2 } };
+    const rows = (variables.pages as { key: string }[]).map((page) => {
+      const acme = page.key === "pty_acme";
+      return { key: page.key, rows: [{ id: acme ? "bill-1" : "bill-2", number: "",
+        company: { id: acme ? "pty_acme" : "pty_beta", display_name: acme ? "Acme" : "Beta" },
+        partner: { id: acme ? "pty_supplier" : "pty_other", display_name: acme ? "Supplier Inc" : "Other Supplier" },
+      }] };
+    });
+    return { data: { data: { rows } } };
+  });
+  render(<Provider resources={[invoice]} dataProvider={{ custom }}>
+    <OperationDocumentsProvider documents={{ console: { groups: { "accounting.Invoice":
+      "query InvoiceGroups { invoices_groups { key { company_id } aggregate { count } } totalCount }",
+    } } }}><ToastProvider><ResourceViewProvider resource="accounting.Invoice" scope="local" initialState={{
+      view: "list", groupStack: [{ field: "company" }], columnVisibility: { company: false },
+    }}><ListView resource="accounting.Invoice" columns={[
+      { field: "number", header: "Number" }, { field: "company", header: "Company" },
+      { field: "partner", header: "Supplier" },
+    ]} /></ResourceViewProvider></ToastProvider></OperationDocumentsProvider>
+  </Provider>);
+  expect(await screen.findByRole("button", { name: "Acme" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Beta" })).toBeTruthy();
+  expect(await screen.findByText("Supplier Inc")).toBeTruthy();
+  expect(screen.getByText("Other Supplier")).toBeTruthy();
+  expect(screen.getAllByText("—")).toHaveLength(2);
+  const leafCalls = custom.mock.calls.filter(([request]) =>
+    Array.isArray((request.meta?.gqlVariables as Record<string, unknown>).pages));
+  expect(leafCalls).toHaveLength(1);
+  const leafDocument = JSON.stringify(leafCalls[0]![0].meta?.gqlQuery);
+  expect(leafDocument).toContain("company");
+  expect(leafDocument).toContain("partner");
+  expect(leafDocument).toContain("display_name");
 });
 
 test("the root pager pages channel groups, so older channels remain reachable independently of record totals", async () => {
@@ -169,7 +277,7 @@ test("the root pager pages channel groups, so older channels remain reachable in
   expect(await screen.findByRole("region", { name: "Archived channel" })).toBeTruthy();
   expect(screen.queryByRole("region", { name: "Mail" })).toBeNull();
   expect(screen.getByRole("button", { name: "Groups 3-4 / 6 groups" })).toBeTruthy();
-  expect(f.custom.mock.calls.at(-1)?.[0].meta?.gqlVariables).toMatchObject({ offset: 2, limit: 2 });
+  expect(f.groupRequests().at(-1)).toMatchObject({ offset: 2, limit: 2 });
   fireEvent.click(screen.getByRole("button", { name: "Next page" }));
   expect(await screen.findByRole("region", { name: "No channel" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Groups 5-6 / 6 groups" })).toBeTruthy();
@@ -186,9 +294,9 @@ test("each channel pages its own records and links retain that leaf filter, orde
   expect(within(mail).queryByText("mail message 1")).toBeNull();
   expect(within(signal).getByText("signal message 1 needle")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Groups 1-6 / 6 groups" })).toBeTruthy();
-  const request = f.getList.mock.calls.at(-1)?.[0];
-  expect(request).toMatchObject({ pagination: { currentPage: 2, pageSize: 20 },
-    meta: { gqlVariables: { where: { channel: { id: { _eq: "mail" } } }, order_by: { title: "desc" } } } });
+  const request = f.leafRequests().findLast((request) => request.offset === 20 &&
+    terms(request.where).some((term) => term.channel?.id._eq === "mail"));
+  expect(request).toMatchObject({ offset: 20, limit: 20, orderBy: { title: "desc" } });
   const navigation = f.rowHref.mock.calls.findLast(([row]) => row.id === "mail-21")?.[1];
   const scope = { filter: { channel: { exact: "mail" } }, order: { title: "DESC" }, page: 2, pageSize: 20 };
   expect(navigation).toMatchObject(scope);
@@ -203,20 +311,24 @@ test("each channel pages its own records and links retain that leaf filter, orde
 test("base and toolbar filters constrain both channel discovery and every channel's record request", async () => {
   const f = fixture({ baseFilter: { status: { exact: "active" } } });
   expect(await screen.findByRole("region", { name: "Mail" })).toBeTruthy();
+  const previousLeafCount = f.leafRequests().length;
   act(() => f.view.setFilter({ title: { iContains: "needle" } }));
   await waitFor(() => expect(screen.queryByRole("region", { name: "Mail" })).toBeNull());
   const signal = await screen.findByRole("region", { name: "Signal" });
   expect(await within(signal).findByText("signal message 1 needle")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Groups 1-1 / 1 groups" })).toBeTruthy();
-  const rootTerms = terms((f.custom.mock.calls.at(-1)?.[0].meta?.gqlVariables as GroupVariables).where);
+  const rootTerms = terms(f.groupRequests().at(-1)?.where);
   expect(rootTerms).toEqual(expect.arrayContaining([
     expect.objectContaining({ status: { _eq: "active" } }), expect.objectContaining({ title: { _ilike: "%needle%" } }),
   ]));
-  const leafTerms = terms(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where);
-  expect(leafTerms).toEqual(expect.arrayContaining([
-    expect.objectContaining({ status: { _eq: "active" } }), expect.objectContaining({ title: { _ilike: "%needle%" } }),
-    expect.objectContaining({ channel: { id: { _eq: "signal" } } }),
-  ]));
+  const filteredLeaves = f.leafRequests().slice(previousLeafCount);
+  expect(filteredLeaves.length).toBeGreaterThan(0);
+  for (const leaf of filteredLeaves) {
+    expect(terms(leaf.where)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: { _eq: "active" } }), expect.objectContaining({ title: { _ilike: "%needle%" } }),
+      expect.objectContaining({ channel: { id: { _eq: "signal" } } }),
+    ]));
+  }
 });
 
 test.each(["board", "list"] as const)("a grouped %s card or row publishes navigation using the declared public identity", async (viewKind) => {
@@ -229,7 +341,8 @@ test.each(["board", "list"] as const)("a grouped %s card or row publishes naviga
     navigationScope: { filter: { channel: { exact: "mail" } }, order: { title: "DESC" }, page: 1, pageSize: 20 },
     rows: expect.arrayContaining([expect.objectContaining({ public_key: "mail-1" })]),
   });
-  expect(f.getList.mock.calls.every(([request]) => request.meta?.fields?.includes("public_key"))).toBe(true);
+  expect(f.leafRequests().length).toBeGreaterThan(0);
+  expect(f.leafRequests().every((request) => JSON.stringify(request.document).includes('"value":"public_key"'))).toBe(true);
 });
 
 test("nested board groups remain reachable and page records within both parent scopes", async () => {
@@ -237,14 +350,15 @@ test("nested board groups remain reachable and page records within both parent s
   const mail = await screen.findByRole("region", { name: "Mail" });
   const active = await within(mail).findByRole("region", { name: "active" });
   expect(within(active).queryByRole("article")).toBeNull();
-  expect(f.getList).not.toHaveBeenCalled();
+  expect(f.leafRequests()).toHaveLength(0);
   fireEvent.click(within(active).getByRole("button", { name: "active" }));
   expect(await within(active).findByRole("link", { name: "mail message 1" })).toBeTruthy();
   fireEvent.click(within(active).getByRole("button", { name: "Next active records" }));
   expect(await within(active).findByRole("link", { name: "mail message 21" })).toBeTruthy();
-  const request = f.getList.mock.calls.at(-1)?.[0];
-  expect(request?.pagination).toMatchObject({ currentPage: 2, pageSize: 20 });
-  expect(terms(request?.meta?.gqlVariables?.where)).toEqual(expect.arrayContaining([
+  const request = f.leafRequests().findLast((request) => request.offset === 20 &&
+    terms(request.where).some((term) => term.channel?.id._eq === "mail"));
+  expect(request).toMatchObject({ offset: 20, limit: 20 });
+  expect(terms(request?.where)).toEqual(expect.arrayContaining([
     expect.objectContaining({ channel: { id: { _eq: "mail" } } }), expect.objectContaining({ status: { _eq: "active" } }),
   ]));
   const signal = screen.getByRole("region", { name: "Signal" });
@@ -256,17 +370,19 @@ test("a card action refreshes loaded records even when the server's channel buck
   const mail = await screen.findByRole("region", { name: "Mail" });
   const link = await within(mail).findByRole("link", { name: "mail message 1" });
   const card = link.closest("article")!;
+  const previousLeafCount = f.leafRequests().length;
   f.changeTitle("Updated message in the same channel");
   fireEvent.click(within(card).getByRole("button", { name: "Refresh cards" }));
   expect(await within(mail).findByRole("link", { name: "Updated message in the same channel" })).toBeTruthy();
   expect(within(mail).queryByText("mail message 1")).toBeNull();
+  expect(f.leafRequests().length).toBeGreaterThan(previousLeafCount);
   expect(screen.getByRole("button", { name: "Groups 1-6 / 6 groups" })).toBeTruthy();
 });
 
 test.each(["root", "leaf"] as const)("a failed %s request is visible instead of presenting missing channels as an empty board", async (error) => {
   const f = fixture({ error });
-  expect(await screen.findByText(error === "root" ? "Channel groups unavailable" : "Mail records unavailable")).toBeTruthy();
+  expect((await screen.findAllByText(error === "root" ? "Channel groups unavailable" : "Mail records unavailable")).length).toBeGreaterThan(0);
   expect(screen.queryByText("No messages")).toBeNull();
-  if (error === "root") expect(f.getList).not.toHaveBeenCalled();
-  else expect(await within(screen.getByRole("region", { name: "Signal" })).findByText("signal message 1 needle")).toBeTruthy();
+  if (error === "root") expect(f.leafRequests()).toHaveLength(0);
+  else expect(within(screen.getByRole("region", { name: "Signal" })).queryByText("signal message 1 needle")).toBeNull();
 });

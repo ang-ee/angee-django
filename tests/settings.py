@@ -19,6 +19,7 @@ class BareGraphQLConfig(AppConfig):
 
 
 SECRET_KEY = "angee-tests"
+ANGEE_REQUIRE_PROJECTIONS = True
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
@@ -62,6 +63,7 @@ INSTALLED_APPS = [
     "angee.uom",
     "angee.messaging",
     "angee.projects",
+    "angee.projects_knowledge",
     "angee.portfolio",
     "angee.proposals",
     "angee.messaging_integrate_slack",
@@ -133,6 +135,7 @@ CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
 BASE_DIR = Path(__file__).resolve().parent.parent
 AUTH_USER_MODEL = "iam.User"
 AUTHENTICATION_BACKENDS = ["angee.iam.auth.ModelBackend"]
+PROVENANCE_POLICY = "angee.provenance.contrib.angee.policy.AngeePolicy"
 ANGEE_CHANGESET_MODEL = "provenance.Changeset"
 REBAC_BACKEND = "local"
 REBAC_LOCAL_BACKEND_STORAGE = "registry"

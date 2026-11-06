@@ -62,8 +62,8 @@ class ProjectSurfaceCampaign(WorkCase):
                 "projects": [],
             },
         )
-        self.assertFalse(self.Project.objects.as_user(self.reader).filter(pk=project.pk).exists())
-        self.assertFalse(self.Milestone.objects.as_user(self.reader).filter(pk=phase.pk).exists())
+        self.assertFalse(self.Project.objects.with_actor(self.reader).filter(pk=project.pk).exists())
+        self.assertFalse(self.Milestone.objects.with_actor(self.reader).filter(pk=phase.pk).exists())
         with actor_context(self.reader):
             self.assertFalse(task.promoted_projects.exists())
         gql = GraphQLSchemas.from_discovery().build("public")
@@ -97,7 +97,7 @@ class ProjectSurfaceCampaign(WorkCase):
                 self.graphql(query, {"limit": limit}, user=user)
                 with (
                     patch(
-                        "angee.graphql.capabilities.permission_annotations",
+                        "angee.iam.graphql.capabilities.permission_annotations",
                         side_effect=AssertionError("Per-record permission fallback"),
                     ),
                     CaptureQueriesContext(connection) as queries,
@@ -128,7 +128,7 @@ class ProjectSurfaceCampaign(WorkCase):
                 self.graphql(query, {"limit": limit}, user=user)
                 with (
                     patch(
-                        "angee.graphql.capabilities.permission_annotations",
+                        "angee.iam.graphql.capabilities.permission_annotations",
                         side_effect=AssertionError("Per-record permission fallback"),
                     ),
                     CaptureQueriesContext(connection) as queries,

@@ -23,7 +23,9 @@ export type Decision = DocumentType<typeof DecisionFields>;
 
 export const DecideDocument = graphql(`
   mutation Decide($id: ID!, $revision: Int!, $chosen: [String!]!, $values: JSON) {
-    decide(id: $id, revision: $revision, chosen: $chosen, values: $values) { ok message id code validation_errors }
+    decide(id: $id, revision: $revision, chosen: $chosen, values: $values) {
+      ok message id code validation_errors decision { ...DecisionCardFields }
+    }
   }
 `);
 
@@ -34,5 +36,13 @@ export const RecordDecisionsDocument = graphql(`
       id
       decision { id kind_label is_open verdict_label created_at answered_at answered_by { display_name } }
     }
+  }
+`);
+
+export const RecordDecisionsCountDocument = graphql(`
+  query RecordDecisionsCount($model: String!, $id: String!) {
+    decision_records_aggregate(where: {
+      record_model: { _eq: $model }, record_id: { _eq: $id }
+    }) { aggregate { count } }
   }
 `);

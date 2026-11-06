@@ -9,14 +9,15 @@ from django.apps import apps
 from django.db import models
 from rebac import MissingActorError, RebacMixin, SubjectRef, system_context
 
-from angee.base import identity as identity_module
-from angee.base.identity import canonical_subject_ref, public_data_id_field, public_subject_ref
-from angee.base.models.base import AngeeDataModel, AngeeModel
+from angee.base.identity import public_data_id_field
 from angee.base.models.identity import instance_from_public_id, public_id_for, public_id_of
+from angee.iam import identity as identity_module
+from angee.iam.identity import canonical_subject_ref, public_subject_ref
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from tests.tables import model_tables
 
 
-class PublicIdThing(AngeeDataModel):
+class PublicIdThing(ProtectedDataModel):
     """Concrete test model with an Angee public identifier."""
 
     name = models.CharField(max_length=32)
@@ -29,7 +30,7 @@ class PublicIdThing(AngeeDataModel):
 
 
 class PlainPublicIdThing(models.Model):
-    """Concrete test model that does not use AngeeModel."""
+    """Concrete test model that does not use ProtectedModel."""
 
     name = models.CharField(max_length=32)
 
@@ -40,9 +41,9 @@ class PlainPublicIdThing(models.Model):
 
 
 def test_every_angee_model_carries_the_rebac_mixin() -> None:
-    """AngeeModel wires REBAC behavior into every source model."""
+    """ProtectedModel wires REBAC behavior into every source model."""
 
-    assert issubclass(AngeeModel, RebacMixin)
+    assert issubclass(ProtectedModel, RebacMixin)
 
 
 def test_concrete_angee_models_keep_the_manager_queryset_canon() -> None:
@@ -50,7 +51,7 @@ def test_concrete_angee_models_keep_the_manager_queryset_canon() -> None:
 
     missing: dict[str, list[str]] = {}
     for model in apps.get_models():
-        if model._meta.abstract or not issubclass(model, AngeeModel):
+        if model._meta.abstract or not issubclass(model, ProtectedModel):
             continue
         queryset = model._default_manager.all()
         missing_methods = [
@@ -65,9 +66,9 @@ def test_concrete_angee_models_keep_the_manager_queryset_canon() -> None:
 
 
 def test_angee_data_model_carries_the_public_data_identity_contract() -> None:
-    """AngeeDataModel is the canonical base for sqid-backed data rows."""
+    """ProtectedDataModel is the canonical base for sqid-backed data rows."""
 
-    assert issubclass(AngeeDataModel, AngeeModel)
+    assert issubclass(ProtectedDataModel, ProtectedModel)
     field = public_data_id_field(PublicIdThing)
     assert field is not None
     assert field.name == "sqid"
@@ -94,6 +95,7 @@ def test_subject_identity_converts_only_at_the_public_boundary(
 ) -> None:
     """Model subjects store PKs while transport subjects retain opaque public ids."""
 
+    # c7732c91a moved subject identity conversion from base to IAM.
     monkeypatch.setattr(identity_module, "model_for_resource_type", lambda _resource_type: PublicIdThing)
     canonical = SubjectRef.of("tests/public-id-thing", "42")
     public = public_subject_ref(canonical)

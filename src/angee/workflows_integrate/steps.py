@@ -195,8 +195,7 @@ class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
         conflicts = [
             row
             for stream in streams
-            for row in stream.sync_failures(open_only=True)
-            if row.kind == SyncFailureKind.CONFLICT
+            for row in stream.sync_failures(open_only=True, kind=SyncFailureKind.CONFLICT)
         ]
         # Decisions reference permission-bearing owners, never a JSON state slot.
         records = tuple(
@@ -231,7 +230,7 @@ class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
     def continue_with(self, ctx: StepContext, decision: Any, outcome: str) -> Settlement:
         streams = ctx.input.current_streams(_bridge_subject(ctx))
         if any(
-            row.kind == SyncFailureKind.CONFLICT for stream in streams for row in stream.sync_failures(open_only=True)
+            stream.sync_failures(open_only=True, kind=SyncFailureKind.CONFLICT) for stream in streams
         ):
             raise ValidationError({"conflicts": "Resolve the sync conflicts before retrying this step."})
         return ctx.done(StreamStageOutput.for_streams(streams, counts={"streams": len(streams)}))
@@ -289,7 +288,7 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
         SoftTimeLimitExceeded,
     ):
         raise
-    except Exception as error:  # noqa: BLE001 -- adapters quarantine semantic errors in the page owner.
+    except Exception as error:  # adapters quarantine semantic errors in the page owner.
         raise Retryable("Stream transport failed.") from error
 
 

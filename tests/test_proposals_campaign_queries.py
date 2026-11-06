@@ -12,8 +12,8 @@ from rebac import actor_context, system_context, to_subject_ref
 from rebac.backends import backend
 from rebac.backends.local import LocalBackend
 
-from angee.graphql.capabilities import held_permissions, permission_annotations
 from angee.graphql.deletion import DeletePreview
+from angee.iam.graphql.capabilities import held_permissions, permission_annotations
 from angee.projects.testing.models import Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
 from tests.proposals_campaign import campaign as campaign
@@ -52,7 +52,7 @@ def test_round_delete_preview_checks_collected_proposals_without_rechecking_them
     assert query_counts[0] == query_counts[1], query_counts
 
 
-def _list_statement_categories(queries, model, *, roster=False, projection=None, audits=None) -> Counter[str]:
+def _list_statement_categories(queries, model, *, roster=False, projection=None) -> Counter[str]:
     """Separate native list projections from the permission compiler's reads."""
 
     categories: Counter[str] = Counter()
@@ -85,7 +85,8 @@ def _list_statement_categories(queries, model, *, roster=False, projection=None,
         categories[category] += 1
     assert categories["application"] == 1, categories
     assert categories["roster"] == int(roster), categories
-    assert categories["bypass_audit"] == (int(roster) if audits is None else audits), categories
+    # Admitted list projections write no read-side bypass audits.
+    assert categories["bypass_audit"] == 0, categories
     return categories
 
 
@@ -100,7 +101,7 @@ def test_proposal_track_status_uses_one_application_select_and_constant_policy_r
 
     def read(limit: int) -> list[Any]:
         return list(
-            Proposal.objects.as_user(manager)
+            Proposal.objects.with_actor(manager)
             .order_by("pk")
             .annotate(
                 _track_status=Proposal.track_status_expression(manager),
@@ -133,7 +134,7 @@ def test_round_lists_use_one_application_select_and_constant_policy_and_roster_r
         c.admit(round, "responder")
 
     def read(limit: int, actor: Any, roster: bool) -> list[Any]:
-        rows = Round.objects.as_user(actor).order_by("pk")
+        rows = Round.objects.with_actor(actor).order_by("pk")
         if roster:
             rows = rows.annotate(**permission_annotations(Round, ("see_roster", "roster_status")))
             rows = rows.prefetch_related(Round.roster_prefetch())
@@ -204,7 +205,7 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
             categories = []
             for limit in (5, 50):
                 rows = (
-                    Task.objects.as_user(actor)
+                    Task.objects.with_actor(actor)
                     .scoped()
                     .filter(clarification_round=round)
                     .order_by("pk")
@@ -215,9 +216,13 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
                 )
                 with CaptureQueriesContext(connection) as queries:
                     waiting = list(rows)
-                categories.append(_list_statement_categories(
-                    queries, Task, projection="_clarification_waiting", audits=2,
-                ))
+                categories.append(
+                    _list_statement_categories(
+                        queries,
+                        Task,
+                        projection="_clarification_waiting",
+                    )
+                )
                 assert len(waiting) == limit
                 assert {entry["id"] for entry in waiting[0]} == expected
                 all_waiting = {c.person("responder").pk, c.person("peer").pk, c.person("third").pk}
@@ -231,7 +236,7 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
             assert categories[0].total() <= 27, categories
     with actor_context(manager):
         as_actor(round, manager).remove_responder(c.person("third"))
-        waiting = as_actor(questions[0], manager).clarification_waiting()
+        waiting = as_actor(questions[0], manager).get_clarification_waiting()
     assert {entry["id"] for entry in waiting} == {c.person("peer").pk}
     assert Task._base_manager.filter(clarification_round=round).count() == 50
 
@@ -247,13 +252,14 @@ def test_single_assignee_stops_waiting_after_posting_and_other_threads_do_not_co
     with actor_context(recipient):
         as_actor(other, recipient).message_post("Other answer")
     with actor_context(manager):
-        assert {row["id"] for row in as_actor(question, manager).clarification_waiting()} == {recipient.pk}
+        assert {row["id"] for row in as_actor(question, manager).get_clarification_waiting()} == {recipient.pk}
     with actor_context(recipient):
         as_actor(question, recipient).message_post("This answer")
     with actor_context(manager):
-        assert as_actor(question, manager).clarification_waiting() == []
+        assert as_actor(question, manager).get_clarification_waiting() == []
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Native PostgreSQL JSON aggregation is required.")
 def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipients(campaign: ProposalCampaign) -> None:
     c = campaign
@@ -267,20 +273,17 @@ def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipie
         rows = Task.objects.filter(pk=task.pk).annotate(waiting=expression).values_list("waiting", flat=True)
         with CaptureQueriesContext(connection) as queries:
             assert list(rows) == [[{"id": c.person("responder").pk, "name": c.person("responder").username}]]
-        # SQL execution prepares the actor/arrow facts and emits the two native
-        # bypass audits; the recipient payload still uses one application SELECT.
-        assert _list_statement_categories(queries, Task, projection="waiting", audits=2) == Counter(
+        # Recovery REBAC decides the actor sets when the expression is built (before
+        # this capture) and compiles the arrow decisions into the one application
+        # SELECT; SQL execution reads one revision without a bypass audit.
+        assert _list_statement_categories(queries, Task, projection="waiting") == Counter(
             application=1,
-            bypass_audit=2,
             schema_revision=1,
-            actor_sets=1,
-            decided_rows=1,
-            constant_decision=1,
         )
     with actor_context(c.person("responder")):
         as_actor(task, c.person("responder")).message_post("Answered")
     with actor_context(manager):
-        assert as_actor(task, manager).clarification_waiting() == []
+        assert as_actor(task, manager).get_clarification_waiting() == []
 
 
 def test_active_project_round_uses_live_targets_and_tracks(campaign: ProposalCampaign) -> None:
@@ -303,10 +306,16 @@ def test_task_audience_projection_shares_publication_constraints(campaign: Propo
     manager = c.person("facilitator")
 
     def choices(actor: Any) -> list[str]:
-        row = Task._base_manager.filter(pk=question.pk).annotate(**{
-            f"allowed_{value}": Task.visibility_allowed_expression(actor, value)
-            for value in Task.TaskVisibility.values
-        }).get()
+        row = (
+            Task._base_manager.filter(pk=question.pk)
+            .annotate(
+                **{
+                    f"allowed_{value}": Task.visibility_allowed_expression(actor, value)
+                    for value in Task.TaskVisibility.values
+                }
+            )
+            .get()
+        )
         return [value for value in Task.TaskVisibility.values if getattr(row, f"allowed_{value}")]
 
     with actor_context(manager):
@@ -337,18 +346,32 @@ def test_task_audience_list_projection_has_constant_query_count(campaign: Propos
     with system_context(reason="tests.task.audiences"):
         for index in range(50):
             Task.objects.create(project=round.project, title=f"Item {index}")
+
     def read(limit: int) -> list[Any]:
-        return list(Task.objects.as_user(manager).annotate(**{
-            f"allowed_{value}": Task.visibility_allowed_expression(manager, value)
-            for value in Task.TaskVisibility.values
-        }).order_by("pk")[:limit])
+        return list(
+            Task.objects.with_actor(manager)
+            .annotate(
+                **{
+                    f"allowed_{value}": Task.visibility_allowed_expression(manager, value)
+                    for value in Task.TaskVisibility.values
+                }
+            )
+            .order_by("pk")[:limit]
+        )
+
     with actor_context(manager):
         read(5)
-        counts = []
+        categories = []
         for limit in (5, 50):
             with CaptureQueriesContext(connection) as queries:
                 rows = read(limit)
             assert len(rows) == limit
-            counts.append(len(queries))
-        # Constant in rows; a record task's subject types and trash authority add arrow sources to each verb.
-        assert counts == [61, 61], counts
+            categories.append(_list_statement_categories(queries, Task))
+        # Recovery REBAC compiles task arrows into the row SELECT. The list read
+        # and widen/narrow annotations are three scopes, each reading one
+        # revision and the same actor sets. Field visibility adds one held
+        # statement for read__clarification_asker over the returned ids.
+        assert categories[0] == categories[1], categories
+        assert categories[0] == Counter(
+            application=1, decided_rows=1, schema_revision=3, actor_sets=3
+        ), categories

@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 15
+// @rebac_schema_revision: 17
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -16,14 +16,16 @@
 // through the party, so a handle synced for an unknown sender (party still null)
 // stays readable.
 
-// Other addons' records (a followed thread, a filed task) may contribute identity
-// read arms. Private fields and private uses of a party require read_private,
+// Other addons project identity facts of an admitted follower or request without
+// contributing party read arms. Private fields and private uses require read_private,
 // which retains per-row grants. An explicit `reader` grant on an MTI child also
 // reaches each parent that accepts the relation and subject through the resources
 // grant loader (`src/angee/resources/grants.py`). Related rows keep their own
 // read rules. Lossless contact data and handle counts are private. created_by,
 // updated_by and their labels remain readable: attribution belongs to identity.
-
+// An admitted party or actor-readable handle may project its avatar file's
+// display facts through that row; file content and direct file reads keep their
+// own storage/file policy.
 definition parties/party {
     relation owner: auth/user // rebac:field=owner
     relation editor: auth/user | auth/group#member

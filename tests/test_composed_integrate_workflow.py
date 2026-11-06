@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from tests.composed_host import COMPOSED_TEST_TIMEOUT
+from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
 
 
 def test_composed_archive_import(tmp_path: Path) -> None:
@@ -26,4 +25,4 @@ def test_composed_archive_import(tmp_path: Path) -> None:
         ], cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT, check=False,
     )
     assert result.returncode == 0, f"composed archive import failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}
+    assert_composed_report(report, vendor="sqlite")

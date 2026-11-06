@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { AuthoredQueryOptions } from "@angee/refine";
 import type { SearchFacet } from "../resource/search/types";
 import { useAngeeFacets } from "@angee/refine";
 import { Filter, ResourceQuery, useModelMetadata, type GroupAxis } from "@angee/metadata";
@@ -29,6 +30,8 @@ export function useRelationFacets(
   resource: string,
   options: readonly RelationFacetOptions[] | undefined = EMPTY_OPTIONS,
   activeFilter?: ResourceViewFilter,
+  interests: Pick<AuthoredQueryOptions, "records" | "relatedModels"> = {},
+  enabled = true,
 ): RelationFacets {
   const t = useUiT();
   const metadata = useModelMetadata(resource);
@@ -53,10 +56,15 @@ export function useRelationFacets(
     id: facet.field, ...query!.toFacet(facet.field, activeFilter), pageSize: facet.pageSize,
   })), [activeFilter, facets, query]);
   const result = useAngeeFacets(groupOperation.target, {
-    document: groupOperation.document, facets: facetSpecs, enabled: facetSpecs.length > 0,
+    ...interests,
+    document: groupOperation.document, facets: facetSpecs, enabled: enabled && facetSpecs.length > 0,
   });
   return React.useMemo(() => facets.map((facet): SearchFacet => ({
-    field: facet.field, label: facet.label, source: "relation", group: facet.group,
+    field: facet.field, label: facet.label,
+    // A declared facet on a scalar axis (an enum) matches its options locally; only a
+    // relation axis looks its options up remotely.
+    source: facet.axis.declaration.kind === "relation" ? "relation" : "scalar",
+    group: facet.group,
     options: (result.facets[facet.field]?.options ?? []).flatMap((option) => {
       const filter = facet.axis.drill({ key: option.key });
       if (!filter) return [];

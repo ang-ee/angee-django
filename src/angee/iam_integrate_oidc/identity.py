@@ -10,7 +10,6 @@ login policy allows. Account-connect (no login) lives in ``integrate.connect``.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +21,7 @@ from django.db import IntegrityError, models, transaction
 from rebac import system_context
 
 from angee.iam.auth import can_authenticate_user
-from angee.iam.models import AmbiguousAccountEmail
+from angee.iam.exceptions import AmbiguousAccountEmail
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_external_account_link
@@ -93,7 +92,7 @@ class OidcLoginCompletion:
         _tokens, claims = self._exchange_verify(code, state_token, redirect_uri, record)
         sub = self._required_sub(claims)
         email = self._claim_email(claims)
-        user = resolve(self.oauth_client, sub=sub, email=email, claims=claims)
+        user = OidcIdentityResolver(self.oauth_client).resolve(sub=sub, email=email, claims=claims)
         if email and claims.get("email_verified") is True:
             try:
                 _claim_login_handle(user, email, claims)
@@ -216,7 +215,8 @@ class OidcIdentityResolver:
                             owner=user,
                             email=normalized_email,
                             identity_claims=claims,
-                            display_name=Account.display_name_from_claims(claims, normalized_email),
+                            display_name=self.oauth_client.display_name_from_claims(claims, normalized_email),
+                            avatar_url=self.oauth_client.avatar_url_from_claims(claims),
                         )
                         return user
 
@@ -228,7 +228,8 @@ class OidcIdentityResolver:
                         owner=user,
                         email=normalized_email,
                         identity_claims=claims,
-                        display_name=Account.display_name_from_claims(claims, normalized_email),
+                        display_name=self.oauth_client.display_name_from_claims(claims, normalized_email),
+                        avatar_url=self.oauth_client.avatar_url_from_claims(claims),
                     )
                     return user
         except ValidationError as error:
@@ -246,11 +247,10 @@ class OidcIdentityResolver:
         user_model = get_user_model()
 
         manager = user_model.objects
-        with system_context(reason="iam_integrate_oidc.link_user"):
-            try:
-                user = manager.get(pk=record.user_id)
-            except user_model.DoesNotExist as exc:
-                raise OAuthFlowError(INVALID_STATE, 400) from exc
+        try:
+            user = manager.get_for_session(record.user_id)
+        except user_model.DoesNotExist as exc:
+            raise OAuthFlowError(INVALID_STATE, 400) from exc
         return user
 
     def _find_by_email(self, email: str) -> _User | None:
@@ -273,12 +273,8 @@ class OidcIdentityResolver:
             user_fields["last_name"] = str(family_name)
         try:
             with transaction.atomic():
-                return manager.create_user(
-                    username=self._available_username(email or f"oidc-{sub}"),
-                    email=email,
-                    password=None,
-                    is_staff=False,
-                    is_superuser=False,
+                return manager.create_user_from_seed(
+                    email or f"oidc-{sub}", fallback="oidc-user", email=email,
                     **user_fields,
                 )
         except IntegrityError:
@@ -286,35 +282,6 @@ class OidcIdentityResolver:
             if self.oauth_client.link_on_email_match and user is not None and can_authenticate_user(user):
                 return user
             raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403) from None
-
-    def _available_username(self, seed: str) -> str:
-        """Return a unique Django username derived from ``seed``."""
-
-        manager = get_user_model().objects
-        base = re.sub(r"[^\w.@+-]", "-", seed).strip("-")[:140] or "oidc-user"
-        candidate = base
-        suffix = 1
-        while manager.filter(username=candidate).exists():
-            suffix_text = f"-{suffix}"
-            candidate = f"{base[: 150 - len(suffix_text)]}{suffix_text}"
-            suffix += 1
-        return candidate
-
-
-def resolve(
-    oauth_client: Any,
-    *,
-    sub: str,
-    email: str | None,
-    claims: dict[str, Any],
-) -> _User:
-    """Resolve OIDC claims to a host user, linking or provisioning when policy allows.
-
-    The identity-resolution seam the login completion calls (and callers/tests can
-    substitute); delegates to :class:`OidcIdentityResolver`.
-    """
-
-    return OidcIdentityResolver(oauth_client).resolve(sub=sub, email=email, claims=claims)
 
 
 def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
@@ -333,24 +300,4 @@ def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
         value=email,
         asserted_by=user,
         display_name=str(claims.get("name") or "").strip(),
-    )
-
-
-def complete_login(oauth_client: Any, *, code: str, state_token: str, redirect_uri: str) -> LoginCompletion:
-    """Complete an OIDC login redirect and return the resolved user with claims."""
-
-    return OidcLoginCompletion(oauth_client).complete_login(
-        code=code, state_token=state_token, redirect_uri=redirect_uri
-    )
-
-
-def complete_link(oauth_client: Any, *, code: str, state_token: str, redirect_uri: str) -> LinkCompletion:
-    """Complete an authenticated OIDC account-link redirect and return the linked account.
-
-    The linked user is the one captured in state when the flow started, never a
-    later session user.
-    """
-
-    return OidcLoginCompletion(oauth_client).complete_link(
-        code=code, state_token=state_token, redirect_uri=redirect_uri
     )

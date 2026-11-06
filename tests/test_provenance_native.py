@@ -10,9 +10,16 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("operation", [
-    "explicit-source", "separate-history", "bound-history", "failed-bulk", "protected-delete",
-])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "explicit-source",
+        "separate-history",
+        "bound-history",
+        "failed-bulk",
+        "protected-delete",
+    ],
+)
 def test_native_capture_preserves_database_owners_without_host_imports(tmp_path: Path, operation: str) -> None:
     _capture_database_owner_contract(tmp_path, operation)
 
@@ -30,7 +37,7 @@ def _capture_database_owner_contract(tmp_path: Path, operation: str, *, angee_ad
     (package / "models.py").write_text("""
 from django.db import models
 from angee.provenance.context import ChangesetRequired
-from angee.provenance.history import HistoryMixin, ModelHistory
+from angee.provenance.history import CaptureHistoryMixin, ModelHistory
 
 class Changeset(models.Model):
     actor_ref = models.TextField(blank=True)
@@ -57,7 +64,7 @@ class Changeset(models.Model):
 class Container(models.Model):
     pass
 
-class Row(HistoryMixin):
+class Row(CaptureHistoryMixin):
     value = models.CharField(max_length=40, unique=True)
     container = models.ForeignKey(Container, null=True, on_delete=models.CASCADE)
     history = ModelHistory(inherit=True, use_base_model_db=False)
@@ -67,10 +74,14 @@ class RetainedRow(models.Model):
 """)
     if angee_adapter:
         models_path = package / "models.py"
-        models_path.write_text(models_path.read_text().replace(
-            "from angee.provenance.history import HistoryMixin, ModelHistory",
-            "from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory",
-        ).replace("use_base_model_db=False", "use_base_model_db=True"))
+        models_path.write_text(
+            models_path.read_text()
+            .replace(
+                "from angee.provenance.history import CaptureHistoryMixin, ModelHistory",
+                "from angee.provenance.contrib.angee.history import HistoryMixin as CaptureHistoryMixin, ModelHistory",
+            )
+            .replace("use_base_model_db=False", "use_base_model_db=True")
+        )
     script = """
 import os
 import sys

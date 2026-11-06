@@ -31,7 +31,6 @@ from django.core.exceptions import ValidationError
 from django.utils.module_loading import import_string
 from rebac import MissingActorError, current_actor, system_context
 
-from angee.agents.autoconfig import SETTINGS as AGENTS_SETTINGS
 from angee.agents.protocol import ACP_PATH
 from angee.agents.runners import SessionRunner
 from angee.base.implementations import ImplBase
@@ -152,7 +151,7 @@ class AgentRuntime(ImplBase):
             routed = daemon.service_endpoint(service)
             if not routed.get("routed"):
                 raise ValidationError("Agent service is not reachable over a routed endpoint.")
-            ttl = str(getattr(settings, "ANGEE_AGENT_CHAT_TOKEN_TTL", AGENTS_SETTINGS["ANGEE_AGENT_CHAT_TOKEN_TTL"]))
+            ttl = str(settings.ANGEE_AGENT_CHAT_TOKEN_TTL)
             token = daemon.mint_route_token(str(actor.object), service, ttl=ttl)
             endpoint = {
                 "url": str(routed.get("url", "")),
@@ -163,7 +162,7 @@ class AgentRuntime(ImplBase):
         return {
             **endpoint,
             "protocol_version": self.chat_protocol_version,
-            "model_handle": agent.service_model_handle(),
+            "model_handle": agent.readable_model_handle(current_actor()),
         }
 
     def session_runner(self) -> SessionRunner:

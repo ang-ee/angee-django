@@ -1,4 +1,8 @@
-"""Initial-admin bootstrap delegates all selected storage to native owners."""
+"""Initial-admin bootstrap delegates all selected storage to native owners.
+
+Known gap: User.update_account and the resource loader still validate uniqueness
+through Django's read alias; this lane fixes only the person factory.
+"""
 
 from __future__ import annotations
 
@@ -36,6 +40,7 @@ settings.configure(
     AUTH_USER_MODEL='iam.User',
     SECRET_KEY='iam-selected', ANGEE_MERGE_GUARDS=[],
     REBAC_LOCAL_BACKEND_STORAGE='registry', REBAC_UNIVERSAL_ADMIN_ROLE='angee/role:admin',
+    ANGEE_REBAC_FORCE_OVERWRITE=False,
     DATABASE_ROUTERS=[DefaultRouter()],
     DATABASES={alias: {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}
                for alias in ('default', 'selected')},
@@ -43,6 +48,7 @@ settings.configure(
 import django
 django.setup()
 from django.core.management import call_command
+from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from rebac import backend, database_context, system_context
 from rebac.models import PermissionAuditEvent, SchemaDefinition, SchemaRelation, active_relationship_model
@@ -58,6 +64,8 @@ with schema_changes(using='selected'):
         definition_id=definition.pk, name='member', allowed_subjects=[{'type': 'auth/user'}])
 User = get_user_model()
 User.objects.db_manager('default').create_user(username='admin', email='default@example.test')
+User.objects.db_manager('default').create_user(username='default-only', email='default-only@example.test')
+User.objects.db_manager('selected').create_user(username='selected-only', email='selected-only@example.test')
 command = Command(stdout=StringIO())
 with database_context('default'), system_context(reason='test.iam.bootstrap'):
     # Fixture creation and this test's system context legitimately audit on default.
@@ -66,6 +74,14 @@ with database_context('default'), system_context(reason='test.iam.bootstrap'):
         'admin', email='selected@example.test', password='initial-secret')
     assert created
     assert user._state.db == 'selected'
+    try:
+        User.objects.db_manager('selected').create_person_as_system(
+            username='selected-only', email='another@example.test', reason='tests.iam.duplicate_username')
+    except ValidationError as error:
+        assert list(error.error_dict) == ['username']
+        assert error.error_dict['username'][0].code == 'unique'
+    else:
+        raise AssertionError('Selected database username collision was not validated')
     first_hash = user.password
     command.handle(database='selected', username='admin', email='selected@example.test', password='ignored-secret')
     user.refresh_from_db(using='selected')
@@ -83,15 +99,26 @@ assert active_relationship_model().objects.using('selected').filter(
 assert not active_relationship_model().objects.using('default').exists()
 assert PermissionAuditEvent.objects.using('selected').filter(
     kind=PermissionAuditEvent.KIND_RELATIONSHIP_GRANT).exists()
+with database_context('selected'), system_context(reason='test.iam.selected_person'):
+    accepted = User.objects.db_manager('selected').create_person_as_system(
+        username='default-only', email='new-selected@example.test', reason='tests.iam.default_only_username')
+    assert accepted._state.db == 'selected'
+    assert User.objects.using('selected').get(username='default-only').pk == accepted.pk
+    assert User.objects.using('default').get(username='default-only').email == 'default-only@example.test'
 import angee.iam
 config = IAMConfig('angee.iam', angee.iam)
 calls = []
 context = SimpleNamespace(database='selected', call=lambda *args, **kwargs: calls.append((args, kwargs)))
+sync_call = (('rebac', 'sync'), {
+    'database': 'selected', 'prune_stale': True, 'yes': True,
+    'force_overwrite': False, 'skip_checks': True,
+})
 config.compose_provision(context)
-assert calls == []
+assert calls == [sync_call]
+calls.clear()
 settings.ANGEE_BOOTSTRAP_ADMIN_PASSWORD = 'explicit-secret'
 config.compose_provision(context)
-assert calls == [(('bootstrap_admin',), {'database': 'selected'})]
+assert calls == [sync_call, (('bootstrap_admin',), {'database': 'selected'})]
 '''
     result = subprocess.run(
         [sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[1],

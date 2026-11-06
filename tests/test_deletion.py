@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any, Self, cast
 
 import pytest
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import connection, models, transaction
 from django.db.models.deletion import Collector
 from django.db.models.signals import pre_delete
 from django.test import override_settings
-from django.test.utils import isolate_apps
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from graphql import GraphQLError
 from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
-import angee.graphql.deletion as deletion_module
-from angee.base.models.base import AngeeModel
+from angee.graphql import deletion as deletion_module
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.deletion import (
     DeletePreview,
@@ -27,6 +29,8 @@ from angee.graphql.deletion import (
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
 from angee.iam import signals as iam_signals
+from angee.iam.graphql import resources as iam_resources
+from angee.iam.models.base import ProtectedModel
 from tests.tables import model_tables
 
 
@@ -48,7 +52,7 @@ def test_confirm_delete_composes_model_locks_after_permission_with_caller_scope(
 
     locked: list[int] = []
 
-    class ScopedDeleteTarget(AngeeModel):
+    class ScopedDeleteTarget(ProtectedModel):
         """Target whose eligibility can change while a domain lock is acquired."""
 
         eligible = models.BooleanField(default=True)
@@ -123,7 +127,7 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 ) -> None:
     """Model refusals are distinct messages, including collected cascade children."""
 
-    class PolicyParent(AngeeModel):
+    class PolicyParent(ProtectedModel):
         """Deletion target with an optional model-owned refusal."""
 
         blocked = models.BooleanField(default=False)
@@ -138,7 +142,7 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 
             return "Release the parent first." if self.blocked else None
 
-    class PolicyChild(AngeeModel):
+    class PolicyChild(ProtectedModel):
         """Cascade row with an optional model-owned refusal."""
 
         parent = models.ForeignKey(PolicyParent, on_delete=models.CASCADE)
@@ -154,7 +158,7 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 
             return "Release the children first." if self.blocked else None
 
-    def refuse_delete(sender: Any, instance: AngeeModel, **kwargs: Any) -> None:
+    def refuse_delete(sender: Any, instance: ProtectedModel, **kwargs: Any) -> None:
         """Enforce each test model's refusal on every deletion path."""
 
         if message := instance.delete_blocker():
@@ -190,7 +194,7 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 def test_deletion_preview_error_includes_model_refusals_and_fk_blockers() -> None:
     """Neither a model refusal nor a protected relation hides the other in errors."""
 
-    class PolicyParent(AngeeModel):
+    class PolicyParent(ProtectedModel):
         """Deletion target refused independently of its protected child."""
 
         class Meta:
@@ -405,6 +409,44 @@ def test_deletion_preview_counts_fast_deletes(monkeypatch: pytest.MonkeyPatch) -
         child_label = str(PreviewCascadeChild._meta.verbose_name_plural)
         assert deleted[parent_label] == 1
         assert deleted[child_label] == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fast_delete_preview_counts_visible_rows_only_after_overflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bounded scoped preview uses one SELECT up to its leaf limit, two above it."""
+
+    class PreviewRow(models.Model):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "auth"
+
+    monkeypatch.setattr(
+        deletion_module,
+        "resource_extensions",
+        lambda model: SimpleNamespace(preview_queryset=lambda model, actor: model.objects.all()),
+    )
+    with model_tables((PreviewRow,)):
+        PreviewRow.objects.bulk_create(PreviewRow(name=str(index)) for index in range(51))
+        rows = PreviewRow.objects.all()
+        with CaptureQueriesContext(connection) as one_query:
+            one = deletion_module._PreviewRows.from_fast_delete(rows.filter(name="0"), None)
+        with CaptureQueriesContext(connection) as overflow_queries:
+            overflow = deletion_module._PreviewRows.from_fast_delete(rows, None)
+        monkeypatch.setattr(
+            deletion_module,
+            "resource_extensions",
+            lambda model: SimpleNamespace(preview_queryset=lambda model, actor: model.objects.none()),
+        )
+        with CaptureQueriesContext(connection) as hidden_queries:
+            hidden = deletion_module._PreviewRows.from_fast_delete(rows, None)
+
+    assert (one.total_count, one.visible_count) == (1, 1)
+    assert (overflow.total_count, overflow.visible_count) == (51, 51)
+    assert (hidden.total_count, hidden.visible_count) == (51, 0)
+    assert len(one_query) == 1
+    assert len(overflow_queries) == 2
+    assert len(hidden_queries) <= 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -630,61 +672,61 @@ def test_delete_by_public_id_previews_and_deletes_inside_transaction(
     assert not Group.objects.filter(pk=group.pk).exists()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
+@isolate_apps("django.contrib.auth")
 def test_delete_by_public_id_elevates_lookup_and_runs_hook(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Admin deletes share one elevated preview/delete helper with before-delete hooks."""
+    """IAM contributes elevated admin deletion and preserves before-delete hooks."""
 
-    group = Group.objects.create(name="admin-delete")
+    class AdminDeleteTarget(ProtectedModel):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "auth"
+            rebac_resource_type = "tests/admin_delete_target"
+
     reasons: list[str | None] = []
     hooked: list[int] = []
 
-    class Context:
-        """Small context manager that records the elevated reason."""
+    @contextmanager
+    def recording_system_context(*, reason: str | None = None) -> Iterator[None]:
+        reasons.append(reason)
+        with system_context(reason=reason):
+            yield
 
-        def __init__(self, reason: str | None) -> None:
-            """Store the reason passed to ``system_context``."""
+    with model_tables((AdminDeleteTarget,)):
+        with system_context(reason="tests.deletion.admin_fixture"):
+            target = AdminDeleteTarget.objects.create(name="admin-delete")
+        target_pk = target.pk
 
-            self.reason = reason
+        def preview_for(cls: type[DeletePreview], instance: AdminDeleteTarget) -> DeletePreview:
+            del cls
+            assert instance == target
+            return DeletePreview(
+                total_deleted_count=1,
+                deleted=[DeletePreviewGroup(label="admin delete targets", count=1)],
+                updated=[],
+                blocked=[],
+                has_blockers=False,
+            )
 
-        def __enter__(self) -> None:
-            reasons.append(self.reason)
+        monkeypatch.setattr(iam_resources, "system_context", recording_system_context)
+        monkeypatch.setattr(DeletePreview, "from_instance", classmethod(preview_for))
 
-        def __exit__(self, *exc: object) -> None:
-            return None
-
-    def recording_system_context(*, reason: str | None = None) -> Context:
-        """Return a recording system context."""
-
-        return Context(reason)
-
-    def preview_for(cls: type[DeletePreview], instance: Group) -> DeletePreview:
-        del cls
-        assert instance == group
-        return DeletePreview(
-            total_deleted_count=1,
-            deleted=[DeletePreviewGroup(label="groups", count=1)],
-            updated=[],
-            blocked=[],
-            has_blockers=False,
+        preview = delete_by_public_id(
+            AdminDeleteTarget,
+            str(target_pk),
+            confirm=True,
+            reason="iam.graphql.user.delete",
+            before_delete=lambda row: hooked.append(row.pk),
         )
 
-    monkeypatch.setattr(deletion_module, "system_context", recording_system_context)
-    monkeypatch.setattr(DeletePreview, "from_instance", classmethod(preview_for))
-
-    preview = delete_by_public_id(
-        Group,
-        str(group.pk),
-        confirm=True,
-        reason="iam.graphql.user.delete",
-        before_delete=lambda row: hooked.append(cast(Group, row).pk),
-    )
-
-    assert not preview.has_blockers
-    assert reasons == ["iam.graphql.user.delete"]
-    assert hooked == [group.pk]
-    assert not Group.objects.filter(pk=group.pk).exists()
+        assert not preview.has_blockers
+        assert reasons == ["iam.graphql.user.delete"]
+        assert hooked == [target_pk]
+        with system_context(reason="tests.deletion.admin_assert"):
+            assert not AdminDeleteTarget.objects.filter(pk=target_pk).exists()
 
 
 @pytest.mark.django_db
@@ -810,7 +852,7 @@ def test_delete_preview_from_counts_reports_target_refusal_with_or_without_fk_bl
 ) -> None:
     """Count-based purges project the target's rule alongside retaining-row groups."""
 
-    class PurgeTarget(AngeeModel):
+    class PurgeTarget(ProtectedModel):
         """Counted purge root with a model-owned refusal."""
 
         class Meta:

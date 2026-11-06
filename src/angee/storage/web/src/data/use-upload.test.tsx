@@ -40,7 +40,7 @@ describe("useStorageUpload", () => {
   test("preview blocks programmatic uploads and retries before starting transport", () => {
     const { result } = renderHook(() => useStorageUpload(), { wrapper: ({ children }: { children: ReactNode }) =>
       <AppRuntimeProvider runtime={{ auth: { user: null, status: "authenticated", hasRole: () => false,
-        viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+        viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, enter: vi.fn(), exit: vi.fn() },
       } }}>{children}</AppRuntimeProvider>,
     });
     act(() => { result.current.upload([new File(["hello"], "hello.txt")]); result.current.retry("old-upload"); });

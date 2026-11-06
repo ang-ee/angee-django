@@ -26,13 +26,13 @@ export function useProposalCeremonyActions(): readonly ActionDescriptor[] {
   const settle = useActionResultRun({ noResultTitle: t("proposal.action.failed") });
   const settleTrack = useActionResultRun({ linkTo: PROJECT_MODEL, noResultTitle: t("proposal.action.failed") });
   const submitRun = useRecordAction(async (proposal, context) => {
-    await settle(async () => extractActionOutcome(await submit({ proposal, revision: recordRevision(context.record) }), "submit_proposal"));
+    await settle(async () => extractActionOutcome(await submit({ proposal, revision: recordRevision(context.record) }, { reconciliation: context.reconciliation }), "submit_proposal"));
   });
   const withdrawRun = useRecordAction(async (proposal, context) => {
-    await settle(async () => extractActionOutcome(await withdraw({ proposal, revision: recordRevision(context.record) }), "withdraw_proposal"));
+    await settle(async () => extractActionOutcome(await withdraw({ proposal, revision: recordRevision(context.record) }, { reconciliation: context.reconciliation }), "withdraw_proposal"));
   });
   const publishTrackRun = useRecordAction(async (proposal, context) => {
-    await settleTrack(async () => extractActionOutcome(await publish({ proposal, revision: recordRevision(context.record) }), "publish_proposal_track"));
+    await settleTrack(async () => extractActionOutcome(await publish({ proposal, revision: recordRevision(context.record) }, { reconciliation: context.reconciliation }), "publish_proposal_track"));
   });
   const [createTrackRun] = useRecordActionMutation<ActionFieldName>("create_proposal_track", {
     invalidateModels: [PROPOSAL_MODEL, PROJECT_MODEL],

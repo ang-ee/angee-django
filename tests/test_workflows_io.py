@@ -13,7 +13,8 @@ from rebac.actors import is_sudo
 
 from angee.graphql.publishing import change_published
 from angee.workflows import runner as runner_module
-from angee.workflows.managers import StepRunQuerySet
+from angee.workflows.models import runs as runs_module
+from angee.workflows.querysets import StepRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, StepMode, Superseded
@@ -204,7 +205,7 @@ def test_paging_retains_each_pages_random_idempotency_key_across_retries(executi
         retry = RetryPolicy(max_attempts=2, backoff=timedelta())
 
         def run(self, ctx):
-            observed.append((ctx.attempt.number, ctx.is_last_attempt, ctx.idempotency_key, ctx.state))
+            observed.append((ctx.attempt.number, ctx.idempotency_key, ctx.state))
             if ctx.attempt.number in {1, 3}:
                 raise Retryable("Transient page failure")
             if ctx.attempt.number == 2:
@@ -227,10 +228,10 @@ def test_paging_retains_each_pages_random_idempotency_key_across_retries(executi
             assert runner.wake() == 1
         else:
             assert retained.retries == 0
-    assert [item[0:2] for item in observed] == [(1, False), (2, True), (3, False), (4, True)]
+    assert [item[0] for item in observed] == [1, 2, 3, 4]
     retained = step_row(run)
     assert retained.idempotency_token.version == 4
-    assert [item[2] for item in observed] == [
+    assert [item[1] for item in observed] == [
         f"{retained.idempotency_token}:0", f"{retained.idempotency_token}:0",
         f"{retained.idempotency_token}:1", f"{retained.idempotency_token}:1",
     ]
@@ -238,7 +239,7 @@ def test_paging_retains_each_pages_random_idempotency_key_across_retries(executi
     assert list(StepAttempt.system_queryset().filter(step_run=retained).order_by("number").values_list(
         "page_index", flat=True,
     )) == [0, 0, 1, 1]
-    assert observed[2][3] == {"page": 2}
+    assert observed[2][2] == {"page": 2}
     assert retained.status == StepRunStatus.SUCCEEDED
     another = WorkflowRun.objects.start(workflow, actor=actor)
     assert runner.execute(step_row(another).pk)
@@ -248,14 +249,11 @@ def test_paging_retains_each_pages_random_idempotency_key_across_retries(executi
 def test_time_wait_keeps_the_current_page_retry_allowance(execution, register_step):
     """Successful waits do not erase preceding failed attempts on the same page."""
     actor, _ = execution
-    observed = []
-
     class WaitingIO(Echo):
         mode = StepMode.IO
         retry = RetryPolicy(max_attempts=2, backoff=timedelta())
 
         def run(self, ctx):
-            observed.append(ctx.is_last_attempt)
             if ctx.attempt.number == 1:
                 raise Retryable("Transient failure before waiting")
             if ctx.attempt.number == 2:
@@ -271,7 +269,6 @@ def test_time_wait_keeps_the_current_page_retry_allowance(execution, register_st
         assert step_row(run).retries == 1
         assert runner.wake() == 1
     assert runner.execute(step_row(run).pk)
-    assert observed == [False, True, True]
     assert step_row(run).retries == 0
 
 
@@ -313,7 +310,7 @@ def test_operator_retry_records_duplicate_acceptance_on_only_the_new_attempt(exe
         mode = StepMode.IO
 
         def run(self, ctx):
-            acknowledgements.append(ctx.retry_acknowledged)
+            acknowledgements.append(ctx.attempt.acknowledged_by_id is not None)
             if ctx.attempt.number == 1:
                 ctx.begin_effect()
                 raise WorkerLost()
@@ -650,7 +647,7 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
     terminal = WorkflowRun.system_queryset().get(pk=run.pk)
     assert terminal.status == RunStatus.FAILED
     assert sent[deliveries_before_failure:] == [
-        ("workflows.wake_run", {"kwargs": {"run_id": run.pk}, "queue": None, "expires": None}),
+        ("workflows.wake_run", {"kwargs": {"run_id": run.pk, "using": run._state.db}, "queue": None, "expires": None}),
     ]
     assert runner.execute(sibling.pk) is False
     assert runner.tick() == {
@@ -707,7 +704,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
             ctx.heartbeat()
             ctx.begin_effect()
             if publication_failure:
-                monkeypatch.setattr(runner_module, "publish_change", failed_publication)
+                monkeypatch.setattr(runs_module, "publish_change", failed_publication)
             return ctx.done({"value": 41})
 
     register_step(RecoverableBranch)
@@ -727,7 +724,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
     assert len(sent) == observed["deliveries"]
     assert not StepRun.system_queryset().filter(run=run, node_key="join").exists()
 
-    monkeypatch.setattr(runner_module, "publish_change", original_publish)
+    monkeypatch.setattr(runs_module, "publish_change", original_publish)
     failed = StepRun.system_queryset().get(run=run, node_key="failed")
     StepRun.objects.retry_step(failed, actor=actor)
     run_until(run)

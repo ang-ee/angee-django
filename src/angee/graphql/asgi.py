@@ -13,6 +13,7 @@ from django.urls import re_path
 from django_compose.components import installed_components
 
 from angee.base.addons import optional_addon_module
+from angee.base.hooks import resolve_hook
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
 from angee.graphql.middleware import WebsocketOriginValidator
 from angee.graphql.schema import GraphQLSchemas
@@ -22,10 +23,13 @@ def websocket_urlpatterns() -> list[object]:
     """Return GraphQL WebSocket URL routes for installed schemas."""
 
     schemas = GraphQLSchemas.from_discovery()
+    consumer = resolve_hook("ANGEE_GRAPHQL_WS_CONSUMER_CLASS") or AngeeGraphQLWSConsumer
+    if not isinstance(consumer, type) or not issubclass(consumer, AngeeGraphQLWSConsumer):
+        raise ImproperlyConfigured("GraphQL consumer must extend AngeeGraphQLWSConsumer.")
     return [
         re_path(
             rf"^graphql/{re.escape(name)}/$",
-            AngeeGraphQLWSConsumer.as_asgi(schema=schemas.build(name)),
+            consumer.as_asgi(schema=schemas.build(name)),
         )
         for name in schemas.names()
     ]
@@ -34,7 +38,6 @@ def websocket_urlpatterns() -> list[object]:
 def websocket_application() -> ASGI3Application:
     """Compose installed WebSocket routes with native Channels auth and origin policy."""
 
-    from channels.auth import AuthMiddlewareStack
     from channels.routing import URLRouter
 
     configs = tuple(apps.get_app_configs())
@@ -62,4 +65,4 @@ def websocket_application() -> ASGI3Application:
         if not callable(wrapper):
             raise ImproperlyConfigured("asgi.websocket_middleware must contain callables")
         application = wrapper(application)
-    return WebsocketOriginValidator(AuthMiddlewareStack(application))
+    return WebsocketOriginValidator(application)

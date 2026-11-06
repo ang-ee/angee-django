@@ -49,6 +49,53 @@ test("changing eligible groups preserves independent count-hook lifetimes", () =
   expect(onCount).toHaveBeenLastCalledWith("related", 3);
 });
 
+test("row-derived counts stay dormant until the Links pane is active", () => {
+  const rows = vi.fn(() => 3);
+  const groups = { lazy: { content: { label: "Lazy", usePaneCount: rows, render: () => null } } };
+  const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": groups });
+  const onCount = vi.fn();
+  const probe = (active: boolean) => <AppRuntimeProvider runtime={{ containers }}>
+    <RelatedCountProbe id="related" context={context} onCount={onCount} includePaneCounts={active} />
+  </AppRuntimeProvider>;
+  const view = render(probe(false));
+  expect(rows).not.toHaveBeenCalled();
+  expect(onCount).toHaveBeenLastCalledWith("related", undefined);
+  view.rerender(probe(true));
+  expect(rows).toHaveBeenCalled();
+  expect(onCount).toHaveBeenLastCalledWith("related", 3);
+});
+
+test("an incomplete badge mounts no aggregate beside a lazy group", () => {
+  const aggregate = vi.fn(() => 2);
+  const rows = vi.fn(() => 3);
+  const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": {
+    aggregate: { content: { label: "Aggregate", useCount: aggregate, render: () => null } },
+    lazy: { content: { label: "Lazy", usePaneCount: rows, render: () => null } },
+  } });
+  const onCount = vi.fn();
+  render(<AppRuntimeProvider runtime={{ containers }}>
+    <RelatedCountProbe id="related" context={context} onCount={onCount} />
+  </AppRuntimeProvider>);
+  expect(aggregate).not.toHaveBeenCalled();
+  expect(rows).not.toHaveBeenCalled();
+  expect(onCount).toHaveBeenLastCalledWith("related", undefined);
+});
+
+test("active Links reuses row counts instead of also requesting aggregate counts", () => {
+  const aggregate = vi.fn(() => 3);
+  const rows = vi.fn(() => 3);
+  const containers = containersFromChildren(CHATTER_CONTAINERS, {
+    "related#groups": { example: { content: { label: "Example", useCount: aggregate, usePaneCount: rows,
+      render: () => null } } },
+  });
+  render(<AppRuntimeProvider runtime={{ containers }}>
+    <RelatedCountProbe id="related" context={context} onCount={vi.fn()} includePaneCounts />
+    <RelatedPane context={context} />
+  </AppRuntimeProvider>);
+  expect(rows).toHaveBeenCalled();
+  expect(aggregate).not.toHaveBeenCalled();
+});
+
 test("one group component owns the label popover and rows across popover lifetimes", async () => {
   const mounted = vi.fn();
   function Group({ label }: { label: RelatedGroupLabel }) {

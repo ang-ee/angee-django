@@ -28,7 +28,7 @@ function fixture(getOne: () => Promise<{ data: Row | null }>) {
   const renderTab = vi.fn(() => <span>Related records</span>);
   const recordExtras = vi.fn(() => <span>Record extras</span>);
   const archive = vi.fn();
-  type Transport = Parameters<typeof createAngeeChangeLiveProvider>[0];
+  type Transport = NonNullable<Parameters<typeof createAngeeChangeLiveProvider>[0]>;
   const sinks: Parameters<Transport["subscribe"]>[1][] = [];
   const subscribe: Transport["subscribe"] = (_request, sink) => { sinks.push(sink); return () => undefined; };
   const liveProvider = createAngeeChangeLiveProvider({ subscribe, on: () => () => undefined }, [resource], { queryClient: client });
@@ -95,22 +95,25 @@ test("a failed refresh preserves the cached record and dirty draft while offerin
   expect(getOne).toHaveBeenCalledTimes(3);
 });
 
-test("a live change replaces an in-flight old snapshot and record actions use the latest clean revision", async () => {
+test("a live change lets a held read settle then refetches once before record actions use the latest revision", async () => {
   let finishOldRead!: (response: { data: Row }) => void;
   const getOne = vi.fn<() => Promise<{ data: Row }>>()
     .mockResolvedValueOnce({ data: { id: "note-1", title: "Loaded", revision: 1 } })
     .mockImplementationOnce(() => new Promise((resolve) => { finishOldRead = resolve; }))
-    .mockResolvedValue({ data: { id: "note-1", title: "Loaded", revision: 2 } });
+    .mockResolvedValue({ data: { id: "note-1", title: "Updated elsewhere", revision: 2 } });
   const f = fixture(getOne);
   await screen.findByRole("textbox", { name: "Title" });
   act(() => { void f.client.invalidateQueries(); });
   await waitFor(() => expect(getOne).toHaveBeenCalledTimes(2));
   await act(async () => { f.change(); });
-  await waitFor(() => expect(getOne).toHaveBeenCalledTimes(3));
+  expect(getOne).toHaveBeenCalledTimes(2);
   await act(async () => { finishOldRead({ data: { id: "note-1", title: "Loaded", revision: 1 } }); });
+  await waitFor(() => expect(getOne).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Updated elsewhere"));
   fireEvent.click(screen.getByRole("button", { name: "Archive" }));
   await waitFor(() => expect(f.archive).toHaveBeenCalledWith(expect.objectContaining({
     record: expect.objectContaining({ revision: 2 }),
   })));
+  expect(getOne).toHaveBeenCalledTimes(3);
   expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
 });

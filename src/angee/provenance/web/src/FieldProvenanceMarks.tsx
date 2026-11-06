@@ -20,12 +20,19 @@ const AUTHORITY_PRESENTATION = {
   tone: RecordFieldMark["tone"];
 }>;
 
+/** Mount provenance only for records declaring field statements. */
+export function FieldProvenanceChrome() {
+  const { canonicalResource } = useRecordChromeContext();
+  const hasFieldStatements = Boolean(useModelMetadata(canonicalResource)?.resource.fieldProvenance);
+  return hasFieldStatements ? <FieldProvenanceMarks /> : null;
+}
+
 /** Publish statement-owned provenance into the one shared form-field decoration surface. */
 export function FieldProvenanceMarks() {
   const { canonicalResource, dataProviderName, recordId } = useRecordChromeContext();
-  const hasHistory = Boolean(useModelMetadata(canonicalResource)?.resource.history);
   const { setActiveTab, setCollapsed } = useChatter();
   const t = useProvenanceT();
+  const hasHistory = Boolean(useModelMetadata(canonicalResource)?.resource.history);
   const revealChangeset = useCallback((changeset: string) => {
     setActiveTab("provenance.history", { target: changeset, focus: "changeset" });
     setCollapsed(false);
@@ -43,7 +50,7 @@ export function FieldProvenanceMarks() {
     model: canonicalResource,
     id: recordId,
     marks: (query.data?.field_provenance ?? []).map((provenance) => provenanceMark(provenance, t, hasHistory ? revealChangeset : undefined)),
-  }], [canonicalResource, hasHistory, query.data?.field_provenance, recordId, revealChangeset, t]);
+  }], [canonicalResource, query.data?.field_provenance, hasHistory, recordId, revealChangeset, t]);
   useRecordFieldMarks(publications);
   return null;
 }

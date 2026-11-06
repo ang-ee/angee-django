@@ -114,7 +114,7 @@ describe("credentialCreateForm", () => {
       prompt: vi.fn<ActionContext["prompt"]>().mockResolvedValue(null),
     })).resolves.toBeUndefined();
 
-    expect(mocks.revealCredential).toHaveBeenCalledWith({ id: "credential-1" });
+    expect(mocks.revealCredential).toHaveBeenCalledWith({ id: "credential-1" }, { reconciliation: undefined });
     // The one-time reveal goes through the shared secret-reveal owner.
     expect(mocks.reveal).toHaveBeenCalledOnce();
     expect(mocks.reveal).toHaveBeenCalledWith({
@@ -132,7 +132,7 @@ describe("credentialCreateForm", () => {
     const Component = credentialCreateForm.Component;
     render(<Component resource={credentialCreateForm.resource} id={null} />);
     expect(mocks.useAuthoredResourceMutation).toHaveBeenCalledWith(IntegrateCreateCredential,
-      expect.objectContaining({ errorNotification: false }));
+      expect.objectContaining({ errorNotification: false, transient: true }));
     const data = { name: "New credential", ...material };
     if (!mocks.createSubmit) throw new Error("Create submission was not registered.");
     await expect(mocks.createSubmit(data, {

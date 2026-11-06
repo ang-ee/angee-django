@@ -139,6 +139,7 @@ export const PartyMergeComparison = graphql(`
       display_avatar { id url }
       notes
       first_met_note
+      merge_scalar_fields
       handles {
         id
         platform
@@ -167,6 +168,7 @@ export const PartyMergeComparison = graphql(`
       display_avatar { id url }
       notes
       first_met_note
+      merge_scalar_fields
       handles {
         id
         platform
@@ -191,6 +193,7 @@ export const PartyMergeComparison = graphql(`
     }
     left_person: people_by_pk(id: $left) {
       id
+      merge_scalar_fields
       name_prefix
       given_name
       additional_name
@@ -201,6 +204,7 @@ export const PartyMergeComparison = graphql(`
     }
     right_person: people_by_pk(id: $right) {
       id
+      merge_scalar_fields
       name_prefix
       given_name
       additional_name

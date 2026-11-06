@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
 from strawberry_django_aggregates import TimeGranularity, group_by_alias
 from strawberry_django_hasura.filtering import PORTABLE_LOOKUPS
 
-from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import (
     DataDefaultSortMetadata,
     DataQueryAxis,
@@ -31,7 +31,7 @@ from angee.graphql.data.contracts import (
     DataResourceQuery,
     DataResourceTypeNames,
 )
-from angee.graphql.data.resource_fields import PREFERRED_DISPLAY_FIELDS, final_wire_field_names
+from angee.graphql.data.resource_fields import final_wire_field_names
 from angee.graphql.introspection import FieldPathError, is_to_one_relation, require_field_for_path
 from graphql import (
     GraphQLEnumType,
@@ -81,7 +81,11 @@ _QUERY_OPERATORS = (
 
 @dataclass(frozen=True)
 class ResourceQueryProjection:
-    """Schema-bound owner of final query field, identity and axis projections."""
+    """Schema-bound owner of final query field, identity and axis projections.
+
+    Server axes name bucket keys and predicates; the grouped-rows result in the
+    final schema carries page membership, so callers need no row-side bucket.
+    """
 
     schema: GraphQLSchema
     types: DataResourceTypeNames
@@ -98,6 +102,8 @@ class ResourceQueryProjection:
     """Declared filter expressions that never yield NULL, so ``isNull`` cannot match."""
     model: type[models.Model] | None = None
     identity_policies: dict[str, str] | None = None
+    representation_policies: dict[str, str | None] | None = None
+    partial_schema: bool = False
 
     def build(self) -> DataResourceQuery:
         """Resolve all projections once, retaining only executable capabilities."""
@@ -118,6 +124,7 @@ class ResourceQueryProjection:
                 sort=DataQueryOrder(name) if name in self.order_fields else descriptor.sort,
             )
         axes: dict[str, DataQueryAxis] = {}
+        missing_identities: list[str] = []
         finalized_axes = self.final_axes()
         consumed_labels = set((self.label_axes or {}).values())
         for axis in finalized_axes:
@@ -143,6 +150,22 @@ class ResourceQueryProjection:
             server = axis.server
             if server is not None and label is not None and label.server is not None:
                 server = replace(server, label_input=label.server.input, label_key=label.server.key)
+            drill = self.drill(axis.drill, fields)
+            extractions = tuple(replace(item, drill=self.drill(item.drill, fields)) for item in axis.extractions)
+            # A relation drill filters by the related row's public id, so the
+            # row must expose it; a scalar axis drills on its own filter field.
+            # An explicitly partial schema may omit a donor's axis field while
+            # retaining its group key. Only that build may drop the drill.
+            if (
+                relation is not None
+                and identity_path is None
+                and (drill is not None or any(item.drill is not None for item in extractions))
+            ):
+                if self.partial_schema and self.selection(canonical)[1] is None:
+                    drill = None
+                    extractions = tuple(replace(item, drill=None) for item in extractions)
+                else:
+                    missing_identities.append(canonical)
             axes[canonical] = replace(
                 axis,
                 field=canonical,
@@ -150,8 +173,13 @@ class ResourceQueryProjection:
                 identity_path=identity_path,
                 paths=paths,
                 label_path=relation.label_path if relation else None,
-                drill=self.drill(axis.drill, fields),
-                extractions=tuple(replace(item, drill=self.drill(item.drill, fields)) for item in axis.extractions),
+                drill=drill,
+                extractions=extractions,
+            )
+        if missing_identities:
+            raise ImproperlyConfigured(
+                f"Relation group axes {missing_identities!r} have a drill but no selectable row identity on "
+                f"{self.types.node!r}: expose the related row's public ID or remove the drill."
             )
         if self.row_model == "client":
             canonical_labels = {self.canonical(label) for label in consumed_labels}
@@ -413,8 +441,8 @@ class ResourceQueryProjection:
         identities = [
             name for name, field in node.fields.items() if getattr(get_named_type(field.type), "name", None) == "ID"
         ]
-        declared = (self.identity_policies or {}).get(node.name, PUBLIC_ID_FIELD_NAME)
-        mapped = final_wire_field_names(self.schema, node.name, (declared,))[0]
+        declared = (self.identity_policies or {}).get(node.name)
+        mapped = final_wire_field_names(self.schema, node.name, (declared,))[0] if declared else None
         node_identity = tuple(
             name
             for interface in node.interfaces
@@ -422,11 +450,10 @@ class ResourceQueryProjection:
             for name, field in interface.fields.items()
             if getattr(get_named_type(field.type), "name", None) == "ID"
         )
-        identity = mapped if mapped in identities else node_identity[0] if len(node_identity) == 1 else None
-        labels = [
-            name for name, field in node.fields.items() if getattr(get_named_type(field.type), "name", None) == "String"
-        ]
-        label = next((name for name in PREFERRED_DISPLAY_FIELDS if name in labels), labels[0] if labels else None)
+        identity = (
+            mapped if mapped in identities else node_identity[0] if len(node_identity) == 1 else None
+        )
+        label = (self.representation_policies or {}).get(node.name)
         return DataQueryRelation(
             model=model,
             identity_path=f"{path}.{identity}" if identity else None,

@@ -27,6 +27,7 @@ from tests.proposals_models import Proposal, Round
 from tests.test_project_access import project_access_schema as project_access_schema
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]

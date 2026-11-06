@@ -14,8 +14,9 @@ from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
-from django.db import close_old_connections, connection
-from rebac import actor_context, system_context
+from django.db import close_old_connections, connections
+from rebac import actor_context, database_context, system_context
+from rebac.database import write_alias
 
 from angee.agents.runners import TurnOutcome
 from angee.jobs.timeouts import task_time_budget
@@ -53,47 +54,48 @@ class _TurnUpdateSink:
             raise TurnStopped
 
 
-def run_next_turn(session_id: int) -> None:
-    """Claim and execute at most one turn, outside a transaction as the agent."""
+def run_next_turn(session_id: int, *, using: str | None = None) -> None:
+    """Claim and execute one turn outside a transaction on its selected database."""
 
-    if connection.in_atomic_block:
+    session_model = apps.get_model("agents", "AgentSession")
+    using = write_alias(session_model, using=using)
+    if connections[using].in_atomic_block:
         raise RuntimeError("Agent turns must run outside a database transaction.")
     deadline = monotonic() + task_time_budget().total_seconds()
-    session_model = apps.get_model("agents", "AgentSession")
-    with system_context(reason="agents.session.execute"):
-        session = session_model.objects.filter(pk=session_id).first()
-        if session is None:
-            return
-        turn = session.claim_turn()
-        if turn is None:
-            return
+    with database_context(using):
+        with system_context(reason="agents.session.execute"):
+            session = session_model.objects.db_manager(using).filter(pk=session_id).first()
+            if session is None:
+                return
+            turn = session.claim_turn()
+            if turn is None:
+                return
 
-    sink = _TurnUpdateSink(turn)
-    try:
-        with system_context(reason="agents.session.principal"):
-            agent = session.agent
-            principal = agent.principal_subject()
-        with actor_context(principal):
-            try:
-                outcome = agent.runtime_backend.session_runner().run_turn(
-                    session,
-                    turn,
-                    deferred_results=[],
-                    emit=sink,
-                    deadline=deadline,
-                )
-            finally:
-                close_old_connections()
-                sink.flush()
-    except TurnStopped:
-        return
-    except (TimeoutError, SoftTimeLimitExceeded):
-        logger.warning("Agent turn %s exceeded its time limit.", turn.pk)
-        outcome = TurnOutcome(kind="failed", error="The agent turn exceeded its time limit.")
-    except asyncio.CancelledError:
-        logger.warning("Agent turn %s was interrupted.", turn.pk)
-        outcome = TurnOutcome(kind="failed", error="The agent turn was interrupted.")
-    except Exception:  # noqa: BLE001 - runtime failures settle this turn without retry.
-        logger.exception("Agent turn %s failed.", turn.pk)
-        outcome = TurnOutcome(kind="failed", error="Agent runtime failed.")
-    session.settle_turn(turn, outcome)
+        sink = _TurnUpdateSink(turn)
+        try:
+            with system_context(reason="agents.session.principal"):
+                agent = session.agent
+                principal = agent.principal_subject()
+            with actor_context(principal):
+                try:
+                    outcome = agent.runtime_backend.session_runner().run_turn(
+                        session,
+                        turn,
+                        emit=sink,
+                        deadline=deadline,
+                    )
+                finally:
+                    close_old_connections()
+                    sink.flush()
+        except TurnStopped:
+            return
+        except (TimeoutError, SoftTimeLimitExceeded):
+            logger.warning("Agent turn %s exceeded its time limit.", turn.pk)
+            outcome = TurnOutcome(kind="failed", error="The agent turn exceeded its time limit.")
+        except asyncio.CancelledError:
+            logger.warning("Agent turn %s was interrupted.", turn.pk)
+            outcome = TurnOutcome(kind="failed", error="The agent turn was interrupted.")
+        except Exception:  # runtime failures settle this turn without retry.
+            logger.exception("Agent turn %s failed.", turn.pk)
+            outcome = TurnOutcome(kind="failed", error="Agent runtime failed.")
+        session.settle_turn(turn, outcome)

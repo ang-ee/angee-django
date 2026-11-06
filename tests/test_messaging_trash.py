@@ -15,8 +15,8 @@ from rebac import (
     to_subject_ref,
 )
 
-from angee.graphql import records
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.graphql import records
 from angee.messaging.testing.models import Message, Thread, ThreadAttachment, ThreadFollower
 from tests.conftest import SchemaAddon, create_platform_admin, execute_schema, result_data
 from tests.messaging_campaign import comment_record as comment_record
@@ -225,10 +225,11 @@ def _console_schema() -> Any:
     """Build the messaging console schema with the shared record verbs."""
 
     modules = (iam_schema, integrate_schema, parties_schema, messaging_schema, records)
+    # An addon-only build: donor addons are left out, so it declares itself partial.
     return GraphQLSchemas([
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
         for module in modules
-    ]).build("console")
+    ], partial_schema=True).build("console")
 
 
 _COMMENTS = ("Off topic remark", "Useful remark")

@@ -297,7 +297,8 @@ class StateTransitions:
 
         source, target = self._allowed_values(instance, spec)
 
-        with transaction.atomic():
+        manager = type(instance)._base_manager.db_manager(instance._state.db, hints={"instance": instance})
+        with transaction.atomic(using=manager.db):
             result = method(instance, *args, **kwargs)
             self._write_target(instance, target)
             if spec.on_success is not None:
@@ -638,9 +639,10 @@ def save_state(
         raise ImproperlyConfigured("save_state must run as a StateTransitions on_success hook.")
     fields = {field_name, *cast(set[str], getattr(instance, "_transition_fields", set()))}
     try:
-        with transaction.atomic():
+        manager = type(instance)._base_manager.db_manager(instance._state.db, hints={"instance": instance})
+        with transaction.atomic(using=manager.db):
             _verify_uncontended_source(instance, field_name, source, target)
-            instance.save(update_fields=fields)
+            instance.save(using=manager.db, update_fields=fields)
     finally:
         if hasattr(instance, "_transition_fields"):
             delattr(instance, "_transition_fields")
@@ -653,7 +655,8 @@ def _verify_uncontended_source(
 
     if not isinstance(instance, PersistenceMixin):
         raise TypeError("Guarded state transitions require PersistenceMixin.")
-    reader = type(instance).system_queryset(lock=("self",))
+    manager = type(instance)._base_manager.db_manager(instance._state.db, hints={"instance": instance})
+    reader = type(instance).system_queryset(lock=("self",)).using(manager.db)
     committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
     field = cast(StateField, instance._meta.get_field(field_name))
     if _state_key(field, committed) != _state_key(field, source):

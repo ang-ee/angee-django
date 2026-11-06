@@ -30,16 +30,16 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.utils import timezone
-from rebac import GenericTarget, generic_target
+from rebac import GenericTarget, database_context, generic_target
 
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.persistence import PersistenceMixin
-from angee.base.models.refs import RecordRefMixin
-from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.models.roles import role_anchor
 from angee.money.rounding import RoundingMode, rounding_constant
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -48,6 +48,11 @@ from angee.resources.mixins import ResourceLoadMixin
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
 """The project setting naming the ISO-4217 code every :class:`CurrencyRate` is relative to."""
+
+MoneyRole = role_anchor("money/role")
+"""The ``money/role`` anchor: its const ``admin`` arm resolves a platform admin as
+an effective money manager. See :func:`angee.iam.models.roles.role_anchor`.
+"""
 
 
 def reference_currency_code() -> str:
@@ -77,7 +82,7 @@ class CurrencyQuerySet[CurrencyT: Currency](ArchiveQuerySet[CurrencyT], AngeeHis
 CurrencyManager = AngeeHistoryManager.from_queryset(CurrencyQuerySet)
 
 
-class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+class Currency(ResourceLoadMixin, ArchiveMixin, ProtectedDataModel, concrete=True):
     """One ISO-4217 currency: its code, display name, symbol, and minor-unit exponent.
 
     ``decimal_places`` is the currency's minor-unit exponent (2 for most, 0 for
@@ -144,30 +149,25 @@ class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
 
         if (context is None) != (reference_currency is None):
             raise ValidationError("Contextual currency conversion requires its explicit reference currency.")
-        rates = apps.get_model(self._meta.app_label, "CurrencyRate").objects
+        rates = apps.get_model(self._meta.app_label, "CurrencyRate").objects.db_manager(self._state.db)
         if context is not None:
             rates.validate_context_reference(context, reference_currency)
-        canonical_source, canonical_target = rates._canonical_currencies(
+        canonical_source, canonical_target = rates.canonical_currencies(
             self,
             to_currency,
         )
         if canonical_source.pk == canonical_target.pk:
             return amount
-        return (
-            amount
-            * rates.rate_for(
-                canonical_target,
-                on_date,
-                context=context,
-                reference_currency=reference_currency,
-            )
-            / rates.rate_for(
-                canonical_source,
-                on_date,
-                context=context,
-                reference_currency=reference_currency,
-            )
+        target_rate = rates.rate_for(
+            canonical_target, on_date, context=context, reference_currency=reference_currency,
         )
+        source_rate = rates.rate_for(
+            canonical_source, on_date, context=context, reference_currency=reference_currency,
+        )
+        if any(not rate.is_finite() or rate <= 0 for rate in (source_rate, target_rate)):
+            raise ValidationError("Exchange rates must be finite and positive.")
+        return amount * target_rate / source_rate
+
 
 
 class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHistoryQuerySet[RateT]):
@@ -194,12 +194,6 @@ class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHis
         return super().update(**kwargs)
 
 
-_CurrencyRateManagerBase = AngeeHistoryManager.from_queryset(CurrencyRateQuerySet)
-
-
-class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
-    """Resolves the effective exchange rate for a currency on a date."""
-
     def rate_for(
         self,
         currency: models.Model,
@@ -220,7 +214,7 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
 
         if (context is None) != (reference_currency is None):
             raise ValidationError("Contextual currency conversion requires its explicit reference currency.")
-        canonical_currency, canonical_reference = self._canonical_currencies(
+        canonical_currency, canonical_reference = self.canonical_currencies(
             currency,
             reference_currency,
         )
@@ -269,7 +263,7 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
         if context is None or reference_currency is None:
             raise ValidationError("Contextual currency conversion requires saved canonical owners.")
         context_ref = self._canonical_context(context)
-        self._canonical_currencies(
+        self.canonical_currencies(
             reference_currency,
             reference_currency,
         )
@@ -286,11 +280,11 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
         model = canonical.content_type.model_class()
         if model is None or not issubclass(model, PersistenceMixin):
             raise ValidationError("The currency-rate context is not a canonical resource.")
-        if not model.system_queryset().filter(pk=canonical.object_id).exists():
+        if not model.system_queryset().using(context._state.db).filter(pk=canonical.object_id).exists():
             raise ValidationError("The currency-rate context is unavailable.")
         return canonical
 
-    def _canonical_currencies(
+    def canonical_currencies(
         self, currency: models.Model, reference_currency: models.Model | None
     ) -> tuple[Currency, Currency]:
         if currency is None or currency.pk is None:
@@ -303,7 +297,10 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
         ):
             raise ValidationError("Contextual currency rates require canonical currencies.")
         ids = {currency.pk} | (set() if reference_currency is None else {reference_currency.pk})
-        rows = {row.pk: row for row in declared_model.system_queryset().filter(pk__in=ids).order_by("pk")}
+        rows = {
+            row.pk: row
+            for row in declared_model.system_queryset().using(self.db).filter(pk__in=ids).order_by("pk")
+        }
         if set(rows) != ids:
             raise ValidationError("A contextual currency is unavailable.")
         return (
@@ -312,7 +309,9 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
         )
 
 
-class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+CurrencyRateManager = AngeeHistoryManager.from_queryset(CurrencyRateQuerySet)
+
+class CurrencyRate(HistoryMixin, ProtectedRecordRefMixin, ArchiveMixin, ProtectedDataModel, concrete=True):
     """One dated global or exact-context exchange rate per reference unit.
 
     A global row has no context or explicit reference and remains relative to
@@ -406,7 +405,8 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel, c
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Keep every rate slot identity immutable after its first persistence."""
 
-        with transaction.atomic():
+        using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
             self.date = type(self).date.field.to_python(self.date)
             rate_field = type(self).rate.field
             self.rate = rate_field.to_python(self.rate)
@@ -423,7 +423,7 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel, c
                     .system_queryset(
                         lock=("self",),
                     )
-                    .filter(pk=self.pk)
+                    .using(using).filter(pk=self.pk)
                     .first()
                 )
                 if previous is not None:
@@ -449,9 +449,3 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel, c
         """Return a readable label for Django displays."""
 
         return f"{self.currency_id}@{self.date}={self.rate}"
-
-
-MoneyRole = role_anchor("money/role")
-"""The ``money/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective money manager. See :func:`angee.base.models.roles.role_anchor`.
-"""

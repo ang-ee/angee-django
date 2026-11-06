@@ -10,7 +10,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { InboxNavigatorPane } from "./Navigator";
 import { InboxResultsPane } from "./Results";
 import { InboxRelatedPane } from "./Related";
-import { InboxAccounts, InboxConnections, InboxNavigator, InboxNavigatorGroups, InboxRelatedTarget, InboxResultGroups, InboxResults, InboxSelection } from "./documents";
+import { InboxAccounts, InboxConnections, InboxNavigator, InboxNavigatorGroups, InboxRelatedTarget, InboxResultGroups, InboxResultsBatch, InboxSelection } from "./documents";
 import { COLLECTION_INITIAL, RESULTS_INITIAL, useInboxNavigation } from "./state";
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://nexus-panes", providerNames: [],
@@ -23,8 +23,8 @@ const message = {
   sender: { display_name: "Ada", value: "ada@example.com", party: null }, thread: { id: "thread-one", title: { text: "A conversation" } },
 };
 
-function fixture(pane: "navigator" | "results" | "related", initialSearch = "", status = false) {
-  const rowMessage = status ? { ...message, platform: "WHATSAPP", channel: { display_name: "Alexis" },
+function fixture(pane: "navigator" | "results" | "related", initialSearch = "", status = false, standalone = false) {
+  const rowMessage = standalone ? { ...message, thread: null } : status ? { ...message, platform: "WHATSAPP", channel: { display_name: "Alexis" },
     thread: { ...message.thread, modality: "STATUS" } } : message;
   let view: ResourceViewContextValue;
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
@@ -42,17 +42,17 @@ function fixture(pane: "navigator" | "results" | "related", initialSearch = "", 
     if (document === InboxNavigatorGroups || document === InboxResultGroups) {
       return { data: { [document === InboxNavigatorGroups ? "inbox_navigator_groups" : "inbox_result_groups"]: {
         count: 30, record_count: 60, message_count: 60,
-        rows: [{ value: "thread:thread-one", label: status ? "Status updates" : `Conversation ${variables.page}`, modality: status ? "status" : "direct", count: 60, message_count: 60 }],
+        rows: [{ value: standalone ? "message:msg-one" : "thread:thread-one", label: standalone ? "Standalone message" : status ? "Status updates" : `Conversation ${variables.page}`, modality: status ? "status" : "direct", count: 60, message_count: 60 }],
       } } };
     }
     const content = variables.options?.lens === "attachments" || variables.options?.lens === "text";
-    if (document === InboxResults) return { data: { inbox_results: { count: 60, message_count: 60, rows: [{
+    if (document === InboxResultsBatch) return { data: { inbox_results_batch: variables.pages.map((page: { key: string; page: number }) => ({ key: page.key, result: { count: 60, message_count: 60, rows: [{
       id: content ? "file:attachment" : "result-one", latest: rowMessage.sent_at, count: 2, part_count: content ? 2 : 0,
-      message: { ...rowMessage, title: `Message page ${variables.page}` },
+      message: { ...rowMessage, title: `Message page ${page.page}` },
       part: content ? { id: "part-one", name: "Report.pdf", role: "BODY" } : null,
       file: content ? { id: "attachment", filename: "Report.pdf", url: "/report.pdf", mime_type: { mime_type: "application/pdf" }, size_bytes: "20" } : null,
       fragment: null,
-    }] } } };
+    }] } })) } };
     if (document === InboxRelatedTarget) return { data: { inbox_related_target: {
       id: "file:one", label: "Pinned file", count: 60, unit: "messages", source: null, part: null, file: null, fragment: null,
     } } };
@@ -112,13 +112,26 @@ test("result pane labels expand native groups and page members independently", a
   const pager = screen.getByRole("navigation", { name: /Conversation 1/ });
   fireEvent.click(within(pager).getByRole("button", { name: /Next/ }));
   await screen.findByRole("button", { name: /Message page 2/ });
-  expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResults
-    && request.meta.gqlVariables?.page === 2 && request.meta.gqlVariables?.size === 3)).toBe(true);
+  expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResultsBatch
+    && request.meta.gqlVariables?.pages?.some((page: { page: number; size: number }) => page.page === 2 && page.size === 3))).toBe(true);
   expect(f.view.state.pagination.pageIndex).toBe(0);
   fireEvent.click(screen.getByRole("button", { name: "Collapse Conversation 1" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: /Message page 2/ })).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Conversation 1" }));
   await waitFor(() => expect(f.router.state.location.search).toHaveProperty("thread", "thread-one"));
+});
+
+test("an admitted message without thread renders as a standalone section", async () => {
+  const f = fixture("results", "", false, true);
+  await screen.findByRole("button", { name: "Collapse Standalone message" });
+  expect(screen.queryByTitle("Open conversation")).toBeNull();
+  const row = await screen.findByRole("button", { name: /Message page 1/ });
+  fireEvent.click(row);
+  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
+  expect(f.router.state.location.search).not.toHaveProperty("thread");
+  fireEvent.click(screen.getByRole("button", { name: "Standalone message" }));
+  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
+  expect(f.router.state.location.search).not.toHaveProperty("thread");
 });
 
 test("related pointers open their message while its pager stays in r", async () => {
@@ -130,6 +143,14 @@ test("related pointers open their message while its pager stays in r", async () 
   fireEvent.click(row);
   await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
   expect(f.router.state.location.search).toHaveProperty("related", "file:one");
+});
+
+test("Related keeps a standalone message readable without a conversation link", async () => {
+  const f = fixture("related", "?related=file:one", false, true);
+  fireEvent.click(await screen.findByRole("button", { name: /A message/ }));
+  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
+  expect(f.router.state.location.search).not.toHaveProperty("thread");
+  expect(screen.queryByRole("button", { name: "Open conversation" })).toBeNull();
 });
 
 test("circle labels leave focus and activation to the tree", async () => {
@@ -172,7 +193,7 @@ test("result lenses retain filters, selection and pinned content while resetting
     expect(f.view.state.pagination.pageIndex).toBe(0);
     expect(f.view.state.groupStack).toEqual(field ? [{ field }] : []);
     expect(f.view.state.filter).toEqual(filter);
-    await waitFor(() => expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResults
+    await waitFor(() => expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResultsBatch
       && request.meta.gqlVariables?.options?.lens === lens && request.meta.gqlVariables?.sender === "party:ada"
       && request.meta.gqlVariables?.search?.text === "renewal")).toBe(true));
   }

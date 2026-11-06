@@ -22,7 +22,7 @@ export function useCycleContext(id: string) {
   return useAuthoredQuery(
     WorkCycleContextDocument,
     { id },
-    { enabled: Boolean(id), models: [CYCLE_MODEL] },
+    { enabled: Boolean(id), models: [CYCLE_MODEL], records: [{ model: CYCLE_MODEL, id }] },
   );
 }
 
@@ -31,6 +31,6 @@ export function useTaskContext(id: string) {
   return useAuthoredQuery(
     WorkTaskContextDocument,
     { id },
-    { enabled: Boolean(id), models: [TASK_MODEL, STAGE_MODEL] },
+    { enabled: Boolean(id), models: [TASK_MODEL, STAGE_MODEL], records: [{ model: TASK_MODEL, id }] },
   );
 }

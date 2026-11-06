@@ -1,16 +1,17 @@
 """Run party review contracts against generated models and installed resources."""
 
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from django.db import connection
 
-from tests.composed_host import COMPOSED_TEST_TIMEOUT
+from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
 
 
+@pytest.mark.postgresql
 def test_composed_workflows_parties(tmp_path: Path) -> None:
     """Keep composition, connections and registries local to the selected worker."""
     root = Path(__file__).resolve().parents[1]
@@ -30,6 +31,4 @@ def test_composed_workflows_parties(tmp_path: Path) -> None:
         cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT, check=False,
     )
     assert result.returncode == 0, f"composed party reviews failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {
-        "failures": 0, "vendor": "postgresql" if postgresql else "sqlite",
-    }
+    assert_composed_report(report, vendor="postgresql" if postgresql else "sqlite")

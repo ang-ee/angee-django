@@ -11,6 +11,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from django.conf import settings
 from django.core.cache import DEFAULT_CACHE_ALIAS, cache, caches
@@ -18,9 +19,9 @@ from django.core.cache.backends.locmem import LocMemCache
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
+from angee.base.models.identity import public_id_of
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
 
-_DEFAULT_STATE_TTL_SECONDS = 600
 _CACHE_PREFIX = "angee.integrate.oauth.state:"
 
 
@@ -53,7 +54,7 @@ class StateRecord:
 
 
 def issue(
-    oauth_client: object,
+    oauth_client: Any,
     redirect_uri: str,
     *,
     user_id: str | None = None,
@@ -66,7 +67,7 @@ def issue(
     _check_state_cache()
     state_token = secrets.token_urlsafe(32)
     record = StateRecord(
-        oauth_client_id=str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", ""))),
+        oauth_client_id=str(public_id_of(oauth_client)),
         redirect_uri=redirect_uri,
         user_id=user_id,
         nonce=secrets.token_urlsafe(32),
@@ -101,7 +102,7 @@ def _cache_key(state_token: str) -> str:
 def _state_ttl_seconds() -> int:
     """Return the configured lifetime for one redirect state record."""
 
-    return int(getattr(settings, "ANGEE_INTEGRATE_OAUTH_STATE_TTL", _DEFAULT_STATE_TTL_SECONDS))
+    return int(settings.ANGEE_INTEGRATE_OAUTH_STATE_TTL)
 
 
 def _check_state_cache() -> None:

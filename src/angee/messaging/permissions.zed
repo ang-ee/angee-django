@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 22
+// @rebac_schema_revision: 24
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -45,9 +45,16 @@ definition messaging/thread {
     permission write__owner = transfer
 }
 
+// Record-gated chatter admits each message before hydration. Its visible `from`
+// implies the sender handle's label and confirmed party display name for that
+// message; the timeline reads those display facts structurally. Standalone
+// message lists still apply the handle and party read gates.
 // A trashed message is withheld from every reader but its channel's managers
 // and admins. Record chatter moderators reach trashed comments through the
 // record-gated removed list instead, so its parts, files and reactions follow.
+// Reading an admitted record implies only its own chatter messages, including
+// their count and the moderator's removed count. Other attachment roles require
+// the attached thread's read. A selected message implies its parts.
 definition messaging/message {
     relation thread: messaging/thread // rebac:field=thread
     relation channel: messaging/channel // rebac:field=channel
@@ -107,6 +114,11 @@ definition messaging/thread_attachment {
 }
 
 definition messaging/thread_follower {
+    // An admitted record's chatter may show its followers and suppress them
+    // from suggestions. The current user's identity implies their Person link
+    // and effective follow across the admitted thread's merged members.
+    // An admitted thread's read implies its explicit follower rows. The record
+    // GraphQL projection may carry party display facts and the public account.
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
     relation user: auth/user // rebac:field=party__person__user
@@ -119,6 +131,9 @@ definition messaging/thread_follower {
 }
 
 definition messaging/thread_notification {
+    // Chatter for an admitted record may show the current user's delivery
+    // facts and an error count that includes authored messages' recipients,
+    // bounded by its thread attachment.
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
     relation message: messaging/message // rebac:field=message
@@ -133,6 +148,9 @@ definition messaging/thread_notification {
 }
 
 definition messaging/part {
+    // A readable message implies its part rows; the part's file display facts
+    // are projected through this admitted row, while file download keeps its
+    // own record arm and a token bound to the part.
     relation message: messaging/message // rebac:field=message
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member

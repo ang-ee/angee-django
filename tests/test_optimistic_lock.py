@@ -196,6 +196,7 @@ def test_unguarded_save_signals_receive_expression_then_committed_integer():
     assert observed[1] == row.revision == 2
 
 
+@pytest.mark.postgresql
 @POSTGRES_LOCK
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("model", [RevisionRow, RevisionChild])

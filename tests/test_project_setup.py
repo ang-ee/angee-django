@@ -12,8 +12,10 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 
+from angee.graphql.schema import GraphQLSchemas
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.provenance.context import changeset_model
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.engine.exceptions import CreationKeyConflict
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -351,19 +353,54 @@ class ProjectAttentionCase(ProjectSetupFixture):
         project = self.setup_project()
         round = self.Round._base_manager.get(project=project)
         with actor_context(self.member):
-            for index in range(5):
+            for index in range(20):
                 self.as_user(round, self.member).ask(f"Question {index}", "Details")
-        query = """query($limit: Int!) { project_tasks(limit: $limit) {
-          id setup_state questions_waiting_for_me questions_passed_on overdue_milestone_count
-        } }"""
-        counts = []
-        for limit in (1, 5):
-            self.graphql(query, {"limit": limit}, user=self.manager)
-            with CaptureQueriesContext(connection) as queries:
-                rows = self.graphql(query, {"limit": limit}, user=self.manager)["project_tasks"]
-            self.assertEqual(len(rows), limit)
-            counts.append(len(queries))
-        self.assertEqual(counts[0], counts[1])
+        with system_context(reason="tests.project_attention.project_rows"):
+            for index in range(19):
+                self.Project.objects.create(title=f"Attention project {index}", owner=self.manager)
+        schema = GraphQLSchemas.from_discovery().build("public")
+        documents = {
+            "task": ("""query($limit: Int!) { project_tasks(limit: $limit) {
+                id questions_waiting_for_me questions_passed_on
+            } }""", "project_tasks"),
+            "project": ("""query($limit: Int!) { projects(limit: $limit, order_by: [{created_at: asc}]) {
+                id questions_waiting_for_me questions_passed_on
+            } }""", "projects"),
+        }
+        for name, (query, field) in documents.items():
+            measure_graphql_document(schema, query, {"limit": 1}, actor=self.manager)
+            reads = {
+                size: measure_graphql_document(schema, query, {"limit": size}, actor=self.manager)
+                for size in (1, 5, 10, 20)
+            }
+            for size, read in reads.items():
+                self.assertEqual(len(read.data[field]), size, name)
+                self.assertEqual(read.statement_count, 5, (name, size))
+                read.assert_no_audit_writes()
+                read.assert_bytes(
+                    total=280_000 if name == "task" else 110_000,
+                    largest=220_000 if name == "task" else 100_000,
+                )
+            with CaptureQueriesContext(connection) as sql_capture:
+                self.graphql(query, {"limit": 1 if name == "task" else 20}, user=self.manager)
+            parent_table = "projects_task" if name == "task" else "projects_project"
+            parent_reads = [
+                item["sql"] for item in sql_capture
+                if item["sql"].startswith(f'SELECT "{parent_table}"."id", COALESCE((SELECT ')
+            ]
+            self.assertEqual(len(parent_reads), 1)
+            self.assertEqual(parent_reads[0].count('AS "_question_attention_counts"'), 1)
+            self.assertIn("waiting", parent_reads[0])
+            self.assertIn("COUNT(", parent_reads[0])
+            self.assertIn('"clarification_round_id" IS NOT NULL', parent_reads[0])
+            for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+                reads[larger].assert_flat_from(reads[smaller])
+            if name == "task":
+                self.assertGreater(sum(row["questions_waiting_for_me"] for row in reads[20].data[field]), 0)
+            if name == "project":
+                for read in reads.values():
+                    source = next(row for row in read.data[field] if row["id"] == project.sqid)
+                    self.assertEqual((source["questions_waiting_for_me"], source["questions_passed_on"]), (20, 0))
 
 
 class DashboardVisibilityCase(WorkCase):
@@ -533,5 +570,19 @@ class DenormalizedDashboardVisibilityCase(DashboardVisibilityCase):
 def test_project_setup_contracts(tmp_path: Path, storage: str, group: str):
     case = ("Denormalized" if storage == "denormalized" else "") + group
     run_composed_tests(
-        tmp_path, f"tests.test_project_setup.{case}", app=("angee.intake", "angee.proposals_work", "angee.dashboards"),
+        tmp_path, f"tests.test_project_setup.{case}",
+        app=("angee.intake", "angee.proposals_work", "angee.dashboards", "angee.projects_knowledge"),
+    )
+
+
+@pytest.mark.postgresql
+def test_project_attention_postgresql_contracts(tmp_path: Path):
+    """Run the attention projection pins in a composed PostgreSQL host."""
+
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL composed host")
+    run_composed_tests(
+        tmp_path, "tests.test_project_setup.ProjectAttentionCase",
+        app=("angee.intake", "angee.proposals_work", "angee.dashboards", "angee.projects_knowledge"),
+        test_postgresql=True,
     )

@@ -6,8 +6,8 @@ import { useRecordSourceThreads } from "./useRecordSourceThreads";
 
 const THREAD_MODEL = "messaging.Thread";
 
-/** The Related group's count: the conversations this record came from. */
-export function useRecordConversationsCount(context: ChatterViewContext): number | undefined {
+/** Derive the count from rows only while the Links pane is rendered. */
+export function useRecordConversationsPaneCount(context: ChatterViewContext): number | undefined {
   return useRecordSourceThreads(context).data?.record_source_threads.length;
 }
 

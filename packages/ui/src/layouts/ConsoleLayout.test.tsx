@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 
+import * as React from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppRuntimeProvider, containersFromChildren } from "../runtime";
+import { AppRuntimeProvider, containersFromChildren, type AppRuntime } from "../runtime";
 import { createUiTestProviders } from "../testing";
+import { CHATTER_CONTAINERS } from "../communication/chatter-containers";
 import { ConsoleLayout } from "./ConsoleLayout";
 
 const viewport = vi.hoisted(() => ({ mobile: false }));
@@ -27,6 +29,29 @@ const ui = createUiTestProviders({ refineResources: [
 ] });
 
 describe("ConsoleLayout breadcrumb strip", () => {
+  test("a visited compact aside keeps its draft when the drawer closes", async () => {
+    viewport.mobile = true;
+    function Draft() {
+      const [text, setText] = React.useState("");
+      return <input aria-label="Draft" value={text} onChange={(event) => setText(event.target.value)} />;
+    }
+    renderConsole(true, "/notes/7", {
+      chatterRoutes: [{ name: "notes.record", path: "/notes/$id", viewType: "notes/note",
+        modelLabel: "notes.Note", recordParam: "id" }],
+      containers: containersFromChildren(CHATTER_CONTAINERS, {
+        "record#aside": { "notes.draft": { content: { label: "Draft", render: () => <Draft /> } } },
+      }),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Open chatter" }));
+    const draft = await screen.findByRole<HTMLInputElement>("textbox", { name: "Draft" });
+    fireEvent.change(draft, { target: { value: "Unsent comment" } });
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Context" }), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Context" })).toBeNull());
+    expect(draft.isConnected).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Open chatter" }));
+    expect((await screen.findByRole<HTMLInputElement>("textbox", { name: "Draft" })).value).toBe("Unsent comment");
+  });
+
   test("a menu destination shows no strip; the top bar already names the app and its menus", async () => {
     renderConsole(true, "/notes");
     const header = await screen.findByRole("banner", { name: "Workspace top bar" });
@@ -69,10 +94,11 @@ describe("ConsoleLayout breadcrumb strip", () => {
   });
 });
 
-function renderConsole(breadcrumb = true, path = "/notes/7") {
+function renderConsole(breadcrumb = true, path = "/notes/7", runtime: Partial<AppRuntime> = {}) {
   trail.crumbs = [{ label: "Desk", href: "/desk" }, { label: "Notes", href: "/notes" }, ...(path === "/notes" ? [] : [{ label: "Show" }])];
   const root = createRootRoute({ component: () => <ui.Provider>
-    <AppRuntimeProvider runtime={breadcrumb ? {} : {
+    <AppRuntimeProvider runtime={breadcrumb ? runtime : {
+      ...runtime,
       // The regions container as a layer leaves it once it hides the breadcrumb strip.
       containers: containersFromChildren([{ address: "shell#regions" }], { "shell#regions": { "chrome.app-menu": { content: null } } }),
     }}>

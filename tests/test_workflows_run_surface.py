@@ -428,7 +428,7 @@ def test_published_labels_describe_node_and_run_outcomes(schema, execution):
     run = start_run(workflow, actor=actor)
     run_until(run)
     assert run.outcome == "accepted"
-    assert str(run).startswith("Labeled flow")
+    assert run.get_workflow_label().startswith("Labeled flow")
     data = result_data(
         execute_schema(
             schema,

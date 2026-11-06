@@ -25,12 +25,18 @@ export function mergeModelLabelInventory(
  * resource inventory; repeating the same label in several GraphQL schemas is harmless,
  * while aliases shared by different labels are ambiguous and throw. Unknown
  * spellings throw as well, so registry declarations cannot silently miss.
+ * Optional lookup returns null only when no resource is exposed; ambiguous
+ * resource aliases still throw. Authored-only model effects need no resource.
  */
+export function canonicalModelLabel(resources: readonly DataResourceMetadata[], spelling: string): string;
+export function canonicalModelLabel(resources: readonly DataResourceMetadata[], spelling: string, options: { optional: true }): string | null;
 export function canonicalModelLabel(
   resources: readonly DataResourceMetadata[],
   spelling: string,
-): string {
+  { optional = false }: { optional?: boolean } = {},
+): string | null {
   if (resources.length === 0) {
+    if (optional) return null;
     throw new Error(
       `Cannot resolve model spelling "${spelling}": schema metadata exposes no resources.`,
     );
@@ -58,6 +64,7 @@ export function canonicalModelLabel(
       }. Use a qualified model label.`,
     );
   }
+  if (optional) return null;
   throw new Error(
     `Unknown model spelling "${spelling}"; declare a model exposed in schema metadata.`,
   );

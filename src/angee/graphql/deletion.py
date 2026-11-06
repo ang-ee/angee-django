@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import strawberry
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
 from django.db.models.deletion import (
@@ -16,13 +17,12 @@ from django.db.models.deletion import (
     ProtectedError,
     RestrictedError,
 )
-from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_of
-from angee.base.permissions import require_rebac_queryset
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
+from angee.graphql.data.extensions import resource_extensions
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
@@ -35,9 +35,6 @@ from graphql import GraphQLError
 
 _PREVIEW_LEAF_LIMIT = 50
 _PREVIEW_PK_CHUNK_SIZE = 500
-
-type _FastDelete = tuple[models.QuerySet[models.Model], int]
-
 
 @strawberry.type
 class DeletePreviewGroup:
@@ -170,7 +167,9 @@ class DeletePreview:
 
     @classmethod
     def from_instance(
-        cls, instance: models.Model, actor: Any | None = None,
+        cls,
+        instance: models.Model,
+        actor: Any | None = None,
     ) -> DeletePreview:
         """Return Django's cascade forecast and model-owned deletion refusals.
 
@@ -187,27 +186,26 @@ class DeletePreview:
         except RestrictedError as error:
             blocked = _groups(_count_by_model(error.restricted_objects))
 
-        fast_deletes: tuple[_FastDelete, ...] = tuple(
-            (queryset, queryset.count()) for queryset in collector.fast_deletes
-        )
-        refusals = list(dict.fromkeys(
-            message
-            for row in chain(
-                [instance],
-                (
-                    row
-                    for model, rows in sorted(collector.data.items(), key=lambda item: item[0]._meta.label_lower)
-                    for row in sorted(rows, key=lambda row: row.pk)
-                    if not _is_root(instance, row)
-                ),
+        refusals = list(
+            dict.fromkeys(
+                message
+                for row in chain(
+                    [instance],
+                    (
+                        row
+                        for model, rows in sorted(collector.data.items(), key=lambda item: item[0]._meta.label_lower)
+                        for row in sorted(rows, key=lambda row: row.pk)
+                        if not _is_root(instance, row)
+                    ),
+                )
+                if isinstance(row, AngeeModel) and (message := row.get_delete_blocker())
             )
-            if isinstance(row, AngeeModel) and (message := row.delete_blocker())
-        ))
+        )
         groups = _PreviewRows.by_model(
             instance,
             collector,
-            fast_deletes,
-            actor if actor is not None else current_actor(),
+            collector.fast_deletes,
+            actor,
         )
         root = DeletePreviewNode.from_target(instance, groups)
         deleted_counts = _deleted_counts(instance, groups)
@@ -287,7 +285,7 @@ class DeletePreview:
                 has_blockers=False,
                 root=DeletePreviewNode.from_target(target, groups),
             )
-        if isinstance(target, AngeeModel) and (message := target.delete_blocker()):
+        if isinstance(target, AngeeModel) and (message := target.get_delete_blocker()):
             preview.refusals = [message]
             preview.has_blockers = True
         return preview
@@ -304,11 +302,7 @@ class DeletePreview:
         actor-scoped retaining-row preview as a purge owner's preflight.
         """
 
-        protected = (
-            error.protected_objects
-            if isinstance(error, ProtectedError)
-            else error.restricted_objects
-        )
+        protected = error.protected_objects if isinstance(error, ProtectedError) else error.restricted_objects
         return cls.from_blockers(target, protected)
 
     @classmethod
@@ -318,8 +312,7 @@ class DeletePreview:
         for row in blockers:
             rows_by_model.setdefault(type(row), []).append(row)
         groups = {
-            model: _PreviewRows.from_collected(target, model, rows, current_actor())
-            for model, rows in rows_by_model.items()
+            model: _PreviewRows.from_collected(target, model, rows, None) for model, rows in rows_by_model.items()
         }
         return cls(
             total_deleted_count=0,
@@ -342,25 +335,37 @@ def delete_by_public_id(
 ) -> DeletePreview:
     """Preview, then optionally delete, one public-id-addressed model row.
 
-    REBAC delete permission is checked before collecting or disclosing related
-    rows and before the model-owned confirmed-delete locks. ``queryset`` retains
-    the caller's target restrictions and must be unlocked. Passing ``reason`` elevates the
-    lookup/delete for admin/action surfaces that already authorized the request.
+    When REBAC is installed, its delete decision is scoped before collecting or
+    disclosing related rows and before the model-owned confirmed-delete locks.
+    ``queryset`` retains the caller's target restrictions and must be unlocked.
+    Passing ``reason`` elevates lookup/delete for admin/action surfaces that
+    already authorized the request.
     A receiver's late ``ValidationError`` rolls back deletion, before-delete writes
     and commit callbacks, and becomes a readable refusal in the same preview;
     FK races refresh the collector forecast.
     """
 
-    context = system_context(reason=reason) if reason is not None else nullcontext()
-    with context, transaction.atomic():
-        targets = queryset if queryset is not None else model._default_manager.all()
+    extensions = resource_extensions(model)
+    context = extensions.delete_context(reason) if extensions.delete_context is not None else nullcontext()
+    targets = queryset if queryset is not None else model._default_manager.all()
+    scope: AbstractContextManager[Any]
+    database_scope: AbstractContextManager[Any]
+    if apps.is_installed("rebac"):
+        from rebac import database_context, evaluator_scope
+
+        database_scope = database_context(targets.db)
+        scope = evaluator_scope()
+    else:
+        database_scope = nullcontext()
+        scope = nullcontext()
+    with context, database_scope, transaction.atomic(using=targets.db), scope:
         instance = require_instance_for_id(
             model,
             public_id,
             queryset=targets,
         )
-        if isinstance(instance, RebacMixin) and not instance.has_access("delete"):
-            raise PermissionDenied("You are not allowed to delete this record.")
+        if extensions.validate_delete is not None:
+            extensions.validate_delete(instance)
         if confirm:
             if isinstance(instance, AngeeModel):
                 locked = instance.lock_for_delete(queryset=targets)
@@ -375,11 +380,11 @@ def delete_by_public_id(
         if confirm and not preview.has_blockers:
             deleted_pk = instance.pk
             try:
-                with transaction.atomic():
+                with transaction.atomic(using=targets.db):
                     if before_delete is not None:
                         before_delete(instance)
                     instance.delete()
-            except (ProtectedError, RestrictedError):
+            except ProtectedError, RestrictedError:
                 preview = DeletePreview.from_instance(instance)
             except ValidationError as error:
                 preview.refusals = list(dict.fromkeys([*preview.refusals, *error.messages]))
@@ -448,7 +453,7 @@ class _PreviewRows:
         cls,
         root: models.Model,
         collector: Collector,
-        fast_deletes: tuple[_FastDelete, ...],
+        fast_deletes: Iterable[models.QuerySet[models.Model]],
         actor: Any | None,
     ) -> dict[type[models.Model], _PreviewRows]:
         """Return deleted tree rows grouped by model, excluding ``root``."""
@@ -462,8 +467,8 @@ class _PreviewRows:
                     visible_count=preview.visible_count,
                     visible_rows=preview.visible_rows,
                 )
-        for queryset, total_count in fast_deletes:
-            preview = cls.from_fast_delete(queryset, total_count, actor)
+        for queryset in fast_deletes:
+            preview = cls.from_fast_delete(queryset, actor)
             if preview.total_count:
                 groups.setdefault(queryset.model, cls()).add(
                     total_count=preview.total_count,
@@ -485,15 +490,14 @@ class _PreviewRows:
         collected = [row for row in rows if not _is_root(root, row)]
         if not collected:
             return cls()
-        if not issubclass(model, RebacMixin):
+        visibility = resource_extensions(model).preview_queryset
+        if visibility is None:
             return cls(
                 total_count=len(collected),
                 visible_count=len(collected),
                 visible_rows=collected,
             )
-        if actor is None:
-            return cls(total_count=len(collected))
-        scoped = require_rebac_queryset(model).with_actor(actor).with_action("read")
+        scoped = visibility(model, actor)
         return cls._from_scoped_collected(collected, scoped)
 
     @classmethod
@@ -511,9 +515,7 @@ class _PreviewRows:
             chunk_visible = set(scoped.filter(pk__in=pk_chunk).values_list("pk", flat=True))
             visible_count += len(chunk_visible)
             if len(visible_rows) <= _PREVIEW_LEAF_LIMIT:
-                visible_rows.extend(
-                    pk_to_row[pk] for pk in pk_chunk if pk in chunk_visible and pk in pk_to_row
-                )
+                visible_rows.extend(pk_to_row[pk] for pk in pk_chunk if pk in chunk_visible and pk in pk_to_row)
                 if len(visible_rows) > _PREVIEW_LEAF_LIMIT + 1:
                     visible_rows = visible_rows[: _PREVIEW_LEAF_LIMIT + 1]
         return cls(total_count=len(collected), visible_count=visible_count, visible_rows=visible_rows)
@@ -522,28 +524,41 @@ class _PreviewRows:
     def from_fast_delete(
         cls,
         queryset: models.QuerySet[models.Model],
-        total_count: int,
         actor: Any | None,
     ) -> _PreviewRows:
-        """Return access-scoped preview rows from one fast-delete queryset."""
+        """Fetch bounded preview rows, counting only when the leaf limit overflows."""
 
-        if total_count == 0:
-            return cls()
-        if not issubclass(queryset.model, RebacMixin):
+        visibility = resource_extensions(queryset.model).preview_queryset
+        if visibility is None:
+            visible_rows = list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1])
+            total_count = len(visible_rows) if len(visible_rows) <= _PREVIEW_LEAF_LIMIT else queryset.count()
             return cls(
                 total_count=total_count,
                 visible_count=total_count,
-                visible_rows=list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
+                visible_rows=visible_rows,
             )
-        if actor is None:
-            return cls(total_count=total_count)
-        scoped = require_rebac_queryset(queryset.model).with_actor(actor).with_action("read")
+        scoped = visibility(queryset.model, actor)
         visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
-        visible_count = visible_queryset.count()
+        total_query = (
+            queryset.order_by()
+            .annotate(_preview_group=models.Value(1))
+            .values("_preview_group")
+            .annotate(_preview_count=models.Count("pk"))
+            .values("_preview_count")[:1]
+        )
+        visible_rows = list(
+            _order_by_pk(visible_queryset).annotate(
+                _preview_total=models.Subquery(total_query, output_field=models.IntegerField()),
+            )[: _PREVIEW_LEAF_LIMIT + 1]
+        )
+        total_count = cast(int, getattr(visible_rows[0], "_preview_total")) if visible_rows else queryset.count()
+        visible_count = (
+            len(visible_rows) if len(visible_rows) <= _PREVIEW_LEAF_LIMIT else visible_queryset.count()
+        )
         return cls(
             total_count=total_count,
             visible_count=visible_count,
-            visible_rows=list(_order_by_pk(visible_queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
+            visible_rows=visible_rows,
         )
 
 

@@ -115,53 +115,48 @@ export const InboxNavigatorGroups = graphql(`
   }
 `);
 
-export const InboxResults = graphql(`
-  query NexusInboxResults(
+export const InboxResultRowFields = graphql(`
+  fragment InboxResultRowFields on InboxResultRow {
+    id
+    latest
+    count
+    part_count
+    message { ...InboxMessageFields }
+    part { ...MessagePartFields }
+    file {
+      id
+      filename
+      url
+      size_bytes
+      mime_type { mime_type }
+    }
+    fragment { id text }
+  }
+`);
+
+export const InboxResultsBatch = graphql(`
+  query NexusInboxResultsBatch(
     $coverage: InboxCoverageInput
     $search: InboxSearchInput
     $options: InboxResultInput
     $sender: String!
     $circle: String!
-    $scope: InboxGroupScopeInput
-    $page: Int!
-    $size: Int!
+    $pages: [InboxResultPageInput!]!
   ) {
-    inbox_results(
+    inbox_results_batch(
       coverage: $coverage
       search: $search
       options: $options
       sender: $sender
       circle: $circle
-      scope: $scope
-      page: $page
-      size: $size
+      pages: $pages
     ) {
-      count
-      message_count
-      rows {
-        id
-        latest
+      key
+      error
+      result {
         count
-        part_count
-        message {
-          ...InboxMessageFields
-        }
-        part {
-          ...MessagePartFields
-        }
-        file {
-          id
-          filename
-          url
-          size_bytes
-          mime_type {
-            mime_type
-          }
-        }
-        fragment {
-          id
-          text
-        }
+        message_count
+        rows { ...InboxResultRowFields }
       }
     }
   }
@@ -236,6 +231,20 @@ export const InboxRelatedTarget = graphql(`
   }
 `);
 
+export const InboxConnectionsCount = graphql(`
+  query NexusInboxConnectionsCount(
+    $target: String!
+    $text: String!
+    $oldest: Boolean!
+    $page: Int!
+    $size: Int!
+  ) {
+    inbox_connections(target: $target, text: $text, oldest: $oldest, page: $page, size: $size) {
+      message_count
+    }
+  }
+`);
+
 export const InboxConnections = graphql(`
   query NexusInboxConnections(
     $target: String!
@@ -296,11 +305,6 @@ export const InboxMessage = graphql(`
       circle: $circle
     ) {
       matches
-      uses {
-        part_id
-        target
-        count
-      }
       message {
         ...InboxMessageFields
         ...MessageReaderFields
@@ -308,6 +312,7 @@ export const InboxMessage = graphql(`
           id
           conversation_label
         }
+        merged_into { id }
         received_at
         external_id
       }
@@ -315,12 +320,18 @@ export const InboxMessage = graphql(`
   }
 `);
 
+export const InboxMessageUses = graphql(`
+  query NexusInboxMessageUses($id: ID!) {
+    inbox_message_uses(id: $id) { part_id target count }
+  }
+`);
+
 export type InboxNavigatorRow = DocumentType<
   typeof InboxNavigator
 >["inbox_navigator"]["rows"][number];
-export type InboxResultRow = DocumentType<
-  typeof InboxResults
->["inbox_results"]["rows"][number];
+export type InboxResultRow = NonNullable<DocumentType<
+  typeof InboxResultsBatch
+>["inbox_results_batch"][number]["result"]>["rows"][number];
 export type InboxConnectionRow = DocumentType<
   typeof InboxConnections
 >["inbox_connections"]["rows"][number];

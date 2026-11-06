@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 class OAuthProviderType(ImplBase):
     """Base class for OAuth provider presets."""
+
     registry_setting = "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES"
 
     category = "oauth"

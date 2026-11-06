@@ -72,7 +72,7 @@ function ConversationLabel({ bucket, label, timezone, navigation }: GroupLabelCo
     sub={[typeof platform === "string" && platform ? optionLabel(platforms, platform) : undefined,
       typeof account === "string" ? account : undefined].filter(Boolean).join(" · ")}
     meta={typeof latest === "string" ? <AbsoluteTime value={latest} timeZone={timezone} display="date" /> : undefined}
-    label={t(statusFeed ? "inbox.viewUpdates" : "inbox.openConversation")}
+    label={t(statusFeed ? "inbox.viewUpdates" : target.startsWith("thread:") ? "inbox.openConversation" : "inbox.read")}
     onOpen={() => statusFeed ? navigation.showUpdates(view.state) : target.startsWith("thread:") ? navigation.conversation(target.slice(7)) : navigation.read(target.slice(8))} />;
 }
 

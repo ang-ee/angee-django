@@ -194,6 +194,7 @@ export function PairingDialog({
   const [submitPassword, submitState] =
     useActionResultMutation<ActionFieldName>("submit_channel_password", {
       invalidateModels: [CHANNEL_MODEL],
+      transient: true,
     });
   const [skipPassword, skipState] = useActionResultMutation<ActionFieldName>(
     "skip_channel_password",

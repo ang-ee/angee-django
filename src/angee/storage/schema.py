@@ -12,29 +12,37 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db.models import Prefetch, prefetch_related_objects
 from django.urls import reverse
 from graphql import GraphQLError
-from rebac import ObjectRef, PermissionDenied, generic_target, system_context
+from rebac import ObjectRef, PermissionDenied, current_actor, generic_target, system_context
+from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
-from strawberry_django.optimizer import optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
-from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
-from angee.graphql.capabilities import permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
     PublicID,
     instance_for_id,
     require_instance_for_id,
 )
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import RecordReferenceNode, actor_scoped_public_id, with_record_reference_access
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
-from angee.iam.permissions import RolePermission
+from angee.iam.graphql.access import RolePermission
+from angee.iam.graphql.actions import resolve_action_target
+from angee.iam.graphql.capabilities import permissions_field
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import (
+    RecordReferenceNode,
+    RecordReferencePageProof,
+    actor_scoped_public_id,
+    record_reference_field,
+)
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.iam.identity import user_display_label, user_label_annotation
 from angee.storage import exceptions
 from angee.storage.models import File as FileModel
 from angee.storage.models import FileVisibility, FolderQuerySet, UploadState
@@ -55,7 +63,7 @@ strawberry.enum(cast(Any, FileVisibility))
 
 
 @strawberry_django.type(MimeType)
-class MimeTypeType(AngeeNode):
+class MimeTypeType(ProtectedNode):
     """GraphQL projection of one MIME taxonomy row."""
 
     mime_type: auto
@@ -65,7 +73,7 @@ class MimeTypeType(AngeeNode):
 
 
 @strawberry_django.type(Backend)
-class BackendType(AngeeNode):
+class BackendType(ProtectedNode):
     """Admin projection of a storage backend, including its config."""
 
     slug: auto
@@ -78,7 +86,7 @@ class BackendType(AngeeNode):
 
 
 @strawberry_django.type(Drive)
-class DriveType(AngeeNode):
+class DriveType(ProtectedNode):
     """GraphQL projection of a drive."""
 
     slug: auto
@@ -101,7 +109,7 @@ def _folder_ancestors_prefetch(info: strawberry.Info) -> Prefetch:
 
 
 @strawberry_django.type(Folder)
-class FolderType(AngeeNode):
+class FolderType(ProtectedNode):
     """GraphQL projection of a folder or smart folder."""
 
     name: auto
@@ -124,18 +132,13 @@ class FolderType(AngeeNode):
 
 
 @strawberry_django.type(File)
-class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
+class FileType(AuthoredRefMixin, TrashedRefMixin, ProtectedNode):
     """GraphQL projection of a file row."""
 
     permissions = permissions_field(("read", "write", "share", "delete"))
     """The verbs record chrome gates on (``holdsPermission``), e.g. a contributed
     ``storage.File#actions`` child declaring ``permission: "read"``."""
 
-    display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
-        only=["title", "filename"],
-        description=NODE_DISPLAY_NAME_DESCRIPTION,
-    )
     filename: auto
     title: auto
     content_hash: auto
@@ -168,26 +171,80 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         return str(row.download_url())
 
 
+@strawberry.type
+class FileMimeIdentity:
+    """MIME display facts carried by a projected file."""
+
+    mime_type: str
+    label: str
+
+    @classmethod
+    def of(cls, file: Any) -> FileMimeIdentity | None:
+        mime = file.mime_type
+        return cls(mime_type=mime.mime_type, label=mime.label) if mime is not None else None
+
+
+@strawberry.type
+class FileIdentity:
+    """Selected file facts projected from an admitted part or record edge."""
+
+    file: strawberry.Private[Any]
+    parent: strawberry.Private[Any | None] = None
+    creator_label: strawberry.Private[str | None] = None
+
+    @strawberry.field
+    def id(self) -> strawberry.ID:
+        return strawberry.ID(self.file.sqid)
+
+    @strawberry.field
+    def filename(self) -> str:
+        return str(self.file.filename)
+
+    @strawberry.field
+    def title(self) -> str:
+        return str(self.file.title)
+
+    @strawberry.field
+    def size_bytes(self) -> int:
+        return int(self.file.size_bytes)
+
+    @strawberry.field
+    def mime_type(self) -> FileMimeIdentity | None:
+        return FileMimeIdentity.of(self.file)
+
+    @strawberry.field
+    def created_by_label(self, info: strawberry.Info) -> str | None:
+        return self.creator_label or user_display_label(self.file.created_by_id, request=get_request(info))
+
+    @strawberry.field
+    def url(self, info: strawberry.Info) -> str | None:
+        if getattr(get_request(info), "view_as", None) is not None:
+            return None
+        return self.file.download_url(parent=self.parent) if self.file.upload_state == UploadState.READY else ""
+
+
 @strawberry_django.type(FileAttachment)
 class FileAttachmentType(RecordReferenceNode):
     """An actor-readable file edge, with its target identity redacted when unreadable."""
 
     label: auto
-    file: FileType
-    display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
-        only=["label", "file_id"],
-        description=NODE_DISPLAY_NAME_DESCRIPTION,
-    )
 
-    model_label: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model,
-        only=["content_type_id", "object_id"],
-    )
-    record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id,
-        only=["content_type_id", "object_id"],
-    )
+    @strawberry_django.field(only=["file_id"])
+    def file(self) -> FileIdentity:
+        """Expose file display facts under this admitted attachment edge."""
+
+        row = cast(Any, self)
+        file = row._state.fields_cache.get("file")
+        if file is None:
+            file = File._base_manager.select_related("mime_type").get(pk=row.file_id)
+        return FileIdentity(
+            file=file,
+            parent=getattr(row, "_projection_parent", None),
+            creator_label=getattr(row, "_file_creator_label", None),
+        )
+
+    model_label: str | None = record_reference_field(FileAttachment, resolver=RecordReferenceNode.reference_model)
+    record_id: PublicID | None = record_reference_field(FileAttachment, resolver=RecordReferenceNode.reference_id)
 
 
 @strawberry.type
@@ -202,14 +259,14 @@ class RecordFilesType:
 class StorageQuery:
     """Record-scoped attachment reads shared by public and console schemas."""
 
-    @strawberry.field(name="file_attachments")
+    @strawberry.field(name="file_attachments", extensions=[RecordReferencePageProof(FileAttachmentType)])
     def file_attachments(self, file: PublicID) -> list[FileAttachmentType]:
         """Read one file's edges through the shared target-access projection."""
 
         source = instance_for_id(File, file)
         if source is None:
             return []
-        return list(with_record_reference_access(source.attachments.select_related("file")))
+        return cast(list[FileAttachmentType], source.attachments.all())
 
     @strawberry.field(name="record_files")
     def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
@@ -230,9 +287,30 @@ class StorageQuery:
         if record is None:
             return RecordFilesType(can_upload=False, attachments=[])
         manager = FileAttachment._default_manager
+        target = generic_target(record)
+        has_arm = manager.has_record_arm(target)
+        edges = list(
+            FileAttachment._base_manager.filter(
+                **target.lookups(FileAttachment, "target"), file__is_trashed=False,
+            ).select_related("file", "file__mime_type").annotate(
+                _file_creator_label=user_label_annotation("file__created_by"),
+            )
+        )
+        needs_file_proof = {
+            edge.file_id for edge in edges if not has_arm or edge.file.visibility != FileVisibility.RECORD
+        }
+        readable_files = set(
+            File.objects.with_actor(current_actor()).filter(pk__in=needs_file_proof).values_list("pk", flat=True)
+        ) if needs_file_proof else set()
+        visible = [
+            edge for edge in edges
+            if (has_arm and edge.file.visibility == FileVisibility.RECORD) or edge.file_id in readable_files
+        ]
+        for edge in visible:
+            cast(Any, edge)._projection_parent = record
         return RecordFilesType(
-            can_upload=manager.has_record_arm(generic_target(record)) and record.has_access("write"),
-            attachments=list(with_record_reference_access(manager.for_record(record))),
+            can_upload=has_arm and record.has_access("write"),
+            attachments=cast(list[FileAttachmentType], visible),
         )
 
 
@@ -309,7 +387,7 @@ class StorageAdminPermission(RolePermission):
 _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 
 
-class FolderWriteBackend(AngeeHasuraWriteBackend):
+class FolderWriteBackend(ProtectedHasuraWriteBackend):
     """Write semantics for folders: create belongs to the manager factory."""
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
@@ -365,7 +443,7 @@ _DRIVE_RESOURCE = hasura_model_resource(
     insertable=["backend", "slug", "name", "description", "prefix", "owns_items"],
     updatable=["name", "description", "prefix", "is_archived", "owns_items"],
     field_id_decode={"backend": public_pk_decoder(Backend)},
-    write_backend=AngeeHasuraWriteBackend(Drive, public_id_fields=("backend",)),
+    write_backend=ProtectedHasuraWriteBackend(Drive, public_id_fields=("backend",)),
 )
 _FOLDER_RESOURCE = hasura_model_resource(
     FolderType,
@@ -425,7 +503,7 @@ _FILE_RESOURCE = hasura_model_resource(
         "folder": public_pk_decoder(Folder),
         "mime_type": public_pk_decoder(MimeType),
     },
-    write_backend=AngeeHasuraWriteBackend(File, public_id_fields=("folder",)),
+    write_backend=ProtectedHasuraWriteBackend(File, public_id_fields=("folder",)),
 )
 _BACKEND_RESOURCE = hasura_model_resource(
     BackendType,

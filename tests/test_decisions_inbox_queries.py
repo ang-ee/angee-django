@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from unittest.mock import patch
 
+import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
@@ -16,7 +17,7 @@ from tests.conftest import addon_schema, create_user, execute_schema, result_dat
 from tests.test_decisions_inbox import inbox as inbox
 
 FIELDS = """
-  id kind_label records { id record_model record_id }
+  id kind_label records { id record_model record_id record_label }
   requester { id display_name } verdict is_open permissions
 """
 LIST = """query Inbox($viewer: String!) {
@@ -35,6 +36,8 @@ RECORD = """query InboxRecord($id: String!) {
 }""".replace("FIELDS", FIELDS)
 
 
+@pytest.mark.postgresql
+@pytest.mark.django_db(transaction=True)
 def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed_tables, tmp_path):
     """Measure real non-admin list, grouped counts, and detail at 1, 10, 50 seats."""
     issuer = create_user("inbox-cost-issuer")
@@ -91,6 +94,9 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
                 assert {record["record_id"] for row in rows for record in row["records"]} == {
                     str(subject.sqid) for subject in subjects[: min(size, 3)]
                 }
+                assert {record["record_label"] for row in rows for record in row["records"]} == {
+                    str(subject) for subject in subjects[: min(size, 3)]
+                }
             elif name == "groups":
                 assert sum(row["aggregate"]["count"] for row in result["decisions_groups"]) == size
             else:
@@ -113,8 +119,13 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
         previous = size
     print(json.dumps({"metrics": metrics, "sql_directory": str(tmp_path)}, indent=2))
     (tmp_path / "metrics.json").write_text(json.dumps(metrics, indent=2))
-    assert all(len(set(values)) == 1 for values in counts.values()), counts
-    for name, budget in (("list", 300), ("groups", 285), ("record", 310)):
+    # Requester field guards use a point for one identity; the three-requester
+    # population plan stays fixed as the inbox grows from ten to fifty seats.
+    assert counts["list"][0] <= counts["list"][1] == counts["list"][2], counts
+    assert all(len(set(counts[name])) == 1 for name in ("groups", "record")), counts
+    # Transactional setup removes the savepoint fixture's three extra reads.
+    # PostgreSQL measures 8/3/8 for list/groups/detail at 1, 10 and 50 rows.
+    for name, budget in (("list", 8), ("groups", 3), ("record", 8)):
         assert max(counts[name]) <= budget, counts
 
 
@@ -122,8 +133,7 @@ def test_inbox_user_relations_embed_names_and_withhold_restricted_fields(inbox):
     """Embedded people show their name to every reader; their restricted fields follow IAM's gates."""
     requester, reviewer, _outsider, _subject, decision = inbox
     issuer = requester
-    Decision.objects.decide(
-        decision.pk, actor=reviewer, revision=decision.revision, chosen=["accept"],
+    decision.decide(actor=reviewer, revision=decision.revision, chosen=["accept"],
     )
     schema = addon_schema(decision_schema.schemas, "console")
     document = """query($id: String!) {

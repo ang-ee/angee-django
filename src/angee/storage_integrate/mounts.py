@@ -11,14 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, ClassVar, cast
 
-from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured, ValidationError
-from rebac import system_context
+from django.core.exceptions import ValidationError
 
 from angee.base.exceptions import exception_text
-from angee.base.implementations import resolve_impl_class
-from angee.integrate.impl import BridgeImpl
+from angee.integrate.backends.base import BridgeImpl
 from angee.storage.exceptions import UploadError
 from angee.storage.uploads import MIME_SNIFF_BYTES, detect_mime, sha256_stream
 
@@ -154,17 +151,10 @@ class LocalFolderMountBackend(MountBackend):
 
         del credential
         raw_token = str(token or "").strip()
-        candidate = Path.home() if not raw_token else Path(raw_token)
-        if raw_token and not candidate.is_absolute():
-            raise ValidationError({"token": "Local folder path must be absolute."})
         try:
-            current = candidate.resolve(strict=True)
-        except OSError as error:
-            raise ValidationError({"token": f"Local folder does not exist: {candidate}"}) from error
-        if not current.is_dir():
-            raise ValidationError({"token": f"Local folder path is not a directory: {current}"})
-        if not os.access(current, os.R_OK | os.X_OK):
-            raise ValidationError({"token": f"Local folder is not readable: {current}"})
+            current = validate_local_folder_root(raw_token or str(Path.home()))
+        except ValidationError as error:
+            raise ValidationError({"token": error.messages}) from error
 
         try:
             directory_children = list(current.iterdir())
@@ -322,21 +312,6 @@ def validate_local_folder_root(path: str) -> Path:
     return root
 
 
-def browse_mount_source(
-    backend_class: str,
-    *,
-    credential: Any | None = None,
-    token: str = "",
-) -> MountBrowseResult:
-    """Dispatch pre-connection browsing through the configured Mount backend."""
-
-    try:
-        impl = resolve_impl_class(MountBackend, backend_class)
-    except ImproperlyConfigured as error:
-        raise ValidationError({"backend_class": str(error)}) from error
-    return cast(type[MountBackend], impl).browse(credential=credential, token=token)
-
-
 def _resolve_browsable_directory(path: Path) -> Path | None:
     """Return a resolved real directory, skipping symlinks and stat races."""
 
@@ -362,11 +337,6 @@ def _local_mount_location(path: Path) -> MountLocation:
     """Project one resolved local directory into the neutral browser contract."""
 
     reason = _local_folder_validation_reason(path)
-    if not reason:
-        mount_model = apps.get_model("storage_integrate", "Mount")
-        with system_context(reason="storage_integrate.browse_mount_source"):
-            if mount_model.objects.filter(config__root=str(path)).exists():
-                reason = "Already mounted"
     return MountLocation(
         token=str(path),
         label=path.name or str(path),

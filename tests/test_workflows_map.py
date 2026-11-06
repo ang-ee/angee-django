@@ -1,25 +1,28 @@
 """Map bodies use the ordinary planner, settlements, recovery and read resources."""
 
+import json
 from datetime import timedelta
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models.identity import public_id_of
+from angee.base.refs import RecordRef
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.graphql.events import ChangeRelatedRecord
+from angee.graphql import publishing
+from angee.graphql.events import ChangePayload, ChangeRelatedRecord
 from angee.workflows import schema as workflow_schema
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem
 from angee.workflows.runner import runner
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode
-from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
 
@@ -66,7 +69,7 @@ def body_rows(run):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(execution, register_step):
+def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(execution, register_step, monkeypatch):
     """One item's publication retains sibling timelines and existing inherited views."""
     from tests.mtidemo.models import MtiChild, MtiParent
 
@@ -89,8 +92,8 @@ def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(e
     assert "run" not in item._state.fields_cache
     with CaptureQueriesContext(connection) as captured:
         concerns = item.change_related_records()
-    expected = {ChangeRelatedRecord(run._meta.label, run.sqid)} | {
-        ChangeRelatedRecord(model._meta.label, model.public_id_from_pk(child.pk))
+    expected = {RecordRef.from_instance(run)} | {
+        RecordRef.from_model(model, child.pk)
         for model in (MtiParent, MtiChild) for child in children
     }
     assert set(concerns) == expected and len(concerns) == len(expected)
@@ -99,12 +102,23 @@ def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(e
     assert any(sql.startswith("SELECT DISTINCT") and '"content_type_id"' in sql for sql in selects)
     assert not any(f'FROM "{run._meta.db_table}"' in sql for sql in selects)
     assert "run" not in item._state.fields_cache
-    from angee.base.refs import RecordRef
-
     with CaptureQueriesContext(connection) as captured:
         leaf_concerns = ChangeRelatedRecord.for_records(*(RecordRef.from_instance(child) for child in children))
     assert len(captured) == 0
-    assert set(leaf_concerns) == {concern for concern in expected if concern.model == MtiChild._meta.label}
+    assert set(leaf_concerns) == {
+        ChangeRelatedRecord(concern.model_label, concern.public_id)
+        for concern in expected if concern.model_label == MtiChild._meta.label
+    }
+    sent = []
+    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
+    publishing.publish_change(item, action="update", update_fields=None)
+    assert len(sent) == 1
+    payload = ChangePayload.from_mapping(sent[0])
+    assert (payload.model, payload.id, payload.action) == (item._meta.label, item.sqid, "update")
+    expected_wire = {ChangeRelatedRecord(reference.model_label, reference.public_id) for reference in expected}
+    assert set(payload.related_records) == expected_wire
+    assert len(payload.related_records) == len(expected_wire)
+    assert "run" not in item._state.fields_cache
 
 
 def test_map_item_is_the_typed_exclusive_result_contract():
@@ -134,7 +148,7 @@ def test_empty_map_finishes_without_body_rows(execution, map_steps):
     assert run.status == "succeeded" and run.output == [] and run.outcome == "done"
     assert not body_rows(run).exists()
     assert mapped.is_map and not mapped.is_mapped
-    assert mapped.map_total == mapped.map_settled == 0
+    assert mapped.get_map_total() == mapped.get_map_settled() == 0
     assert mapped.attempt == 1
     schema = addon_schema(workflow_schema.schemas, "console")
     assert result_data(execute_schema(schema, "{ steprun { is_map is_mapped map_total } }", user=actor)) == {
@@ -164,14 +178,14 @@ def test_map_orders_results_and_bounds_planning(execution, map_steps, settings):
     values = [{"value": index} for index in range(5)]
     run, mapped = start_map(actor, values)
     assert (mapped.status, mapped.waiting_kind) == ("waiting", "map")
-    assert (mapped.map_total, mapped.map_settled) == (5, 0)
+    assert (mapped.get_map_total(), mapped.get_map_settled()) == (5, 0)
     assert list(body_rows(run).values_list("map_index", flat=True)) == [0, 1]
     second = body_rows(run).get(map_index=1)
     assert second.is_mapped and second.rank == mapped.rank
     assert runner.execute(second.pk)
     assert list(body_rows(run).values_list("map_index", flat=True)) == [0, 1, 2]
     mapped.refresh_from_db()
-    assert (mapped.map_total, mapped.map_settled) == (5, 1)
+    assert (mapped.get_map_total(), mapped.get_map_settled()) == (5, 1)
     run_until(run)
     results = TypeAdapter(list[MapItem[dict[str, int]]]).validate_python(run.output)
     assert [(item.index, item.outcome, item.output) for item in results] == [
@@ -180,8 +194,90 @@ def test_map_orders_results_and_bounds_planning(execution, map_steps, settings):
     assert all("error" not in item for item in run.output)
     mapped.refresh_from_db()
     assert run.status == "succeeded" and mapped.attempt == 2
-    assert (mapped.map_total, mapped.map_settled) == (5, 5)
+    assert (mapped.get_map_total(), mapped.get_map_settled()) == (5, 5)
     assert all(row.rank == mapped.rank and row.is_mapped for row in body_rows(run))
+
+
+def test_map_claim_and_planning_load_bounded_rows(execution, map_steps, settings, monkeypatch):
+    """Claim and advancement keep map item JSON out of the planner's row scan."""
+    actor, _ = execution
+    settings.ANGEE_WORKFLOW_MAP_CONCURRENCY = 1
+    samples = []
+    original = StepRun.from_db
+    for size in (10, 50, 200):
+        run, parent = start_map(actor, [{"value": index} for index in range(size)])
+        body = body_rows(run).get(map_index=0)
+        materialized = []
+
+        def observe(cls, db, field_names, values, **kwargs):
+            fields = dict(zip(field_names, values))
+            materialized.append(
+                (
+                    fields.get("node_key"),
+                    sum(
+                        len(json.dumps(fields[name]).encode())
+                        for name in ("input", "output", "state", "notes")
+                        if name in fields
+                    ),
+                )
+            )
+            return original(db, field_names, values, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(StepRun, "from_db", classmethod(observe))
+            with system_context(reason="tests.map.claim.measure"), transaction.atomic():
+                with CaptureQueriesContext(connection) as claim_queries:
+                    attempt = StepRun.system_queryset().claim(body)
+        claim_rows = list(materialized)
+        materialized.clear()
+        assert attempt is not None
+        with system_context(reason="tests.map.seed.progress"):
+            StepRun.system_queryset().filter(pk=body.pk).to_succeeded(output={"value": 0}, outcome="done")
+            StepRun.system_queryset().bulk_create(
+                StepRun(
+                    run=run,
+                    node_key="items.body",
+                    map_index=index,
+                    rank=parent.rank,
+                    status="succeeded",
+                    outcome="done",
+                    output={"value": index},
+                )
+                for index in range(1, size - 1)
+            )
+        with monkeypatch.context() as patch:
+            patch.setattr(StepRun, "from_db", classmethod(observe))
+            with system_context(reason="tests.map.advance.measure"):
+                with CaptureQueriesContext(connection) as advance_queries:
+                    run.advance()
+        assert body_rows(run).filter(map_index=size - 1).exists()
+        assert len(claim_rows) <= 6
+        assert sum(key == "items.body" for key, _bytes in claim_rows) <= 1
+        assert len(materialized) <= 5
+        assert not any(key == "items.body" for key, _bytes in materialized)
+        if size == 50:
+            status_queries = [
+                query["sql"]
+                for query in advance_queries
+                if query["sql"].startswith("SELECT DISTINCT ")
+                and f'FROM "{StepRun._meta.db_table}"' in query["sql"]
+                and '"status"' in query["sql"]
+            ]
+            assert status_queries and all(" ORDER BY " not in sql for sql in status_queries)
+        samples.append(
+            (
+                len(claim_queries),
+                len(claim_rows),
+                len(advance_queries),
+                len(materialized),
+                sum(n for _, n in materialized),
+            )
+        )
+    assert all(
+        claim_statements <= 50 and advance_statements <= 52 for claim_statements, _, advance_statements, _, _ in samples
+    )
+    assert all(claim_rows <= 6 and advance_rows <= 5 for _, claim_rows, _, advance_rows, _ in samples)
+    assert all(payload_bytes <= 500 for _, _, _, _, payload_bytes in samples)
 
 
 def test_routed_body_failure_keeps_typed_partial_results(execution, map_steps, register_step):
@@ -295,6 +391,7 @@ def test_waiting_body_consumes_a_slot_and_retry_keeps_its_index(execution, map_s
     assert all(row.rank == mapped.rank for row in body_rows(run))
 
 
+@pytest.mark.django_db(transaction=True)
 def test_operator_wait_in_a_body_requires_duplicate_acknowledgement(execution, map_steps, register_step, settings):
     actor, _sent = execution
     settings.ANGEE_WORKFLOW_MAP_CONCURRENCY = 1
@@ -310,7 +407,7 @@ def test_operator_wait_in_a_body_requires_duplicate_acknowledgement(execution, m
             if ctx.attempt.number == 1:
                 ctx.begin_effect()
                 raise Retryable("The effect's result was unavailable.")
-            assert ctx.retry_acknowledged
+            assert ctx.attempt.acknowledged_by_id is not None
             return ctx.done(ctx.input)
 
     register_step(MarkedItem)
@@ -360,8 +457,9 @@ def test_map_progress_and_body_identity_are_resource_owned(execution, map_steps,
     assert all(row["rank"] == mapped.rank and row["map_total"] == row["map_settled"] == 0 for row in bodies)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_decision_map_body_has_independent_questions_and_typed_outputs(execution, map_steps, register_step):
-    actor, _sent = execution
+    actor, sent = execution
     reviewer = create_user("map-reviewer")
     reference = vault_for(actor)
     write_relationships([RelationshipTuple(to_object_ref(reference), "viewer", to_subject_ref(reviewer))])
@@ -388,9 +486,11 @@ def test_decision_map_body_has_independent_questions_and_typed_outputs(execution
     decisions = [Decision.system_queryset().get(requesting_steps=row) for row in original]
     assert decisions[0].pk != decisions[1].pk
     decide(decisions[1], actor=reviewer, chosen=["accept"])
+    assert deliver_decision_wakes(sent, decisions[1].pk) == [1]
     run_until(run)
     assert applied == [1] and body_rows(run)[0].status == "waiting"
     decide(decisions[0], actor=reviewer, chosen=["accept"])
+    assert deliver_decision_wakes(sent, decisions[0].pk) == [1]
     run_until(run)
     assert run.status == "succeeded" and applied == [1, 0]
     assert [item["output"] for item in StepRun.system_queryset().get(run=run, node_key="items").output] == [

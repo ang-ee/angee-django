@@ -19,6 +19,7 @@ import type {
 } from "@angee/metadata";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { OperationDocumentsProvider, type GroupByBatchScope } from "@angee/refine";
+import type { ReactElement, ReactNode } from "react";
 
 import { ToastProvider } from "../../feedback";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
@@ -38,6 +39,7 @@ const tableMocks = vi.hoisted(() => ({
   refetch: vi.fn(),
   mutateAsync: vi.fn(),
   pageSizes: [] as number[],
+  fetching: false,
   subgroupTotal: null as number | null,
   subgroupPages: [] as number[],
 }));
@@ -75,8 +77,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
           tableMocks.pageSizes.push(pagination.pageSize);
       }
       return {
-        result: { data: tableMocks.rows, total: tableMocks.rows.length },
-        query: { isFetching: false, refetch: tableMocks.refetch },
+        result: tableMocks.fetching
+          ? { data: [], total: undefined }
+          : { data: tableMocks.rows, total: tableMocks.rows.length },
+        query: { isFetching: tableMocks.fetching, isSuccess: !tableMocks.fetching, refetch: tableMocks.refetch },
       };
     },
     useUpdate: () => ({ mutateAsync: tableMocks.mutateAsync }),
@@ -165,10 +169,18 @@ afterEach(() => {
   tableMocks.refetch.mockClear();
   tableMocks.mutateAsync.mockClear();
   tableMocks.pageSizes = [];
+  tableMocks.fetching = false;
   tableMocks.rows = [{ id: "note_1", title: "First", status: "active" }];
   tableMocks.subgroupTotal = null;
   tableMocks.subgroupPages = [];
 });
+
+function renderSurface(ui: ReactElement): ReturnType<typeof render> {
+  const client = new QueryClient();
+  return render(ui, { wrapper: ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}><ToastProvider>{children}</ToastProvider></QueryClientProvider>
+  ) });
+}
 
 describe("useClientResourceViewSurface", () => {
   test("client row-model pagination retains page sizes above the server cap", () => {
@@ -177,19 +189,83 @@ describe("useClientResourceViewSurface", () => {
       title: `Note ${index + 1}`,
       status: "active",
     }));
-    render(
-      <ToastProvider>
-        <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
-          <ClientSurfaceProbe />
-        </ResourceViewProvider>
-      </ToastProvider>,
-    );
+    renderSurface(<ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
+      <ClientSurfaceProbe />
+    </ResourceViewProvider>);
 
     expect(screen.getByTestId("client-page-size").textContent).toBe(
       "200:200:200",
     );
   });
+
+  test("client row-model pages records from the view page and keeps it while the read is in flight", () => {
+    tableMocks.rows = clientRows(204);
+    tableMocks.fetching = true;
+    const probe = (): ReactElement => <ResourceViewProvider scope="local" initialState={{ page: 3, pageSize: 50 }}>
+      <ClientPagingProbe />
+    </ResourceViewProvider>;
+    const view = renderSurface(probe());
+    // page:pageCount:hasNext:total:records:groups:first-last:records-before/total:groupedRows
+    expect(screen.getByTestId("client-paging").textContent).toBe("3:1:false:0:0:0:-:-:1");
+
+    tableMocks.fetching = false;
+    view.rerender(probe());
+    expect(screen.getByTestId("client-paging").textContent).toBe("3:5:true:204:50:0:note_101-note_150:-:1");
+
+    tableMocks.rows = clientRows(60);
+    view.rerender(probe());
+    expect(screen.getByTestId("client-paging").textContent).toBe("2:2:false:60:10:0:note_51-note_60:-:1");
+  });
+
+  test("client row-model grouping pages root groups with their records open", () => {
+    tableMocks.rows = clientRows(204);
+    const { unmount } = renderSurface(<ResourceViewProvider scope="local" initialState={{ pageSize: 50, group: { field: "status" } }}>
+      <ClientPagingProbe />
+    </ResourceViewProvider>);
+    // 37 groups on one page, every record open: the last record is the last group's.
+    expect(screen.getByTestId("client-paging").textContent).toBe("1:1:false:37:204:37:note_1-note_185:0/204:37");
+    unmount();
+
+    renderSurface(<ResourceViewProvider scope="local" initialState={{ page: 2, pageSize: 20, group: { field: "status" } }}>
+      <ClientPagingProbe />
+    </ResourceViewProvider>);
+    // Groups 21-37 (five records each) on page 2; groups 1-20 (nineteen of six, one of five) on page 1.
+    // The record facts and the board's groups follow the page: 119 records precede page 2.
+    expect(screen.getByTestId("client-paging").textContent).toBe("2:2:false:37:85:17:note_21-note_185:119/204:17");
+    fireEvent.click(screen.getByRole("button", { name: "first page" }));
+    expect(screen.getByTestId("client-paging").textContent).toBe("1:2:true:37:119:20:note_1-note_168:0/204:20");
+  });
 });
+
+/** `n` records over 37 statuses, in order: group `s1` holds note_1, note_38, … */
+function clientRows(n: number): Row[] {
+  return Array.from({ length: n }, (_, index) => ({
+    id: `note_${index + 1}`,
+    title: `Note ${index + 1}`,
+    status: `s${(index % 37) + 1}`,
+  }));
+}
+
+function ClientPagingProbe(): React.ReactElement {
+  const resourceView = useResourceView();
+  const surface = useClientResourceViewSurface({
+    resource: "notes.Note",
+    columns: NOTE_COLUMNS,
+    resourceView,
+    modelMetadata: CLIENT_NOTE_METADATA,
+  });
+  const ids = surface.rows.map((row) => row.id);
+  const groups = surface.rowModels.filter((row) => row.getIsGrouped()).length;
+  return <>
+    <button type="button" onClick={() => resourceView.setPage(1)}>first page</button>
+    <span data-testid="client-paging">
+      {[surface.list.page, surface.list.pageCount, surface.list.hasNext, surface.list.total, surface.rows.length, groups,
+        ids.length > 0 ? `${ids[0]}-${ids.at(-1)}` : "-",
+        surface.list.records ? `${surface.list.records.before}/${surface.list.records.total}` : "-",
+        surface.groupedRows.length].join(":")}
+    </span>
+  </>;
+}
 
 function ClientSurfaceProbe(): React.ReactElement {
   const resourceView = useResourceView();
@@ -208,17 +284,13 @@ function ClientSurfaceProbe(): React.ReactElement {
 
 describe("useResourceViewSurface", () => {
   test("row query filters follow cleared resource-view facets after mount", async () => {
-    render(
-      <ToastProvider>
-        <ResourceViewProvider
-          resource="notes.Note"
-          scope="local"
-          initialState={{ filter: { status: "active" } }}
-        >
-          <SurfaceProbe />
-        </ResourceViewProvider>
-      </ToastProvider>,
-    );
+    renderSurface(<ResourceViewProvider
+      resource="notes.Note"
+      scope="local"
+      initialState={{ filter: { status: "active" } }}
+    >
+      <SurfaceProbe />
+    </ResourceViewProvider>);
 
     expect(tableMocks.activeFilters.at(-1)).toEqual({
       status: { _eq: "active" },
@@ -233,13 +305,9 @@ describe("useResourceViewSurface", () => {
 
   test("server pagination clamps oversized native state before query and navigation", async () => {
     const onListStateChange = vi.fn();
-    render(
-      <ToastProvider>
-        <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
-          <SurfaceProbe onListStateChange={onListStateChange} />
-        </ResourceViewProvider>
-      </ToastProvider>,
-    );
+    renderSurface(<ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
+      <SurfaceProbe onListStateChange={onListStateChange} />
+    </ResourceViewProvider>);
 
     await waitFor(() =>
       expect(screen.getByTestId("flat-page-size").textContent).toBe("100:100"),
@@ -282,15 +350,13 @@ describe("useGroupedResourceViewSurface", () => {
   test("fetches the last valid nested page after a live count shrinks", async () => {
     tableMocks.subgroupTotal = 5;
     const probe = () => (
-      <ToastProvider>
-        <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": {} } } }}>
-          <ResourceViewProvider scope="local" initialState={{ pageSize: 2 }}>
-            <NestedPageProbe />
-          </ResourceViewProvider>
-        </OperationDocumentsProvider>
-      </ToastProvider>
+      <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": {} } } }}>
+        <ResourceViewProvider scope="local" initialState={{ pageSize: 2 }}>
+          <NestedPageProbe />
+        </ResourceViewProvider>
+      </OperationDocumentsProvider>
     );
-    const { rerender } = render(probe());
+    const { rerender } = renderSurface(probe());
     fireEvent.click(await screen.findByRole("button", { name: "open root" }));
     fireEvent.click(await screen.findByRole("button", { name: "last subgroup page" }));
     await waitFor(() => expect(tableMocks.subgroupPages.at(-1)).toBe(3));
@@ -348,27 +414,19 @@ function renderGroupedProbe(
   filter: Record<string, unknown>,
   onListStateChange: (state: ResourceListSnapshot<Row>) => void,
 ): void {
-  // The grouped batch read shares TanStack Query's cache, so it needs a client.
-  render(
-    <QueryClientProvider client={new QueryClient()}>
-      <ToastProvider>
-        <OperationDocumentsProvider
-          documents={{
-            console: {
-              groups: {
-                "notes.Note":
-                  "query NoteGroups { notes_groups { key { status } aggregate { count } } }",
-              },
-            },
-          }}
-        >
-          <ResourceViewProvider resource="notes.Note" scope="local">
-            <GroupedProbe filter={filter} onListStateChange={onListStateChange} />
-          </ResourceViewProvider>
-        </OperationDocumentsProvider>
-      </ToastProvider>
-    </QueryClientProvider>,
-  );
+  renderSurface(<OperationDocumentsProvider
+    documents={{
+      console: {
+        groups: {
+          "notes.Note": "query NoteGroups { notes_groups { key { status } aggregate { count } } }",
+        },
+      },
+    }}
+  >
+    <ResourceViewProvider resource="notes.Note" scope="local">
+      <GroupedProbe filter={filter} onListStateChange={onListStateChange} />
+    </ResourceViewProvider>
+  </OperationDocumentsProvider>);
 }
 
 function GroupedProbe({

@@ -1,5 +1,10 @@
-import { parse, parseType, print } from "graphql";
+import {
+  parse,
+  parseType,
+  print,
+} from "graphql";
 import { refineFieldsFromPaths, selectionText } from "./selections";
+import type { TypedDocumentNode } from "./typed-document";
 
 /** Executable GraphQL names supplied by the resource metadata edge. */
 export interface ListQueryTarget {
@@ -20,6 +25,12 @@ export interface ListQueryFieldArgument {
 export interface ListQueryFieldBinding {
   path: string;
   arguments: readonly ListQueryFieldArgument[];
+}
+
+export interface GroupedListQueryTarget extends ListQueryTarget {
+  groupedRowsRoot: string;
+  groupByType: string;
+  groupedRowPageType: string;
 }
 
 /** Bind already-compiled predicates through Refine's native document override. */
@@ -80,5 +91,47 @@ export function listQueryMeta(
       ${aggregate}(where: $where) { aggregate { count } }
     }`),
     gqlVariables: variables,
+  };
+}
+
+/** Build one operation for independently paged list scopes of the same resource. */
+export function groupedListQueryMeta(
+  target: GroupedListQueryTarget,
+  paths: readonly string[],
+  groupBy: { field: string; granularity?: string },
+  scopes: readonly {
+    value: unknown;
+    page: number;
+    pageSize: number;
+  }[],
+  where?: Record<string, unknown>,
+  orderBy?: unknown,
+) {
+  for (const name of [target.groupedRowsRoot, target.groupByType, target.groupedRowPageType, target.filterType, target.orderType]) {
+    if (!/^[_A-Za-z][_0-9A-Za-z]*$/.test(name)) throw new Error(`Invalid GraphQL name: ${name}`);
+  }
+  const fields = refineFieldsFromPaths(paths);
+  if (fields.length === 0) throw new Error("A grouped list query requires a selection.");
+  const document: TypedDocumentNode<Record<string, unknown>, Record<string, unknown>> = parse(`
+    query GroupedResourceList(
+      $group_by: ${target.groupByType}!,
+      $pages: [${target.groupedRowPageType}!]!,
+      $where: ${target.filterType},
+      $order_by: [${target.orderType}!]
+    ) {
+      rows: ${target.groupedRowsRoot}(group_by: $group_by, pages: $pages, where: $where, order_by: $order_by) {
+        key
+        rows { ${selectionText(fields, {})} }
+      }
+    }
+  `);
+  return {
+    document,
+    variables: {
+      group_by: groupBy,
+      pages: scopes.map(({ value, page, pageSize }) => ({ key: value, limit: pageSize, offset: (page - 1) * pageSize })),
+      ...(where === undefined ? {} : { where }),
+      ...(orderBy === undefined ? {} : { order_by: orderBy }),
+    },
   };
 }

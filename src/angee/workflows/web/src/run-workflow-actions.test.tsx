@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { DocumentType } from "@angee/gql/console";
 import type { CustomParams } from "@refinedev/core";
@@ -63,6 +63,8 @@ async function openWorkflows() {
 
 test("lists the server's workflows for the concrete and canonical record models", async () => {
   const { custom } = mount();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(custom).not.toHaveBeenCalled();
   await openWorkflows();
   expect(await screen.findByRole("menuitem", { name: "Quiet" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: "Review" })).toBeTruthy();
@@ -80,7 +82,7 @@ test("starts a workflow with an empty input form at once and settles its outcome
   await waitFor(() => expect(mocks.start).toHaveBeenCalledExactlyOnceWith("wfl_quiet", {
     subject: { model: "notes.Note", id: "nte_7" }, input: {},
     request_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
-  }));
+  }, expect.any(Object)));
   // The success toast is itself a dialog role; the input form is the named one.
   expect(screen.queryByRole("dialog", { name: "Quiet" })).toBeNull();
   expect(await screen.findAllByText("Quiet started")).toHaveLength(1);
@@ -95,7 +97,7 @@ test("required input opens the shared schema form before starting", async () => 
   fireEvent.click(within(dialog).getByRole("button", { name: "Review" }));
   await waitFor(() => expect(mocks.start).toHaveBeenCalledExactlyOnceWith("wfl_review", {
     subject: { model: "notes.Note", id: "nte_7" }, input: { reason: "Check record" }, request_key: expect.any(String),
-  }));
+  }, expect.any(Object)));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
   expect(await screen.findAllByText("Review started")).toHaveLength(1);
 });
@@ -128,8 +130,9 @@ test("relation annotations render the standard record picker", async () => {
 
 test("omits the contribution when no workflow applies", async () => {
   const { custom } = mount({ workflow: [] });
-  await waitFor(() => expect(custom).toHaveBeenCalledOnce());
   fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+  await waitFor(() => expect(custom).toHaveBeenCalledOnce());
+  await act(async () => { await custom.mock.results[0]?.value; });
   expect(screen.queryByRole("menuitem", { name: "Run workflow" })).toBeNull();
 });
 
@@ -153,5 +156,5 @@ test("optional input opens the shared schema form before starting", async () => 
   expect(mocks.start).not.toHaveBeenCalled();
   fireEvent.change(within(dialog).getByRole("textbox", { name: "Note" }), { target: { value: "Keep this" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Optional" }));
-  await waitFor(() => expect(mocks.start).toHaveBeenCalledWith("wfl_optional", expect.objectContaining({ input: { note: "Keep this" } })));
+  await waitFor(() => expect(mocks.start).toHaveBeenCalledWith("wfl_optional", expect.objectContaining({ input: { note: "Keep this" } }), expect.any(Object)));
 });

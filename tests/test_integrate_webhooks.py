@@ -4,74 +4,21 @@ from __future__ import annotations
 
 import hmac
 import socket
-from collections.abc import Iterator
 from typing import Any
-from unittest.mock import Mock
 
-import httpcore2
 import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import transaction
-from django.test.utils import isolate_apps
 from rebac import system_context
 
-from angee.integrate.events import EventKind
+from angee.integrate.http import HttpClient
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
-from angee.integrate.testing.integration import Integration
-from angee.integrate.webhooks import SIGNATURE_HEADER, WebhookDeliveryError
 from tests.conftest import (
     WebhookSubscription,
-    make_integration,
 )
-from tests.tables import model_tables
-
-
-@pytest.fixture
-def dispatch_bridge(transactional_db: None) -> Iterator[Bridge]:
-    """Persist an isolated bridge so inbound dispatch has a real lock identity."""
-
-    with isolate_apps():
-
-        class DispatchBridge(Bridge, Integration):
-            """Concrete bridge fixture used only for inbound dispatch tests."""
-
-            class Meta(Bridge.Meta):
-                """Django model options for the inbound dispatch bridge fixture."""
-
-                abstract = False
-                app_label = "tests"
-                db_table = "test_integrate_webhook_dispatch_bridge"
-                rebac_resource_type = "tests/webhook_dispatch_bridge"
-
-            def sync(self) -> None:
-                """No-op sync implementation for the fixture."""
-
-            def handle_webhook(self, payload: Any) -> None:
-                """Record that the verified payload was handled."""
-
-                self.calls.append(("handle", payload))
-
-            def verify_webhook(self, request: Any) -> bool:
-                """Record verification and return the fixture's configured result."""
-
-                self.calls.append(("verify", request))
-                if hasattr(self, "verify_error"):
-                    raise self.verify_error
-                return self.accepts
-
-            def start_live(self) -> None:
-                """No-op live subscription start for the fixture."""
-
-            def stop_live(self) -> None:
-                """No-op live subscription stop for the fixture."""
-
-        with model_tables((DispatchBridge,)):
-            bridge = make_integration("inbound-dispatch", model=DispatchBridge)
-            yield bridge
 
 
 @pytest.mark.django_db(transaction=True)
@@ -91,7 +38,6 @@ def test_webhook_subscription_owner_is_field_backed(transactional_db: None) -> N
             owner=user,
             target_url="https://hooks.example.test/events",
             secret="owner-secret",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
         )
 
     assert subscription.owner_id == user.pk
@@ -135,32 +81,6 @@ def test_validate_public_url_accepts_public_dns(monkeypatch: pytest.MonkeyPatch)
     validate_public_url("https://hooks.example.test/events")
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("empty_answer", [False, True])
-def test_webhook_nonexistent_host_is_an_invalid_target(monkeypatch: pytest.MonkeyPatch, empty_answer: bool) -> None:
-    call_command("rebac", "sync", verbosity=0)
-
-    def resolve(*args: Any, **kwargs: Any) -> list[Any]:
-        if empty_answer:
-            return []
-        raise socket.gaierror(socket.EAI_NONAME, "no such host")
-
-    monkeypatch.setattr(socket, "getaddrinfo", resolve)
-    dial = Mock(side_effect=AssertionError("Absent host must never be dialled."))
-    monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", dial)
-    user = get_user_model().objects.create_user(username="webhook-absent-host")
-    with system_context(reason="test webhook absent host"):
-        subscription = WebhookSubscription.objects.create(
-            owner=user, target_url="https://absent.example.test/events", secret="test",
-            event_kinds=[EventKind.BRIDGE_ERRORED.value],
-        )
-    result = WebhookSubscription.objects.deliver_event(kind=EventKind.BRIDGE_ERRORED, payload={"bridge": "br_1"})
-    subscription.refresh_from_db()
-    assert result == {"delivered": 0, "errors": 1}
-    assert subscription.last_error == "Webhook target is invalid."
-    dial.assert_not_called()
-
-
 def test_runtime_marker_is_per_class() -> None:
     """Pure abstract bases stay unmaterialized; subclasses opt in per class."""
 
@@ -176,213 +96,6 @@ def test_runtime_marker_is_per_class() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_deliver_event_signs_and_posts_only_matching_subscriptions(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Outbound delivery signs raw JSON and skips disabled or filtered subscriptions."""
-
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    posts = _record_posts(monkeypatch, status=202)
-
-    user = get_user_model().objects.create_user(username="webhook-delivery", email="delivery@example.com")
-    conn = make_integration("delivery-account")
-    other_conn = make_integration("delivery-other")
-    payload = {"bridge": "br_1"}
-    body = b'{"bridge":"br_1"}'
-
-    with system_context(reason="test webhook delivery setup"):
-        first = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-a.example.test/events",
-            secret="first-secret",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
-            impl_app_filter=["notes"],
-            integration_filter=conn,
-            consecutive_failures=3,
-        )
-        match_all = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-all.example.test/events",
-            secret="all-secret",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
-        )
-        disabled = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-disabled.example.test/events",
-            secret="disabled-secret",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
-            enabled=False,
-        )
-        wrong_kind = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-kind.example.test/events",
-            secret="kind-secret",
-            event_kinds=[EventKind.ACCOUNT_REVOKED.value],
-        )
-        wrong_impl = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-impl.example.test/events",
-            secret="impl-secret",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
-            impl_app_filter=["records"],
-        )
-        wrong_account = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-account.example.test/events",
-            secret="account-secret",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
-            integration_filter=other_conn,
-        )
-
-    result = WebhookSubscription.objects.deliver_event(
-        kind=EventKind.BRIDGE_SYNCED,
-        payload=payload,
-        impl_app="notes",
-        integration=conn,
-    )
-
-    assert result == {"delivered": 2, "errors": 0}
-    assert [post["url"] for post in posts] == [
-        "https://hooks-a.example.test/events",
-        "https://hooks-all.example.test/events",
-    ]
-    assert {post["body"] for post in posts} == {body}
-    assert {post["headers"][SIGNATURE_HEADER] for post in posts} == {
-        _signature("first-secret", body),
-        _signature("all-secret", body),
-    }
-
-    first.refresh_from_db()
-    match_all.refresh_from_db()
-    for delivered in (first, match_all):
-        assert delivered.last_delivery_status == "202"
-        assert delivered.last_delivery_at is not None
-        assert delivered.last_error == ""
-        assert delivered.consecutive_failures == 0
-
-    for skipped in (disabled, wrong_kind, wrong_impl, wrong_account):
-        skipped.refresh_from_db()
-        assert skipped.last_delivery_at is None
-
-
-@pytest.mark.django_db(transaction=True)
-def test_enqueue_event_delivers_after_commit(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The manager-owned queue seam sends webhook fan-out after commit."""
-
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    posts = _record_posts(monkeypatch, status=202)
-
-    user = get_user_model().objects.create_user(username="webhook-queued", email="queued@example.com")
-    with system_context(reason="test webhook queued setup"):
-        WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-queued.example.test/events",
-            secret="queued-secret",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
-        )
-
-    with transaction.atomic():
-        WebhookSubscription.objects.enqueue_event(
-            kind=EventKind.BRIDGE_SYNCED,
-            payload={"bridge": "br_queued"},
-        )
-        assert posts == []
-
-    assert [post["url"] for post in posts] == ["https://hooks-queued.example.test/events"]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_deliver_event_prefilters_integration_scope_before_row_matching(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The manager excludes integration-filter misses before calling row matchers."""
-
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    _record_posts(monkeypatch, status=202)
-
-    user = get_user_model().objects.create_user(username="webhook-prefilter", email="prefilter@example.com")
-    conn = make_integration("prefilter-account")
-    other_conn = make_integration("prefilter-other")
-    with system_context(reason="test webhook prefilter setup"):
-        matching = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-prefilter.example.test/events",
-            secret="prefilter-secret",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
-            integration_filter=conn,
-        )
-        wrong_account = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-prefilter-other.example.test/events",
-            secret="prefilter-other-secret",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
-            integration_filter=other_conn,
-        )
-
-    checked: list[int] = []
-    original_matches = WebhookSubscription.matches
-
-    def tracked_matches(subscription: WebhookSubscription, **kwargs: Any) -> bool:
-        checked.append(subscription.pk)
-        return original_matches(subscription, **kwargs)
-
-    monkeypatch.setattr(WebhookSubscription, "matches", tracked_matches)
-
-    result = WebhookSubscription.objects.deliver_event(
-        kind=EventKind.BRIDGE_SYNCED,
-        payload={"bridge": "br_prefilter"},
-        integration=conn,
-    )
-
-    assert result == {"delivered": 1, "errors": 0}
-    assert matching.pk in checked
-    assert wrong_account.pk not in checked
-
-
-@pytest.mark.django_db(transaction=True)
-def test_deliver_event_failure_increments_consecutive_failures(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failed POST records telemetry and increments the failure counter."""
-
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    posts = _record_posts(monkeypatch, post_error=ConnectionRefusedError("connection refused"))
-
-    user = get_user_model().objects.create_user(username="webhook-failure", email="failure@example.com")
-    with system_context(reason="test webhook failure setup"):
-        subscription = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-failure.example.test/events",
-            secret="failure-secret",
-            event_kinds=[EventKind.BRIDGE_ERRORED.value],
-            consecutive_failures=4,
-        )
-
-    result = WebhookSubscription.objects.deliver_event(
-        kind=EventKind.BRIDGE_ERRORED,
-        payload={"bridge": "br_1"},
-    )
-
-    subscription.refresh_from_db()
-    assert result == {"delivered": 0, "errors": 1}
-    assert len(posts) == 1
-    assert subscription.consecutive_failures == 5
-    assert subscription.last_delivery_at is not None
-    assert subscription.last_delivery_status == ""
-    assert subscription.last_error == "Webhook delivery failed."
-
-
-@pytest.mark.django_db(transaction=True)
 def test_record_delivery_failure_refreshes_incremented_counter(transactional_db: None) -> None:
     """Failure telemetry leaves the row instance with the database counter value."""
 
@@ -395,7 +108,6 @@ def test_record_delivery_failure_refreshes_incremented_counter(transactional_db:
             owner=user,
             target_url="https://hooks-refresh.example.test/events",
             secret="refresh-secret",
-            event_kinds=[EventKind.BRIDGE_ERRORED.value],
             consecutive_failures=4,
         )
         subscription.record_delivery_failure(status="", error="ConnectionRefusedError: connection refused")
@@ -404,164 +116,30 @@ def test_record_delivery_failure_refreshes_incremented_counter(transactional_db:
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize(
-    "address",
-    [
-        "127.0.0.1",
-        "10.0.0.1",
-        "169.254.169.254",
-    ],
-)
-def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-    address: str,
-) -> None:
-    """Unsafe DNS refuses before dialling and records the gate's invalid-target telemetry."""
+def test_subscription_test_delivery_signs_and_records_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The retained test action signs its body and persists delivery telemetry."""
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    _resolve_to(monkeypatch, address)
-    dial = Mock(side_effect=AssertionError("Unsafe webhook target must never be dialled."))
-    monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", dial)
-
-    user = get_user_model().objects.create_user(
-        username=f"webhook-ssrf-{address.replace('.', '-')}",
-        email="ssrf@example.com",
-    )
-    with system_context(reason="test webhook ssrf setup"):
+    user = get_user_model().objects.create_user(username="webhook-test-delivery")
+    with system_context(reason="test webhook delivery setup"):
         subscription = WebhookSubscription.objects.create(
             owner=user,
-            target_url="https://hooks-ssrf.example.test/events",
-            secret="ssrf-secret",
-            event_kinds=[EventKind.BRIDGE_ERRORED.value],
+            target_url="https://hooks.example.test/events",
+            secret="delivery-secret",
         )
+    sent: list[tuple[str, bytes, dict[str, str]]] = []
 
-    result = WebhookSubscription.objects.deliver_event(
-        kind=EventKind.BRIDGE_ERRORED,
-        payload={"bridge": "br_1"},
-    )
+    def post(_client: HttpClient, url: str, *, body: bytes, headers: dict[str, str]) -> httpx2.Response:
+        sent.append((url, body, headers))
+        return httpx2.Response(204)
 
-    subscription.refresh_from_db()
-    assert result == {"delivered": 0, "errors": 1}
-    assert subscription.consecutive_failures == 1
-    assert subscription.last_delivery_status == ""
-    assert subscription.last_error == "Webhook target is invalid."
-    dial.assert_not_called()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_deliver_event_redirect_response_fails_without_following(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A 3xx delivery response is telemetry failure and never another request."""
-
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    posts = _record_posts(monkeypatch, status=302)
-
-    user = get_user_model().objects.create_user(username="webhook-redirect", email="redirect@example.com")
-    with system_context(reason="test webhook redirect setup"):
-        subscription = WebhookSubscription.objects.create(
-            owner=user,
-            target_url="https://hooks-redirect.example.test/events",
-            secret="redirect-secret",
-            event_kinds=[EventKind.BRIDGE_ERRORED.value],
-            consecutive_failures=2,
-        )
-
-    result = WebhookSubscription.objects.deliver_event(
-        kind=EventKind.BRIDGE_ERRORED,
-        payload={"bridge": "br_1"},
-    )
-
-    subscription.refresh_from_db()
-    assert result == {"delivered": 0, "errors": 1}
-    assert len(posts) == 1
-    assert posts[0]["url"] == "https://hooks-redirect.example.test/events"
-    assert subscription.consecutive_failures == 3
-    assert subscription.last_delivery_status == "302"
-    assert subscription.last_error == "Webhook returned HTTP 302."
-
-
-@pytest.mark.django_db(transaction=True)
-def test_dispatch_inbound_verifies_then_handles_fixture_bridge(dispatch_bridge: Bridge) -> None:
-    """Inbound dispatch calls verify_webhook before handle_webhook."""
-
-    payload = {"event": "vendor.changed"}
-    bridge = dispatch_bridge
-    bridge.calls = []
-    bridge.accepts = True
-
-    result = bridge.dispatch_inbound(payload)
-
-    assert result is True
-    assert bridge.calls == [("verify", payload), ("handle", payload)]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_dispatch_inbound_rejects_without_handling_when_verify_returns_false(dispatch_bridge: Bridge) -> None:
-    """Inbound dispatch does not handle a payload rejected by verify_webhook."""
-
-    payload = {"event": "vendor.changed"}
-    bridge = dispatch_bridge
-    bridge.calls = []
-    bridge.accepts = False
-
-    result = bridge.dispatch_inbound(payload)
-
-    assert result is False
-    assert bridge.calls == [("verify", payload)]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_dispatch_inbound_does_not_handle_when_verify_raises(dispatch_bridge: Bridge) -> None:
-    """Inbound dispatch does not handle a payload when verification raises."""
-
-    payload = {"event": "vendor.changed"}
-    bridge = dispatch_bridge
-    bridge.calls = []
-    bridge.accepts = True
-    bridge.verify_error = RuntimeError("bad signature")
-
-    with pytest.raises(RuntimeError, match="bad signature"):
-        bridge.dispatch_inbound(payload)
-
-    assert bridge.calls == [("verify", payload)]
-
-
-def _record_posts(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    status: int = 202,
-    post_error: Exception | None = None,
-) -> list[dict[str, Any]]:
-    """Record posts through the shared ``HttpClient`` (the seam webhook delivery uses).
-
-    Pinning itself is covered by ``tests/test_integrate_http.py``; here we only need
-    to observe the URL, body, and signature delivery sends, and replay a status or a
-    transport error.
-    """
-
-    posts: list[dict[str, Any]] = []
-
-    def fake_post(
-        self: Any,
-        url: str,
-        *,
-        body: bytes | None = None,
-        headers: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> httpx2.Response:
-        del kwargs
-        posts.append({"url": url, "body": body, "headers": headers or {}})
-        if post_error is not None:
-            raise post_error
-        return httpx2.Response(status, content=b"", headers={})
-
-    monkeypatch.setattr("angee.integrate.http.HttpClient.post", fake_post)
-    return posts
+    monkeypatch.setattr(HttpClient, "post", post)
+    with system_context(reason="test webhook delivery"):
+        assert subscription.deliver_test() == (True, "Delivered (status 204).")
+    url, body, headers = sent[0]
+    assert url == subscription.target_url
+    assert headers["X-Angee-Signature"] == f"sha256={hmac.new(b'delivery-secret', body, 'sha256').hexdigest()}"
+    assert subscription.last_delivery_status == "204"
+    assert subscription.consecutive_failures == 0
 
 
 def _resolve_to(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
@@ -572,49 +150,3 @@ def _resolve_to(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
         return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (address, port or 443))]
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
-
-
-def _signature(secret: str, body: bytes) -> str:
-    """Return the expected Angee webhook signature for a test request body."""
-
-    return f"sha256={hmac.new(secret.encode(), body, 'sha256').hexdigest()}"
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("failure", [False, True])
-def test_webhook_commit_fanout_and_delivery_telemetry(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-    failure: bool,
-) -> None:
-    """Fanout waits for commit, then records delivery success or failure."""
-
-    user = get_user_model().objects.create_user(username=f"routed-webhook-{failure}")
-    with system_context(reason="test routed webhook setup"):
-        subscription = WebhookSubscription.objects.create(
-            owner_id=user.pk,
-            target_url="https://hooks.example.test/events",
-            secret="test",
-            event_kinds=[EventKind.BRIDGE_SYNCED.value],
-        )
-    deliveries: list[bytes] = []
-
-    def deliver(_subscription: Any, body: bytes) -> str:
-        deliveries.append(body)
-        if failure:
-            raise WebhookDeliveryError("HTTP failure", status="503")
-        return "204"
-
-    monkeypatch.setattr(WebhookSubscription, "deliver", deliver)
-    with system_context(reason="test webhook fanout"):
-        with transaction.atomic():
-            WebhookSubscription.objects.enqueue_event(
-                kind=EventKind.BRIDGE_SYNCED,
-                payload={"items": 2},
-            )
-            assert deliveries == []
-        assert deliveries == [b'{"items":2}']
-        stored = WebhookSubscription.objects.get(pk=subscription.pk)
-        assert stored.consecutive_failures == int(failure)
-        assert stored.last_delivery_at is not None
-        assert stored.last_delivery_status == ("503" if failure else "204")

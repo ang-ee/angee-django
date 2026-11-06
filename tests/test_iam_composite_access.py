@@ -18,7 +18,7 @@ from rebac import (
 from rebac.backends import backend
 from rebac.relationships import write_relationships
 
-from angee.base.identity import public_subject_ref
+from angee.iam.identity import public_subject_ref
 from angee.iam.roles import principal_access
 from angee.messaging.testing.models import Channel, Message, Thread
 from angee.projects.testing.models import Project, ProjectBinding

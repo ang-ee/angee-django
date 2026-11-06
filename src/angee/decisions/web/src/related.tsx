@@ -1,13 +1,13 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, useRouteHref,
+  AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, relatedCount, useRouteHref,
   type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 import * as v from "valibot";
 
 import { DecisionContextSchema } from "./DecisionContext";
-import { DECISION_MODEL, DECISION_MODELS, DecisionDocument, RecordDecisionsDocument } from "./documents.console";
+import { DECISION_MODEL, DECISION_MODELS, DecisionDocument, RecordDecisionsCountDocument, RecordDecisionsDocument } from "./documents.console";
 import { enDecisionsMessages, useDecisionsT } from "./i18n";
 
 const RECORD_MODEL = "decisions.DecisionRecord";
@@ -27,7 +27,7 @@ export const decisionConcernsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: enDecisionsMessages["related.concerns"]!,
-    useCount: (context) => {
+    usePaneCount: (context) => {
       const query = useDecisionRead(recordId(context));
       return query.data ? query.data.decisions_by_pk?.records.filter((record) => record.record_model && record.record_id).length ?? 0 : undefined;
     },
@@ -53,13 +53,17 @@ function DecisionConcernsGroup({ context, label }: { context: ChatterViewContext
   </li></>;
 }
 
-function useRecordDecisions(context: ChatterViewContext) {
+function recordDecisionsScope(context: ChatterViewContext) {
   const model = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
   const id = recordId(context);
-  const variables = useMemo(() => ({ model, id }), [model, id]);
-  return useAuthoredQuery(RecordDecisionsDocument, variables, {
+  return { variables: { model, id }, options: {
     enabled: Boolean(model && id), models: DECISION_MODELS, records: [{ model, id }], relatedModels: [DECISION_MODEL, RECORD_MODEL],
-  });
+  } };
+}
+
+function useRecordDecisions(context: ChatterViewContext) {
+  const { variables, options } = recordDecisionsScope(context);
+  return useAuthoredQuery(RecordDecisionsDocument, variables, options);
 }
 
 function recordDecisions(data: ReturnType<typeof useRecordDecisions>["data"]) {
@@ -81,7 +85,9 @@ export const recordDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enDecisionsMessages["related.decisions"]!,
     when: concernsRecords,
-    useCount: (context) => {
+    useCount: relatedCount(RecordDecisionsCountDocument, recordDecisionsScope,
+      (data) => data.decision_records_aggregate.aggregate?.count),
+    usePaneCount: (context) => {
       const query = useRecordDecisions(context);
       return query.data ? recordDecisions(query.data).length : undefined;
     },

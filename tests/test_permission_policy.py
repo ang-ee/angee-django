@@ -11,15 +11,15 @@ from django.test.utils import isolate_apps
 from rebac.mixins import RebacModelBase
 from rebac.schema import parse_zed
 
-from angee.base import permissions
-from angee.base.permissions import (
+from angee.iam import permissions
+from angee.iam.graphql.access import is_gated_read_axis
+from angee.iam.permissions import (
     bind_rebac_schema,
     declared_rebac_definition,
     declared_schema_path,
     effective_rebac_definition,
     effective_rebac_schema,
 )
-from angee.graphql.access import is_gated_read_axis
 
 
 @isolate_apps()
@@ -34,7 +34,7 @@ def test_requests_use_synced_policy_without_reading_artifacts(monkeypatch):
     schema = parse_zed(
         'definition probe/record {\npermission read = anonymous\npermission read__secret = anonymous\n}'
     )
-    monkeypatch.setattr('angee.base.permissions.backend', lambda: SimpleNamespace(schema=lambda: schema))
+    monkeypatch.setattr('angee.iam.permissions.backend', lambda: SimpleNamespace(schema=lambda: schema))
     def forbid_read(*args, **kwargs):
         raise AssertionError('request read permission artifacts')
     monkeypatch.setattr(Path, 'read_text', forbid_read)
@@ -52,7 +52,7 @@ def test_startup_snapshot_needs_no_policy_backend(tmp_path, monkeypatch):
     config = SimpleNamespace(path=str(tmp_path), rebac_schema=str(path))
     def forbid_backend():
         raise AssertionError('startup queried policy backend')
-    monkeypatch.setattr('angee.base.permissions.backend', forbid_backend)
+    monkeypatch.setattr('angee.iam.permissions.backend', forbid_backend)
     assert effective_rebac_schema(config).get_definition('probe/record') is not None
 
 

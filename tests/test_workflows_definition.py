@@ -12,7 +12,7 @@ from angee.base.validators import validator
 from angee.workflows.bindings import SourceBinding
 from angee.workflows.definition import Definition
 from angee.workflows.states import ERROR_OUTCOME, WaitingKind
-from angee.workflows.steps import Step, Wait, resolve_step
+from angee.workflows.steps import Done, Step, Wait, resolve_step
 from angee.workflows.testing.models import Workflow
 
 pytestmark = pytest.mark.usefixtures("steps")
@@ -621,14 +621,13 @@ def test_generics_set_existing_config_owner_and_normalize_models():
     assert Configured.normalize_config({}) == {"amount": 3}
     assert Configured.normalize_input({"value": "2"}) == {"value": 2}
     output = Payload(value=8)
-    completion = Configured.done(output)
-    assert completion.output is output
+    completion = Done(output=output)
     assert Configured.check(completion).output == {"value": 8}
     with pytest.raises(ValidationError) as error:
-        Configured.check(Configured.done({"value": "invalid"}))
+        Configured.check(Done(output={"value": "invalid"}))
     assert "output.value" in error.value.message_dict
     with pytest.raises(ValidationError, match="outcome"):
-        Configured.check(Configured.done(Payload(value=8), outcome="missing"))
+        Configured.check(Done(output=Payload(value=8), outcome="missing"))
     with pytest.raises(ValidationError, match="does not accept configuration"):
         Echo.parse_config({"unused": True})
     with pytest.raises(ValidationError, match="does not accept configuration"):
@@ -683,9 +682,9 @@ def test_dynamic_outcome_hook_retains_builtin_error_routing():
     assert definition.issues() == []
     config = Dynamic.parse_config({"amount": 1})
     assert Dynamic.available_outcomes(config) == {"added": "Added", "error": "Error"}
-    assert Dynamic.check(Dynamic.done(Payload(value=1), outcome="added"), config=config).outcome == "added"
+    assert Dynamic.check(Done(output=Payload(value=1), outcome="added"), config=config).outcome == "added"
     with pytest.raises(ValidationError, match="outcome"):
-        Dynamic.check(Dynamic.done(Payload(value=1), outcome="zero"), config=config)
+        Dynamic.check(Done(output=Payload(value=1), outcome="zero"), config=config)
 
 
 def test_wait_requires_aware_deadline():
@@ -762,7 +761,7 @@ def test_whole_result_allows_input_and_producer_but_not_ancestor():
 def test_done_cannot_forge_the_builtin_error_outcome():
     """Only failure settlement owns the error outcome."""
     with pytest.raises(ValidationError, match="success outcome"):
-        Echo.check(Echo.done({"value": 1}, outcome="error"))
+        Echo.check(Done(output={"value": 1}, outcome="error"))
 
 
 def test_config_and_input_errors_keep_inherited_field_paths():
@@ -1010,7 +1009,7 @@ def test_outcomes_accept_the_shared_storage_boundary(register_step):
         [{"from": outcome, "when": [outcome], "as": outcome}],
     )
     assert definition.issues() == []
-    assert BoundaryOutcome.done({"value": 1}, outcome=outcome).outcome == outcome
+    assert BoundaryOutcome.check(Done(output={"value": 1}, outcome=outcome)).outcome == outcome
 
 
 def test_whole_null_binding_is_rejected_but_nested_null_is_preserved(register_step):

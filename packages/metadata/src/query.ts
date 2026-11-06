@@ -516,7 +516,7 @@ export class GroupAxis {
     const value = mapped ? mapped.to : raw;
     if (value === undefined) return fail(`groups.${this.field}`, `bucket is missing key "${key}"`);
     if (value === null || (this.extraction?.rangeKey && value === "")) return null;
-    if (this.extraction && typeof value !== "number") return dateGroup(value, this.extraction.name, `groups.${this.field}`);
+    if (this.extraction && typeof value !== "number") return dateGroup(value, this.extraction.name, `groups.${this.field}`, true);
     if (!this.extraction && this.declaration.kind === "date") return temporalValue(value, this.query.fields[this.field]?.scalar ?? "DateTime");
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return this.canonicalValue(value);
     if (this.declaration.kind === "json") return JSON.stringify(jsonValue(value, `groups.${this.field}`));
@@ -646,33 +646,57 @@ function normalizeDate(value: string): string {
   const normalized = value.replace(/^(\d{4}-\d{2}-\d{2})\s+(\d)/, "$1T$2");
   return /^\d{4}-\d{2}-\d{2}T/.test(normalized) && !/(Z|[+-]\d{2}:?\d{2})$/.test(normalized) ? `${normalized}Z` : normalized;
 }
-function dateGroup(value: unknown, extraction: string, path: string): string | number {
+function dateGroup(value: unknown, extraction: string, path: string, bucketKey = false): string | number {
   if (typeof value !== "string" && typeof value !== "number" && !(value instanceof Date)) return fail(path, "expected a date group value");
   const normalized = typeof value === "string" ? normalizeDate(value) : value;
   if (typeof normalized === "string" && !validCalendarDate(normalized, "DateTime")) return fail(path, "invalid date group value");
-  const date = new Date(normalized);
+  // Server bucket keys name civil time in the project's time zone. Parsing an
+  // offset into an instant shifts that calendar date for viewers east of UTC.
+  const civil = bucketKey && typeof normalized === "string"
+    ? /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2}))?/.exec(normalized)
+    : null;
+  const date = civil
+    ? new Date(Number(civil[1]), Number(civil[2]) - 1, Number(civil[3]), Number(civil[4] ?? 0), Number(civil[5] ?? 0), Number(civil[6] ?? 0))
+    : new Date(normalized);
   if (Number.isNaN(date.getTime())) return fail(path, "invalid date group value");
+  const yearNumber = civil ? date.getFullYear() : date.getUTCFullYear();
+  const monthIndex = civil ? date.getMonth() : date.getUTCMonth();
+  const dayNumber = civil ? date.getDate() : date.getUTCDate();
+  const dayOfWeek = civil ? date.getDay() : date.getUTCDay();
   const parts: Readonly<Record<string, number>> = {
-    year_number: date.getUTCFullYear(), quarter_number: Math.floor(date.getUTCMonth() / 3) + 1,
-    month_number: date.getUTCMonth() + 1, day_of_year: Math.floor((date.getTime() - Date.UTC(date.getUTCFullYear(), 0, 1)) / 86400000) + 1,
-    day_of_month: date.getUTCDate(), day_of_week: date.getUTCDay(), hour_number: date.getUTCHours(), minute_number: date.getUTCMinutes(), second_number: date.getUTCSeconds(),
+    year_number: yearNumber, quarter_number: Math.floor(monthIndex / 3) + 1,
+    month_number: monthIndex + 1, day_of_year: Math.floor((Date.UTC(yearNumber, monthIndex, dayNumber) - Date.UTC(yearNumber, 0, 1)) / 86400000) + 1,
+    day_of_month: dayNumber, day_of_week: dayOfWeek,
+    hour_number: civil ? date.getHours() : date.getUTCHours(),
+    minute_number: civil ? date.getMinutes() : date.getUTCMinutes(),
+    second_number: civil ? date.getSeconds() : date.getUTCSeconds(),
   };
   if (Object.hasOwn(parts, extraction)) return parts[extraction]!;
   if (extraction === "iso_week_number") {
-    const thursday = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-    thursday.setUTCDate(thursday.getUTCDate() + 3 - ((thursday.getUTCDay() + 6) % 7));
-    return 1 + Math.floor((thursday.getTime() - Date.UTC(thursday.getUTCFullYear(), 0, 1)) / (7 * 86400000));
+    const thursdayDay = dayNumber + 3 - ((dayOfWeek + 6) % 7);
+    const thursday = new Date(Date.UTC(yearNumber, monthIndex, thursdayDay));
+    const thursdayYear = civil
+      ? new Date(yearNumber, monthIndex, thursdayDay).getFullYear()
+      : thursday.getUTCFullYear();
+    return 1 + Math.floor((thursday.getTime() - Date.UTC(thursdayYear, 0, 1)) / (7 * 86400000));
   }
-  const year = String(date.getUTCFullYear());
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const year = String(yearNumber);
+  const month = String(monthIndex + 1).padStart(2, "0");
   if (extraction === "year") return year;
-  if (extraction === "quarter") return `${year}-Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
+  if (extraction === "quarter") return `${year}-Q${Math.floor(monthIndex / 3) + 1}`;
   if (extraction === "month") return `${year}-${month}`;
-  if (extraction === "week") { date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7)); return date.toISOString().slice(0, 10); }
-  if (extraction === "day") return date.toISOString().slice(0, 10);
-  if (extraction === "hour") return date.toISOString().slice(0, 13);
-  if (extraction === "minute") return date.toISOString().slice(0, 16);
-  if (extraction === "second") return date.toISOString().slice(0, 19);
+  if (extraction === "week") {
+    if (civil) date.setDate(dayNumber - ((dayOfWeek + 6) % 7));
+    else date.setUTCDate(dayNumber - ((dayOfWeek + 6) % 7));
+  }
+  const dateText = civil
+    ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+    : date.toISOString().slice(0, 10);
+  if (extraction === "week" || extraction === "day") return dateText;
+  const timeText = `${dateText}T${String(parts.hour_number).padStart(2, "0")}:${String(parts.minute_number).padStart(2, "0")}:${String(parts.second_number).padStart(2, "0")}`;
+  if (extraction === "hour") return timeText.slice(0, 13);
+  if (extraction === "minute") return timeText.slice(0, 16);
+  if (extraction === "second") return timeText;
   return fail(path, `client extraction "${extraction}" is unsupported`);
 }
 

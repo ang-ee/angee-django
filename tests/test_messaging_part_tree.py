@@ -11,7 +11,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 import tests.test_messaging  # noqa: F401 -- register the fixture model graph before database setup
-from angee.graphql.publishing import mute_changes
+from angee.base.signals import mute_changes
 from angee.messaging.testing.models import Fragment, Message, Part
 from tests.conftest import File
 from tests.test_messaging import _storage_drive
@@ -245,6 +245,21 @@ def test_part_database_load_eagerly_fetches_content_without_creating_a_cache(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_part_file_reference_retains_acquisition(part_tree: tuple[Message, dict[str, Part]], tmp_path: Path) -> None:
+    """A Part's declared file link retains its file without a storage attachment."""
+
+    _message, parts = part_tree
+    with system_context(reason="messaging part file retention"), mute_changes():
+        _storage_drive(tmp_path, owner=None)
+        file = File.objects.ingest_bytes(b"Part only", filename="part.txt")
+        Part.objects.filter(pk=parts["attachment"].pk).update(file_id=file.pk)
+        assert not file.attachments.exists()
+        assert not file.purge_if_unretained()
+        assert File.objects.filter(pk=file.pk).exists()
+        assert Part.objects.get(pk=parts["attachment"].pk).file_id == file.pk
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "cache_state",
     ["complete", "deferred_parent", "uncached_fragment"],
@@ -254,7 +269,7 @@ def test_prefetched_tree_reloads_incomplete_fields_and_content(
     tmp_path: Path,
     cache_state: str,
 ) -> None:
-    """Only complete rows and content caches can bypass the joined read."""
+    """Missing navigation batches a reload; unrequested content stays lazy until read."""
 
     message, parts = part_tree
     with system_context(reason="messaging cached content setup"), mute_changes():
@@ -278,3 +293,21 @@ def test_prefetched_tree_reloads_incomplete_fields_and_content(
         assert loaded[attachment.pk].file.filename == "note.txt"
         assert loaded[attachment.pk].file.mime_type.mime_type == "text/plain"
     assert len(queries) == (0 if cache_state == "complete" else 1)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_native_part_projection_does_not_load_unselected_content(part_tree: tuple[Message, dict[str, Part]]) -> None:
+    """Traversal reuses a narrow authorized prefetch without forcing fragments or files."""
+    message, parts = part_tree
+    with system_context(reason="test.messaging.narrow_part_navigation"):
+        message = Message._base_manager.prefetch_related(
+            Prefetch(
+                "parts",
+                queryset=Part._base_manager.only("message_id", "parent_id", "position", "sqid"),
+            )
+        ).get(pk=message.pk)
+    with CaptureQueriesContext(connection) as queries:
+        ordered = Part.objects.reading_order_for_message(message)
+        assert [row.pk for row in ordered] == [row.pk for row in parts.values()]
+    assert len(queries) == 0
+    assert all("fragment_id" in row.get_deferred_fields() for row in ordered)

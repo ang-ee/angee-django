@@ -27,9 +27,20 @@ test("enter/exit reset observed reads, remove inactive data and mutations, and s
   let rowGate: Promise<void> | undefined;
   let releaseRows!: () => void;
   const rowActors: (string | null)[] = [];
+  const candidateActors: (string | null)[] = [];
+  let candidateGate: Promise<void> | undefined;
+  let releaseCandidates!: () => void;
   const fetch: typeof globalThis.fetch = async (_input, init) => {
     const target = new Headers(init?.headers).get("X-Angee-View-As");
     const { query } = JSON.parse(String(init?.body)) as { query: string };
+    if (query.includes("AngeeViewablePeople")) {
+      candidateActors.push(target);
+      const gate = candidateGate;
+      await gate;
+      return Response.json({ data: { viewable_people: target
+        ? [{ id: "target-peer", name: "Target peer" }]
+        : [{ id: "person", name: "Person" }] } });
+    }
     if (query.includes("PreviewRows")) {
       rowActors.push(target);
       await rowGate;
@@ -37,7 +48,6 @@ test("enter/exit reset observed reads, remove inactive data and mutations, and s
     }
     return Response.json({ data: {
       current_user: person(target ?? "real"), real_user: target ? person("real") : null,
-      viewable_people: [{ id: "person", name: "Person" }],
     } });
   };
   function Page() {
@@ -62,8 +72,9 @@ test("enter/exit reset observed reads, remove inactive data and mutations, and s
   const host = document.createElement("div"); document.body.append(host);
   const root = app.mount(host);
   try {
-    await waitFor(() => expect(preview.viewablePeople).toEqual([{ id: "person", name: "Person" }]));
     await screen.findByText("real row");
+    expect(preview.currentUser?.id).toBe("real");
+    expect(candidateActors).toEqual([]);
     client.setQueryData(["inactive-private-row"], "private");
     client.getMutationCache().build(client, { mutationKey: ["previous-write"] });
     rowGate = new Promise<void>((resolve) => { releaseRows = resolve; });
@@ -74,10 +85,27 @@ test("enter/exit reset observed reads, remove inactive data and mutations, and s
     const previousSubscriptions = upstream.mock.results.map((result) => result.value);
     fireEvent.click(screen.getByRole("button", { name: "User menu" }));
     fireEvent.click(await screen.findByLabelText("Preview as a person"));
-    fireEvent.click(await screen.findByRole("option", { name: "Person" }));
+    const personOption = await screen.findByRole("option", { name: "Person" });
+    // StrictMode remount cancels the first signal-aware transport read.
+    expect(candidateActors).toEqual([null, null]);
+    // Keep an old-actor candidate refresh in flight across the identity reset.
+    candidateGate = new Promise<void>((resolve) => { releaseCandidates = resolve; });
+    void client.invalidateQueries({ predicate: (query) => refine.authoredQueryReadsAnyModel(query.meta, ["iam.User"]) });
+    await waitFor(() => expect(candidateActors).toHaveLength(3));
+    candidateGate = undefined;
+    fireEvent.click(personOption);
     await waitFor(() => expect(preview.pending).toBe(false));
     expect(preview.currentUser?.id).toBe("person");
     expect(preview.realUser?.id).toBe("real");
+    fireEvent.click(screen.getByRole("button", { name: "User menu" }));
+    fireEvent.click(await screen.findByLabelText("Preview as a person"));
+    await screen.findByRole("option", { name: "Target peer" });
+    expect(screen.queryByRole("option", { name: /^Person$/ })).toBeNull();
+    await act(async () => { releaseCandidates(); });
+    expect(screen.queryByRole("option", { name: /^Person$/ })).toBeNull();
+    expect(screen.getByRole("option", { name: "Target peer" })).toBeTruthy();
+    expect(candidateActors.at(-1)).toBe("person");
+    fireEvent.click(screen.getByRole("button", { name: "User menu" }));
     expect(screen.getByTestId("rows").textContent).not.toContain("real row");
     expect(client.getQueryData(["inactive-private-row"])).toBeUndefined();
     expect(client.getMutationCache().getAll()).toHaveLength(0);

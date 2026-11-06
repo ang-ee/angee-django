@@ -12,13 +12,15 @@ from typing import Any
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db.models import CharField, Q, QuerySet, Value
+from django.db.models import CharField, OuterRef, QuerySet, Subquery, Value
 from django.db.models.functions import Coalesce, Concat, NullIf, Trim
 from django.http import HttpRequest
-from rebac import system_context
-from rebac.resources import model_resource_type
+from rebac import SubjectRef, system_context
+from rebac.resources import model_for_resource_type, model_resource_type
 
-from angee.base.models.identity import instance_from_public_id, public_id_for
+from angee.base.identity import public_data_id_field
+from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
+from angee.base.models.persistence import require_projection
 
 
 def group_subject_type() -> str:
@@ -30,22 +32,33 @@ def group_subject_type() -> str:
     return resource_type
 
 
-def user_label(user: Any) -> str:
+def user_label(user: Any, *, guard: bool = True) -> str:
     """Return any user model's human label from the Django auth contract.
 
-    A row loaded for a viewer who cannot read the sign-in name carries it as
-    None; such a row's label is its full name alone.
+    A dedicated label queryset projects the display scalar before field
+    redaction. An ordinary actor-scoped User row still respects redaction.
     """
 
+    if "_iam_display_label" in user.__dict__:
+        return str(user.__dict__["_iam_display_label"] or "")
+    if guard and user.get_deferred_fields() & {"first_name", "last_name", "username"}:
+        require_projection(user, "_iam_display_label")
     return str(user.get_full_name() or user.username or "")
 
 
 def user_label_queryset() -> QuerySet[Any]:
-    """Keep scalar-label source rows narrow and explicitly elevated inside IAM."""
+    """Read only the display label disclosed by an already-readable record.
 
-    return get_user_model().objects.system_context(reason="iam.identity.user_label").only(
+    Audit references expose a scalar label, not a User row. The unscoped base
+    manager avoids a REBAC bypass event for this narrow projection; callers
+    must return only :func:`user_label`'s result, never the source instance.
+    A nameless account's label is its sign-in name, even though username is a
+    read_private field; this scalar disclosure follows every readable record.
+    """
+
+    return get_user_model()._base_manager.only(
         "first_name", "last_name", "username",
-    )
+    ).annotate(_iam_display_label=user_label_expression())
 
 
 def user_label_expression(prefix: str = "") -> Coalesce:
@@ -53,6 +66,15 @@ def user_label_expression(prefix: str = "") -> Coalesce:
 
     full_name = Trim(Concat(f"{prefix}first_name", Value(" "), f"{prefix}last_name"))
     return Coalesce(NullIf(full_name, Value("")), f"{prefix}username", output_field=CharField())
+
+
+def user_label_annotation(relation: str) -> Subquery:
+    """Project one linked account's public display label as a scalar only."""
+
+    return Subquery(
+        user_label_queryset().filter(pk=OuterRef(f"{relation}_id"))
+        .order_by().values("_iam_display_label")[:1]
+    )
 
 
 def user_public_id(user_id: Any) -> str | None:
@@ -86,12 +108,11 @@ def user_display_labels(
     *,
     request: HttpRequest | None = None,
 ) -> dict[Any, str | None]:
-    """Return user display labels for ``user_ids`` with one elevated read.
+    """Return user display labels for ``user_ids`` with one narrow read.
 
-    Resolved under ``system_context`` (IAM's elevation for server-side
-    reads) so an actor-scoped caller never pulls a guarded User row into
-    its own queryset — REBAC rejects that; only a display string leaves
-    the helper.
+    The label is the disclosure carried by an already-readable record or
+    principal. Only the display string leaves this helper; User rows remain
+    inside IAM and the queryset selects no credential fields.
 
     Pass the Django ``request`` to prime and reuse the request-scoped label memo:
     list resolvers can ask for all distinct ids up front and pay one query.
@@ -112,33 +133,23 @@ def user_display_labels(
         return labels
 
     user_model = get_user_model()
+    # Role grants carry canonical primary keys; public input carries model-owned
+    # identifiers. Turn only canonical keys into public ids through that owner,
+    # then let its batch resolver decode and retrieve the whole set once.
     pk = user_model._meta.pk
-    public_lookup = getattr(user_model, "public_id_lookup", None)
-    lookup = Q()
-    if pk is not None:
-        pk_values = []
-        for user_id in missing:
+    public_ids: dict[str, str] = {}
+    for user_id in missing:
+        public_id = str(user_id)
+        if pk is not None:
             try:
-                pk_values.append(pk.to_python(user_id))
+                canonical = pk.to_python(user_id)
             except TypeError, ValueError, ValidationError:
-                continue
-        if pk_values:
-            lookup |= Q(**{f"{pk.name}__in": pk_values})
-    if callable(public_lookup):
-        for user_id in missing:
-            try:
-                lookup |= Q(**public_lookup(str(user_id)))
-            except TypeError, ValueError:
-                continue
-
-    fetched: dict[str, str] = {}
-    users = user_label_queryset().filter(lookup) if lookup else []
-    for user in users:
-        label = user_label(user)
-        fetched[str(user.pk)] = label
-        public_id = getattr(user, "sqid", None)
-        if public_id:
-            fetched[str(public_id)] = label
+                pass
+            else:
+                public_id = public_id_for(user_model, canonical)
+        public_ids[str(user_id)] = public_id
+    users = instances_from_public_ids(user_model, public_ids.values(), queryset=user_label_queryset())
+    fetched = {key: user_label(users[value]) for key, value in public_ids.items() if value in users}
 
     for user_id in missing:
         fetched_label = fetched.get(str(user_id))
@@ -173,27 +184,18 @@ def user_principal(principal_id: str) -> Any:
     """Return the user addressed by a role-grant principal id."""
 
     user_model = get_user_model()
-    lookups: list[dict[str, Any]] = []
-    pk = user_model._meta.pk
-    if pk is not None:
-        lookups.append({pk.name: principal_id})
-    public_lookup = getattr(user_model, "public_id_lookup", None)
-    if callable(public_lookup):
-        lookups.append(public_lookup(principal_id))
-
-    tried: set[tuple[tuple[str, Any], ...]] = set()
     with system_context(reason="iam.identity.principal"):
-        for lookup in lookups:
-            key = tuple(sorted(lookup.items()))
-            if key in tried:
-                continue
-            tried.add(key)
-            try:
-                user = user_model._default_manager.filter(**lookup).first()
-            except TypeError, ValueError:
-                continue
+        try:
+            canonical = user_model._meta.pk.to_python(principal_id)
+        except TypeError, ValueError, ValidationError:
+            canonical = None
+        if canonical is not None:
+            user = user_model._default_manager.filter(pk=canonical).first()
             if user is not None:
                 return user
+        user = instance_from_public_id(user_model, principal_id)
+        if user is not None:
+            return user
     raise ValueError(f"User principal {principal_id!r} was not found.")
 
 
@@ -206,3 +208,46 @@ def user_from_public_id(user_id: Any) -> Any:
     if user is None:
         raise ValueError(f"User {user_id!s} was not found.")
     return user
+
+
+def canonical_subject_ref(value: str) -> SubjectRef:
+    """Decode a transport subject into its canonical REBAC identity."""
+
+    subject = SubjectRef.parse(value)
+    if subject.subject_id in {"", "*"}:
+        return subject
+    model = model_for_resource_type(subject.subject_type)
+    if model is None or not model._meta.managed:
+        return subject
+    field = public_data_id_field(model)
+    if field is None:
+        return subject
+    pk = field.public_id_to_value(subject.subject_id)
+    if pk is None:
+        if not field.prefix:
+            raise ValueError(f"Subject {value!r} has an invalid public id.")
+        model_pk = model._meta.pk
+        if model_pk is None:
+            raise ValueError(f"Subject {value!r} has no model identity.")
+        try:
+            pk = model_pk.to_python(subject.subject_id)
+        except (TypeError, ValueError, ValidationError) as error:
+            raise ValueError(f"Subject {value!r} has an invalid canonical id.") from error
+    return SubjectRef.of(subject.subject_type, str(pk), subject.optional_relation)
+
+def public_subject_ref(subject: SubjectRef) -> SubjectRef:
+    """Encode a canonical model-backed subject for a transport boundary."""
+
+    if subject.subject_id in {"", "*"}:
+        return subject
+    model = model_for_resource_type(subject.subject_type)
+    if model is None or not model._meta.managed:
+        return subject
+    field = public_data_id_field(model)
+    if field is None:
+        return subject
+    return SubjectRef.of(
+        subject.subject_type,
+        field.public_id_from_value(subject.subject_id),
+        subject.optional_relation,
+    )

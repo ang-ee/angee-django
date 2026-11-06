@@ -11,7 +11,9 @@ import pytest
 @pytest.mark.parametrize("outcome", ["success", "failure"])
 def test_actual_changeset_storage_uses_selected_database_and_restores_scope(outcome):
     root = Path(__file__).resolve().parents[1]
-    script = f"expected_outcome = {outcome!r}\n" + """
+    script = (
+        f"expected_outcome = {outcome!r}\n"
+        + """
 from django.conf import settings
 class DefaultRouter:
     def db_for_read(self, model, **hints):
@@ -19,9 +21,10 @@ class DefaultRouter:
     db_for_write = db_for_read
 settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac',
-                    'simple_history', 'angee.base', 'angee.provenance', 'angee.provenance.testing'],
+                    'simple_history', 'angee.base', 'angee.iam', 'angee.provenance', 'angee.provenance.testing'],
     SECRET_KEY='actual-storage-alias-test', AUTH_USER_MODEL='auth.User',
     ANGEE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
+    PROVENANCE_POLICY='angee.provenance.contrib.angee.policy.AngeePolicy',
     REBAC_LOCAL_BACKEND_STORAGE='registry', DATABASE_ROUTERS=[DefaultRouter()],
     DATABASES={alias: {'ENGINE':'django.db.backends.sqlite3', 'NAME':':memory:'}
                for alias in ('default', 'selected')},
@@ -110,7 +113,7 @@ with transaction.atomic(using='selected'):
     assert locked._state.db == 'selected' and locked.value == 'selected'
 
 from django.core.exceptions import ImproperlyConfigured
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.statements import StatementsMixin
 try:
@@ -119,7 +122,7 @@ except ImproperlyConfigured:
     pass
 else:
     raise AssertionError('Angee replay requires co-located source/history/Changeset storage')
-class ReplayRow(StatementsMixin, HistoryMixin, AngeeDataModel):
+class ReplayRow(StatementsMixin, HistoryMixin, ProtectedDataModel):
     title = models.CharField(max_length=30)
     counter = models.IntegerField(default=0)
     history = ModelHistory(inherit=True, excluded_fields=['counter'])
@@ -147,9 +150,10 @@ with actor_context(actor), database_context('default'):
         selected_row.save(using='selected', update_fields=['title'])
         edited = context.current_changeset(required=True)
     assert edited._state.db == 'selected'
-    assert ReplayRow.history.using('selected').filter(changeset_id=edited.pk).exists()
-    version = ReplayRow.history.using('selected').filter(changeset_id=edited.pk).select_related('changeset').get()
-    assert version.changeset._state.db == 'selected'
+    assert ReplayRow.history.using('selected').filter(history_changeset_id=edited.pk).exists()
+    version = (ReplayRow.history.using('selected').filter(history_changeset_id=edited.pk)
+               .select_related('history_changeset').get())
+    assert version.history_changeset._state.db == 'selected'
     restored = version.get_instance(using='selected')
     assert restored._state.db == 'selected' and restored.counter == 7
     reverted = edited.revert()
@@ -160,9 +164,14 @@ with actor_context(actor), database_context('default'):
     assert (default_row.title, default_row.counter) == ('default untouched', 99)
 
 """
-    environment = {key: value for key, value in os.environ.items() if key != 'DJANGO_SETTINGS_MODULE'}
+    )
+    environment = {key: value for key, value in os.environ.items() if key != "DJANGO_SETTINGS_MODULE"}
     result = subprocess.run(
-        [sys.executable, '-c', script], cwd=root, env=environment,
-        capture_output=True, text=True, timeout=60,
+        [sys.executable, "-c", script],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr

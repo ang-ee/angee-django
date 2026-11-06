@@ -35,7 +35,7 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 - Runtime code reaches a seeded row with `Resource.objects.resolve(handle, model=…)` (`managers.py:146`)
   or re-imports one with `load_xref` (`managers.py:248`); tests take the concrete ledger from
   `angee.resources.testing` (`src/angee/resources/testing/__init__.py:1-12`).
-- Shared catalogues exist: `integrate.Vendor` (`src/angee/integrate/models.py:1464`), `money.Currency`
+- Shared catalogues exist: `integrate.Vendor` (`src/angee/integrate/models/integrations.py`), `money.Currency`
   (`src/angee/money/models.py:80`); contribute rows with `adopt`.
 - Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`src/angee/workflows/resources.py:68,124`);
   non-row declarations use `ResourceEntryKind` (`src/angee/resources/kinds.py:16`).
@@ -160,7 +160,7 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 - Selecting a seeded row by display name when it has an xref or stable key: the ledger owns the lookup ([seeded rows carry a stable key](references/pitfalls.md)).
 - Seeding fields that `StateTransitions` writes (`workspace`, `runtime_status`, `last_error`): the transition owns them and the loader does not protect them ([seeded transition state](../../../docs/backend/guidelines.md#seeded-transition-state)).
 - A catalogue tier on `AppConfig` or a second registry, or `runtime/` model imports to resolve a seed: the source model owns the tier and the ledger owns resolution ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
-- Caveated REBAC subjects behind a grant: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`src/angee/base/checks.py:37`) and grants are caveat-free (`grants.py:8`).
+- Caveated REBAC subjects behind a grant: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`src/angee/iam/checks.py:37`) and grants are caveat-free (`grants.py:8`).
 
 ## Verify
 

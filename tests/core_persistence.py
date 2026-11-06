@@ -12,12 +12,15 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.base.models.base import AngeeModel
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
-from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
-from angee.base.models.timestamps import TimestampMixin
-from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.models.trash import TrashQuerySet
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.base import ProtectedModel
+from angee.iam.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.querysets import ProtectedQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 
@@ -58,11 +61,11 @@ class OwnedRows(OwnerQuerySet, AngeeHistoryQuerySet):
     """Compose release with the framework's ordinary queryset mechanics."""
 
 
-class OwnedRow(OwnerMixin, HistoryMixin, AngeeModel):
+class OwnedRow(OwnerMixin, HistoryMixin, ProtectedModel):
     owner_container = "container"
     container = models.ForeignKey(OwnershipContainer, null=True, on_delete=models.CASCADE)
     title = models.CharField(max_length=40, default="owned")
-    objects = OwnedRows.as_manager()
+    objects = AngeeHistoryManager.from_queryset(OwnedRows)()
 
     class Meta:
         app_label = "scopedemo"
@@ -80,9 +83,13 @@ class ReceiptRow(ImmutableFieldsMixin):
         app_label = "scopedemo"
 
 
-class TrashRow(TrashMixin, TimestampMixin):
+class TrashRowQuerySet(TrashQuerySet, ProtectedQuerySet):
+    """Keep trash scopes on the protected row's native REBAC collection."""
+
+
+class TrashRow(ProtectedTrashMixin):
     title = models.CharField(max_length=40, default="kept")
-    objects = TrashQuerySet.as_manager()
+    objects = ProtectedManager.from_queryset(TrashRowQuerySet)()
 
     class Meta:
         app_label = "scopedemo"

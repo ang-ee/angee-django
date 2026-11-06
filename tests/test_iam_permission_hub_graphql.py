@@ -21,11 +21,11 @@ from rebac import (
     write_relationships,
 )
 from rebac.actors import to_subject_ref
-from rebac.models import active_relationship_model
+from rebac.models import PermissionAuditEvent, active_relationship_model
 from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant, revoke
 
-from angee.graphql.data.metadata import _grantable_relations
+from angee.iam.graphql.resources import _grantable_relations
 from angee.projects.testing.models import Project
 from tests.conftest import addon_schema, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
@@ -860,6 +860,7 @@ def test_group_members_and_bindings_preserve_canonical_tuple_identity(
                 ),
             ])
 
+        before_audits = PermissionAuditEvent.objects.count()
         detail = _data(
             _execute(
                 schema,
@@ -880,6 +881,7 @@ def test_group_members_and_bindings_preserve_canonical_tuple_identity(
                 user=admin,
             )
         )["groups_by_pk"]
+        assert PermissionAuditEvent.objects.count() == before_audits
         assert detail["assignment_subject"] == f"auth/group:{group.sqid}#member"
         assert detail["members"][0]["subject"] == subject
         assert detail["members"][0]["subject_id"] == str(member.sqid)

@@ -2,30 +2,45 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import timedelta
 
 import pytest
 from django.db import connection
+from django.db.models.query import EmptyQuerySet
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from django_cte import CTE, with_cte
+from rebac import (
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    delete_relationship,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
+from rebac.models import PermissionAuditEvent
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.decisions.timeline import DecisionKind
 from angee.graphql import publishing
 from angee.graphql.publishing import change_published
 from angee.provenance.context import changeset
+from angee.timeline.reading import Timeline, _union
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
-from angee.workflows.testing.drivers import decide, load_workflow, run_until
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
 from angee.workflows.timeline import RunKind
-from tests.conftest import create_user
+from tests.conftest import create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_timeline import read_timeline, timeline_entries
-from tests.test_workflows_review import review as review  # noqa: F401 -- shared real review driver
+from tests.test_workflows_review import review as review
 from tests.test_workflows_review import start_review
 from tests.workflow_steps import document
 
@@ -80,8 +95,101 @@ def test_run_follows_execution_without_an_explicit_projection(execution) -> None
     assert next(kind["count"] for kind in data["timeline"]["kinds"] if kind["id"] == "workflows.run") == 0
 
 
+def test_requester_cte_stays_on_the_record_without_a_private_scope_or_run_audit(review) -> None:
+    owner, reviewers, _, question = review
+    subject = question.review_subject
+    _, step = start_review(review)
+    other = create_user("timeline-other-subject")
+    workflow = load_workflow(document("entry"), key="timeline-other-run", actor=owner,
+                             subject_model=other._meta.label)
+    unrelated = WorkflowRun.objects.start(workflow, actor=owner, subject=other)
+    run_until(unrelated)
+    assert StepRun.system_queryset().filter(run=unrelated).exists()
+    unrelated_record = vault_for(owner, name="Timeline unrelated concern")
+    write_relationships([RelationshipTuple(
+        to_object_ref(unrelated_record), "viewer", to_subject_ref(reviewers[0]),
+    )])
+    unrelated_decision = Decision.objects.ask(DecisionRequest(
+        kind="elsewhere", records=(unrelated_record,), assignees=(reviewers[0],),
+        proposal=DecisionProposal.model_validate({
+            "alternatives": [{"key": "done", "label": "Done", "outcome": "done"}],
+        }),
+    ), actor=owner)
+    assert Decision.objects.with_actor(reviewers[0]).scoped().filter(pk=unrelated_decision.pk).exists()
+
+    rows, _ = DecisionKind().source(subject, reviewers[0])
+    requester, = rows.query._with_ctes
+    assert requester.name == "timeline_requesters"
+    assert requester.query.model is Decision
+    assert set(with_cte(requester, select=requester.queryset().using(rows.db)
+                        .with_actor(reviewers[0]).scoped())
+               .values_list("pk", flat=True)) == {
+        step.decision_id,
+    }
+    before = PermissionAuditEvent.objects.order_by("-pk").values_list("pk", flat=True).first() or 0
+    with CaptureQueriesContext(connection) as queries:
+        Timeline(subject, reviewers[0]).page()
+    reasons = Counter(PermissionAuditEvent.objects.filter(pk__gt=before).values_list("reason", flat=True))
+    assert reasons["workflows.workflowrun.system_queryset"] == 0
+    selection, = (query["sql"] for query in queries if '"timeline_source" AS' in query["sql"])
+    assert selection.count('"timeline_requesters" AS') == 1
+    assert f'"timeline_requesters" AS (SELECT "{Decision._meta.db_table}"' in selection
+    start = selection.index('"timeline_requesters" AS (')
+    opening = selection.index("(", start)
+    depth = 0
+    for end in range(opening, len(selection)):
+        depth += (selection[end] == "(") - (selection[end] == ")")
+        if depth == 0:
+            break
+    else:
+        pytest.fail("Unclosed timeline_requesters CTE")
+    assert '"rebac_' not in selection[opening:end + 1]
+
+
+def test_source_union_namespaces_equal_cte_names_from_distinct_kinds(execution) -> None:
+    """Two addon branches may use the same local CTE name without sharing its rows."""
+    first, _ = execution
+    second = create_user("timeline-second-cte")
+    rows = type(first)._base_manager.using(first._state.db)
+    left = CTE(rows.filter(pk=first.pk).values("pk"), name="timeline_local")
+    right = CTE(rows.filter(pk=second.pk).values("pk"), name="timeline_local")
+    source = _union([
+        with_cte(left, select=left.queryset().using(first._state.db)),
+        with_cte(right, select=right.queryset().using(first._state.db)),
+    ], "pk")
+    assert len({cte.name for cte in source.query._with_ctes}) == 2
+    assert set(source.values_list("pk", flat=True)) == {first.pk, second.pk}
+
+
+def test_source_union_retargets_sibling_cte_after_name_collision(execution) -> None:
+    """A dependent CTE reads its own branch's renamed base, not the first kind's base."""
+    first, _ = execution
+    second = create_user("timeline-dependent-cte")
+    rows = type(first)._base_manager.using(first._state.db)
+    left = CTE(rows.filter(pk=first.pk).values("pk"), name="base")
+    right_base = CTE(rows.filter(pk=second.pk).values("pk"), name="base")
+    right_dep = CTE(right_base.queryset().values("pk"), name="dep")
+    source = _union([
+        with_cte(left, select=left.queryset().using(first._state.db)),
+        with_cte(right_base, right_dep, select=right_dep.queryset().using(first._state.db)),
+    ], "pk")
+    assert sorted(source.values_list("pk", flat=True)) == sorted([first.pk, second.pk])
+
+
+def test_source_union_namespaces_nested_requester_references(review) -> None:
+    """A second decision-like kind keeps its own requester CTE in nested predicates."""
+    _, reviewers, _, question = review
+    _, step = start_review(review)
+    record, actor = question.review_subject, reviewers[0]
+    rows, _ = DecisionKind().source(record, actor)
+    other, _ = DecisionKind().source(record, actor)
+    source = _union([rows, other], "pk")
+    assert len({cte.name for cte in source.query._with_ctes}) == 2
+    assert list(source.values_list("pk", flat=True)) == [step.decision_id, step.decision_id]
+
+
 def test_waiting_run_folds_readable_children_and_computes_attention(review) -> None:
-    actor, reviewers, _, question = review
+    actor, reviewers, sent, question = review
     batches = []
 
     def observed(sender, *, instances, **kwargs):
@@ -109,11 +217,12 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     assert {"kind": "decisions.decision", "count": 1} in line["children"]
     assert {"kind": "provenance.change", "count": 1} in line["children"]
     assert data["timeline_attention"] == data["timeline"]["needs_me"] == 1
-    folded_groups = [
+    selections = [
         query["sql"] for query in queries.captured_queries
-        if 'AS "_timeline_fold_type"' in query["sql"] and "GROUP BY" in query["sql"]
+        if 'WITH RECURSIVE "timeline_source" AS' in query["sql"]
     ]
-    assert len(folded_groups) == 1
+    assert len(selections) == 1
+    assert '"timeline_selected" AS' in selections[0] and 'INNER JOIN "timeline_selected"' in selections[0]
 
     bystander = create_user("timeline-fold-bystander")
     with system_context(reason="test.timeline.fold_reader"):
@@ -128,13 +237,42 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     assert hidden["timeline_attention"] == hidden["timeline"]["needs_me"] == 0
 
     decide(step.decision, actor=reviewer, chosen=["approve"])
+    assert deliver_decision_wakes(sent, step.decision_id) == [1]
     run_until(run)
     assert timeline_entries(subject, reviewer, kind="workflows.run")[0].detail == "Succeeded"
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
 
 
+def test_run_waiting_projection_preserves_read_scope_and_row_cardinality(review) -> None:
+    _actor, reviewers, _, question = review
+    run, _step = start_review(review)
+    reviewer = reviewers[0]
+    bystander = create_user("timeline-attention-bystander")
+    unreadable = create_user("timeline-attention-unreadable")
+    with system_context(reason="test.timeline.waiting_readers"):
+        write_relationships([
+            RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(person))
+            for person in (reviewer, bystander)
+        ])
+    kind = RunKind()
+    rows = kind.queryset(question.review_subject, reviewer).filter(pk=run.pk)
+    projected = rows.annotate(waiting=kind.waiting_on_expression(rows, reviewer))
+    assert list(projected.values_list("pk", "waiting")) == [(run.pk, True)]
+    assert not projected.exclude(pk=run.pk).exists()
+    other = WorkflowRun.objects.with_actor(bystander).filter(pk=run.pk)
+    assert list(other.annotate(waiting=kind.waiting_on_expression(other, bystander))
+                .values_list("pk", "waiting")) == [(run.pk, False)]
+    hidden = WorkflowRun.objects.with_actor(unreadable).filter(pk=run.pk)
+    assert list(hidden.annotate(waiting=kind.waiting_on_expression(hidden, reviewer))) == []
+    with actor_context(reviewer):
+        for actor in (None, SubjectRef.of("auth/group", str(reviewer.pk))):
+            assert isinstance(Decision.objects.using(rows.db).waiting_on(actor), EmptyQuerySet)
+            assert list(rows.annotate(waiting=kind.waiting_on_expression(rows, actor))
+                        .values_list("pk", "waiting")) == [(run.pk, False)]
+
+
 def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(review) -> None:
-    _, reviewers, _, question = review
+    _, reviewers, sent, question = review
     run, step = start_review(review)
     subject, reviewer = question.review_subject, reviewers[0]
     with system_context(reason="test.timeline.hidden_run"), changeset(
@@ -151,6 +289,7 @@ def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(rev
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 1
     assert next(kind["count"] for kind in data["timeline"]["kinds"] if kind["id"] == "decisions.decision") == 1
     decide(step.decision, actor=reviewer, chosen=["reject"])
+    assert deliver_decision_wakes(sent, step.decision_id) == [1]
     run_until(run)
     data = read_timeline(subject, reviewer, kinds=["decisions.decision"])
     assert len(data["timeline"]["entries"]) == 1
@@ -203,7 +342,7 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
 ):
     """Like the AP page: a canonical record has only a child's public feed."""
 
-    actor, _sent = execution
+    actor, sent = execution
     with system_context(reason="test.timeline.inherited_subject"):
         subject = MtiChild.objects.create(title="Review twice")
         write_relationships([
@@ -258,6 +397,27 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
         assert line["detail"] == event.detail and line["needs_me"]
         assert {"kind": "decisions.decision", "count": 1 if node == "first" else 2} in line["children"]
         decide(step.decision, actor=actor, chosen=["done"])
+        assert deliver_decision_wakes(sent, step.decision_id) == [1]
     run_until(run)
     assert snapshots[-1]["timeline_attention"] == 0
     assert snapshots[-1]["timeline"]["entries"][0]["detail"] == "Succeeded"
+
+
+def test_cached_source_query_rechecks_parent_read_after_revocation(review) -> None:
+    """Building fold membership never freezes a readable parent's identity set."""
+    _, reviewers, _, question = review
+    run, step = start_review(review)
+    reviewer, subject = reviewers[0], question.review_subject
+    share = RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(reviewer))
+    with system_context(reason="test.timeline.fold_parent_share"):
+        write_relationships([share])
+    timeline = Timeline(subject, reviewer)
+    assert timeline.lines is not None
+    with system_context(reason="test.timeline.fold_parent_revoke"):
+        delete_relationship(share)
+    page = timeline.page()
+    assert all(entry.target_id != public_id_of(run) for entry in page.entries)
+    decision, = [entry for entry in page.entries if entry.kind == "decisions.decision"]
+    assert decision.target_id == public_id_of(step.decision) and decision.needs_me
+    assert next(kind.count for kind in page.kinds if kind.id == "workflows.run") == 0
+    assert page.needs_me == 1

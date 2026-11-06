@@ -1,8 +1,9 @@
 import { useMemo, type ReactElement, type ReactNode } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
 import {
-  Button, Card, CardContent, CommandBand, ControlBandProvider, EmptyState, ErrorBanner, formatDate, formatSize,
+  errorMessage, useToast, Button, Card, CardContent, CommandBand, ControlBandProvider, EmptyState, ErrorBanner, formatDate, formatSize,
   Glyph, LoadingPanel, RecordHeader, useConfirm, type RecordChromeContext, type RecordNavigation,
 } from "@angee/ui";
 
@@ -34,6 +35,18 @@ export function FilePreviewFrame({
 }): ReactElement {
   const t = useStorageT();
   const confirm = useConfirm();
+  const toast = useToast();
+  const lifecycle = useMutation({
+    mutationFn: async ({ id, restore, name }: { id: string; restore: boolean; name: string }) => {
+      if (restore) {
+        await fileActions.restore(id);
+        return;
+      }
+      if (!(await confirm({ title: t("file.trashTitle", { name }), body: t("file.trashBody"), confirm: t("file.trash"), danger: true }))) return;
+      if (await fileActions.trash(id, { errorNotification: false })) closeDetail();
+    },
+    onError: (error) => toast.danger({ title: errorMessage(error, t("action.failed")) }),
+  });
   const metadata = useModelMetadata(FILE_MODEL);
   const query = useAuthoredQuery(StorageFileById, { id }, { models: [FILE_MODEL] });
   const file = query.data?.files_by_pk ?? null;
@@ -72,21 +85,14 @@ export function FilePreviewFrame({
           )}
           {file?.is_trashed ? (
             <Button type="button" size="sm" variant="secondary" loading={fileActions.busy}
-              onClick={() => void fileActions.restore(file.id)}>
+              onClick={() => lifecycle.mutate({ id: file.id, restore: true, name: file.title || file.filename })}>
               <Glyph name="restore" />
               {t("file.restore")}
             </Button>
           ) : (
             <Button type="button" size="sm" variant="danger" loading={fileActions.busy} disabled={!file}
-              onClick={async () => {
-                if (!file) return;
-                const ok = await confirm({
-                  title: t("file.trashTitle", { name: file.title || file.filename }),
-                  body: t("file.trashBody"),
-                  confirm: t("file.trash"),
-                  danger: true,
-                });
-                if (ok) void fileActions.trash(file.id).then(closeDetail);
+              onClick={() => {
+                if (file) lifecycle.mutate({ id: file.id, restore: false, name: file.title || file.filename });
               }}>
               <Glyph name="trash" />
               {t("file.trash")}
@@ -130,7 +136,7 @@ export function FilePreviewFrame({
           <Card render={<section aria-label={t("file.details")} />} className="mt-4">
             <CardContent>
               <ControlBandProvider host={undefined}>
-                <FileDetail id={id} filename={file?.filename} onChanged={query.refetch} />
+                <FileDetail id={id} filename={file?.filename} />
               </ControlBandProvider>
             </CardContent>
           </Card>

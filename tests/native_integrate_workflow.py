@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from tempfile import TemporaryDirectory
-from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from django.apps import apps
@@ -12,13 +11,20 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.core.management import call_command
 from django.test import TransactionTestCase
+from django.utils import timezone
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.fields.identity import SqidField
-from angee.jobs.enqueue import celery_app
 from angee.workflows.context import StepContext
-from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import (
+    capture_tasks,
+    decide,
+    deliver_decision_wakes,
+    load_workflow,
+    run_until,
+    start_run,
+)
 from angee.workflows_integrate.archive_steps import ArchiveExecute, ArchiveExtractor, ArchiveMappingUnit
 
 
@@ -76,7 +82,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
     """Install both resource rows, review mappings and execute their map bodies."""
 
     def setUp(self):
-        self.enterContext(patch.object(celery_app, "send_task"))
+        self.sent = self.enterContext(capture_tasks())
         call_command("rebac", "sync", verbosity=0)
         self.enterContext(patch.dict(settings.ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES, {
             "test_file": f"{__name__}.TestFileExtractor",
@@ -109,11 +115,20 @@ class ArchiveWorkflowTests(TransactionTestCase):
         canonical = str(self.target.sqid)
         padded = SqidField(prefix=self.target.sqid_prefix, min_length=24).public_id_from_value(self.target.pk)
         self.assertNotEqual(padded, canonical)
-        context = SimpleNamespace(
-            subject=self.source, input=ArchiveMappingUnit(extractor="test_drive", target=padded), actor=reader,
-            heartbeat=Mock(), begin_effect=Mock(), record=Mock(), done=Mock(side_effect=lambda value, **_: value),
+        self.source.with_actor(self.actor).grant_record_access("viewer", reader)
+        workflow = load_workflow(
+            "angee.workflows_integrate.archive_import_drive", actor=self.actor, allow_non_dev=True,
         )
-        context.load = MethodType(StepContext.load, context)
+        run = start_run(workflow, actor=self.actor, subject=self.source)
+        context = StepContext(
+            run=run, step_run=None, step=ArchiveExecute, attempt=None,
+            input=ArchiveMappingUnit(extractor="test_drive", target=padded), config=None,
+            actor=reader, now=timezone.now(),
+        )
+        self.enterContext(patch.object(context, "heartbeat", Mock()))
+        self.enterContext(patch.object(context, "begin_effect", Mock()))
+        self.enterContext(patch.object(context, "record", Mock()))
+        self.enterContext(patch.object(context, "done", Mock(side_effect=lambda value, **_: value)))
         self.assertTrue(self.target.with_actor(reader).has_access("read"))
         self.assertFalse(self.target.with_actor(reader).has_access("write"))
         with patch.object(TestDriveExtractor, "execute") as execute:
@@ -163,13 +178,14 @@ class ArchiveWorkflowTests(TransactionTestCase):
                     decision = apps.get_model("decisions.Decision").objects.get(pk=gate.decision_id)
                     self.assertEqual(gate.state["mappings"][str(self.target.sqid)][0]["extractor"], f"test_{suffix}")
                 decide(decision, actor=self.actor, chosen=[str(self.target.sqid)])
+                self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
                 run_until(run)
                 with system_context(reason="archive result assertion"):
                     run.refresh_from_db()
                     self.assertEqual(run.status, "succeeded")
                     self.assertEqual(run.outcome, "complete")
                     mapped = run.step_runs.get(node_key="import_units")
-                    self.assertEqual(mapped.map_total, 1)
+                    self.assertEqual(mapped.get_map_total(), 1)
                     self.assertEqual(mapped.output[0]["outcome"], "completed")
                     self.assertEqual(mapped.output[0]["output"]["result"], {
                         "source": str(subject.sqid), "target": str(self.target.sqid),
@@ -205,6 +221,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
             gate = run.step_runs.get(node_key="gate")
             decision = apps.get_model("decisions.Decision").objects.get(pk=gate.decision_id)
         decide(decision, actor=self.actor, chosen=["skip"])
+        self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
         run_until(run)
         with system_context(reason="skip archive result"):
             run.refresh_from_db()
@@ -228,12 +245,13 @@ class ArchiveWorkflowTests(TransactionTestCase):
                 gate = run.step_runs.get(node_key="gate")
                 decision = apps.get_model("decisions.Decision").objects.get(pk=gate.decision_id)
             decide(decision, actor=self.actor, chosen=[str(self.target.sqid)])
+            self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
             run_until(run)
             with system_context(reason="partial archive results"):
                 run.refresh_from_db()
                 self.assertEqual((run.status, run.outcome), ("succeeded", "partial"))
                 mapped = run.step_runs.get(node_key="import_units")
-                self.assertEqual(mapped.map_total, 2)
+                self.assertEqual(mapped.get_map_total(), 2)
                 self.assertEqual([item["outcome"] for item in mapped.output], ["error", "completed"])
                 self.assertEqual(mapped.map_rows().filter(outcome="completed").get().records.count(), 1)
 

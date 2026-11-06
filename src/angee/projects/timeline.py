@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
@@ -14,7 +15,12 @@ from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, act
 class TaskKind(TimelineKind):
     id = "projects.task"
     sequence = 50
-    source_models = ("projects.Task",)
+    source_models = {
+        "projects.Task": (
+            "subject_content_type", "subject_object_id", "status", "title", "due_date", "assignee", "is_trashed",
+        ),
+    }
+    previous_source_models = {"projects.Task": ("subject_content_type", "subject_object_id")}
 
     def eligible(self, model: type[models.Model]) -> bool:
         return apps.get_model("projects", "Task").declares_target(model)
@@ -25,8 +31,8 @@ class TaskKind(TimelineKind):
             "assignee",
         )
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        return rows.waiting_on(actor)
+    def waiting_on_expression(self, rows: Any, actor: Any) -> models.Expression:
+        return rows.waiting_on_expression(actor)
 
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         result = {}
@@ -36,8 +42,14 @@ class TaskKind(TimelineKind):
         return result
 
     def records(self, row: Any) -> Iterable[RecordIdentity]:
-        if row.subject_object_id is not None and (model := row.subject_content_type.model_class()) is not None:
-            yield model, row.subject_object_id
+        content_type = (
+            ContentType.objects.db_manager(row._state.db).get_for_id(row.subject_content_type_id)
+            if row.subject_content_type_id is not None else None
+        )
+        if row.subject_object_id is not None and content_type is not None:
+            model = content_type.model_class()
+            if model is not None:
+                yield model, row.subject_object_id
 
 
 def timeline_kinds() -> tuple[TimelineKind, ...]:

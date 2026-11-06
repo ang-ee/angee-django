@@ -6,12 +6,14 @@ import { useResourceListQuery } from "./resource-list-query";
 import { useBoardLaneState } from "../resource-view-board-lanes";
 import { modelRowId } from "../resource-view-codecs";
 import { useResourceViewPresentationSurfaceFromTable } from "./presentation";
-import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState } from "./table-state";
+import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState, useSettledPageClamp } from "./table-state";
 import type { ResourceViewSurface, UseResourceViewSurfaceProps } from "./types";
 import { useCollectionQueryBatch } from "../collection-source";
 import { EMPTY_ARRAY } from "./types";
 export function useResourceViewSurface<TRow extends Row = Row>({
   source,
+  records,
+  relatedModels,
   columns,
   fields,
   filter,
@@ -70,6 +72,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
       pageSize: paginationState.pageSize,
     },
     fields: requestedFields,
+    records, relatedModels,
     enabled: active && !source,
   });
   const sourceRequests = React.useMemo(
@@ -108,19 +111,6 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   const settled = source
     ? authored?.data !== undefined && !error
     : listQuery.query.isSuccess && !listQuery.query.isPlaceholderData;
-  React.useEffect(() => {
-    if (!active || !settled || fetching || total === undefined) return;
-    const lastPage = Math.max(1, Math.ceil(total / paginationState.pageSize));
-    if (paginationState.pageIndex >= lastPage) resourceView.setPage(lastPage);
-  }, [
-    active,
-    settled,
-    fetching,
-    total,
-    paginationState.pageIndex,
-    paginationState.pageSize,
-    resourceView.setPage,
-  ]);
   const table: Table<TRow> = useReactTable<TRow>({
     data: rows,
     columns: tableColumns as ColumnDef<TRow>[],
@@ -156,8 +146,12 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     modelMetadata,
     rows,
     enabled: active && resourceView.state.view === "board",
-    refetchRows: refetchRows ?? (() => {}),
   });
+  useSettledPageClamp(
+    resourceView,
+    total === undefined ? undefined : Math.max(1, table.getPageCount()),
+    active && settled && !fetching,
+  );
   const list = React.useMemo(
     () => ({
       ...listResultFromTable(table, {
@@ -184,6 +178,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   );
   const listState = useResourceRowsSnapshot<TRow>(list, {
     navigation: { filter: mergedFilter, order: sortOrder },
+    queryFields: source ? undefined : requestedFields,
     onListStateChange,
   });
 

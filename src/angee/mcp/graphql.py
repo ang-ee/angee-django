@@ -53,9 +53,9 @@ from rebac import current_actor, system_context
 from strawberry.types import get_object_definition
 from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
-from angee.base.permissions import actor_user_id
 from angee.graphql.actions import ActionResult
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.permissions import actor_user_id
 from mcp.types import ToolAnnotations
 
 _SCALAR_JSON = {
@@ -389,6 +389,7 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
         parameters=parameters,
         output_schema=_output_schema(node, leaves, is_list),
         annotations=ToolAnnotations(readOnlyHint=(op_type == "query")),
+        meta={"angee": {"execution_context": "actor"}},
         tags=set(spec.tags),
         schema_name=spec.schema,
         op_type=op_type,
@@ -633,7 +634,7 @@ def _document(
         if isinstance(argument.type, GraphQLNonNull) and argument.default_value is not Undefined:
             try:
                 default = ast_from_value(argument.default_value, argument.type)
-            except Exception:  # noqa: BLE001 - scalar literal conversion must not disable other tools.
+            except Exception:
                 # An omitted nullable variable lets the field apply its native
                 # default, including custom scalar values with no literal form.
                 variable_type = argument.type.of_type
@@ -679,3 +680,35 @@ def _json_type(gql_type: Any) -> tuple[dict[str, Any], bool]:
     if isinstance(gql_type, GraphQLInputObjectType):
         return {"type": "object"}, False
     return {}, False
+
+
+def actor_tool_read_only(tool: Tool) -> bool:
+    """Validate native actor-only execution metadata and return the declared posture.
+
+    Tools admitted outside a FastMCP request explicitly declare
+    ``meta={"angee": {"execution_context": "actor"}}``. Request-scoped Context
+    and token injection belong to request execution; no callable inspection can
+    establish that contract. ToolAnnotations remains the one read/write fact.
+    The GraphQL compiler additionally verifies its own structural annotation.
+    """
+
+    annotations = tool.annotations
+    if isinstance(tool, _CompiledTool):
+        if tool.op_type not in {"query", "mutation"}:
+            raise ImproperlyConfigured(f"GraphQL MCP tool {tool.name!r} has invalid operation type {tool.op_type!r}.")
+        if annotations is None or annotations.readOnlyHint is not (tool.op_type == "query"):
+            raise ImproperlyConfigured(
+                f"GraphQL MCP tool {tool.name!r} readOnlyHint disagrees with its {tool.op_type} operation."
+            )
+    elif annotations is None or annotations.readOnlyHint is None:
+        raise ImproperlyConfigured(
+            f"Non-GraphQL built-in MCP tool {tool.name!r} must explicitly declare ToolAnnotations.readOnlyHint."
+        )
+    contract = (tool.meta or {}).get("angee")
+    if not isinstance(contract, dict) or contract.get("execution_context") != "actor":
+        raise ImproperlyConfigured(
+            f"Built-in MCP tool {tool.name!r} must declare actor-only execution_context; "
+            "request-scoped FastMCP Context is unavailable."
+        )
+    assert annotations is not None and annotations.readOnlyHint is not None
+    return annotations.readOnlyHint

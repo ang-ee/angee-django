@@ -6,13 +6,13 @@ from django.db.migrations.state import ModelState
 from django.test.utils import isolate_apps
 from rebac import RebacMixin
 
-from angee.base.models.base import AngeeModel
 from angee.base.models.inputs import InputExtensionsMixin
+from angee.iam.models.base import ProtectedModel
 from angee.tags.models import TaggedModel
 
 
 def test_angee_model_reuses_the_input_terminal() -> None:
-    assert AngeeModel.apply_input_extensions is InputExtensionsMixin.apply_input_extensions
+    assert ProtectedModel.apply_input_extensions is InputExtensionsMixin.apply_input_extensions
     assert InputExtensionsMixin._meta.fields == ()
 
 
@@ -66,7 +66,7 @@ def test_tagged_plain_rebac_host_keeps_its_native_model_fields() -> None:
     assert {name: field.deconstruct()[1:] for name, field in plain.fields.items()} == {
         name: field.deconstruct()[1:] for name, field in tagged.fields.items()
     }
-    assert not issubclass(Tagged, AngeeModel)
+    assert not issubclass(Tagged, ProtectedModel)
     Tagged().apply_input_extensions()
     with pytest.raises(ImproperlyConfigured, match="no owner for input extension values: extra"):
         Tagged().apply_input_extensions(extra=True)

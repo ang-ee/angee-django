@@ -11,6 +11,7 @@ from typing import Any
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 from django.db import models
+from django.db.models.expressions import BaseExpression
 from django.dispatch import receiver
 
 from angee.base.hooks import resolve_hooks
@@ -40,6 +41,7 @@ class TimelineKind(ABC):
     id: str
     sequence: int
     source_models: tuple[str, ...] | Mapping[str, Iterable[str]]
+    previous_source_models: Mapping[str, Iterable[str]] | None = None
     explicit_publication = False
     occurrence = "1"
     at = models.F("created_at")
@@ -50,6 +52,25 @@ class TimelineKind(ABC):
     def relevant(self, model: type[models.Model], update_fields: Iterable[str] | None) -> bool:
         if update_fields is None or not isinstance(self.source_models, Mapping):
             return True
+        return not set(self.observed_fields(model)).isdisjoint(update_fields)
+
+    def previous_relevant(self, model: type[models.Model], update_fields: Iterable[str] | None) -> bool:
+        """Whether changing these columns may leave an old record membership."""
+        if update_fields is None or self.previous_source_models is None:
+            return self.relevant(model, update_fields)
+        return any(
+            name in update_fields
+            for owner in (model, *model._meta.get_parent_list())
+            for field_name in self.previous_source_models.get(owner._meta.label, ())
+            for field in (owner._meta.get_field(field_name),)
+            if isinstance(field, models.Field)
+            for name in (field.name, field.attname)
+        )
+
+    def observed_fields(self, model: type[models.Model]) -> tuple[str, ...]:
+        """Return the stored columns governing this kind's source invalidation."""
+        if not isinstance(self.source_models, Mapping):
+            return ()
         fields: set[str] = set()
         for owner in (model, *model._meta.get_parent_list()):
             for field_name in self.source_models.get(owner._meta.label, ()):
@@ -59,7 +80,7 @@ class TimelineKind(ABC):
                         f"Timeline kind {self.id!r} must observe a stored field: {owner._meta.label}.{field_name}."
                     )
                 fields.update((field.name, field.attname))
-        return not fields.isdisjoint(update_fields)
+        return tuple(sorted(fields))
 
     @abstractmethod
     def eligible(self, model: type[models.Model]) -> bool:
@@ -69,13 +90,23 @@ class TimelineKind(ABC):
     def queryset(self, record: models.Model, actor: Any) -> models.QuerySet:
         """Readable occurrences on this record, one per source primary key."""
 
+    def source(self, record: models.Model, actor: Any) -> tuple[models.QuerySet, tuple[Any, Any] | None]:
+        """Share statement-local admission and fold facts; queryset() must select the same rows."""
+        return self.queryset(record, actor), self.fold(record)
+
     @abstractmethod
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         """Describe the selected source rows, batching any additional display dependencies."""
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        """The native subset waiting on the viewer, within the readable branch."""
-        return rows.none()
+    def waiting_on_expression(self, rows: Any, actor: Any) -> BaseExpression:
+        """Project attention on an already-readable branch without changing its rows.
+
+        Return a non-null, join-free Boolean expression; related targets retain their own
+        read gates. The branch owns its record membership and row admission. A kind may
+        resolve record-bounded attention first when an in-statement relation would exceed
+        the Timeline SQL budget; that pre-read executes during Timeline construction.
+        """
+        return models.Value(False, output_field=models.BooleanField())
 
     def fold(self, record: models.Model) -> tuple[Any, Any] | None:
         """Content type and primary key expressions for a possible parent target."""
@@ -114,8 +145,6 @@ def _forget_kinds(*, setting: str, **_: Any) -> None:
 def actor_label(user: Any) -> str:
     """A selected user's display label, empty when no actor is recorded."""
     return str(user) if user is not None else ""
-
-
 
 
 def timeline_subject(model: type[models.Model]) -> bool:

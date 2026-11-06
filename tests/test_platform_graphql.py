@@ -359,6 +359,19 @@ def test_field_collection_groups_rows_by_model_and_kind(monkeypatch: Any) -> Non
     ]
     assert data["platform_fields_groups_count"] == len({row.kind for row in rows})
 
+    grouped_rows = _data(
+        execute_schema(
+            schema,
+            f"""{{ platform_fields_grouped_rows(
+              group_by: {{field: MODEL}}, pages: [{{key: "{line}", limit: 200}}]
+            ) {{ key rows {{ id }} }} }}""",
+        )
+    )
+    assert grouped_rows["platform_fields_grouped_rows"][0]["key"] == line
+    assert {row["id"] for row in grouped_rows["platform_fields_grouped_rows"][0]["rows"]} == {
+        row.id for row in rows if row.model == line
+    }
+
 
 def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: Any) -> None:
     """A model-only explorer request reads neither the catalogue nor graph edges."""

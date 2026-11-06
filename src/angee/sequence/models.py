@@ -40,9 +40,14 @@ from django.utils import timezone
 from rebac import database_context, system_context
 
 from angee.base.fields.state import StateField
-from angee.base.managers import AngeeManager
-from angee.base.models.base import AngeeDataModel, AngeeModel
-from angee.base.models.roles import role_anchor
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
+from angee.iam.models.roles import role_anchor
+
+SequenceRole = role_anchor("sequence/role")
+"""The ``sequence/role`` anchor: its const ``admin`` arm resolves a platform admin
+as an effective sequence manager. See :func:`angee.iam.models.roles.role_anchor`.
+"""
 
 
 class PeriodReset(models.TextChoices):
@@ -53,7 +58,7 @@ class PeriodReset(models.TextChoices):
     MONTH = "month", "Monthly"
 
 
-class SequenceManager[SequenceT: Sequence](AngeeManager[SequenceT]):
+class SequenceManager[SequenceT: Sequence](ProtectedManager[SequenceT]):
     """Draws and previews formatted numbers from a keyed sequence."""
 
     def next_value(self, key: str, *, on_date: date | None = None) -> str:
@@ -102,7 +107,7 @@ class SequenceManager[SequenceT: Sequence](AngeeManager[SequenceT]):
         return model
 
 
-class Sequence(AngeeDataModel, concrete=True):
+class Sequence(ProtectedDataModel, concrete=True):
     """A named counter with a formatting template and reset period.
 
     The ``key`` is the stable lookup handle consumers draw against; scope (a
@@ -159,7 +164,7 @@ class Sequence(AngeeDataModel, concrete=True):
         )
 
 
-class SequenceCounterManager[CounterT: SequenceCounter](AngeeManager[CounterT]):
+class SequenceCounterManager[CounterT: SequenceCounter](ProtectedManager[CounterT]):
     """Owns the locked counter row for one ``(sequence, period)`` pair.
 
     Not a GraphQL surface: counter rows are internal bookkeeping the caller never
@@ -201,7 +206,7 @@ class SequenceCounterManager[CounterT: SequenceCounter](AngeeManager[CounterT]):
         )
 
 
-class SequenceCounter(AngeeModel, concrete=True):
+class SequenceCounter(ProtectedModel, concrete=True):
     """Current value for one sequence within one reset period.
 
     Internal to the sequence addon — no sqid, no GraphQL surface, no REBAC
@@ -236,9 +241,3 @@ class SequenceCounter(AngeeModel, concrete=True):
         """Return a readable label for Django displays."""
 
         return f"{self.sequence_id}:{self.period or '-'}={self.value}"
-
-
-SequenceRole = role_anchor("sequence/role")
-"""The ``sequence/role`` anchor: its const ``admin`` arm resolves a platform admin
-as an effective sequence manager. See :func:`angee.base.models.roles.role_anchor`.
-"""

@@ -73,7 +73,6 @@ def test_viewable_people_search_and_ordering_precede_limit(iam_admin):
 
 @pytest.mark.parametrize("limit,cap", [(0, 1), (2, 2), (1000, 25)])
 def test_picker_applies_sql_admission_before_the_capped_limit(iam_admin, monkeypatch, limit, cap):
-    User._base_manager.bulk_create([User(username=f"candidate-{i:03}", password="!") for i in range(80)])
     for name, attrs in [
         ("000-staff", {"is_staff": True}),
         ("000-superuser", {"is_superuser": True}),
@@ -81,23 +80,40 @@ def test_picker_applies_sql_admission_before_the_capped_limit(iam_admin, monkeyp
         ("000-service", {"kind": "service"}),
     ]:
         User.objects.create_user(name, **attrs)
+
     def readmission(*args):
         pytest.fail("The picker must not re-admit individual candidates")
 
     monkeypatch.setattr(User._default_manager, "admit_view_as", readmission)
-    with CaptureQueriesContext(connection) as captured:
-        assert [person.username for person in User.objects.viewable_people(iam_admin, limit=limit)] == [
-            f"candidate-{i:03}" for i in range(cap)
-        ]
-    selections = [
-        q["sql"] for q in captured if q["sql"].startswith("SELECT") and f'FROM "{User._meta.db_table}"' in q["sql"]
-    ]
-    assert len(selections) == 1
-    sql = selections[0]
-    assert f"LIMIT {cap}" in sql
-    where = sql.split(" WHERE ", 1)[1]
-    assert all(f'"{field}"' in where for field in ("kind", "is_active", "is_staff", "is_superuser"))
-    assert "person" in where and "NOT" in where
+    user_select_counts = []
+    total_counts = []
+    table = User._meta.db_table
+    for start in (0, 40):
+        User._base_manager.bulk_create(
+            [User(username=f"candidate-{i:03}", password="!") for i in range(start, start + 40)]
+        )
+        with CaptureQueriesContext(connection) as captured:
+            assert [person.username for person in User.objects.viewable_people(iam_admin, limit=limit)] == [
+                f"candidate-{i:03}" for i in range(cap)
+            ]
+        selections = [q["sql"] for q in captured if q["sql"].startswith("SELECT") and f'FROM "{table}"' in q["sql"]]
+        rows = [sql for sql in selections if sql.startswith(f'SELECT "{table}"."id",')]
+        # REBAC held_many groups the six read_private fields into one bounded
+        # visibility statement over the returned ids.
+        guards = [sql for sql in selections if sql.startswith(f'SELECT "{table}"."id" AS "pk", CASE WHEN')]
+        assert len(rows) == 1 and len(guards) == 1 and len(selections) == 2, selections
+        assert all(f'FROM "{table}" WHERE "{table}"."id" IN (' in sql for sql in guards)
+        sql = rows[0]
+        assert f"LIMIT {cap}" in sql
+        where = sql.split(" WHERE ", 1)[1]
+        assert all(f'"{field}"' in where for field in ("kind", "is_active", "is_staff", "is_superuser"))
+        assert "person" in where and "NOT" in where and "EXISTS(" in where
+        user_select_counts.append(len(selections))
+        total_counts.append(len(captured))
+    assert user_select_counts == [2, 2]
+    # The composed tests/extcontrib const manager role on iam/protected adds one
+    # fixed actor-set read per picker request.
+    assert total_counts == [19, 19]
 
 
 def test_viewable_people_returns_at_most_twenty_five_people(iam_admin):

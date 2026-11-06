@@ -35,10 +35,6 @@ from rebac.roles import grant as grant_role
 from rebac.roles import revoke as revoke_role
 
 from angee.agents.context import record_view_context
-from angee.agents.grants import (
-    builtin_mcp_server,
-    sync_builtin_tool_catalogue,
-)
 from angee.agents.provisioning import provision_agent
 from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.runners import TurnOutcome
@@ -135,8 +131,8 @@ class CommentReplyTests(TransactionTestCase):
                 owner_id=self.owner.pk,
             )[0]
         with actor_context(self.admin):
-            sync_builtin_tool_catalogue()
-            self.server = builtin_mcp_server()
+            MCPTool.objects.sync_builtin()
+            self.server = MCPServer.objects.builtin()
             self.agent.mcp_servers.add(self.server)
             for name in sorted(READ_TOOLS):
                 self.agent.mcp_tools.add(MCPTool.objects.get(server=self.server, name=name))
@@ -695,24 +691,6 @@ class CommentReplyTests(TransactionTestCase):
         self.assertEqual(self.step(run).state["deadline"], before)
         self.assertEqual(sum(call.args[0] == "agents.run_session" for call in self.tasks.call_args_list), 2)
 
-    def test_first_observed_claim_on_approval_starts_a_fresh_execution_deadline(self):
-        run, session = self.waiting_run()
-        turn = session.claim_turn()
-        with system_context(reason="coalesced running and approval wakes"), transaction.atomic():
-            AgentSession.system_queryset(lock=("self",)).get(pk=session.pk)
-            turn.mark_awaiting_approval()
-            session.mark_awaiting_approval()
-        self.expire(run)
-        state = self.step(run).state
-        self.assertEqual(self.step(run).status, "waiting")
-        self.assertIsNotNone(state["running_since"])
-        self.assertGreater(datetime.fromisoformat(state["deadline"]), timezone.now())
-        turn.refresh_from_db()
-        self.assertEqual(turn.status, "awaiting_approval")
-        self.expire(run)
-        turn.refresh_from_db()
-        self.assertEqual((run.status, turn.status), ("failed", "canceled"))
-
     def test_repeated_wakes_keep_one_unexpired_pending_delivery(self):
         run, session = self.waiting_run()
         first = [call for call in self.tasks.call_args_list if call.args[0] == "agents.run_session"][-1]
@@ -762,7 +740,7 @@ class CommentReplyTests(TransactionTestCase):
                     other = MCPServer.objects.create(name="Other server")
                     ledger.objects.filter(source_addon="angee.agents", xref="mcp_angee").update(target_id=other.sqid)
                 with actor_context(self.admin):
-                    result = provision_agent(self.agent.sqid)
+                    result = provision_agent(self.agent)
                 self.assertFalse(result.ok)
                 self.assertIn("external server" if failure == "external_server" else "another record", result.message)
                 after = Agent.system_queryset().get(pk=self.agent.pk)
@@ -894,8 +872,8 @@ class CommentReplyTests(TransactionTestCase):
 
     def test_catalogue_sync_provisions_and_adopts_without_demo_rows(self):
         self.assertEqual(MCPServer.system_queryset().count(), 1)
-        sync_builtin_tool_catalogue()
-        self.assertEqual(builtin_mcp_server().pk, self.server.pk)
+        MCPTool.objects.sync_builtin()
+        self.assertEqual(MCPServer.objects.builtin().pk, self.server.pk)
         self.assertEqual(
             set(
                 MCPTool.system_queryset().filter(server=self.server, name__in=READ_TOOLS).values_list("name", flat=True)
@@ -986,8 +964,8 @@ class CommentReplyTests(TransactionTestCase):
         with actor_context(self.admin):
             self.agent.with_actor(self.admin).resource_reader = False
             self.agent.save(update_fields=("resource_reader", "updated_at"))
-            self.assertTrue(provision_agent(self.agent.sqid).ok)
-            sync_builtin_tool_catalogue()
+            self.assertTrue(provision_agent(self.agent).ok)
+            MCPTool.objects.sync_builtin()
         run, session = self.waiting_run()
         toolset = AngeeToolset(session, ToolGrantAccess(self.agent.principal_subject()), str(self.server.sqid))
         tools = async_to_sync(toolset.get_tools)(SimpleNamespace(max_retries=0))
@@ -1011,7 +989,7 @@ class CommentReplyTests(TransactionTestCase):
                 instance=self.agent,
                 source="reader-policy",
             )
-            self.assertTrue(provision_agent(self.agent.sqid).ok)
+            self.assertTrue(provision_agent(self.agent).ok)
             self.assertIn(RESOURCE_READER_ROLE, set(containers_of(self.agent.user)))
             resource.import_data(rows, dry_run=False, raise_errors=True, use_transactions=True, actor=self.admin)
             self.agent.refresh_from_db()

@@ -65,10 +65,7 @@ import {
 import type {
   ResourceListSnapshot,
 } from "@angee/ui/views/resource-view-surface";
-import type {
-  AngeeListBatchScope,
-  GroupByBatchScope,
-} from "@angee/refine";
+import type { GroupByBatchScope } from "@angee/refine";
 import {
   Action,
   Column,
@@ -562,27 +559,6 @@ vi.mock("@angee/refine", async (importOriginal) => {
       refetch: vi.fn(),
     };
   }
-  function listBatchEntry(scope: AngeeListBatchScope) {
-    sdkMocks.listCalls.push({
-      page: scope.page,
-      pageSize: scope.pageSize,
-      filter: scope.where,
-      order: scope.orderBy,
-      enabled: true,
-    });
-    const matchingRows = refineRowsForWhere(sdkMocks.rows, scope.where);
-    const pageCount = Math.max(1, Math.ceil(matchingRows.length / scope.pageSize));
-    const page = Math.min(pageCount, Math.max(1, scope.page));
-    return {
-      rows: matchingRows.slice(
-        (page - 1) * scope.pageSize,
-        page * scope.pageSize,
-      ),
-      total: matchingRows.length,
-      fetching: sdkMocks.fetching,
-      error: null,
-    };
-  }
   function snakeToCamel(field: string): string {
     return field
       .toLowerCase()
@@ -608,17 +584,25 @@ vi.mock("@angee/refine", async (importOriginal) => {
           }),
         ]),
       ),
-    useAngeeListBatch: (
-      _resource: unknown,
-      scopes: readonly AngeeListBatchScope[],
-      options: { enabled?: boolean } = {},
-    ) =>
-      new Map(
-        (options.enabled === false ? [] : scopes).map((scope) => [
-          scope.key,
-          listBatchEntry(scope),
-        ]),
-      ),
+    useAuthoredQueryBatch: (requests: readonly { key: string; variables: Record<string, unknown> }[]) =>
+      new Map(requests.map(({ key, variables }) => {
+        const data: Record<string, unknown> = {};
+        const pages = variables.pages as { key: unknown; limit: number; offset: number }[] | undefined;
+        const groupBy = variables.group_by as { field: string; granularity?: string } | undefined;
+        if (pages && groupBy) {
+          const where = variables.where as Record<string, unknown> | undefined;
+          const matchingRows = refineRowsForWhere(sdkMocks.rows, where);
+          data.rows = pages.map((page) => {
+            sdkMocks.listCalls.push({ page: page.offset / page.limit + 1, pageSize: page.limit, filter: where, order: variables.order_by, enabled: true });
+            const keyField = groupBy.granularity
+              ? `${snakeToCamel(groupBy.field.toLowerCase())}${groupBy.granularity.charAt(0)}${groupBy.granularity.slice(1).toLowerCase()}`
+              : snakeToCamel(groupBy.field.toLowerCase());
+            return { key: page.key, rows: matchingRows.filter((row) => Object.is(groupValue(row, { input: groupBy.field, granularity: groupBy.granularity }, keyField), page.key))
+              .slice(page.offset, page.offset + page.limit) };
+          });
+        }
+        return [key, { data, isFetching: sdkMocks.fetching, error: null, refetch: vi.fn() }];
+      })),
     useAngeeAggregate: (
       _resource: unknown,
       options: AggregateRequestOptions & { enabled?: boolean },
@@ -700,6 +684,7 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           aggregate: "noteAggregate",
           groups: "noteGroups",
           groupsCount: "noteGroupsCount",
+          groupedRows: "noteGroupedRows",
           deletePreview: "deleteNote",
         },
         typeNames: {
@@ -707,6 +692,7 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           filter: "NoteFilter",
           order: "NoteOrder",
           groupBySpec: "NoteGroupBySpec",
+          groupedRowPage: "note_grouped_rows_page",
           groupKey: "NoteGroupKey",
           groupOrder: "NoteGroupOrder",
           having: "NoteHaving",
@@ -761,12 +747,14 @@ const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventor
           aggregate: "notes_aggregate",
           groups: "notes_groups",
           groupsCount: "notes_groups_count",
+          groupedRows: "notes_grouped_rows",
         },
         typeNames: {
           node: "NoteType",
           filter: "notes_bool_exp",
           order: "notes_order_by",
           groupBySpec: "NoteTypeGroupBySpec",
+          groupedRowPage: "notes_grouped_rows_page",
           groupKey: "NoteTypeGroupKey",
           groupOrder: "NoteTypeGroupOrder",
           having: "NoteTypeHaving",
@@ -800,12 +788,14 @@ function groupedListResource(
       aggregate: `${modelName}_aggregate`,
       groups: `${modelName}_groups`,
       groupsCount: `${modelName}_groups_count`,
+      groupedRows: `${modelName}_grouped_rows`,
     },
     typeNames: {
       filter: `${modelName}_bool_exp`,
       order: `${modelName}_order_by`,
       aggregate: `${modelName}_aggregate_fields`,
       groupBySpec: `${modelName}_group_by`,
+      groupedRowPage: `${modelName}_grouped_rows_page`,
       groupKey: `${modelName}_group_key`,
       groupOrder: `${modelName}_group_order`,
       having: `${modelName}_having`,
@@ -2144,8 +2134,8 @@ describe("ResourceList", () => {
       expect(pager.textContent?.replace(/\s+/g, " ")).toContain("2 / 2");
       expect(screen.queryByRole("button", { name: "Search options", hidden: true })).toBeNull();
       const request = sdkMocks.listCalls.findLast((call) => call.enabled !== false);
-      expect(JSON.stringify(request?.filter)).toContain("2026-01-01");
-      expect(JSON.stringify(request?.filter)).toContain("2026-02-01");
+      expect(request?.page).toBe(1);
+      expect(request?.pageSize).toBe(20);
       fireEvent.click(within(pager).getByRole("button", { name: "Previous record" }));
       await waitFor(() => expect(screen.getByRole("navigation", { name: "Record navigation" }).textContent?.replace(/\s+/g, " ")).toContain("1 / 2"));
       expect(await screen.findByDisplayValue("First")).toBeTruthy();
@@ -2305,6 +2295,14 @@ describe("ResourceList", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Add custom filter" }),
     );
+    fireEvent.click(await screen.findByRole("combobox", { name: "Filter field" }));
+    const title = await screen.findByRole("option", { name: "Title" });
+    fireEvent.pointerDown(title, { pointerType: "mouse" });
+    fireEvent.click(title);
+    fireEvent.click(await screen.findByRole("combobox", { name: "Filter operator" }));
+    const contains = await screen.findByRole("option", { name: "contains (case-sensitive)" });
+    fireEvent.pointerDown(contains, { pointerType: "mouse" });
+    fireEvent.click(contains);
     fireEvent.change(await screen.findByRole("textbox", { name: "Filter value" }), {
       target: { value: "Fir" },
     });
@@ -2316,9 +2314,7 @@ describe("ResourceList", () => {
         title: { contains: "Fir" },
       });
     });
-    // A custom text filter defaults to case-sensitive `contains` so it coexists
-    // with the free-text search box's `iContains` on the same field; the chip
-    // labels that distinction.
+    // Case-sensitive `contains` coexists with the search box's `iContains`.
     expect(
       await screen.findAllByRole("button", { name: "Remove Title contains (case-sensitive) Fir" }),
     ).toHaveLength(1);

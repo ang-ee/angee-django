@@ -1,6 +1,10 @@
 import * as React from "react";
 import type { DocumentType } from "@angee/gql/console";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import {
+  authoredQueryKey, requestAuthoredData, sharedAuthoredMeta, useActiveDataProviderName,
+  useAuthoredErrorPolicy, useAuthoredLiveInterest, useAuthoredMutation, useAuthoredQuery,
+  useDataProvider, useInfiniteQuery, useQueryClient, useSetAuthoredQueryData, type AuthoredVariables,
+} from "@angee/refine";
 import { jsonValueFromUnknown, type JsonValue } from "@angee/ui";
 import {
   parseDashboardSnapshot,
@@ -70,7 +74,7 @@ function payloadError(payload: ErrorPayload | null | undefined): Error | null {
 function saveResult(payload: FullPayload | null | undefined): DashboardSaveResult {
   const error = payloadError(payload);
   if (error) throw error;
-  if (!payload?.id || payload.revision == null || payload.snapshot == null) {
+  if (!payload?.id || !payload.name || payload.revision == null || payload.snapshot == null) {
     throw new Error("The dashboard API returned an incomplete snapshot.");
   }
   return {
@@ -112,9 +116,25 @@ function loadState(
   }
 }
 
+/** The mutation returns the complete Dashboard projection for this target. */
+function useAcceptDashboard() {
+  const acceptQuery = useSetAuthoredQueryData();
+  return React.useCallback(async (payload: FullPayload | null | undefined, target: AuthoredVariables<typeof DashboardDocument>["target"]) => {
+    saveResult(payload);
+    if (!payload) return;
+    return await acceptQuery(DashboardDocument, { target }, { dashboard: payload });
+  }, [acceptQuery]);
+}
+
 function useCreatePersonal() {
+  const acceptDashboard = useAcceptDashboard();
   const [create] = useAuthoredMutation(CreatePersonalDashboardDocument, {
     invalidateModels: DASHBOARD_MODELS,
+    errorFrom: (data) => payloadError(data?.create_personal_dashboard),
+    acceptResponse: async (data) => {
+      const payload = data?.create_personal_dashboard;
+      return await acceptDashboard(payload, { scope: "PERSONAL", id: saveResult(payload).persistedId });
+    },
   });
   return React.useCallback(async (input: { name: string; description?: string; idempotencyKey: string }) => {
     const result = await create({
@@ -130,9 +150,24 @@ function useDashboard(target: DashboardTarget) {
   const variables = React.useMemo(() => ({ target: targetInput(target) }), [target]);
   const query = useAuthoredQuery(DashboardDocument, variables, { models: DASHBOARD_MODELS });
   const loadedState = loadState(query.data?.dashboard, query.isFetching, query.error);
-  const [saveMutation] = useAuthoredMutation(SaveDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
-  const [resetMutation] = useAuthoredMutation(ResetDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
-  const [duplicateMutation] = useAuthoredMutation(DuplicateDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
+  const acceptDashboard = useAcceptDashboard();
+  const [saveMutation] = useAuthoredMutation(SaveDashboardDocument, {
+    invalidateModels: DASHBOARD_MODELS,
+    errorFrom: (data) => payloadError(data?.save_dashboard),
+    acceptResponse: (data, input) => acceptDashboard(data?.save_dashboard, input.target),
+  });
+  const [resetMutation] = useAuthoredMutation(ResetDashboardDocument, {
+    invalidateModels: DASHBOARD_MODELS,
+    errorFrom: (data) => payloadError(data?.reset_dashboard),
+  });
+  const [duplicateMutation] = useAuthoredMutation(DuplicateDashboardDocument, {
+    invalidateModels: DASHBOARD_MODELS,
+    errorFrom: (data) => payloadError(data?.duplicate_dashboard),
+    acceptResponse: async (data) => {
+      const payload = data?.duplicate_dashboard;
+      return await acceptDashboard(payload, { scope: "PERSONAL", id: saveResult(payload).persistedId });
+    },
+  });
   const createPersonal = useCreatePersonal();
 
   return {
@@ -176,61 +211,51 @@ function summaryTarget(row: { id: string; scope: string; scope_key?: string | nu
 }
 
 function useCatalogue(): DashboardCatalogueBinding {
-  type SummaryRow = DocumentType<typeof DashboardSummariesDocument>["dashboard_summaries"]["items"][number];
-  const [request, setRequest] = React.useState<{ cursor: string | null; version: string | null }>({ cursor: null, version: null });
-  const [rows, setRows] = React.useState<readonly SummaryRow[]>([]);
-  const [complete, setComplete] = React.useState(false);
-  const [collectionError, setCollectionError] = React.useState<Error | null>(null);
+  type Page = DocumentType<typeof DashboardSummariesDocument>["dashboard_summaries"];
+  type Cursor = { cursor: string | null; version: string | null };
+  const client = useQueryClient();
+  const dataProvider = useDataProvider();
+  const provider = useActiveDataProviderName() ?? "default";
+  const queryKey = React.useMemo(() => [
+    ...authoredQueryKey(DashboardSummariesDocument, { cursor: null, version: null }, provider), "catalogue",
+  ], [provider]);
   const restarts = React.useRef(0);
-  const processedPage = React.useRef<string | null>(null);
-  const query = useAuthoredQuery(
-    DashboardSummariesDocument,
-    { cursor: request.cursor, version: request.version },
-    { models: DASHBOARD_MODELS },
-  );
+  const query = useInfiniteQuery({
+    queryKey,
+    meta: sharedAuthoredMeta(client, queryKey, DASHBOARD_MODELS),
+    initialPageParam: { cursor: null, version: null } as Cursor,
+    queryFn: async (context): Promise<Page> => (await requestAuthoredData<DocumentType<typeof DashboardSummariesDocument>>(
+      dataProvider, provider, DashboardSummariesDocument, context.pageParam, context,
+    )).dashboard_summaries,
+    getNextPageParam: (page): Cursor | undefined => page.status === "ready" && page.version && page.next_cursor
+      ? { cursor: page.next_cursor, version: page.version } : undefined,
+  });
+  useAuthoredLiveInterest(true, DASHBOARD_MODELS);
+  useAuthoredErrorPolicy([queryKey]);
   const createPersonal = useCreatePersonal();
+  const lastPage = query.data?.pages.at(-1);
   const restart = React.useCallback((manual = false) => {
     if (manual) restarts.current = 0;
-    processedPage.current = null;
-    setRows([]);
-    setComplete(false);
-    setCollectionError(null);
-    setRequest({ cursor: null, version: null });
-  }, []);
+    void client.resetQueries({ queryKey, exact: true }).catch(() => undefined);
+  }, [client, queryKey]);
   React.useEffect(() => {
-    const page = query.data?.dashboard_summaries;
-    if (!page) return;
-    if (page.status === "collection_changed") {
-      if (restarts.current >= 2) {
-        setCollectionError(new Error("The dashboard catalogue kept changing. Retry when updates settle."));
-        setComplete(true);
-        return;
-      }
-      restarts.current += 1;
-      restart();
+    if (query.isFetching || query.error || !lastPage) return;
+    if (lastPage.status === "collection_changed") {
+      if (restarts.current < 2) { restarts.current += 1; restart(); }
       return;
     }
-    if (page.status === "limit") {
-      setCollectionError(new Error("The dashboard catalogue exceeds the 5,000 item limit."));
-      setComplete(true);
-      return;
+    if (lastPage.status === "ready" && lastPage.version) {
+      if (query.hasNextPage) void query.fetchNextPage().catch(() => undefined);
+      else restarts.current = 0;
     }
-    if (page.status !== "ready" || !page.version) {
-      setCollectionError(new Error("The dashboard catalogue returned an invalid page."));
-      setComplete(true);
-      return;
-    }
-    const pageKey = `${request.cursor ?? "__first__"}:${page.version}`;
-    if (processedPage.current === pageKey) return;
-    processedPage.current = pageKey;
-    setRows((current) => request.cursor ? [...current, ...page.items] : page.items);
-    if (page.next_cursor) {
-      setRequest({ cursor: page.next_cursor, version: page.version });
-    } else {
-      setComplete(true);
-      restarts.current = 0;
-    }
-  }, [query.data, request.cursor, restart]);
+  }, [lastPage, query.isFetching, query.error, query.hasNextPage, query.fetchNextPage, restart]);
+  const collectionError = !lastPage || lastPage.status === "ready" && lastPage.version ? null
+    : lastPage.status === "collection_changed" && restarts.current < 2 ? null
+      : new Error(lastPage.status === "collection_changed"
+        ? "The dashboard catalogue kept changing. Retry when updates settle."
+        : lastPage.status === "limit" ? "The dashboard catalogue exceeds the 5,000 item limit."
+          : "The dashboard catalogue returned an invalid page.");
+  const rows = React.useMemo(() => query.data?.pages.flatMap((page) => page.status === "ready" ? page.items : []) ?? [], [query.data]);
   const summaries = React.useMemo<readonly DashboardSummary[]>(() =>
     rows.map((row) => ({
       id: row.id,
@@ -251,7 +276,7 @@ function useCatalogue(): DashboardCatalogueBinding {
     })), [rows]);
   return {
     summaries,
-    loading: query.isFetching || !complete,
+    loading: query.isFetching || query.isPending || query.hasNextPage,
     error: collectionError ?? query.error,
     refresh: () => restart(true),
     createPersonal,

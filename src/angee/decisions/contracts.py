@@ -14,10 +14,8 @@ from rebac.schema.walker import field_gated_actions
 
 from angee.base.fields.state import StateField
 from angee.base.models.identity import instance_from_public_id, public_id_for
-from angee.base.permissions import effective_rebac_definition, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
-from angee.graphql.data.metadata import data_resource_contributions
-from angee.graphql.schema import schema_parts_for
+from angee.iam.permissions import effective_rebac_definition, require_rebac_queryset
 from angee.provenance.evidence import EvidenceFact, EvidenceReference
 
 
@@ -101,13 +99,6 @@ class RecordActions(BaseModel):
         model = self.target_model(record)
         if not isinstance(record, model):
             raise ValueError("Concern the concrete record named by the action model.")
-        resources = [
-            item.native_resource
-            for parts in schema_parts_for(apps.get_app_config(model._meta.app_label)).values()
-            for surface in parts.mutation
-            for item in data_resource_contributions(surface)
-            if item.model is model and item.native_resource is not None
-        ]
         resolved = {}
         for name, operation in self.fields.items():
             try:
@@ -116,10 +107,6 @@ class RecordActions(BaseModel):
                 raise ValueError(f"Unknown field: {name}.") from error
             if not operation.model_fields_set:
                 continue
-            if (resources or field.many_to_many) and not any(
-                name in resource.updatable_fields for resource in resources
-            ):
-                raise ValueError(f"The record owner does not expose writes to {name}.")
             if field.one_to_many:
                 raise ValueError(f"Set a scalar field or call its owner's method: {name}.")
             if not isinstance(field, models.Field):

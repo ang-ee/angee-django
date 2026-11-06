@@ -100,6 +100,46 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
         self.assertEqual(self.Message._base_manager.count(), 1)
         self.assertEqual(self.Need._base_manager.count(), 0)
 
+    def test_migrated_retired_intake_triggers_keep_capture_disabled(self):
+        """A project data migration clears the queue when retiring inert triggers."""
+
+        with system_context(reason="test retired intake trigger setup"):
+            self.channel.intake_queue = self.queue
+            self.channel.save(update_fields=["intake_queue"])
+        table = connection.ops.quote_name(self.channel._meta.db_table)
+        column = connection.ops.quote_name("intake_trigger")
+        queue_column = connection.ops.quote_name("intake_queue_id")
+        pk_column = connection.ops.quote_name(self.channel._meta.pk.column)
+        for retired in ("reaction", "mention", "command"):
+            with self.subTest(retired=retired), connection.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE {table} SET {column} = %s, {queue_column} = %s WHERE {pk_column} = %s",
+                    [retired, self.queue.pk, self.channel.pk],
+                )
+                cursor.execute(
+                    f"SELECT {column}, {queue_column} FROM {table} WHERE {pk_column} = %s",
+                    [self.channel.pk],
+                )
+                self.assertEqual(cursor.fetchone(), (retired, self.queue.pk))
+                cursor.execute(
+                    f"UPDATE {table} SET {column} = %s, {queue_column} = NULL "
+                    f"WHERE {column} IN (%s, %s, %s)",
+                    ["all_messages", "reaction", "mention", "command"],
+                )
+            channel = type(self.channel)._base_manager.get(pk=self.channel.pk)
+            self.assertEqual(str(channel.intake_trigger), "all_messages")
+            self.assertIsNone(channel.intake_queue_id)
+            self.assertFalse(channel.should_capture_message(None))
+            self.channel = channel
+            self.ingest(external_id=f"retired-{retired}")
+            self.assertEqual(self.Need._base_manager.count(), 0)
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT {column} FROM {table} WHERE {pk_column} = %s", [channel.pk])
+                self.assertEqual(cursor.fetchone()[0], "all_messages")
+            self.assertTrue(
+                type(self.channel)._base_manager.filter(pk=channel.pk, intake_trigger="all_messages").exists()
+            )
+
     def test_transport_channel_is_the_concrete_channel_child(self):
         (message,) = self.ingest()
         channel = message.transport_channel(reason="test transport channel")
@@ -265,7 +305,7 @@ class IntakeAccessCase(TransactionTestCase):
     def need(self, *, email="new@example.com", party=None, name=""):
         # Like its production callers, the triage factory locks rank rows inside a transaction.
         with system_context(reason="test request setup"), transaction.atomic():
-            task = self.Need.objects._create_triage_task(queue=self.queue, title="Request", note="")
+            task = self.Task.objects.capture_triage(queue=self.queue, title="Request", note="")
             task.owner = self.owner
             task.assignee = self.writer
             task.save()
@@ -279,7 +319,7 @@ class IntakeAccessCase(TransactionTestCase):
             )
 
     def as_user(self, need, user=None):
-        return self.Need.objects.as_user(user or self.admin).get(pk=need.pk)
+        return self.Need.objects.with_actor(user or self.admin).get(pk=need.pk)
 
     def party(self, user):
         with system_context(reason="test account identity"):
@@ -327,7 +367,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertTrue(accepted["decide"]["ok"])
         need.refresh_from_db()
         self.assertEqual(need.access_verdict, ["intake.approve"])
-        self.assertEqual(need.access_answered_by_id, self.admin.pk)
+        self.assertEqual(need.access_decision.answered_by_id, self.admin.pk)
         self.assertEqual(need._account_for_party(need.party_id).pk, self.reader.pk)
         self.assertEqual([grant_rows(store) for store in stores], before)
 
@@ -370,7 +410,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         need.decide_access("intake.deny", expected_revision=before)
         denied = need.access_decision
         self.assertEqual(need.access_verdict, ["intake.deny"])
-        self.assertEqual(need.access_answered_by_id, self.owner.pk)
+        self.assertEqual(need.access_decision.answered_by_id, self.owner.pk)
         self.assertEqual(need.revision, before + 1)
         self.assertIsNotNone(need.access_answered_at)
         need.decide_access("intake.deny")
@@ -525,7 +565,9 @@ class NeedAccessDecisionTests(IntakeAccessCase):
                     need.refresh_from_db()
                     self.assertEqual(need.revision, before + 1)
                     self.assertEqual(need.access_verdict, None)
-                    self.assertIsNone(need.access_answered_by_id)
+                    self.assertNotEqual(need.access_decision_id, previous_decision.pk)
+                    self.assertTrue(need.access_decision.is_open)
+                    self.assertIsNone(need.access_answered_by)
                     self.assertIsNone(need.access_answered_at)
                     previous_decision.refresh_from_db()
                     self.assertEqual(previous_decision.verdict, ["intake.approve"])
@@ -874,7 +916,7 @@ class NeedAccessTests(IntakeAccessCase):
         for candidate in (reader, writer):
             self.assertIsNone(candidate.access_decision_id)
             self.assertIsNone(candidate.access_verdict)
-            self.assertIsNone(candidate.access_answered_by_id)
+            self.assertIsNone(candidate.access_answered_by)
             self.assertIsNone(candidate.access_answered_at)
             with self.assertRaises(PermissionDenied):
                 candidate.decide_access("intake.deny")
@@ -902,9 +944,9 @@ class NeedAccessTests(IntakeAccessCase):
         need = self.Need._base_manager.get(pk=need.pk)
         self.assertEqual(need.access_decision_id, decision_id)
         self.assertEqual(need.access_verdict, ["intake.deny"])
-        self.assertEqual(need.access_answered_by_id, self.owner.pk)
+        self.assertEqual(need.access_decision.answered_by_id, self.owner.pk)
 
-    def test_requester_comment_filer_read_and_preview_derive_from_need(self):
+    def test_requester_comment_and_filer_identity_derive_from_need(self):
         party = self.party(self.reader)
         need = self.need(party=party)
         with system_context(reason="test restricted request"):
@@ -917,9 +959,14 @@ class NeedAccessTests(IntakeAccessCase):
         for permission in ("read", "comment"):
             self.assertTrue(requester_task.has_access(permission))
         for user in (self.owner, self.writer):
-            self.assertTrue(self.Party.objects.as_user(user).filter(pk=party.pk).exists())
-            self.assertTrue(apps.get_model("parties", "Person").objects.as_user(user).filter(pk=party.pk).exists())
-            self.assertTrue(self.reader.with_actor(to_subject_ref(user)).has_access("view_as"))
+            self.assertFalse(self.Party.objects.with_actor(user).filter(pk=party.pk).exists())
+            self.assertFalse(apps.get_model("parties", "Person").objects.with_actor(user).filter(pk=party.pk).exists())
+            projected = self.graphql(
+                "{ intake_needs { id party { id display_name } } }", {}, user=user,
+            )["intake_needs"]
+            assert {row["id"]: row["party"] for row in projected}[need.sqid] == {
+                "id": party.sqid, "display_name": party.display_name,
+            }
 
     def test_filer_name_sorts_readable_requesters_and_redacts_hidden_parties(self):
         with system_context(reason="test filer parties"):
@@ -950,7 +997,7 @@ class NeedAccessTests(IntakeAccessCase):
                 positions = sorted(ids.index(value) for value in null_group)
                 self.assertEqual(positions, list(range(positions[0], positions[0] + len(null_group))), direction)
 
-        self.assertFalse(self.Party.objects.as_user(self.writer).filter(pk=parties["Zed"].pk).exists())
+        self.assertFalse(self.Party.objects.with_actor(self.writer).filter(pk=parties["Zed"].pk).exists())
         assert_ordering(self.admin, [al.sqid, bea.sqid, hidden.sqid], [unnamed.sqid, blank.sqid])
         assert_ordering(self.writer, [al.sqid, bea.sqid], [unnamed.sqid, hidden.sqid, blank.sqid])
         before = {direction: ordered(self.writer, direction) for direction in ("asc", "desc")}
@@ -1033,9 +1080,8 @@ class NeedAccessTests(IntakeAccessCase):
             task = self.Task.objects.sudo(reason="test.intake.transfer_share").get(pk=task.pk)
             task.owner = self.writer
             task.save(update_fields=("owner",))
-        Decision = apps.get_model("decisions", "Decision")
         with self.assertRaises(PermissionDenied):
-            Decision.objects.decide(decision, actor=self.owner, chosen=["intake.approve"])
+            decision.decide(actor=self.owner, chosen=["intake.approve"])
         need.refresh_from_db()
         self.assertIsNone(need.access_verdict)
         self.assertIsNone(need.admitted_user_id)
@@ -1044,10 +1090,10 @@ class NeedAccessTests(IntakeAccessCase):
         # A new sharer is eligible even though the original question named the old one.
         with patch.object(self.Need, "apply_access_answer", side_effect=ValidationError("owner refused")):
             with self.assertRaisesMessage(ValidationError, "owner refused"):
-                Decision.objects.decide(decision, actor=self.writer, chosen=["intake.approve"])
+                decision.decide(actor=self.writer, chosen=["intake.approve"])
         decision.refresh_from_db()
         self.assertTrue(decision.is_open)
-        Decision.objects.decide(decision, actor=self.writer, chosen=["intake.approve"])
+        decision.decide(actor=self.writer, chosen=["intake.approve"])
         need.refresh_from_db()
         self.assertEqual(need.admitted_user_id, self.reader.pk)
         self.assertTrue(need.task.with_actor(self.reader).has_access("read"))
@@ -1102,7 +1148,7 @@ class NeedResetAccessTests(IntakeAccessCase):
             need.task.revoke_record_access("reader", self.reader)
         self.as_user(need).decide_access("intake.approve")
         need.refresh_from_db()
-        requester_task = self.Task.objects.as_user(self.reader).filter(pk=need.task_id)
+        requester_task = self.Task.objects.with_actor(self.reader).filter(pk=need.task_id)
         self.assertTrue(requester_task.exists())
         password = self.User._base_manager.get(pk=self.reader.pk).password
         previous = need.access_decision
@@ -1138,6 +1184,45 @@ class NeedResetAccessTests(IntakeAccessCase):
 
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized")
 class DenormalizedNeedResetAccessTests(NeedResetAccessTests):
+    pass
+
+
+class NeedViewAsAdminOnlyTests(IntakeAccessCase):
+    def test_task_writers_see_requester_display_without_view_as(self):
+        party = self.party(self.reader)
+        need = self.need(party=party)
+        with system_context(reason="test unrelated preview target"):
+            unrelated = self.User.objects.create_user(username="unrelated-preview-target")
+        for writer in (self.owner, self.writer):
+            self.assertTrue(need.task.with_actor(to_subject_ref(writer)).has_access("write"))
+            for target in (self.reader, unrelated, writer):
+                self.assertFalse(target.with_actor(to_subject_ref(writer)).has_access("view_as"))
+                self.assertIsNone(self.User.objects.admit_view_as(writer, str(target.sqid)))
+            self.assertFalse(self.Party.objects.with_actor(writer).filter(pk=party.pk).exists())
+            self.assertFalse(
+                apps.get_model("parties", "Person").objects.with_actor(writer).filter(pk=party.pk).exists()
+            )
+            projected = self.graphql(
+                "{ intake_needs { id party { id display_name } } }", {}, user=writer,
+            )["intake_needs"]
+            self.assertEqual(
+                {row["id"]: row["party"] for row in projected}[need.sqid],
+                {"id": party.sqid, "display_name": party.display_name},
+            )
+            self.assertEqual(
+                self.graphql(
+                    "{ project_tasks { requester { display_name } } }",
+                    {},
+                    user=writer,
+                )["project_tasks"],
+                [{"requester": {"display_name": party.display_name}}],
+            )
+        self.assertTrue(self.reader.with_actor(to_subject_ref(self.admin)).has_access("view_as"))
+        self.assertEqual(self.User.objects.admit_view_as(self.admin, str(self.reader.sqid)), self.reader)
+
+
+@override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized")
+class DenormalizedNeedViewAsAdminOnlyTests(NeedViewAsAdminOnlyTests):
     pass
 
 

@@ -1,9 +1,9 @@
 """GitHub REST implementation of the host-agnostic :class:`VCSBackend`.
 
 Reads a GitHub remote over the REST API to populate the ``integrate`` inventory —
-listing repositories (by org), walking trees, reading blobs, resolving refs — and
-verifies inbound push webhooks. It never clones: git transport is the operator's
-job. Outbound calls go through the shared SSRF-pinned client (``self.http``, from
+listing repositories (by org), walking trees, reading blobs, and resolving refs.
+Git transport is the operator's job. Outbound calls go through the shared
+SSRF-pinned client (``self.http``, from
 :class:`~angee.integrate.http.HttpClientMixin` on :class:`VCSBackend`); the API
 base is admin-configured (``api.github.com`` by default, a GHE host via
 ``VcsBridge.config``), so the host is trusted rather than user-supplied per
@@ -13,8 +13,7 @@ request.
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -24,7 +23,6 @@ from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 
 HTTP_TIMEOUT_SECONDS = 15
 DEFAULT_API_BASE = "https://api.github.com"
-WEBHOOK_SIGNATURE_HEADER = "X-Hub-Signature-256"
 PER_PAGE = 100
 MAX_REPO_PAGES = 100
 """Hard cap on repository pages (~10k repos) so a pathological listing can't loop forever."""
@@ -89,7 +87,7 @@ class GitHubBackend(VCSBackend):
     def ls_tree(self, repository: Any, *, ref: str, path: str, recursive: bool = False) -> list[TreeEntry]:
         """List the tree under ``path`` at ``ref`` via the git-trees API."""
 
-        tree_oid = self.rev_parse(repository, ref)
+        tree_oid = ref if re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", ref) else self.rev_parse(repository, ref)
         suffix = "?recursive=1" if recursive else ""
         payload = self._get(f"/repos/{repository.name}/git/trees/{quote(tree_oid)}{suffix}") or {}
         if payload.get("truncated"):
@@ -124,9 +122,13 @@ class GitHubBackend(VCSBackend):
             raise GitHubApiError("GitHub returned an unsupported file encoding", status=0)
         headers = {**self._headers(), "Accept": "application/vnd.github.raw+json"}
         response = self.http.request(
-            "GET", f"{self.api_base}{endpoint}", headers=headers,
+            "GET",
+            f"{self.api_base}{endpoint}",
+            headers=headers,
             allow_private=self.api_base != DEFAULT_API_BASE.rstrip("/"),
-            same_origin_redirects=3, max_bytes=self.max_file_bytes, timeout=HTTP_TIMEOUT_SECONDS,
+            same_origin_redirects=3,
+            max_bytes=self.max_file_bytes,
+            timeout=HTTP_TIMEOUT_SECONDS,
         )
         if response.status_code == 404:
             raise FileNotFoundError(path)
@@ -154,16 +156,6 @@ class GitHubBackend(VCSBackend):
 
         return self._descriptor(self._get(f"/repos/{name}"))
 
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
-        """Verify an inbound push webhook's HMAC-SHA256 signature against the secret."""
-
-        secret = str(getattr(vcs_bridge, "webhook_secret", "") or "")
-        signature = _request_header(request, WEBHOOK_SIGNATURE_HEADER)
-        if not secret or not signature:
-            return False
-        digest = hmac.new(secret.encode("utf-8"), _request_body(request), hashlib.sha256).hexdigest()
-        return hmac.compare_digest(signature, f"sha256={digest}")
-
     # Internals ---------------------------------------------------------------
 
     def _headers(self) -> dict[str, str]:
@@ -174,15 +166,8 @@ class GitHubBackend(VCSBackend):
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "angee-integrate-github",
         }
-        credential_field = self.bridge._meta.get_field("credential")
-        if not credential_field.is_cached(self.bridge):
-            credential_field.set_cached_value(
-                self.bridge,
-                credential_field.related_model._base_manager.select_related("oauth_client").get(
-                    pk=self.bridge.credential_id
-                ),
-            )
-        credential: Any = self.bridge.credential
+        credential = self.bridge.connection_credential()
+        assert credential is not None
         headers.update(credential.auth_headers())
         return headers
 
@@ -197,13 +182,19 @@ class GitHubBackend(VCSBackend):
         allow_private = self.api_base != DEFAULT_API_BASE.rstrip("/")
         if max_bytes is None:
             response = self.http.get(
-                f"{self.api_base}{path}", headers=self._headers(),
-                allow_private=allow_private, timeout=HTTP_TIMEOUT_SECONDS,
+                f"{self.api_base}{path}",
+                headers=self._headers(),
+                allow_private=allow_private,
+                timeout=HTTP_TIMEOUT_SECONDS,
             )
         else:
             response = self.http.request(
-                "GET", f"{self.api_base}{path}", headers=self._headers(),
-                allow_private=allow_private, max_bytes=max_bytes, timeout=HTTP_TIMEOUT_SECONDS,
+                "GET",
+                f"{self.api_base}{path}",
+                headers=self._headers(),
+                allow_private=allow_private,
+                max_bytes=max_bytes,
+                timeout=HTTP_TIMEOUT_SECONDS,
             )
         if response.status_code == 404:
             raise FileNotFoundError(path)
@@ -231,19 +222,3 @@ class GitHubBackend(VCSBackend):
             web_url=str(item.get("html_url", "")),
             archived=bool(item.get("archived")),
         )
-
-
-def _request_header(request: Any, name: str) -> str:
-    """Return one header from a Django request or a test double."""
-
-    headers = getattr(request, "headers", None)
-    if headers is not None:
-        return str(headers.get(name, "") or "")
-    return str(getattr(request, name, "") or "")
-
-
-def _request_body(request: Any) -> bytes:
-    """Return the raw request body from a Django request or a test double."""
-
-    body = getattr(request, "body", b"")
-    return body if isinstance(body, bytes) else str(body).encode("utf-8")

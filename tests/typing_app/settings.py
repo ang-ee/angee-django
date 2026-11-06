@@ -10,6 +10,7 @@ INSTALLED_APPS = [
 ]
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+PROVENANCE_POLICY = "angee.provenance.contrib.angee.policy.AngeePolicy"
 ANGEE_CHANGESET_MODEL = "typing_app.TypingChangeset"
 
 ANGEE_TYPING_IMPL_CLASSES = {"local": "tests.typing_app.models.TypingImplementation"}

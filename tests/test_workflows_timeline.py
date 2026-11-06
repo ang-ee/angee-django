@@ -1,21 +1,36 @@
 """Record work, holds and the linear projection share the execution owners."""
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.db.models import Value
 from django.db.models.functions import Now
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context
+from rebac import (
+    RelationshipTuple,
+    actor_context,
+    generic_target,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.decisions.querysets import DecisionQuerySet
+from angee.iam.testing.queries import is_permission_audit_insert
+from angee.workflows import schema as timeline_schema
 from angee.workflows.decision_steps import AskDecision, DecisionStep
+from angee.workflows.querysets import WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Trigger, WorkflowRun
-from tests.conftest import execute_schema, result_data, vault_for
+from angee.workflows.timeline import TimelineSelection
+from tests.conftest import create_user, execute_schema, result_data, vault_for
 from tests.test_workflows_children import child_graph as child_graph
 from tests.test_workflows_review import questions, start_review
 from tests.test_workflows_review import review as review
@@ -35,6 +50,88 @@ def timeline(schema, actor, records):
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
         "record_timeline"
     ]
+
+
+QUERY = """query($records:[TimelineRecordInput!]!, $limit:Int!) {
+    record_timeline(records: $records, run_limit: $limit) {
+      open_decision_count
+      records {
+      record_model record_id
+      decisions { id kind kind_label revision created_at is_open permissions context proposal verdict
+      verdict_values verdict_label answered_at records { id record_model record_id } requester {
+      display_name } assignees { display_name } answered_by { display_name } }
+      runs {
+        id display_name status origin subject_model subject_id outcome_label failure_reason created_at
+        finished_at stopped_at output can_cancel
+        run_as { display_name }
+        version { workflow { display_name } }
+        parent_step { id run { id } }
+        trigger_event { record_model record_id changed_at trigger { display_name } }
+        graph {
+          edges { source outcome target taken }
+          nodes {
+            key label step_label rank body_key plan outcomes { outcome label }
+            item_counts { status count } item_attempts
+            step_run {
+              id status hold outcome outcome_label failure_reason wait_reason notes { tone message }
+              attempt page_index map_total map_settled created_at updated_at
+              can_retry requires_duplicate_acknowledgement
+              awaited_run { id display_name status }
+              child_runs { id display_name status }
+              records { id label operation record_model record_id }
+              decision { id kind kind_label revision created_at is_open permissions context proposal verdict
+              verdict_values verdict_label answered_at records { id record_model record_id } requester {
+              display_name } assignees { display_name } answered_by { display_name } }
+              map_steps {
+                id node_label map_index status hold outcome_label failure_reason wait_reason notes { tone message }
+                can_retry requires_duplicate_acknowledgement updated_at
+                awaited_run { id display_name status }
+                child_runs { id display_name status }
+                records { id label operation record_model record_id }
+                decision { id kind kind_label revision created_at is_open permissions context proposal verdict
+                verdict_values verdict_label answered_at records { id record_model record_id } requester {
+                display_name } assignees { display_name } answered_by { display_name } }
+              }
+            }
+          }
+        }
+      }
+      }
+    }
+  }"""
+
+
+def test_record_timeline_graph_statement_count_is_independent_of_run_count(schema, review):
+    """The shipped RecordTimelineDocument fields cost the same for one or five runs."""
+    actor, reviewers, sent, question = review
+    subject = question.review_subject
+    workflow = load_workflow({"nodes": {"review": {"step": "question"}}}, actor=actor)
+    runs = []
+    for _ in range(5):
+        run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
+        run_until(run)
+        runs.append(run)
+
+    def counts(query):
+        measured = []
+        for limit in (1, 5):
+            with CaptureQueriesContext(connection) as queries:
+                rows = result_data(execute_schema(schema, query, {"records": [{
+                    "model": subject._meta.label, "id": subject.sqid,
+                }], "limit": limit}, user=actor))["record_timeline"]["records"][0]["runs"]
+            assert len(rows) == limit
+            measured.append(len(queries))
+        assert measured[0] == measured[1], measured
+
+    for query in (QUERY, QUERY.replace(" can_retry", "")):
+        counts(query)
+    for run in runs:
+        step = StepRun.system_queryset().get(run=run, node_key="review")
+        decide(step.decision, actor=reviewers[0], chosen=["reject"])
+        deliver_decision_wakes(sent, step.decision_id)
+        run_until(run)
+    for query in (QUERY, QUERY.replace(" can_retry", "")):
+        counts(query)
 
 
 @pytest.mark.parametrize("operation,canceled", [("read", False), ("created", True), ("changed", True)])
@@ -63,7 +160,6 @@ def test_deletion_only_enqueues_active_runs_that_modify_the_record(review, regis
 def test_timeline_bounds_inputs_and_calls_the_set_owner_once(schema, review, monkeypatch):
     actor, _, _, question = review
     run, _ = start_review(review)
-    from angee.workflows.managers import WorkflowRunQuerySet
 
     calls = []
     original = WorkflowRunQuerySet.about
@@ -100,7 +196,6 @@ def test_timeline_bounds_inputs_and_calls_the_set_owner_once(schema, review, mon
 def test_attention_read_does_not_load_the_run_graph(schema, review, monkeypatch):
     actor, _, _, question = review
     start_review(review)
-    from angee.workflows import schema as timeline_schema
 
     def refuse_graph(*args, **kwargs):
         raise AssertionError("The eager probe must not materialize runs")
@@ -136,7 +231,6 @@ def test_timeline_open_decision_records_are_readable(schema, review, include_run
 def test_timeline_selection_owner_matches_graphql_and_keeps_empty_records(schema, review, include_runs):
     """Domain grouping preserves deduplication, record order and optional run reads."""
 
-    from angee.workflows.timeline import TimelineSelection
 
     actor, _, _, question = review
     run, step = start_review(review)
@@ -144,18 +238,22 @@ def test_timeline_selection_owner_matches_graphql_and_keeps_empty_records(schema
     unrelated = vault_for(actor, name="No workflow runs")
     with actor_context(actor):
         selection = TimelineSelection([record, record, unrelated], actor, run_limit=1)
-        entries = list(selection.entries(list(selection.runs) if include_runs else []))
+        groups = selection.runs_by_record if include_runs else {target: () for target in selection.targets}
+        entries = [(target, groups[target], selection.decisions_by_record[target]) for target in selection.targets]
         count = selection.open_decision_count
     assert [target.object_id for target, _, _ in entries] == [record.pk, unrelated.pk]
-    assert [[row.pk for row in runs] for _, runs, _ in entries] == ([[run.pk], []] if include_runs else [[], []])
+    assert [list(ids) for _, ids, _ in entries] == ([[run.pk], []] if include_runs else [[], []])
     assert [[row.pk for row in decisions] for _, _, decisions in entries] == [[questions(step)[0].pk], []]
     assert count == 1
-    result = result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!, $include:Boolean!) {
-      record_timeline(records:$records, include_runs:$include, run_limit:1) {
-        open_decision_count has_runs records { record_id runs { id } decisions { id } }
-      }
-    }""", {"records": [{"model": item._meta.label, "id": item.sqid} for item in [record, record, unrelated]],
-            "include": include_runs}, user=actor))["record_timeline"]
+    with CaptureQueriesContext(connection) as captured:
+        result = result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!, $include:Boolean!) {
+          record_timeline(records:$records, include_runs:$include, run_limit:1) {
+            open_decision_count has_runs records { record_id runs { id } decisions { id } }
+          }
+        }""", {"records": [{"model": item._meta.label, "id": item.sqid} for item in [record, record, unrelated]],
+                "include": include_runs}, user=actor))["record_timeline"]
+    assert sum(is_permission_audit_insert(query["sql"], connection) for query in captured) == 0
+    assert len(captured) == (28 if include_runs else 21)
     assert result == {"open_decision_count": 1, "has_runs": True, "records": [
         {"record_id": record.sqid, "runs": [{"id": run.sqid}] if include_runs else [],
          "decisions": [{"id": questions(step)[0].sqid}]},
@@ -172,6 +270,37 @@ def test_about_uses_separate_indexed_identity_queries(review):
     assert 'JOIN "test_workflows_step_record"' not in sql
     assert '"content_type_id"' in sql and '"subject_content_type_id"' in sql
 
+
+def test_nonrecursive_about_preserves_subject_evidence_and_caller_scope(execution):
+    actor, _sent = execution
+    reader = create_user("about-reader")
+    target = vault_for(actor, name="About target")
+    other = vault_for(actor, name="Other subject")
+    workflow = load_workflow({"nodes": {"entry": {"step": "echo"}}}, key="about-membership", actor=actor)
+    direct = start_run(workflow, actor=actor, subject=target, request_key="about-direct")
+    linked = start_run(workflow, actor=actor, subject=other, request_key="about-linked")
+    unrelated = start_run(workflow, actor=actor, subject=other, request_key="about-unrelated")
+    hidden = start_run(workflow, actor=actor, subject=target, request_key="about-hidden")
+    with system_context(reason="test about retained evidence"):
+        evidence = [StepRecord.objects.create(
+            run=run, step_run=StepRun.system_queryset().get(run=run), operation="changed",
+            **generic_target(target).lookups(StepRecord, "record"),
+        ) for run in (linked, hidden)]
+    write_relationships([
+        RelationshipTuple(to_object_ref(target), "viewer", to_subject_ref(reader)),
+        *(RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(reader))
+          for run in (direct, linked, unrelated)),
+    ])
+    rows = WorkflowRun.objects.with_actor(reader)
+    assert set(rows.about(target, ancestors=False).values_list("pk", flat=True)) == {direct.pk, linked.pk}
+    assert not rows.filter(pk=hidden.pk).exists()
+    assert not StepRecord.objects.with_actor(reader).filter(pk=evidence[1].pk).exists()
+    assert rows.about(other, ancestors=False).filter(pk=unrelated.pk).exists()
+    for operations, expected in (("created", {direct.pk}), ("changed", {direct.pk, linked.pk})):
+        selected = rows.about(target, ancestors=False, operations=(operations,))
+        assert set(selected.values_list("pk", flat=True)) == expected
+    selected = rows.annotate(kept=Value("kept")).exclude(pk=direct.pk).about(target, ancestors=False)
+    assert list(selected.values_list("pk", "kept")) == [(linked.pk, "kept")]
 
 def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trigger_setup, register_step):
     actor, _, record, _ = trigger_setup
@@ -215,9 +344,9 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     assert step["records"][0]["record_id"] == record.sqid
     assert step["decision"]["records"][0]["record_id"] == record.sqid
     assert data["decisions"] == [{"id": step["decision"]["id"]}]
-    from angee.graphql.events import ChangeRelatedRecord
+    from angee.base.refs import RecordRef
 
-    concern = ChangeRelatedRecord(record._meta.label, record.sqid)
+    concern = RecordRef.from_instance(record)
     with system_context(reason="tests.timeline.change_concerns"):
         stored = WorkflowRun.objects.get(sqid=run.sqid)
         assert concern in stored.change_related_records()
@@ -226,7 +355,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
 
 
 def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(review, register_step, schema):
-    actor, people, _, question = review
+    actor, people, sent, question = review
     register_step(AskDecision)
     target = question.review_subject
     workflow = load_workflow({"nodes": {"ask": {"step": "ask_decision", "config": {
@@ -237,10 +366,11 @@ def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(revi
     run = start_run(workflow, actor=actor, subject=target)
     run_until(run)
     step = StepRun.system_queryset().get(run=run)
-    assert step.hold == "decision"
+    assert step.get_hold() == "decision"
     decision = step.decision
     assert target.sqid in decision.proposal["alternatives"][0]["actions"]
     decision.decide(actor=people[0], chosen=["rename"])
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     target.refresh_from_db()
     assert target.name == "Chosen" and run.status == "succeeded" and run.outcome == "renamed"
@@ -282,7 +412,7 @@ def test_a_routed_failure_is_done_and_does_not_hold_the_next_question(review, sc
         "review": {"step": "question", "input": {}},
     }})
     failed = StepRun.system_queryset().get(run=run, node_key="failure")
-    assert run.status == "waiting" and failed.hold is None
+    assert run.status == "waiting" and failed.get_hold() is None
     data = timeline(schema, actor, [question.review_subject])["records"][0]["runs"][0]
     assert {node["key"]: node["plan"] for node in data["graph"]["nodes"]} == {"failure": "done", "review": "current"}
     assert data["graph"]["nodes"][0]["step_run"]["hold"] is None
@@ -376,12 +506,215 @@ def test_stop_error_hold_disables_retry_and_removes_the_future_plan(execution, r
     }}, actor=actor), actor=actor)
     run_until(run)
     step = StepRun.system_queryset().get(run=run)
-    assert step.hold == "error" and step.can_retry(actor) and run.can_cancel(actor)
+    assert step.get_hold() == "error" and step.get_can_retry(actor) and run.get_can_cancel(actor)
     WorkflowRun.objects.cancel(run, actor=actor)
     run.refresh_from_db()
     step.refresh_from_db()
     assert run.status == "failed" and run.stopped_at is not None
-    assert step.hold is None and not step.can_retry(actor) and not run.can_cancel(actor)
+    assert step.get_hold() is None and not step.get_can_retry(actor) and not run.get_can_cancel(actor)
     assert {node.node.key: node.plan for node in run.graph(actor).nodes} == {"failure": "done", "finish": "not_run"}
     with pytest.raises(ValidationError, match="cannot be retried"):
         StepRun.objects.retry_step(step, actor=actor)
+
+
+@pytest.mark.parametrize(
+    ("projection", "decision_reads", "run_selections", "variables"),
+    [
+        ("records { record_id runs { id status } }", 0, 1, {}),
+        ("records { record_id }", 0, 0, {}),
+        ("open_decision_count", 1, 0, {}),
+        ("has_runs", 0, 1, {}),
+    ] + [
+        (
+            "open_decision_count @" + directive + "(if:$recordLevel) records { record_id "
+            "decisions @" + directive + "(if:$recordLevel) { id permissions } "
+            "runs { id graph { nodes { step_run { id decision { id permissions } } } } } }",
+            2 if included else 0,
+            1,
+            variables,
+        )
+        for directive, variables, included in [
+            ("include", {}, True),
+            ("include", {"recordLevel": True}, True),
+            ("include", {"recordLevel": False}, False),
+            ("skip", {"recordLevel": True}, False),
+            ("skip", {"recordLevel": False}, True),
+        ]
+    ],
+)
+def test_record_timeline_executes_only_requested_projections(
+    schema, review, monkeypatch, projection, decision_reads, run_selections, variables,
+):
+    actor, _, _, question = review
+    run, step = start_review(review)
+
+    calls = {"decisions": 0, "runs": 0}
+    # Both readable questions and the record's structural attention count use
+    # this membership owner; the latter has no question-level read proof.
+    original_decisions = DecisionQuerySet.for_records
+    original_runs = WorkflowRunQuerySet.about
+
+    def decisions(self, *records):
+        calls["decisions"] += 1
+        return original_decisions(self, *records)
+
+    def runs(self, *args, **kwargs):
+        calls["runs"] += 1
+        return original_runs(self, *args, **kwargs)
+
+    monkeypatch.setattr(DecisionQuerySet, "for_records", decisions)
+    monkeypatch.setattr(WorkflowRunQuerySet, "about", runs)
+    data = result_data(execute_schema(
+        schema,
+        "query($records:[TimelineRecordInput!]!"
+        + (", $recordLevel:Boolean=true" if "$recordLevel" in projection else "")
+        + ") { record_timeline(records:$records) { " + projection + " } }",
+        {"records": [{"model": question.review_subject._meta.label, "id": question.review_subject.sqid}], **variables},
+        user=actor,
+    ))["record_timeline"]
+    assert data
+    assert calls == {"decisions": decision_reads, "runs": run_selections}
+
+    if "graph" in projection:
+        record = data["records"][0]
+        assert ("open_decision_count" in data) is bool(decision_reads)
+        assert ("decisions" in record) is bool(decision_reads)
+        assert [item["id"] for item in record["runs"]] == [run.sqid]
+        projected_steps = [node["step_run"] for node in record["runs"][0]["graph"]["nodes"] if node["step_run"]]
+        assert [item["id"] for item in projected_steps] == [step.sqid]
+        decision = projected_steps[0]["decision"]
+        assert decision["id"] == questions(step)[0].sqid
+        assert "permissions" in decision
+
+
+def test_record_timeline_aliases_use_child_projection_info_and_share_record_batches(
+    schema, review, register_step, monkeypatch,
+):
+    actor, _, _, _ = review
+
+    class End(Step[None, None, None]):
+        key = "lazy_timeline_projection"
+
+        def run(self, ctx):
+            return ctx.done()
+
+    register_step(End)
+    workflow = load_workflow({"nodes": {"entry": {"step": End.key}}}, actor=actor)
+    records = [vault_for(actor, name=f"Projection {index}") for index in range(3)]
+    runs = [start_run(workflow, actor=actor, subject=record) for record in records]
+
+    projections = []
+    selections = []
+    original_type = timeline_schema.WorkflowRunType.get_queryset
+    original_about = WorkflowRunQuerySet.about
+
+    def projected(cls, queryset, info):
+        projections.append((info.field_name, info.path.key))
+        return original_type(queryset, info)
+
+    def about(self, selected, **kwargs):
+        selections.append(selected)
+        return original_about(self, selected, **kwargs)
+
+    monkeypatch.setattr(timeline_schema.WorkflowRunType, "get_queryset", classmethod(projected))
+    monkeypatch.setattr(WorkflowRunQuerySet, "about", about)
+    result = result_data(execute_schema(schema, """
+      query($records:[TimelineRecordInput!]!, $details:Boolean!) {
+        record_timeline(records:$records, run_limit:1) {
+          records {
+            record_id
+            compact:runs { id status }
+            ...DetailedRuns
+            ignored:runs @skip(if:$details) { id graph { nodes { key } } }
+          }
+        }
+      }
+      fragment DetailedRuns on RecordTimelineType {
+        detailed:runs @include(if:$details) {
+          id display_name subject_model subject_id
+          version { number workflow { name } }
+          records { record_model record_id }
+          trigger_event { id record_model record_id }
+        }
+      }
+    """, {"records": [{"model": row._meta.label, "id": row.sqid} for row in records], "details": True},
+        user=actor))["record_timeline"]["records"]
+    assert len(selections) == 1 and len(selections[0]) == 3
+    assert projections == [("runs", "compact"), ("runs", "detailed")]
+    for record, run, row in zip(records, runs, result, strict=True):
+        assert row["record_id"] == record.sqid
+        assert row["compact"][0]["id"] == row["detailed"][0]["id"] == run.sqid
+        assert row["detailed"][0]["display_name"]
+        assert row["detailed"][0]["subject_model"] == record._meta.label
+        assert row["detailed"][0]["subject_id"] == record.sqid
+        assert row["detailed"][0]["version"]["number"] == run.version.number
+        assert row["detailed"][0]["version"]["workflow"]["name"] == workflow.name
+        assert record.sqid in {link["record_id"] for link in row["detailed"][0]["records"]}
+        assert row["detailed"][0]["trigger_event"] is None
+        assert "ignored" not in row
+
+
+def test_record_timeline_projection_state_does_not_outlive_its_authorized_request(schema, review):
+    actor, _, _, question = review
+    run, _ = start_review(review)
+    record = question.review_subject
+    variables = {"records": [{"model": record._meta.label, "id": record.sqid}]}
+    query = """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records:$records) { records { runs { id status } } }
+    }"""
+    data = result_data(execute_schema(schema, query, variables, user=actor))
+    assert data["record_timeline"]["records"][0]["runs"][0]["id"] == run.sqid
+    stranger = create_user("lazy-projection-stranger")
+    refused = execute_schema(schema, query, variables, user=stranger)
+    assert refused.errors
+    attention = execute_schema(schema, """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records:$records) { open_decision_count }
+    }""", variables, user=stranger)
+    assert attention.errors
+
+
+def test_record_run_aliases_keep_unreadable_versions_hidden_with_batched_projection(
+    schema, review, register_step,
+):
+    actor, _, _, _ = review
+    reader = create_user("lazy-run-reader")
+
+    class End(Step[None, None, None]):
+        key = "lazy_timeline_related_permission"
+
+        def run(self, ctx):
+            return ctx.done()
+
+    register_step(End)
+    workflow = load_workflow({"nodes": {"entry": {"step": End.key}}}, actor=actor)
+    records = [vault_for(actor, name=f"Readable source {index}") for index in range(3)]
+    runs = [start_run(workflow, actor=actor, subject=record) for record in records]
+    with system_context(reason="tests.timeline.related_reader"):
+        write_relationships([
+            RelationshipTuple(to_object_ref(row), relation, to_subject_ref(reader))
+            for rows, relation in ((records, "viewer"), (runs, "reader")) for row in rows
+        ])
+    assert not workflow.with_actor(reader).has_access("read")
+    type_calls = []
+    original = timeline_schema.WorkflowRunType.get_queryset
+
+    def projected(cls, queryset, info):
+        type_calls.append(info.path.key)
+        return original(queryset, info)
+
+    for count in (1, 3):
+        type_calls.clear()
+        with patch.object(timeline_schema.WorkflowRunType, "get_queryset", classmethod(projected)):
+            data = result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!) {
+              record_timeline(records:$records) { records {
+                compact:runs { id status }
+                detailed:runs { id version { id number workflow { id name } } }
+              } }
+            }""", {"records": [
+                {"model": record._meta.label, "id": record.sqid} for record in records[:count]
+            ]}, user=reader))["record_timeline"]["records"]
+        assert type_calls == ["compact", "detailed"]
+        assert len(data) == count
+        for run, row in zip(runs, data, strict=False):
+            assert row["compact"][0]["id"] == row["detailed"][0]["id"] == run.sqid
+            assert row["detailed"][0]["version"] is None

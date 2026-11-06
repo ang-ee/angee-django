@@ -8,28 +8,25 @@ Deliberate shares remain independent of these derived permissions.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import date
-from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Self, TypedDict, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, router, transaction
+from django.db import models, transaction
 from django.db.models.expressions import Combinable
-from django.db.models.functions import JSONObject, Lower
+from django.db.models.functions import Coalesce, JSONObject, Lower
 from django.db.models.lookups import Exact
 from django.utils import timezone
-from django.utils.dateparse import parse_date
 from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     actor_context,
-    check_new,
     current_actor,
+    database_context,
     generic_target,
     system_context,
     to_object_ref,
@@ -37,7 +34,7 @@ from rebac import (
 )
 from rebac.actors import to_subject_ref
 from rebac.backends import backend
-from rebac.errors import MissingActorError
+from rebac.database import write_alias
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationships
 from rebac.resources import model_resource_type
@@ -47,21 +44,32 @@ from angee.base.exceptions import DomainError, RecordAccessSubjectRefused
 from angee.base.expressions import JSONArraySubquery
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
-from angee.base.managers import AngeeManager
 from angee.base.models.audit import AuditMixin, retained_set_null
-from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
-from angee.base.models.ownership import OwnerQuerySet
-from angee.base.models.roles import role_anchor
+from angee.base.models.persistence import require_composed_type, require_projection
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
-from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, ClosedUpdateQuerySet
-from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
-from angee.base.validators import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
+from angee.iam.models.ownership import OwnerQuerySet
+from angee.iam.models.roles import role_anchor
+from angee.iam.permissions import actor_user_id, instance_actor, subject_reaches_user
+from angee.iam.querysets import structural_prefetch
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
-from angee.proposals.inputs import RoundTemplate
+from angee.proposals.choices import (
+    ANSWER_VISIBILITY_ORDER,
+    OPENING_POLICY_ORDER,
+    AnswerVisibility,
+    ClarificationAskers,
+    ProposalConfidence,
+    ProposalState,
+    RosterVisibility,
+    RoundOpeningPolicy,
+    RoundOutcome,
+    RoundStatus,
+)
+from angee.proposals.managers import ProposalManager, RoundManager, _RoundBaseManager
+from angee.proposals.validators import normalize_topic_key
 from angee.provenance.context import changeset, changeset_model, require_changeset
 
 if TYPE_CHECKING:
@@ -70,14 +78,16 @@ if TYPE_CHECKING:
     from angee.iam.models import User
     from angee.messaging.models import Message
     from angee.parties.models import Party
-    from angee.projects.models import Milestone, MilestoneQuerySet, Project, Task
-    from angee.spaces.models import Group
+    from angee.projects.models import Milestone, MilestoneQuerySet, Project
 
 _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
 """Non-user attribution for Project rows created only by ``create_track``."""
 
 _CLARIFICATION_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "clarification")
 """Anonymous attribution shared by clarification content and nested history."""
+
+ProposalsRole = role_anchor("proposals/role")
+"""Table-less REBAC anchor for global proposal-viewer membership."""
 
 
 class ClarificationWidenBlocked(DomainError, ValidationError):
@@ -109,96 +119,6 @@ class PublishedQuestion(DomainError, ValidationError):
         )
 
 
-class RoundOpeningPolicy(models.TextChoices):
-    """Which responder-owned surfaces disclosure opens."""
-
-    FACILITATOR_ONLY = "facilitator_only", "Facilitator only"
-    ANSWERS = "answers", "Answers"
-    ANSWERS_AND_TRACKS = "answers_and_tracks", "Answers and tracks"
-    DRAFTS_AND_TRACKS = "drafts_and_tracks", "Drafts and tracks"
-
-
-class RoundStatus(models.TextChoices):
-    """Code-owned Round lifecycle."""
-
-    COLLECTING = "collecting", "Collecting"
-    OPENED = "opened", "Opened"
-    CLOSED = "closed", "Closed"
-    CANCELED = "canceled", "Canceled"
-
-
-class RoundOutcome(models.TextChoices):
-    """Terminal close outcomes."""
-
-    AWARDED = "awarded", "Awarded"
-    NO_AWARD = "no_award", "No award"
-
-
-class ProposalState(models.TextChoices):
-    """Single Proposal document lifecycle."""
-
-    DRAFT = "draft", "Draft"
-    SUBMITTED = "submitted", "Submitted"
-    ACCEPTED = "accepted", "Accepted"
-    PARTIALLY_ACCEPTED = "partially_accepted", "Partially accepted"
-    DECLINED = "declined", "Declined"
-    WITHDRAWN = "withdrawn", "Withdrawn"
-
-
-class ProposalConfidence(models.TextChoices):
-    """Closed confidence vocabulary for comparison."""
-
-    LOW = "low", "Low"
-    MEDIUM = "medium", "Medium"
-    HIGH = "high", "High"
-
-
-class RosterVisibility(models.TextChoices):
-    """Responder roster projection detail."""
-
-    HIDDEN = "hidden", "Hidden"
-    NAMED = "named", "Named"
-    STATUS = "status", "Status"
-
-
-class ClarificationAskers(models.TextChoices):
-    """Whether peers may read the asker column."""
-
-    HIDDEN = "hidden", "Hidden"
-    NAMED = "named", "Named"
-
-
-class AnswerVisibility(models.TextChoices):
-    """Successively narrower inherited answer audiences."""
-
-    ROUND = "round", "Round"
-    RESPONDER = "responder", "Responder"
-    SEALED = "sealed", "Managers only"
-
-
-OPENING_POLICY_ORDER = (
-    RoundOpeningPolicy.FACILITATOR_ONLY,
-    RoundOpeningPolicy.ANSWERS,
-    RoundOpeningPolicy.ANSWERS_AND_TRACKS,
-    RoundOpeningPolicy.DRAFTS_AND_TRACKS,
-)
-ANSWER_VISIBILITY_ORDER = (AnswerVisibility.ROUND, AnswerVisibility.RESPONDER, AnswerVisibility.SEALED)
-
-
-class QuestionAudience(models.TextChoices):
-    """Audience choices when asking or narrowing an unpassed question."""
-
-    DEFAULT = "default", "Section default"
-    MANAGERS = "managers", "Managers"
-
-
-class PassAudience(models.TextChoices):
-    """Audience choices for a question's first pass."""
-
-    DEFAULT = "default", "Section default"
-    ASKER = "asker", "Asker"
-
-
 @dataclass(frozen=True)
 class RosterEntry:
     """An authorized name and optional track status, never a proposal row."""
@@ -206,169 +126,6 @@ class RosterEntry:
     user_id: Any
     name: str
     track_status: str | None = None
-
-
-class _RoundRequesterWrites(ClosedUpdateQuerySet):
-    """Reserve requester identity changes for the round's locked instance owner."""
-
-    def update(self, **kwargs: Any) -> int:
-        if {"requester_party", "requester_party_id"}.intersection(kwargs):
-            raise ValidationError({"requester_party": "Change requester identity through the round instance."})
-        return self.owner_update(**kwargs)
-
-    def bulk_update(self, objs: Any, fields: Any, *args: Any, **kwargs: Any) -> int:
-        """Keep native batch edits subject to the requester update guard."""
-
-        return super(ClosedUpdateQuerySet, self).bulk_update(objs, fields, *args, **kwargs)
-
-    def bulk_create(
-        self,
-        objs: Iterable[Any],
-        batch_size: int | None = None,
-        ignore_conflicts: bool = False,
-        update_conflicts: bool = False,
-        update_fields: Collection[str] | None = None,
-        unique_fields: Collection[str] | None = None,
-    ) -> list[Any]:
-        if update_conflicts and {"requester_party", "requester_party_id"}.intersection(update_fields or ()):
-            raise ValidationError({"requester_party": "Change requester identity through the round instance."})
-        return super().bulk_create(
-            objs, batch_size, ignore_conflicts, update_conflicts, update_fields, unique_fields,
-        )
-
-
-class _RoundBaseQuerySet(_RoundRequesterWrites, AngeeUnscopedQuerySet):
-    """Keep native unfiltered manager writes under the requester identity contract."""
-
-
-_RoundBaseManager = models.Manager.from_queryset(_RoundBaseQuerySet)
-
-
-class RoundQuerySet[T: Round](_RoundRequesterWrites, AngeeQuerySet[T]):
-    """Round collection scopes shared by record projections."""
-
-    def active_for_project(self, project: Project) -> Self:
-        """Select the newest live round targeting this project, its source task or track."""
-        targets = models.Q(project=project) | models.Q(proposals__track=project)
-        if project.converted_from_id is not None:
-            targets |= models.Q(task_id=project.converted_from_id)
-        return (
-            self.filter(targets, status__in=(RoundStatus.COLLECTING, RoundStatus.OPENED))
-            .distinct()
-            .order_by(
-                "-created_at",
-                "-pk",
-            )
-        )
-
-
-_RoundManagerBase = AngeeManager.from_queryset(RoundQuerySet)
-
-
-class RoundManager[T: Round](_RoundManagerBase[T]):
-    """Provision rounds by composing the native topic and admission owners."""
-
-    def provision(
-        self,
-        target: Project | Task,
-        template: object,
-        facilitator: User,
-        responders: Iterable[User],
-        team: Group | None = None,
-        *,
-        requester_party: Party | None = None,
-        configuration: Mapping[str, Any] | None = None,
-    ) -> T:
-        """Resume a round with the same target, name and declared settings."""
-
-        round_template: RoundTemplate = validate_value(RoundTemplate, template, field="template")
-        target_field = {"projects.project": "project", "projects.task": "task"}.get(target._meta.label_lower)
-        if target_field is None:
-            raise ValidationError({"target": "Choose a project or task."})
-        actor = current_actor()
-        resource_type = model_resource_type(self.model)
-        if actor is None:
-            raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
-        if resource_type is None or not check_new(
-            subject=actor,
-            action="create",
-            resource_type=resource_type,
-            relationships={target_field: (to_subject_ref(target),)},
-        ).allowed:
-            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
-        with transaction.atomic():
-            type(target).system_queryset(lock=("self",)).get(pk=target.pk)
-            candidate = self.model(**{target_field: target}, facilitator=facilitator, team=team)
-            project = candidate.target_project()
-            values = round_template.round_values(project)
-            setup_values = self.model.setup_values(**(configuration or {}))
-            if requester_party is not None:
-                setup_values["requester_party_id"] = requester_party.pk
-            rows = self.sudo(reason="proposals.round.provision").filter(
-                **{target_field: target},
-                name=round_template.name,
-                closed_at__isnull=True,
-            )
-            round = rows.first()
-            if round is None:
-                round = self.model(
-                    **{target_field: target},
-                    facilitator=facilitator,
-                    team=team,
-                    **values,
-                    **setup_values,
-                )
-                round.sudo(reason="proposals.round.provision").save()
-            elif not round.with_actor(actor).has_access("write"):
-                raise PermissionDenied("Round write access is required to resume provisioning.")
-            elif any(getattr(round, name) != value for name, value in values.items()) or (
-                round.facilitator_id != facilitator.pk or round.team_id != (team.pk if team else None)
-            ):
-                raise ValidationError({"template": "The existing round has different settings."})
-            else:
-                changed = []
-                for name, value in setup_values.items():
-                    previous = getattr(round, name)
-                    if previous == value:
-                        continue
-                    if previous is not None:
-                        raise ValidationError({"round": "The existing round has different setup choices."})
-                    setattr(round, name, value)
-                    changed.append(name)
-                if changed:
-                    round.save(update_fields=(*changed, "updated_at"))
-            topic_model = apps.get_model("proposals", "Topic")
-            with system_context(reason="proposals.round.provision.topics"):
-                topics = {topic.key: topic for topic in topic_model._base_manager.filter(round=round)}
-                if set(topics) - {topic.key for topic in round_template.topics}:
-                    raise ValidationError({"template": "The existing round has different topic keys."})
-                rank = None
-                for topic in round_template.topics:
-                    rank = FractionalRankField.get_append_rank(rank)
-                    values = dict(name=topic.name, hint=topic.hint, sort_order=rank)
-                    existing = topics.get(topic.key)
-                    if existing is None:
-                        topic_model.objects.create(round=round, key=topic.key, **values)
-                    elif any(getattr(existing, key) != value for key, value in values.items()):
-                        raise ValidationError({"template": "The existing topic differs from the template."})
-            round.sudo(reason="proposals.round.provision.admission")
-            for responder in responders:
-                round.admit(responder, track=round_template.tracks)
-        return round.with_actor(actor)
-
-    def for_track(self, project_id: Any, *, lock: bool = False) -> T | None:
-        """Return the round whose admitted shell owns ``project_id`` as its track, else ``None``.
-
-        Track items keep the round's holder ceiling and manager-only sharing; an
-        ordinary project or a question on the round's target project has no round here.
-        """
-
-        if project_id is None:
-            return None
-        return (
-            self.model.system_queryset(lock=("self",) if lock else None).using(self._db)
-            .filter(proposals__track_id=project_id).order_by("pk").first()
-        )
 
 
 def _copy_persisted_state(instance: models.Model, source: models.Model, fields: Iterable[str]) -> None:
@@ -390,7 +147,9 @@ class _RosterProjection(TypedDict):
     _roster_track_status: str | None
 
 
-class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, concrete=True):
+class Round(
+    OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, ProtectedDataModel, concrete=True
+):
     """A bounded solicitation on one project or task; its chatter is shared."""
 
     _roster_entries: list[WithAnnotations[Proposal, _RosterProjection]]
@@ -603,7 +362,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def can_open(self) -> bool:
         """Report whether this manager can lift an undisclosed round."""
         return (
-            type(self).system_queryset()
+            type(self)._base_manager
             .filter(pk=self.pk)
             .annotate(
                 ready=type(self).can_open_expression(instance_actor(self)),
@@ -615,7 +374,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def can_admit(self) -> bool:
         """Report whether this actor may admit a new shell now."""
         return (
-            type(self).system_queryset()
+            type(self)._base_manager
             .filter(pk=self.pk)
             .annotate(
                 ready=type(self).can_admit_expression(instance_actor(self)),
@@ -639,7 +398,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def roster_prefetch(cls) -> models.Prefetch:
         """Batch scalar roster facts without reading each peer's proposal."""
         rows = (
-            apps.get_model("proposals", "Proposal").system_queryset()
+            apps.get_model("proposals", "Proposal")._base_manager
             .filter(
                 retired_at__isnull=True,
                 responder__isnull=False,
@@ -651,7 +410,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             )
             .order_by("responder_id")
         )
-        return models.Prefetch("proposals", queryset=rows, to_attr="_roster_entries")
+        return structural_prefetch("proposals", queryset=rows, to_attr="_roster_entries")
 
     def roster(self, *, permitted: bool | None = None, status: bool | None = None) -> list[RosterEntry]:
         """Use batched permission answers and prefetched scalar facts on lists."""
@@ -681,7 +440,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             .first()
         )
 
-    def _build_collections(self) -> list[tuple[models.QuerySet[AngeeModel], bool]]:
+    def _build_collections(self) -> list[tuple[models.QuerySet[ProtectedModel], bool]]:
         """Return the retained shell/answer and owned track content this round governs."""
 
         tracks = apps.get_model("projects", "Project").system_queryset().using(self._state.db).filter(
@@ -718,8 +477,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         relationships = active_relationship_model().objects.using(self._state.db)
         for rows, owned in self._build_collections():
             if owned:
-                assert isinstance(rows, OwnerQuerySet)
-                if rows.filter(owner_id=requester).exists():
+                if require_composed_type(rows, OwnerQuerySet).filter(owner_id=requester).exists():
                     raise RecordAccessSubjectRefused()
             shares = relationships.filter(
                 resource_type=model_resource_type(rows.model),
@@ -741,25 +499,34 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         self, user: User, party: Party | None = None, track: bool = False, follow: bool = False
     ) -> Proposal:
         """Create the unique shell and optionally its owning track, idempotently."""
-        if not self.has_access("write"):
-            raise PermissionDenied("Round write access is required.")
-        actor = instance_actor(self)
-        with transaction.atomic():
-            locked = type(self).objects.sudo(reason="proposals.round.admit").lock_if_supported().get(pk=self.pk)
-            with system_context(reason="proposals.round.admit.shell"):
-                proposal_model = apps.get_model("proposals", "Proposal")
-                proposal = proposal_model._base_manager.filter(round=locked, responder=user).first()
-                if proposal is None:
-                    proposal = proposal_model(round=locked, responder=user, party=party)
-                    proposal.save()
-                elif proposal.retired_at is not None:
-                    raise ValidationError({"responder": "A retired responder cannot be admitted again."})
-                elif party is not None and proposal.party_id != party.pk:
-                    raise ValidationError({"party": "The shell has a different party."})
-                if track:
-                    proposal.create_track()
-                if follow and getattr(user, "kind", None) == "person":
-                    locked.message_subscribe(user=user)
+        if self.pk is None:
+            raise ValidationError("A saved round is required for admission.")
+        using = write_alias(type(self), using=self._state.db, instance=self)
+        if any(row._state.db not in (None, using) for row in (user, *(() if party is None else (party,)))):
+            raise ValidationError("Admission references must belong to the round's database.")
+        with database_context(using):
+            if not self.has_access("write"):
+                raise PermissionDenied("Round write access is required.")
+            actor = instance_actor(self)
+            with transaction.atomic(using=using):
+                locked = (
+                    type(self).objects.db_manager(using)
+                    .sudo(reason="proposals.round.admit").lock_if_supported().get(pk=self.pk)
+                )
+                with system_context(reason="proposals.round.admit.shell"):
+                    proposal_model = apps.get_model("proposals", "Proposal")
+                    proposal = proposal_model._base_manager.using(using).filter(round=locked, responder=user).first()
+                    if proposal is None:
+                        proposal = proposal_model(round=locked, responder=user, party=party)
+                        proposal.save(using=using)
+                    elif proposal.retired_at is not None:
+                        raise ValidationError({"responder": "A retired responder cannot be admitted again."})
+                    elif party is not None and proposal.party_id != party.pk:
+                        raise ValidationError({"party": "The shell has a different party."})
+                    if track:
+                        proposal.create_track()
+                    if follow and getattr(user, "kind", None) == "person":
+                        locked.message_subscribe(user=user)
         return proposal.with_actor(actor)
 
     def remove_responder(self, user: User, expected_revision: int | None = None) -> dict[str, Any]:
@@ -809,8 +576,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             relationships = active_relationship_model().objects
             for rows, track_rows in collections:
                 if track_rows:
-                    assert isinstance(rows, OwnerQuerySet)
-                    rows.release(user)
+                    require_composed_type(rows, OwnerQuerySet).release(user)
                 resource_type = model_resource_type(rows.model)
                 assert resource_type is not None
                 identifiers = [str(pk) for pk in rows.order_by().values_list("pk", flat=True)]
@@ -954,7 +720,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 clarification_by_manager=manager,
                 clarification_default_visibility=default,
                 clarification_surrendered=audience == "managers",
-                visibility="restricted" if audience == "managers" else default,
+                visibility=task_model.TaskVisibility("restricted" if audience == "managers" else default),
                 assignee_id=locked.facilitator_id,
             )
             with actor_context(_CLARIFICATION_SYSTEM_ACTOR):
@@ -1110,8 +876,9 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist coherent round policy, serializing requester changes with shell admission."""
 
-        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-        with transaction.atomic(using=using):
+        using = write_alias(type(self), using=kwargs.get("using") or self._state.db, instance=self)
+        kwargs["using"] = using
+        with database_context(using), transaction.atomic(using=using):
             fields = kwargs.get("update_fields")
             requester_write = fields is None or bool({"requester_party", "requester_party_id"}.intersection(fields))
             if not self._state.adding and requester_write and "requester_party_id" in self.__dict__:
@@ -1131,7 +898,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             previous = (
                 {}
                 if self._state.adding or not boundaries
-                else type(self).system_queryset().filter(pk=self.pk).values(
+                else type(self).system_queryset().using(using).filter(pk=self.pk).values(
                     *(f"{name}_id" for name in boundaries),
                 ).get()
             )
@@ -1144,7 +911,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             if changed_ids:
                 project = self.target_project()
                 valid = set() if project is None else set(
-                    apps.get_model("projects", "Milestone").system_queryset()
+                    apps.get_model("projects", "Milestone").system_queryset().using(using)
                     .filter(
                         pk__in=changed_ids.values(),
                         project_id=project.pk,
@@ -1154,10 +921,17 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 for name, identifier in changed_ids.items():
                     if identifier not in valid:
                         raise ValidationError({name: "The milestone must belong to the target project."})
-            if self.pk is not None and not self._state.adding:
+            if (
+                self.pk is not None
+                and not self._state.adding
+                and (update_fields is None or "opening_policy" in update_fields)
+            ):
                 # Opening-policy immutability depends on the committed lifecycle state.
                 with system_context(reason="proposals.round.opening_policy"):
-                    persisted = type(self)._base_manager.filter(pk=self.pk).values("status", "opening_policy").first()
+                    persisted = (
+                        type(self)._base_manager.using(using).filter(pk=self.pk)
+                        .values("status", "opening_policy").first()
+                    )
                 if persisted is not None and persisted["status"] == RoundStatus.COLLECTING:
                     self.allow_immutable_save("opening_policy")
             super().save(*args, **kwargs)
@@ -1455,7 +1229,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             raise ValidationError("Closed round left a submitted proposal undecided.")
 
 
-class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Topic(ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One stable, ordered comparison subject within a Round."""
 
     sqid_prefix = "top_"
@@ -1495,245 +1269,28 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         return self.name
 
+    def normalize_key(self) -> None:
+        """Normalize and require this topic's stable machine key."""
+
+        try:
+            self.key = normalize_topic_key(str(self.key or ""))
+        except ValueError as error:
+            raise ValidationError({"key": str(error)}) from error
+
     def clean(self) -> None:
         """Normalize the immutable machine key."""
 
-        self.key = str(self.key or "").strip().lower()
-        if not self.key:
-            raise ValidationError({"key": "Topic key is required."})
+        self.normalize_key()
         super().clean()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the normalized stable key."""
 
-        self.key = str(self.key or "").strip().lower()
-        if not self.key:
-            raise ValidationError({"key": "Topic key is required."})
+        self.normalize_key()
         super().save(*args, **kwargs)
 
 
-class ProposalManager[T: Proposal](AngeeManager[T]):
-    """Own replay-safe message capture into Proposal and Answer rows."""
-
-    CAPTURE_PARSER_VERSION = "proposals.capture.v1"
-    CAPTURE_FIELDS = (
-        "cost",
-        "currency",
-        "staffing",
-        "timeframe_start",
-        "timeframe_end",
-        "confidence",
-        "valid_until",
-    )
-
-    def capture_from_message(
-        self,
-        message: Message,
-        round: Round,
-        party: Party | None = None,
-    ) -> T:
-        """Interpret one reply atomically and submit only after all rows succeed."""
-
-        if message.pk is None or round.pk is None:
-            raise ValidationError("A saved message and round are required for capture.")
-        actor = current_actor()
-        with transaction.atomic():
-            locked_round = (
-                type(round).objects.sudo(reason="proposals.capture.round").lock_if_supported().get(pk=round.pk)
-            )
-            if locked_round.status != RoundStatus.COLLECTING:
-                raise ValidationError({"round": "Replies cannot be captured after opening."})
-            locked_message = (
-                type(message).objects.sudo(reason="proposals.capture.message").lock_if_supported().get(pk=message.pk)
-            )
-            resolved_party = party or self._resolved_sender_party(locked_message)
-            if resolved_party is None:
-                raise ValidationError({"party": "Capture requires a party or a resolved sender party."})
-            interpretation = self._interpret(locked_message, locked_round)
-            payload_hash = self._payload_hash(locked_message)
-            proposal = self._locked_capture_proposal(message=locked_message, round=locked_round, party=resolved_party)
-            if proposal.state != ProposalState.DRAFT:
-                if (
-                    proposal.state == ProposalState.SUBMITTED
-                    and proposal.capture_payload_hash == payload_hash
-                    and proposal.capture_parser_version == self.CAPTURE_PARSER_VERSION
-                ):
-                    if actor is not None:
-                        proposal.with_actor(actor)
-                    return proposal
-                raise ValidationError("Captured proposal does not match the replayed interpretation.")
-
-            self._apply_interpretation(
-                proposal, message=locked_message, interpretation=interpretation, payload_hash=payload_hash
-            )
-            proposal._submit_locked(fallback_user_id=locked_message.created_by_id or locked_round.facilitator_id)
-        if actor is not None:
-            proposal.with_actor(actor)
-        return proposal
-
-    def _locked_capture_proposal(
-        self,
-        *,
-        message: Message,
-        round: Round,
-        party: Party,
-    ) -> T:
-        """Resolve an existing capture shell or create/reload its unique row."""
-
-        candidates = list(
-            self.sudo(reason="proposals.capture.lookup")
-            .lock_if_supported()
-            .filter(models.Q(source_message_id=message.pk) | models.Q(round_id=round.pk, party_id=party.pk))
-            .order_by("pk")
-        )
-        if len(candidates) > 1:
-            raise ValidationError("Message and party resolve to different proposal shells.")
-        if candidates:
-            proposal = candidates[0]
-            if proposal.round_id != round.pk or proposal.party_id != party.pk:
-                raise ValidationError("The captured message is already bound to another proposal.")
-            if proposal.source_message_id not in (None, message.pk):
-                raise ValidationError("The party's proposal already has a different source message.")
-            return proposal
-
-        proposal = self.model(round=round, party=party, source_message=message)
-        proposal.full_clean(validate_unique=False, validate_constraints=False)
-        try:
-            with transaction.atomic():
-                proposal.sudo(reason="proposals.capture.create").save()
-        except IntegrityError:
-            concurrent = (
-                self.sudo(reason="proposals.capture.concurrent_reload")
-                .lock_if_supported()
-                .filter(models.Q(source_message_id=message.pk) | models.Q(round_id=round.pk, party_id=party.pk))
-                .order_by("pk")
-                .first()
-            )
-            if concurrent is None:
-                raise
-            proposal = concurrent
-            if proposal.round_id != round.pk or proposal.party_id != party.pk:
-                raise ValidationError("A concurrent capture claimed the message for another proposal.")
-        return proposal
-
-    def _interpret(self, message: Message, round: Round) -> dict[str, Any]:
-        """Return the deterministic v1 interpretation envelope for one Message."""
-
-        metadata = message.metadata if isinstance(message.metadata, Mapping) else {}
-        raw = metadata.get("proposal_capture", {})
-        if raw is None:
-            raw = {}
-        if not isinstance(raw, Mapping):
-            raise ValidationError({"message": "proposal_capture metadata must be an object."})
-        allowed = {*self.CAPTURE_FIELDS, "answers"}
-        unknown = sorted(set(raw) - allowed)
-        if unknown:
-            raise ValidationError({"message": f"Unknown proposal capture fields: {', '.join(unknown)}."})
-
-        answers_raw = raw.get("answers", {})
-        if not isinstance(answers_raw, Mapping):
-            raise ValidationError({"message": "proposal_capture.answers must be an object."})
-        topics = {
-            topic.key.casefold(): topic
-            for topic in apps.get_model("proposals", "Topic")
-            ._base_manager.filter(round_id=round.pk)
-            .order_by("sort_order", "pk")
-        }
-        answers: dict[Any, str] = {}
-        for supplied_key, body in answers_raw.items():
-            key = str(supplied_key).strip().casefold()
-            topic = topics.get(key)
-            if topic is None:
-                raise ValidationError({"message": f"Unknown round topic {supplied_key!r}."})
-            answers[topic.pk] = str(body or "").strip()
-        if not answers and str(message.preview or "").strip() and topics:
-            first = next(iter(topics.values()))
-            answers[first.pk] = str(message.preview).strip()
-
-        fields = {name: raw[name] for name in self.CAPTURE_FIELDS if name in raw}
-        if not answers and not fields:
-            raise ValidationError({"message": "The reply contains no proposal fields or answers."})
-        return {"answers": answers, "fields": fields}
-
-    def _apply_interpretation(
-        self,
-        proposal: T,
-        *,
-        message: Message,
-        interpretation: Mapping[str, Any],
-        payload_hash: str,
-    ) -> None:
-        """Upsert interpreted fields and Answers before the final submit edge."""
-
-        fields = dict(cast(Mapping[str, Any], interpretation["fields"]))
-        currency_value = fields.pop("currency", None)
-        if "cost" in fields:
-            fields["cost"] = Decimal(str(fields["cost"])) if fields["cost"] not in (None, "") else None
-        if currency_value not in (None, ""):
-            currency_model = apps.get_model("money", "Currency")
-            fields["currency"] = currency_model._base_manager.get(code__iexact=str(currency_value).strip())
-        elif "cost" in fields:
-            fields["currency"] = None
-        for name in ("timeframe_start", "timeframe_end", "valid_until"):
-            if name in fields and fields[name] not in (None, ""):
-                parsed = fields[name] if isinstance(fields[name], date) else parse_date(str(fields[name]))
-                if parsed is None:
-                    raise ValidationError({name: "Use an ISO date."})
-                fields[name] = parsed
-        for name, value in fields.items():
-            setattr(proposal, name, value)
-        if proposal.source_message_id is None:
-            proposal.source_message = message
-            proposal.allow_immutable_save("source_message_id")
-        proposal.capture_payload_hash = payload_hash
-        proposal.capture_parser_version = self.CAPTURE_PARSER_VERSION
-        proposal.full_clean(validate_unique=False, validate_constraints=False)
-        proposal.save(
-            update_fields=(
-                *fields,
-                "source_message",
-                "capture_payload_hash",
-                "capture_parser_version",
-                "updated_at",
-            ),
-        )
-
-        answer_model = apps.get_model("proposals", "Answer")
-        topics = apps.get_model("proposals", "Topic")._base_manager.in_bulk(interpretation["answers"])
-        for topic_id, body in cast(Mapping[Any, str], interpretation["answers"]).items():
-            answer = answer_model._base_manager.filter(proposal_id=proposal.pk, topic_id=topic_id).first()
-            if answer is None:
-                answer = answer_model(proposal=proposal, topic=topics[topic_id], body=body)
-            else:
-                answer.body = body
-            answer.full_clean(validate_unique=False, validate_constraints=False)
-            answer.sudo(reason="proposals.capture.answer").save()
-
-    def _resolved_sender_party(self, message: Message) -> Party | None:
-        """Resolve the sender through the parties-owned handle matching seam."""
-
-        if message.sender_id is None:
-            return None
-        handle = message.sender
-        assert handle is not None
-        if handle.party_id is None:
-            apps.get_model("parties", "Party").objects.suggest_for(handle)
-            # Matching may assign the party through another Handle instance.
-            handle.refresh_from_db(fields=["party"])
-        return handle.party
-
-    def _payload_hash(self, message: Message) -> str:
-        """Hash the portable source payload interpreted by this parser version."""
-
-        payload = {
-            "parser_version": self.CAPTURE_PARSER_VERSION,
-            "preview": str(message.preview or ""),
-            "metadata": message.metadata if isinstance(message.metadata, Mapping) else {},
-        }
-        return canonical_json_sha256(chunks=(STRINGIFIED_JSON.encode(payload),))
-
-
-class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One responder's structured response; its private work lives on ``track``."""
 
     sqid_prefix = "prp_"
@@ -1926,15 +1483,17 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         if not self._state.adding:
             super().save(*args, **kwargs)
             return
-        with transaction.atomic():
+        using = write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        with database_context(using), transaction.atomic(using=using):
             locked_round = (
                 apps.get_model("proposals", "Round")
-                .objects.sudo(reason="proposals.proposal.create.round")
+                .objects.db_manager(using).sudo(reason="proposals.proposal.create.round")
                 .lock_if_supported()
                 .get(pk=self.round_id)
             )
             if (
-                not type(locked_round).system_queryset()
+                not type(locked_round).system_queryset().using(using)
                 .filter(
                     type(locked_round).admission_condition(),
                     pk=locked_round.pk,
@@ -1979,7 +1538,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
     def track_status(self) -> str | None:
         """Read the scalar through the same gated expression as a list."""
         return (
-            type(self).system_queryset()
+            type(self)._base_manager
             .filter(pk=self.pk)
             .annotate(
                 _track_status=type(self).track_status_expression(instance_actor(self)),
@@ -2114,20 +1673,29 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         return self
 
     def identify_party(self, party: Party) -> Self:
-        """Set the external identity once under Round-first row locks."""
+        """Identify a readable party after proposal write admission, under Round-first locks."""
 
         if self.pk is None or party.pk is None:
             raise ValidationError("A saved proposal and party are required.")
-        with transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+        if party._state.db not in (None, using):
+            raise ValidationError({"party": "The party must belong to the proposal database."})
+        with database_context(using):
+            actor = self.require_access("write")
+            party.require_access("read", actor=actor)
+        with (
+            database_context(using), transaction.atomic(using=using),
+            actor_context(actor) if actor is not None else nullcontext(),
+        ):
             round_model = apps.get_model("proposals", "Round")
             locked_round = (
-                round_model.objects.sudo(reason="proposals.proposal.identify.round")
+                round_model.objects.db_manager(using).sudo(reason="proposals.proposal.identify.round")
                 .lock_if_supported()
                 .get(pk=self.round_id)
             )
             locked = (
                 type(self)
-                .objects.sudo(reason="proposals.proposal.identify")
+                .objects.db_manager(using).sudo(reason="proposals.proposal.identify")
                 .lock_if_supported()
                 .filter(round_id=locked_round.pk, pk=self.pk)
                 .order_by("pk")
@@ -2139,92 +1707,96 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             else:
                 locked.party = party
                 locked.allow_immutable_save("party_id")
-                locked.save(update_fields=("party", "updated_at"))
+                locked.save(using=using, update_fields=("party", "updated_at"))
         _copy_persisted_state(self, locked, ("party", "updated_at", "updated_by"))
         return self
 
     def create_track(self) -> Project:
         """Create one ownerless, item-owning project with its own bound drive."""
 
-        actor = instance_actor(self)
-        _, unscoped = self.effective_actor(strict=True)
-        if not self.has_access("write"):
-            raise PermissionDenied("Proposal write access is required.")
-        if self.pk is None:
-            raise ValidationError("A saved proposal is required.")
-        project_model = apps.get_model("projects", "Project")
-        with transaction.atomic():
-            round_model = apps.get_model("proposals", "Round")
-            locked_round = (
-                round_model.objects.sudo(reason="proposals.proposal.create_track.round")
-                .lock_if_supported()
-                .get(pk=self.round_id)
-            )
-            locked = (
-                type(self)
-                .objects.sudo(reason="proposals.proposal.create_track")
-                .lock_if_supported()
-                .filter(round_id=locked_round.pk, pk=self.pk)
-                .order_by("pk")
-                .get()
-            )
-            if not unscoped and not locked.with_actor(actor).has_access("write"):
+        using = write_alias(type(self), using=self._state.db, instance=self)
+        with database_context(using):
+            actor = instance_actor(self)
+            _, unscoped = self.effective_actor(strict=True)
+            if not self.has_access("write"):
                 raise PermissionDenied("Proposal write access is required.")
-            if locked.track_id is not None:
-                track = locked.track
-                assert track is not None
-            else:
-                track = project_model(
-                    title=f"{locked_round.name} — proposal track",
-                    body="Private proposal delivery track.",
-                    lead_id=locked.responder_id or locked_round.facilitator_id,
-                    owns_items=True,
+            if self.pk is None:
+                raise ValidationError("A saved proposal is required.")
+            project_model = apps.get_model("projects", "Project")
+            with transaction.atomic(using=using):
+                round_model = apps.get_model("proposals", "Round")
+                locked_round = (
+                    round_model.objects.db_manager(using).sudo(reason="proposals.proposal.create_track.round")
+                    .lock_if_supported()
+                    .get(pk=self.round_id)
                 )
-                with actor_context(_TRACK_SYSTEM_ACTOR), system_context(reason="proposals.proposal.create_track"):
-                    track.save(ownerless=True)
-                locked.track = track
-                locked.allow_immutable_save("track_id")
-                with actor_context(actor) if actor is not None else nullcontext():
-                    locked.sudo(reason="proposals.proposal.create_track.link")
-                    try:
-                        locked.save(update_fields=("track", "updated_at"))
-                    finally:
-                        if actor is None:
-                            locked.unsudo()
-                        else:
-                            locked.with_actor(actor)
-                if (
-                    locked_round.status == RoundStatus.OPENED
-                    and locked_round.opening_policy
-                    in {
-                        RoundOpeningPolicy.DRAFTS_AND_TRACKS,
-                        RoundOpeningPolicy.ANSWERS_AND_TRACKS,
-                    }
-                    and locked.disclosed_at is not None
-                ):
-                    locked._publish_track_locked()
-            with system_context(reason="proposals.proposal.track_drive"):
-                track = project_model.system_queryset().get(pk=track.pk)
-                drive_model = apps.get_model("storage", "Drive")
-                slug = f"proposal-{locked.pk}"
-                drive = drive_model._base_manager.filter(
-                    slug=slug,
-                    project_bindings__project=track,
-                ).first()
-                if drive is None:
-                    with actor_context(_TRACK_SYSTEM_ACTOR):
-                        drive = drive_model.objects.create_on_default_backend(
-                            slug=slug,
-                            name=track.title,
-                            owns_items=True,
+                locked = (
+                    type(self)
+                    .objects.db_manager(using).sudo(reason="proposals.proposal.create_track")
+                    .lock_if_supported()
+                    .filter(round_id=locked_round.pk, pk=self.pk)
+                    .order_by("pk")
+                    .get()
+                )
+                if not unscoped and not locked.with_actor(actor).has_access("write"):
+                    raise PermissionDenied("Proposal write access is required.")
+                if locked.track_id is not None:
+                    track = locked.track
+                    assert track is not None
+                else:
+                    track = project_model(
+                        title=f"{locked_round.name} — proposal track",
+                        body="Private proposal delivery track.",
+                        lead_id=locked.responder_id or locked_round.facilitator_id,
+                        owns_items=True,
+                    )
+                    with actor_context(_TRACK_SYSTEM_ACTOR), system_context(reason="proposals.proposal.create_track"):
+                        track.save(using=using, ownerless=True)
+                    locked.track = track
+                    locked.allow_immutable_save("track_id")
+                    with actor_context(actor) if actor is not None else nullcontext():
+                        locked.sudo(reason="proposals.proposal.create_track.link")
+                        try:
+                            locked.save(using=using, update_fields=("track", "updated_at"))
+                        finally:
+                            if actor is None:
+                                locked.unsudo()
+                            else:
+                                locked.with_actor(actor)
+                    if (
+                        locked_round.status == RoundStatus.OPENED
+                        and locked_round.opening_policy
+                        in {
+                            RoundOpeningPolicy.DRAFTS_AND_TRACKS,
+                            RoundOpeningPolicy.ANSWERS_AND_TRACKS,
+                        }
+                        and locked.disclosed_at is not None
+                    ):
+                        locked._publish_track_locked()
+                with system_context(reason="proposals.proposal.track_drive"):
+                    track = project_model.system_queryset().using(using).get(pk=track.pk)
+                    drive_model = apps.get_model("storage", "Drive")
+                    slug = f"proposal-{locked.pk}"
+                    drive = drive_model._base_manager.using(using).filter(
+                        slug=slug,
+                        project_bindings__project=track,
+                    ).first()
+                    if drive is None:
+                        with actor_context(_TRACK_SYSTEM_ACTOR):
+                            drive = drive_model.objects.db_manager(using).create_on_default_backend(
+                                slug=slug,
+                                name=track.title,
+                                owns_items=True,
+                            )
+                        drive = drive_model.system_queryset().using(using).get(pk=drive.pk)
+                        apps.get_model("projects", "ProjectBinding").objects.db_manager(using).bind(
+                            project=track, target=drive,
                         )
-                    drive = drive_model.system_queryset().get(pk=drive.pk)
-                    apps.get_model("projects", "ProjectBinding").objects.bind(project=track, target=drive)
-        if actor is not None:
-            track.with_actor(actor)
-        _copy_persisted_state(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
-        self._state.fields_cache["track"] = track
-        return track
+            if actor is not None:
+                track.with_actor(actor)
+            _copy_persisted_state(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
+            self._state.fields_cache["track"] = track
+            return track
 
     def publish_track(self, expected_revision: int | None = None) -> Project:
         """Publish the private track to this Round's responders, idempotently."""
@@ -2380,16 +1952,6 @@ class ProjectProposalAccess(Composable, extends="projects.Project"):
         )
         return super().setup_complete_condition(actor) & models.Q(models.Exists(rounds))
 
-    @classmethod
-    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> Combinable:
-        """Count readable unanswered questions on this project."""
-
-        return apps.get_model("projects", "Task").question_count_expression(
-            actor,
-            scope=models.Q(project_id=models.OuterRef("pk")),
-            passed_on=passed_on,
-        )
-
     def lock_for_record_access(self, *, using: str) -> Self:
         """A track's round precedes its project row in the grant/ownership lock order."""
 
@@ -2405,34 +1967,23 @@ class ProjectProposalAccess(Composable, extends="projects.Project"):
                 round.validate_build_subject(subject)
 
     def selectable_milestones(self) -> MilestoneQuerySet[Milestone]:
-        """Limit unopened rounds to the boundary and its immediate successor."""
+        """Limit an admitted project's choices by its unopened round boundaries."""
         choices = super().selectable_milestones()
-        with system_context(reason="proposals.track.phase_choices"):
-            rounds = (
-                apps.get_model("proposals", "Round")
-                ._base_manager.filter(
-                    models.Q(project_id=self.pk) | models.Q(task__project_id=self.pk),
-                    opened_at__isnull=True,
-                    closed_at__isnull=True,
-                    opens_after__isnull=False,
-                )
-                .select_related("opens_after")
+        boundaries = list(
+            apps.get_model("proposals", "Round")
+            ._base_manager.filter(
+                models.Q(project_id=self.pk) | models.Q(task__project_id=self.pk),
+                opened_at__isnull=True,
+                closed_at__isnull=True,
+                opens_after__isnull=False,
             )
-            for round in rounds:
-                boundary = round.opens_after
-                assert boundary is not None  # The queryset excludes NULL boundaries.
-                next_rank = (
-                    choices.filter(sort_order__gt=boundary.sort_order)
-                    .order_by(
-                        "sort_order",
-                    )
-                    .values_list("sort_order", flat=True)
-                    .first()
-                )
-                choices = choices.filter(
-                    sort_order__lte=boundary.sort_order if next_rank is None else next_rank,
-                )
-        return choices
+            .values_list("opens_after__sort_order", flat=True)
+        )
+        if not boundaries:
+            return choices
+        ranks = list(choices.order_by("sort_order").values_list("sort_order", flat=True))
+        limit = min(next((rank for rank in ranks if rank > boundary), boundary) for boundary in boundaries)
+        return choices.filter(sort_order__lte=limit)
 
     class Meta:
         """Abstract zero-column donor folded into the composed Project model."""
@@ -2559,11 +2110,11 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
     def clarification_widen_blocker_expression(cls) -> Combinable:
         """Compute the publication blocker; callers must authorize its disclosure.
 
-        Keep the hidden asker's identity inside the model-owned system query.
-        The caller projects only the blocker, never a gated column from its
-        actor-scoped outer row.
+        The admitted task's attached message existence supplies the blocker;
+        its hidden asker's identity stays inside the correlated expression.
+        The caller projects only the blocker, never a gated identity column.
         """
-        messages = cls.thread_messages_expression(models.OuterRef("pk")).filter(
+        messages = cls.thread_messages_expression(models.OuterRef("pk"), structural_existence=True).filter(
             created_by_id=models.OuterRef("clarification_asker_id"),
         )
         blocker = models.Case(
@@ -2575,7 +2126,7 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
             output_field=models.CharField(),
         )
         return models.Subquery(
-            cls.system_queryset().filter(pk=models.OuterRef("pk")).annotate(_blocker=blocker).values("_blocker"),
+            cls._base_manager.filter(pk=models.OuterRef("pk")).annotate(_blocker=blocker).values("_blocker"),
         )
 
     @classmethod
@@ -2679,51 +2230,50 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
         round_model = apps.get_model("proposals", "Round")
         proposal_model = apps.get_model("proposals", "Proposal")
         managed = round_model.objects.with_actor(actor).with_action("manage").scoped()
-        with system_context(reason="proposals.clarification.waiting"):
-            current = proposal_model._base_manager.filter(
-                round_id=models.OuterRef("_question_round"),
-                responder_id=models.OuterRef("pk"),
-                retired_at__isnull=True,
+        current = proposal_model._base_manager.filter(
+            round_id=models.OuterRef("_question_round"),
+            responder_id=models.OuterRef("pk"),
+            retired_at__isnull=True,
+        )
+        messages = cls.thread_messages_expression(models.OuterRef("_question_id"), structural_existence=True).filter(
+            created_by_id=models.OuterRef("pk"),
+        )
+        question_context = {}
+        for alias, name in (
+            ("_question_id", "pk"),
+            ("_question_round", "clarification_round"),
+            ("_question_assignee", "assignee"),
+            ("_manager_question", "clarification_by_manager"),
+            ("_passed", "clarification_passed_at"),
+        ):
+            field = cls._meta.pk if name == "pk" else cls._meta.get_field(name)
+            assert isinstance(field, models.Field)
+            question_context[alias] = models.ExpressionWrapper(models.OuterRef(name), output_field=field)
+        users = (
+            user_label_queryset()
+            .annotate(**question_context)
+            .filter(_question_round__isnull=False)
+            .filter(
+                models.Q(pk=models.F("_question_assignee"))
+                | (
+                    models.Q(_question_assignee__isnull=True, _manager_question=True, _passed__isnull=False)
+                    & models.Q(models.Exists(current))
+                ),
             )
-            messages = cls.thread_messages_expression(models.OuterRef("_question_id")).filter(
-                created_by_id=models.OuterRef("pk"),
+            .filter(
+                models.Q(models.Exists(managed.filter(pk=models.OuterRef("_question_round"))))
+                | models.Q(pk=actor_user_id(actor)),
             )
-            question_context = {}
-            for alias, name in (
-                ("_question_id", "pk"),
-                ("_question_round", "clarification_round"),
-                ("_question_assignee", "assignee"),
-                ("_manager_question", "clarification_by_manager"),
-                ("_passed", "clarification_passed_at"),
-            ):
-                field = cls._meta.pk if name == "pk" else cls._meta.get_field(name)
-                assert isinstance(field, models.Field)
-                question_context[alias] = models.ExpressionWrapper(models.OuterRef(name), output_field=field)
-            users = (
-                user_label_queryset()
-                .annotate(**question_context)
-                .filter(_question_round__isnull=False)
-                .filter(
-                    models.Q(pk=models.F("_question_assignee"))
-                    | (
-                        models.Q(_question_assignee__isnull=True, _manager_question=True, _passed__isnull=False)
-                        & models.Q(models.Exists(current))
-                    ),
-                )
-                .filter(
-                    models.Q(models.Exists(managed.filter(pk=models.OuterRef("_question_round"))))
-                    | models.Q(pk=actor_user_id(actor)),
-                )
-                .filter(~models.Exists(messages))
-                .order_by("pk")
-                .annotate(
-                    _recipient=JSONObject(
-                        id="pk",
-                        name=user_label_expression(),
-                    ),
-                )
+            .filter(~models.Exists(messages))
+            .order_by("pk")
+            .annotate(
+                _recipient=JSONObject(
+                    id="pk",
+                    name=user_label_expression(),
+                ),
             )
-            return users if actor is not None else users.none()
+        )
+        return users if actor is not None else users.none()
 
     @classmethod
     def clarification_waiting_expression(cls, actor: Any) -> Combinable:
@@ -2734,57 +2284,107 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
         return JSONArraySubquery(cls.clarification_waiting_users(actor).values(_item=models.F("_recipient")))
 
     @classmethod
-    def question_count_expression(cls, actor: Any, *, scope: models.Q, passed_on: bool) -> Combinable:
-        """Count questions, not recipients, intersecting the native task read scope."""
+    def question_attention_annotations(cls, actor: Any) -> dict[str, Combinable]:
+        """Project the two attention facts from assignee and current responder rows."""
 
-        if actor is None:
-            return models.Value(0)
-        waiting = cls.clarification_waiting_users(actor)
-        if not passed_on:
-            waiting = waiting.filter(pk=actor_user_id(actor))
-        questions = (
-            cls.objects.with_actor(actor)
-            .scoped()
-            .filter(
-                scope,
-                status="open",
-                clarification_round__isnull=False,
-            )
-            .filter(models.Exists(waiting))
+        actor_id = actor_user_id(actor) if actor is not None else None
+        if actor_id is None:
+            return {
+                "_question_waiting_for_me": models.Value(False, output_field=models.BooleanField()),
+                "_question_passed_on": models.Value(False, output_field=models.BooleanField()),
+            }
+        proposal_model = apps.get_model("proposals", "Proposal")
+        current = proposal_model._base_manager.filter(
+            round_id=models.OuterRef("clarification_round_id"),
+            responder_id__isnull=False,
+            retired_at__isnull=True,
         )
-        if passed_on:
-            managed = apps.get_model("proposals", "Round").objects.with_actor(actor).with_action("manage").scoped()
-            questions = questions.filter(
-                models.Exists(managed.filter(pk=models.OuterRef("clarification_round_id"))),
-                clarification_passed_at__isnull=False,
-            )
-        return questions.readable_count_subquery(actor=actor)
+        responder_context = models.Q(
+            assignee_id__isnull=True,
+            clarification_by_manager=True,
+            clarification_passed_at__isnull=False,
+        )
+        actor_answer = cls.thread_messages_expression(
+            models.OuterRef("pk"), structural_existence=True,
+        ).filter(created_by_id=actor_id)
+        waiting = (
+            models.Q(assignee_id=actor_id)
+            | (responder_context & models.Q(models.Exists(current.filter(responder_id=actor_id))))
+        ) & ~models.Q(models.Exists(actor_answer))
+
+        assignee_answer = cls.thread_messages_expression(
+            models.OuterRef("pk"), structural_existence=True,
+        ).filter(created_by_id=models.OuterRef("assignee_id"))
+        responder_answer = cls.thread_messages_expression(
+            models.OuterRef(models.OuterRef("pk")), structural_existence=True,
+        ).filter(created_by_id=models.OuterRef("responder_id"))
+        recipient = (
+            models.Q(assignee_id__isnull=False) & ~models.Q(models.Exists(assignee_answer))
+        ) | (responder_context & models.Q(models.Exists(current.filter(~models.Exists(responder_answer)))))
+        managed = apps.get_model("proposals", "Round").objects.with_actor(actor).with_action("manage").scoped()
+        passed = (
+            models.Q(clarification_passed_at__isnull=False)
+            & models.Q(models.Exists(managed.filter(pk=models.OuterRef("clarification_round_id"))))
+            & recipient
+        )
+        return {
+            "_question_waiting_for_me": models.Case(
+                models.When(waiting, status="open", clarification_round__isnull=False, then=models.Value(True)),
+                default=models.Value(False), output_field=models.BooleanField(),
+            ),
+            "_question_passed_on": models.Case(
+                models.When(passed, status="open", clarification_round__isnull=False, then=models.Value(True)),
+                default=models.Value(False), output_field=models.BooleanField(),
+            ),
+        }
 
     @classmethod
-    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> Combinable:
-        """Include this question or the questions filed under this source task."""
+    def question_attention_expression(cls, actor: Any, *, project: bool) -> Combinable:
+        """Count disclosed candidate questions in the parent page's SQL selection."""
 
-        return cls.question_count_expression(
-            actor,
-            scope=models.Q(parent_id=models.OuterRef("pk")) | models.Q(pk=models.OuterRef("pk")),
-            passed_on=passed_on,
+        empty = models.Value({"waiting": 0, "passed": 0}, output_field=models.JSONField())
+        if actor is None:
+            return empty
+        candidates = cls.objects.with_actor(actor).scoped().filter(
+            status="open", clarification_round__isnull=False,
+        )
+        parent = models.OuterRef("pk")
+        candidates = candidates.filter(
+            models.Q(project_id=parent) if project
+            else models.Q(pk=parent) | models.Q(parent_id=parent)
+        ).annotate(**cls.question_attention_annotations(actor))
+        counts = (
+            candidates.order_by()
+            .values(_group=models.Value(1))
+            .annotate(
+                _waiting=models.Count("pk", filter=models.Q(_question_waiting_for_me=True)),
+                _passed=models.Count("pk", filter=models.Q(_question_passed_on=True)),
+            )
+            .annotate(_attention=JSONObject(waiting="_waiting", passed="_passed"))
+            .values("_attention")[:1]
+        )
+        return Coalesce(
+            models.Subquery(counts, output_field=models.JSONField()), empty, output_field=models.JSONField(),
         )
 
     def clarification_waiting(self) -> list[dict[str, Any]]:
-        """Read the optimized projection, with the same SQL for a standalone row."""
+        """Read the recipient projection requested by the list queryset."""
         if "_clarification_waiting" in self.__dict__:
             return self.__dict__["_clarification_waiting"]
+        require_projection(self, "_clarification_waiting")
+        return self.get_clarification_waiting()
+
+    def get_clarification_waiting(self) -> list[dict[str, Any]]:
+        """Read one task's recipients explicitly outside a projected list."""
+
         expression = type(self).clarification_waiting_expression(instance_actor(self))
-        with system_context(reason="proposals.clarification.waiting.row"):
-            return (
-                type(self)
-                ._base_manager.filter(pk=self.pk)
-                .annotate(
-                    _clarification_waiting=expression,
-                )
-                .values_list("_clarification_waiting", flat=True)
-                .get()
-            )
+        return (
+            type(self)
+            ._base_manager.filter(pk=self.pk)
+            .annotate(_clarification_waiting=expression)
+            .values_list("_clarification_waiting", flat=True)
+            .get()
+        )
 
 
 class DriveProposalAccess(Composable, extends="storage.Drive"):
@@ -2845,11 +2445,7 @@ class FileProposalAccess(Composable, extends="storage.File"):
             self.drive.validate_record_access_subject(relation, subject)
 
 
-ProposalsRole = role_anchor("proposals/role")
-"""Table-less REBAC anchor for global proposal-viewer membership."""
-
-
-class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One Proposal response aligned to one Topic in the same Round."""
 
     sqid_prefix = "ans_"
@@ -2993,7 +2589,7 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
         return f"{self.proposal_id}:{self.topic_id}"
 
 
-class Review(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Review(ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One evaluator's private assessment of a Proposal."""
 
     sqid_prefix = "rvw_"

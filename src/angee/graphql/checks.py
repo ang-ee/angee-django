@@ -6,6 +6,28 @@ from collections.abc import Sequence
 
 from django.apps import AppConfig
 from django.core import checks
+from django.core.exceptions import ImproperlyConfigured
+
+
+def check_graphql_channel_layer(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Report unsafe process-local change delivery before the first publish."""
+
+    from angee.graphql.publishing import validate_channel_layer, validate_replay_redis_version
+
+    del app_configs, kwargs
+    try:
+        validate_channel_layer()
+        validate_replay_redis_version()
+    except ImproperlyConfigured as error:
+        return [checks.Error(
+            str(error),
+            hint="Configure Redis-backed CHANNEL_LAYERS for worker broadcasts, or use eager tasks in DEBUG.",
+            id="angee.graphql.E003",
+        )]
+    return []
 
 
 def check_graphql_schemas(
@@ -20,7 +42,7 @@ def check_graphql_schemas(
     try:
         schemas = GraphQLSchemas.from_discovery()
         names = schemas.names()
-    except Exception as error:  # noqa: BLE001 - checks report invalid composition instead of aborting
+    except Exception as error:
         return [
             checks.Error(
                 f"GraphQL schema discovery failed: {error}",
@@ -33,7 +55,7 @@ def check_graphql_schemas(
     for name in names:
         try:
             schemas.build(name)
-        except Exception as error:  # noqa: BLE001 - retain successful builds and report every invalid bucket
+        except Exception as error:
             errors.append(
                 checks.Error(
                     f"GraphQL schema {name!r} failed to build: {error}",

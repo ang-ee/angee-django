@@ -88,7 +88,7 @@ class IntakeCampaign(IntakeAccessCase):
         seats = apps.get_model("decisions", "Decision")
         for user, allowed in ((self.owner, True), (self.writer, False), (self.reader, False), (self.admin, True)):
             with self.subTest(user=user.username):
-                self.assertEqual(seats.objects.as_user(user).filter(pk=rows[0].access_decision_id).exists(), allowed)
+                self.assertEqual(seats.objects.with_actor(user).filter(pk=rows[0].access_decision_id).exists(), allowed)
                 query = "{ intake_needs { access_verdict access_answered_at } }"
                 self.graphql(query, {}, user=user)
                 with CaptureQueriesContext(connection) as queries:
@@ -131,7 +131,7 @@ class IntakeCampaign(IntakeAccessCase):
             {"task": str(task.sqid)},
             user=self.owner,
         )["insert_intake_needs_one"]
-        need = self.Need.objects.as_user(self.owner).get(sqid=created["id"])
+        need = self.Need.objects.with_actor(self.owner).get(sqid=created["id"])
         self.assertEqual(need.task_id, task.pk)
         self.assertIsNone(need.project_id)
 
@@ -170,8 +170,8 @@ class IntakeCampaign(IntakeAccessCase):
         self.assertFalse(first.task.with_actor(self.reader).has_access("write"))
         current = self.as_user(first)
         current.reset_access(confirmed=True, expected_revision=current.revision)
-        self.assertFalse(self.Task.objects.as_user(self.reader).filter(pk=first.task_id).exists())
-        self.assertFalse(self.Party.objects.as_user(self.reader).filter(pk=second.party_id).exists())
+        self.assertFalse(self.Task.objects.with_actor(self.reader).filter(pk=first.task_id).exists())
+        self.assertFalse(self.Party.objects.with_actor(self.reader).filter(pk=second.party_id).exists())
         with actor_context(self.reader), self.assertRaises(PermissionDenied):
             first.task.with_actor(self.reader).message_post("Unusable comment arm")
 

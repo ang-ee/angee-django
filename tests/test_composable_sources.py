@@ -2,13 +2,13 @@
 
 from django_compose.models import Composable
 
-from angee.base.models.base import AngeeModel
-from angee.base.models.roles import role_anchor
+from angee.iam.models.base import ProtectedModel
+from angee.iam.models.roles import role_anchor
 
 
 def test_source_base_inherits_native_composable_without_legacy_defaults() -> None:
-    assert issubclass(AngeeModel, Composable)
-    assert not {"runtime", "extends", "requires_parent"}.intersection(AngeeModel.__dict__)
+    assert issubclass(ProtectedModel, Composable)
+    assert not {"runtime", "extends", "requires_parent"}.intersection(ProtectedModel.__dict__)
 
 
 def test_role_anchor_declares_native_concrete_keyword() -> None:

@@ -19,10 +19,6 @@ from django.db import models
 from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
 from django_compose.components import InstalledComponents, installed_components
-from rebac import MissingActorError, PermissionDenied
-from rebac.graphql.strawberry import RebacExtension
-from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
-from rebac.resources import model_resource_type
 from strawberry.extensions import SchemaExtension
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.tools import merge_types
@@ -33,12 +29,13 @@ from strawberry.types.execution import ExecutionContext
 from strawberry.types.field import StrawberryField
 from strawberry.types.scalar import ScalarDefinition
 from strawberry.types.union import StrawberryUnion
+from strawberry_django.optimizer import DjangoOptimizerExtension
 from strawberry_django_hasura import hasura_config
 
 from angee.base.addons import addon_facts, is_angee_addon, optional_addon_module
 from angee.base.exceptions import DomainError, classify_error, validation_error
+from angee.base.hooks import resolve_hook
 from angee.base.models.locks import StaleRevisionError
-from angee.base.permissions import require_rebac_queryset
 from angee.graphql.data.contracts import DataResourceMetadata
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -51,7 +48,6 @@ from angee.graphql.introspection import (
     surface_field_names,
     surface_name,
 )
-from angee.graphql.view_as import ViewAsReadOnlyExtension
 from graphql import (
     GraphQLError,
     GraphQLObjectType,
@@ -92,7 +88,11 @@ _ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in _
 
 
 class AngeeSchema(strawberry.Schema):
-    """Strawberry schema that exposes stable REBAC denial codes."""
+    """Strawberry schema with shared resource projection and safe domain errors."""
+
+    classify_error = staticmethod(classify_error)
+    optimizer_extension = DjangoOptimizerExtension
+    framework_extensions: tuple[type[SchemaExtension], ...] = ()
 
     angee_resources: tuple[DataResourceMetadata, ...] = ()
     """Model resource metadata carried by this built schema."""
@@ -107,9 +107,10 @@ class AngeeSchema(strawberry.Schema):
         """
 
         return [
+            *(extension() for extension in self.framework_extensions),
             *super().get_extensions(sync=sync),
-            *(import_string(path)(sync=sync)() for path in
-              getattr(settings, "ANGEE_GRAPHQL_EXTENSION_FACTORIES", ())),
+            self.optimizer_extension(),
+            *(import_string(path)(sync=sync)() for path in getattr(settings, "ANGEE_GRAPHQL_EXTENSION_FACTORIES", ())),
         ]
 
     @lru_cache
@@ -150,7 +151,7 @@ class AngeeSchema(strawberry.Schema):
         errors_to_log: list[GraphQLError] = []
         for error in errors:
             refusal = (
-                classify_error(error.original_error).expected
+                self.classify_error(error.original_error).expected
                 or (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES
             )
             if error.path is None and isinstance(error.original_error, GraphQLError):
@@ -158,19 +159,18 @@ class AngeeSchema(strawberry.Schema):
                 # Preserve them for the client without passing them to logging.
                 error.extensions = {"code": (error.extensions or {}).get("code", "BAD_USER_INPUT")}
                 continue
-            self._apply_rebac_code(error)
+            self._apply_expected_code(error)
             self._apply_validation_error(error)
             self._sanitize_unexpected_error(error)
             if not refusal:
                 errors_to_log.append(error)
         super().process_errors(errors_to_log, execution_context)
 
-    @staticmethod
-    def _sanitize_unexpected_error(error: GraphQLError) -> None:
+    def _sanitize_unexpected_error(self, error: GraphQLError) -> None:
         """Keep resolver implementation details out of public GraphQL errors."""
 
         original = error.original_error
-        if original is None or isinstance(original, MissingActorError | PermissionDenied):
+        if original is None:
             return
         if isinstance(original, DomainError):
             error.message = original.code
@@ -181,7 +181,7 @@ class AngeeSchema(strawberry.Schema):
             return
         if validation_error(original) is not None:
             return
-        classification = classify_error(original)
+        classification = self.classify_error(original)
         if classification.expected:
             error.message = classification.message
             error.extensions = {"code": classification.code}
@@ -208,10 +208,10 @@ class AngeeSchema(strawberry.Schema):
         # not merely move from the response into ordinary application logs.
         error.original_error = None
 
-    def _apply_rebac_code(self, error: GraphQLError) -> None:
-        """Attach the code owned by a REBAC denial exception."""
+    def _apply_expected_code(self, error: GraphQLError) -> None:
+        """Attach a recognized authentication or permission error code."""
 
-        classification = classify_error(error.original_error)
+        classification = self.classify_error(error.original_error)
         if classification.code not in ("UNAUTHENTICATED", "PERMISSION_DENIED"):
             return
         error.extensions = {**(error.extensions or {}), "code": classification.code}
@@ -230,7 +230,7 @@ class AngeeSchema(strawberry.Schema):
         validation = validation_error(error.original_error)
         if validation is None:
             return
-        error.message = classify_error(validation).message
+        error.message = self.classify_error(validation).message
         field_errors: dict[str, list[str]] = {}
         form_errors: list[str] = []
         if hasattr(validation, "error_dict"):
@@ -327,10 +327,11 @@ class GraphQLSchemas:
 
     _discovered: ClassVar[GraphQLSchemas | None] = None
 
-    def __init__(self, addons: Iterable[AppConfig]) -> None:
-        """Store addon configs in deterministic discovery order."""
+    def __init__(self, addons: Iterable[AppConfig], *, partial_schema: bool = False) -> None:
+        """Store addon configs; only explicitly partial builds may omit donor fields."""
 
         self.addons = tuple(addons)
+        self.partial_schema = partial_schema
         self._builds: dict[str, strawberry.Schema] = {}
         self._build_lock = threading.RLock()
 
@@ -468,10 +469,12 @@ class GraphQLSchemas:
         query = self._merge_root(name, "query", parts.query)
         if query is None:
             raise ImproperlyConfigured(f"GraphQL schema {name!r} has no query root")
-        self._assert_rebac_querysets(types)
         assert_unique_sqid_prefixes(types)
         self._describe_choice_enums(types)
-        schema = AngeeSchema(
+        schema_class = resolve_hook("ANGEE_GRAPHQL_SCHEMA_CLASS") or AngeeSchema
+        if not isinstance(schema_class, type) or not issubclass(schema_class, AngeeSchema):
+            raise ImproperlyConfigured("ANGEE_GRAPHQL_SCHEMA_CLASS must extend AngeeSchema.")
+        schema = schema_class(
             query=query,
             mutation=self._merge_root(name, "mutation", parts.mutation),
             subscription=self._merge_root(
@@ -483,10 +486,7 @@ class GraphQLSchemas:
             extensions=cast(
                 list[Any],
                 [
-                    ViewAsReadOnlyExtension,
-                    RebacExtension,
                     *parts.extensions,
-                    RebacDjangoOptimizerExtension,
                 ],
             ),
             config=hasura_config(),
@@ -494,6 +494,7 @@ class GraphQLSchemas:
         resources = finalize_data_resources(
             schema._schema,
             (*parts.query, *parts.mutation, *parts.subscription),
+            partial_schema=self.partial_schema,
         )
         self._attach_schema_metadata(schema, name=name, resources=resources)
         return schema
@@ -567,18 +568,6 @@ class GraphQLSchemas:
         definition.fields = [copy.copy(field) for field in definition.fields]
         return root
 
-    def _assert_rebac_querysets(
-        self,
-        types: tuple[object, ...],
-    ) -> None:
-        """Raise when a GraphQL-exposed REBAC model is not manager-scoped."""
-
-        for surface in types:
-            model = self._django_model_or_none(surface)
-            if model is None or not model_resource_type(model):
-                continue
-            require_rebac_queryset(model)
-
     def _django_model_or_none(
         self,
         surface: object,
@@ -623,7 +612,9 @@ class GraphQLSchemas:
 
 
 def schema_parts_for(
-    app_config: AppConfig, *, index: InstalledComponents | None = None,
+    app_config: AppConfig,
+    *,
+    index: InstalledComponents | None = None,
 ) -> dict[str, SchemaParts]:
     """Return normalized GraphQL schema parts declared by one addon."""
 

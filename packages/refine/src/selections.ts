@@ -38,3 +38,15 @@ export function selectionText(
     }).join(" ");
   }).join(" ");
 }
+
+/** Check only the declared native projection; null is present, omission is not. */
+export function selectedFieldsPresent(data: unknown, fields: Fields): boolean {
+  if (data === null) return true;
+  if (Array.isArray(data)) return data.every((row) => selectedFieldsPresent(row, fields));
+  if (typeof data !== "object" || data === null) return false;
+  const row = data as Record<string, unknown>;
+  return fields.every((field) => typeof field === "string"
+    ? Object.hasOwn(row, field) && row[field] !== undefined
+    : Object.entries(field).every(([name, children]) => Object.hasOwn(row, name)
+      && row[name] !== undefined && selectedFieldsPresent(row[name], children as Fields)));
+}

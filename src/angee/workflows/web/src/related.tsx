@@ -1,11 +1,12 @@
+import type { RecordOperation } from "@angee/gql/console/graphql";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, StatusBadge, useEnumOptions, useRouteHref,
-  useResourceRecordHrefLookup, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
+  useResourceRecordHrefLookup, relatedCount, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
-import { DecisionStepsDocument, RecordRelatedRunsDocument, RUN_MODEL, RUN_MODELS, RunRelatedDocument, STEP_RUN_MODEL } from "./documents.console";
+import { DecisionRunCountDocument, DecisionStepsDocument, RecordRelatedRunsDocument, RunDecisionsCountDocument, RUN_MODEL, RUN_MODELS, RunRelatedDocument, STEP_RUN_MODEL } from "./documents.console";
 import { enWorkflowsMessages, useWorkflowsT } from "./i18n";
 
 const DECISION_MODEL = "decisions.Decision";
@@ -13,6 +14,9 @@ const RELATED_MODELS = [...RUN_MODELS, DECISION_MODEL] as const;
 /** The roles a record plays in a run, most telling first: the one it keeps when several steps touched it. */
 const ROLES = ["source", "created", "changed", "read"] as const;
 type Role = (typeof ROLES)[number];
+const RECORD_ROLES: Record<RecordOperation, Role> = {
+  CALLED: "read", CHANGED: "changed", CREATED: "created", DELETED: "read", READ: "read",
+};
 const ROLE_LABELS = {
   source: "related.role.source", created: "related.role.created", changed: "related.role.changed", read: "related.role.read",
 } as const;
@@ -21,11 +25,15 @@ function recordId(context: ChatterViewContext): string {
   return context.view.kind === "record" ? context.view.sqid ?? "" : "";
 }
 
-function useRunRelated(runId: string) {
-  const variables = useMemo(() => ({ run: runId }), [runId]);
-  return useAuthoredQuery(RunRelatedDocument, variables, {
+function runRelatedScope(runId: string) {
+  return { variables: { run: runId }, options: {
     enabled: Boolean(runId), models: RELATED_MODELS, records: [{ model: RUN_MODEL, id: runId }],
-  });
+  } };
+}
+
+function useRunRelated(runId: string) {
+  const { variables, options } = runRelatedScope(runId);
+  return useAuthoredQuery(RunRelatedDocument, variables, options);
 }
 
 export interface RunRecord {
@@ -51,7 +59,7 @@ export function runRecords(data: ReturnType<typeof useRunRelated>["data"]): read
   keep(run?.subject_model, run?.subject_id, "source");
   keep(run?.trigger_event?.record_model, run?.trigger_event?.record_id, "source");
   for (const row of data.steprecord ?? []) {
-    const role: Role = row.operation === "created" ? "created" : row.operation === "changed" ? "changed" : "read";
+    const role = RECORD_ROLES[row.operation];
     keep(row.record_model, row.record_id, role, row.step_run?.node_label);
   }
   return [...byKey.values()].sort((a, b) => ROLES.indexOf(a.role) - ROLES.indexOf(b.role))
@@ -63,7 +71,7 @@ export const runRecordsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: enWorkflowsMessages["related.records"]!,
-    useCount: (context) => {
+    usePaneCount: (context) => {
       const query = useRunRelated(recordId(context));
       return query.data ? runRecords(query.data).length : undefined;
     },
@@ -92,7 +100,9 @@ export const runDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.decisions"]!,
-    useCount: (context) => useRunRelated(recordId(context)).data?.steprun?.filter((step) => step.decision).length,
+    useCount: relatedCount(RunDecisionsCountDocument, (context) => runRelatedScope(recordId(context)),
+      (data) => data.steprun_aggregate.aggregate?.count),
+    usePaneCount: (context) => useRunRelated(recordId(context)).data?.steprun?.filter((step) => step.decision).length,
     render: (context, label) => <RunDecisionsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -117,13 +127,14 @@ function RunDecisionsGroup({ context, label }: { context: ChatterViewContext; la
   </li></>;
 }
 
-function useRecordRuns(context: ChatterViewContext) {
+function useRecordRunsScope(context: ChatterViewContext) {
   const model = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
   const id = recordId(context);
   const records = useMemo(() => [{ model, id }], [model, id]);
-  return useAuthoredQuery(RecordRelatedRunsDocument, { records }, {
-    enabled: Boolean(model && id), models: [...RUN_MODELS], records, relatedModels: [...RUN_MODELS],
-  });
+  return {
+    variables: { records },
+    options: { enabled: Boolean(model && id), models: [...RUN_MODELS], records, relatedModels: [...RUN_MODELS] },
+  };
 }
 
 /** Runs are their own record pages and steps are theirs; every other record lists the runs that worked on it. */
@@ -138,8 +149,9 @@ export const recordRunsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enWorkflowsMessages["related.runs"]!,
     when: hasRuns,
-    useCount: (context) => {
-      const query = useRecordRuns(context);
+    usePaneCount: (context) => {
+      const scope = useRecordRunsScope(context);
+      const query = useAuthoredQuery(RecordRelatedRunsDocument, scope.variables, scope.options);
       return query.data ? query.data.record_timeline.records.flatMap((entry) => entry.runs).length : undefined;
     },
     render: (context, label) => <RecordRunsGroup key={context.view.sqid} context={context} label={label} />,
@@ -150,7 +162,8 @@ function RecordRunsGroup({ context, label }: { context: ChatterViewContext; labe
   const t = useWorkflowsT();
   const recordHref = useResourceRecordHrefLookup();
   const statuses = useEnumOptions(RUN_MODEL, "status", { casing: "upper" });
-  const query = useRecordRuns(context);
+  const scope = useRecordRunsScope(context);
+  const query = useAuthoredQuery(RecordRelatedRunsDocument, scope.variables, scope.options);
   // Newest first: the run that last worked on the record is the one a reader looks for.
   const runs = [...(query.data?.record_timeline.records.flatMap((entry) => entry.runs) ?? [])].reverse();
   return <>{label()}<li>
@@ -166,12 +179,16 @@ function RecordRunsGroup({ context, label }: { context: ChatterViewContext; labe
   </li></>;
 }
 
-function useDecisionSteps(decisionId: string) {
-  const variables = useMemo(() => ({ decision: decisionId }), [decisionId]);
-  return useAuthoredQuery(DecisionStepsDocument, variables, {
+function decisionStepsScope(decisionId: string) {
+  return { variables: { decision: decisionId }, options: {
     enabled: Boolean(decisionId), models: [DECISION_MODEL, STEP_RUN_MODEL],
     records: [{ model: DECISION_MODEL, id: decisionId }], relatedModels: [STEP_RUN_MODEL],
-  });
+  } };
+}
+
+function useDecisionSteps(decisionId: string) {
+  const { variables, options } = decisionStepsScope(decisionId);
+  return useAuthoredQuery(DecisionStepsDocument, variables, options);
 }
 
 /** The run and step that asked a decision, as a Related group of the decision's page. */
@@ -179,7 +196,9 @@ export const decisionRunGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.run"]!,
-    useCount: (context) => useDecisionSteps(recordId(context)).data?.steprun.filter((step) => step.run).length,
+    useCount: relatedCount(DecisionRunCountDocument, (context) => decisionStepsScope(recordId(context)),
+      (data) => data.steprun_aggregate.aggregate?.count),
+    usePaneCount: (context) => useDecisionSteps(recordId(context)).data?.steprun.filter((step) => step.run).length,
     render: (context, label) => <DecisionRunGroup key={context.view.sqid} context={context} label={label} />,
   },
 };

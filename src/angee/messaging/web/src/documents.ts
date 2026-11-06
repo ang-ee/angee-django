@@ -217,6 +217,8 @@ export const RecordUserFields = graphql(`
 export const RecordMessageFields = graphql(`
   fragment RecordMessageFields on RecordMessageType {
     id
+    feed_order_key
+    is_trashed
     preview
     direction
     status
@@ -363,7 +365,7 @@ export const RecordFollowerFields = graphql(`
     notification_policy
     subtype_keys
     party { id display_name }
-    user { id username is_active }
+    user { id username is_active assignment_subject }
   }
 `);
 
@@ -372,23 +374,11 @@ export const RecordThreadDocument = graphql(`
   query MessagingRecordThread(
     $modelLabel: String!
     $recordId: ID!
-    $search: String = ""
-    $messageLimit: Int = 50
-    $before: ID = null
-    $after: ID = null
-    $around: ID = null
-    $messageTypes: [String!] = []
   ) {
     record_thread(
       input: {
         model_label: $modelLabel
         record_id: $recordId
-        search: $search
-        message_limit: $messageLimit
-        before: $before
-        after: $after
-        around: $around
-        message_types: $messageTypes
       }
     ) {
       error
@@ -398,15 +388,9 @@ export const RecordThreadDocument = graphql(`
       thread {
         ...RecordThreadSummaryFields
       }
-      has_older_messages
-      has_newer_messages
-      message_result_count
       removed_message_count
       audience_label
       post_kinds
-      messages {
-        ...RecordMessageFields
-      }
       follower_count
       is_following
       self_follower {
@@ -447,6 +431,44 @@ export const RecordThreadDocument = graphql(`
       followers {
         ...RecordFollowerFields
       }
+    }
+  }
+`);
+
+/** Header bell projection; discussion owns the full record-thread read. */
+export const RecordFollowingDocument = graphql(`
+  query MessagingRecordFollowing($modelLabel: String!, $recordId: ID!) {
+    record_thread(input: { model_label: $modelLabel, record_id: $recordId }) {
+      error_code
+      is_following
+      subtypes { key internal default }
+    }
+  }
+`);
+
+/** Chatter windows and retained IDs share the parent record's authorization. */
+export const RecordMessageFeedDocument = graphql(`
+  query MessagingRecordMessageFeed(
+    $modelLabel: String!, $recordId: ID!, $search: String = "", $messageTypes: [String!] = [],
+    $around: ID, $beforeCursor: String, $throughCursor: String, $afterCursor: String, $limit: Int!
+  ) {
+    record_message_feed(input: { model_label: $modelLabel, record_id: $recordId, search: $search,
+      message_types: $messageTypes, around: $around }, before_cursor: $beforeCursor,
+      through_cursor: $throughCursor, after_cursor: $afterCursor, limit: $limit) {
+      count older_cursor newer_cursor has_older has_newer has_more_in_window has_older_than_through has_newer_than_before
+      messages { ...RecordMessageFields }
+    }
+  }
+`);
+
+export const RecordMessageFeedRevalidateDocument = graphql(`
+  query MessagingRecordMessageFeedRevalidate(
+    $modelLabel: String!, $recordId: ID!, $search: String = "", $messageTypes: [String!] = [], $ids: [ID!]!
+  ) {
+    record_message_feed_revalidate(input: { model_label: $modelLabel, record_id: $recordId,
+      search: $search, message_types: $messageTypes }, ids: $ids) {
+      messages { ...RecordMessageFields }
+      absent_ids
     }
   }
 `);
@@ -496,18 +518,8 @@ export const PostRecordMessageDocument = graphql(`
     ) {
       error
       error_code
-      follower_count
-      is_following
-      unread_count
-      needaction_count
-      message_has_error
-      message_has_error_counter
-      attachment_count
       message {
         ...RecordMessageFields
-      }
-      thread {
-        ...RecordThreadSummaryFields
       }
     }
   }
@@ -530,18 +542,8 @@ export const UpdateRecordMessageDocument = graphql(`
     ) {
       error
       error_code
-      follower_count
-      is_following
-      unread_count
-      needaction_count
-      message_has_error
-      message_has_error_counter
-      attachment_count
       message {
         ...RecordMessageFields
-      }
-      thread {
-        ...RecordThreadSummaryFields
       }
     }
   }
@@ -568,6 +570,7 @@ export const TrashRecordMessageDocument = graphql(`
       error
       error_code
       removed_message_count
+      message { ...RecordMessageFields }
     }
   }
 `);
@@ -589,6 +592,7 @@ export const RestoreRecordMessageDocument = graphql(`
       error
       error_code
       removed_message_count
+      message { ...RecordMessageFields }
     }
   }
 `);
@@ -627,20 +631,6 @@ export const DeleteRecordMessageDocument = graphql(`
       error
       error_code
       deleted_message_id
-      message_result_count
-      follower_count
-      is_following
-      unread_count
-      needaction_count
-      message_has_error
-      message_has_error_counter
-      attachment_count
-      thread {
-        ...RecordThreadSummaryFields
-      }
-      messages {
-        ...RecordMessageFields
-      }
     }
   }
 `);
@@ -664,15 +654,7 @@ export const SetRecordMessageReactionDocument = graphql(`
     ) {
       error
       error_code
-      reaction_groups {
-        ...RecordReactionGroupFields
-      }
-      message {
-        id
-        reaction_groups {
-          ...RecordReactionGroupFields
-        }
-      }
+      message { ...RecordMessageFields }
     }
   }
 `);
@@ -694,11 +676,7 @@ export const SetRecordMessageStarredDocument = graphql(`
     ) {
       error
       error_code
-      starred
-      message {
-        id
-        starred
-      }
+      message { ...RecordMessageFields }
     }
   }
 `);
@@ -736,10 +714,7 @@ export const MarkRecordMessageDoneDocument = graphql(`
       error_code
       unread_count
       needaction_count
-      message {
-        id
-        needaction
-      }
+      message { ...RecordMessageFields }
       thread {
         ...RecordThreadSummaryFields
       }
@@ -768,9 +743,8 @@ export const SetRecordFollowingDocument = graphql(`
       error_code
       follower_count
       is_following
-      follower {
-        ...RecordFollowerFields
-      }
+      follower { ...RecordFollowerFields }
+      followers { ...RecordFollowerFields }
     }
   }
 `);
@@ -782,17 +756,8 @@ export type MessageReaderData = DocumentType<typeof MessageReaderFields>;
 export type MessageReplyData = DocumentType<typeof MessageReplyFields>;
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
-export type RecordMessageRow = NonNullable<RecordThreadPayload["messages"]>[number];
+export type RecordMessageRow = DocumentType<typeof RecordMessageFeedDocument>["record_message_feed"]["messages"][number];
 export type SuggestedRecipientRow =
   NonNullable<RecordThreadPayload["suggested_recipients"]>[number];
 export type RecipientUserRow =
   NonNullable<DocumentType<typeof MessagingRecipientUsersDocument>["colleagues"]>[number];
-
-
-export const MessagingAccessFollowersDocument = graphql(`
-  query MessagingAccessFollowers($modelLabel: String!, $recordId: ID!) {
-    record_thread(input: { model_label: $modelLabel, record_id: $recordId, message_limit: 1 }) {
-      followers { user { assignment_subject username } }
-    }
-  }
-`);

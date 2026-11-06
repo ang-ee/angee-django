@@ -19,7 +19,6 @@ from django.test import override_settings
 from rebac import actor_context, generic_target, system_context
 
 from angee.base.fields.state import StateField
-from angee.base.models.derived import DerivedFrom
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import (
     DocumentPart,
@@ -27,8 +26,9 @@ from angee.extraction.contracts import (
     Result,
     Source,
 )
-from angee.extraction.managers import StaleExtraction
+from angee.extraction.managers import ExtractionManager, StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
+from angee.iam.models.derived import ProtectedDerivedFrom
 from angee.provenance.evidence import FactAuthority
 from angee.storage.models import File as AbstractFile
 from angee.workflows_extraction.steps import InferEvidenceInput, InferEvidenceStep
@@ -131,6 +131,13 @@ def evidence(drive, monkeypatch):
         yield retain, defaults
 
 
+def test_retained_inference_admission_refuses_unrequested_work(evidence):
+    retain, _values = evidence
+    row = retain()
+    assert row.inference_admission(allow_inference=False, identity_mapping={}) == "unchanged"
+    assert row.retained_inference_parts() == row.document_parts()
+
+
 def test_retention_preserves_sources_parts_pages_and_typed_missing_values(evidence):
     retain, values = evidence
     image = PageCarrier(source_position=0, page_position=0, width=40, height=60, dpi=100)
@@ -154,7 +161,7 @@ def test_retention_preserves_sources_parts_pages_and_typed_missing_values(eviden
     assert row.fact_authority("/documents/0/title") is FactAuthority.SOURCE
     assert row.fact_correction("/documents/0/title") is None
     source = row.sources.get()
-    assert isinstance(source, DerivedFrom)
+    assert isinstance(source, ProtectedDerivedFrom)
     target = generic_target(values["target"])
     assert (source.content_type, source.object_id) == (target.content_type, target.object_id)
     assert source.record == values["target"]
@@ -163,6 +170,36 @@ def test_retention_preserves_sources_parts_pages_and_typed_missing_values(eviden
     with pytest.raises(KeyError):
         row.selected_line(reference.identity, "unknown")
     assert ExtractionLineage.objects.get(pk=row.lineage_id).head_id == row.pk
+
+
+def test_revision_retains_pages_and_authority_when_base_reader_lacks_source_content(evidence, monkeypatch):
+    """System retention reads child evidence even when the supplied base is pinned to a viewer."""
+    retain, values = evidence
+    admin = create_platform_admin("retention-source-admin")
+    first = retain(
+        actor=admin,
+        pages=(PageCarrier(source_position=0, page_position=0, width=40, height=60, dpi=100),),
+    )
+    viewer = get_user_model().objects.create_user(username="retention-base-viewer")
+    first.with_actor(admin).grant_record_access("viewer", viewer)
+    assert first.with_actor(viewer).has_access("read")
+    assert not values["target"].with_actor(viewer).has_access("read")
+    assert not ExtractionPage.system_queryset().get(extraction=first).with_actor(viewer).has_access("read")
+    assert not ExtractionPart.system_queryset().get(extraction=first).with_actor(viewer).has_access("read")
+
+    original = ExtractionManager._retain_prepared
+
+    def pinned_base(manager, prepared, sources, pages, parts, base, mapping, retirement, **kwargs):
+        return original(
+            manager, prepared, sources, pages, parts, base.with_actor(viewer), mapping, retirement, **kwargs
+        )
+
+    monkeypatch.setattr(ExtractionManager, "_retain_prepared", pinned_base)
+    second = retain(actor=admin, base=first, request_key="reader-pinned-revision")
+    assert second.revision == 2
+    assert list(second.pages.values_list("source_page", flat=True)) == [0]
+    assert second.authority_carrier_positions(first) == {0: 0}
+    assert second.claims == first.claims
 
 
 def test_revision_reuses_one_protected_part_carrier(evidence):
@@ -185,8 +222,10 @@ def test_inference_retry_returns_its_revision_before_head_comparison(evidence):
     ctx = SimpleNamespace(
         actor=values["actor"],
         input=InferEvidenceInput(
-            base_extraction_id=str(base.sqid), base_revision=base.revision,
-            target_model="storage.File", target_id=str(values["target"].sqid),
+            base_extraction_id=str(base.sqid),
+            base_revision=base.revision,
+            target_model="storage.File",
+            target_id=str(values["target"].sqid),
         ),
         idempotency_key="retry-attempt",
         load=lambda model, public_id: base if model is Extraction else values["target"],
@@ -495,8 +534,11 @@ def test_schema_error_does_not_disclose_rejected_document_values(evidence):
 
 def test_missing_claim_path_does_not_disclose_document_values_in_tracebacks(evidence):
     retain, values = evidence
-    result = replace(values["result"], value={"documents": [], "private": "protected source content"},
-                     claims={"/absent": [{"part_position": 0, "start": 0, "end": 4}]})
+    result = replace(
+        values["result"],
+        value={"documents": [], "private": "protected source content"},
+        claims={"/absent": [{"part_position": 0, "start": 0, "end": 4}]},
+    )
     with pytest.raises(ValidationError) as raised:
         retain(result=result)
     assert "protected source content" not in "".join(format_exception(raised.value))

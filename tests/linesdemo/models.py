@@ -17,10 +17,10 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 from angee.base.fields.state import StateField
-from angee.base.managers import AngeeManager
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.locks import RowLockMixin, RowLockQuerySet
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.locks import ProtectedRowLockMixin, ProtectedRowLockQuerySet
+from angee.iam.querysets import ProtectedQuerySet
 
 
 class InputStampMixin(models.Model):
@@ -47,7 +47,7 @@ class InputStampMixin(models.Model):
         super().apply_input_extensions(**values)
 
 
-class Document(InputStampMixin, AngeeDataModel):
+class Document(InputStampMixin, ProtectedDataModel):
     """A manager-gated document whose lines are edited transactionally."""
 
     sqid_prefix = "doc_"
@@ -55,7 +55,7 @@ class Document(InputStampMixin, AngeeDataModel):
     title = models.CharField(max_length=200)
     note = models.CharField(max_length=200, blank=True, default="")
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         """Concrete REBAC document model for the editable-lines tests."""
 
         abstract = False
@@ -64,7 +64,7 @@ class Document(InputStampMixin, AngeeDataModel):
         rebac_resource_type = "linesdemo/document"
 
 
-class Product(AngeeDataModel):
+class Product(ProtectedDataModel):
     """A manager-gated catalogue row a line may reference (visibility target).
 
     Its own REBAC policy is what a line's ``product`` public-id decode is scoped
@@ -77,7 +77,7 @@ class Product(AngeeDataModel):
 
     name = models.CharField(max_length=200)
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         """Concrete manager-gated product model for line-relation visibility tests."""
 
         abstract = False
@@ -86,7 +86,7 @@ class Product(AngeeDataModel):
         rebac_resource_type = "linesdemo/product"
 
 
-class Tag(AngeeDataModel):
+class Tag(ProtectedDataModel):
     """A free vocabulary row a line references through an M2M (no row policy).
 
     The child's ``tags`` decodes/persists as public sqids, and the F6 lines metadata
@@ -99,7 +99,7 @@ class Tag(AngeeDataModel):
 
     name = models.CharField(max_length=200)
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         """Concrete read-all vocabulary model for line-M2M tests."""
 
         abstract = False
@@ -107,7 +107,7 @@ class Tag(AngeeDataModel):
         db_table = "test_linesdemo_tag"
 
 
-class DocumentLine(InputStampMixin, AngeeDataModel):
+class DocumentLine(InputStampMixin, ProtectedDataModel):
     """One ordered child line of a :class:`Document` (no row policy of its own)."""
 
     sqid_prefix = "dln_"
@@ -140,7 +140,7 @@ class DocumentLine(InputStampMixin, AngeeDataModel):
     quantity = models.IntegerField(default=1)
     position = models.IntegerField(default=0)
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         """Concrete child-line model; no ``rebac_resource_type`` by design."""
 
         abstract = False
@@ -149,14 +149,14 @@ class DocumentLine(InputStampMixin, AngeeDataModel):
         ordering = ("position", "pk")
 
 
-class LineReceipt(AngeeDataModel):
+class LineReceipt(ProtectedDataModel):
     """A record that keeps a document line in use: removing that line is refused."""
 
     sqid_prefix = "lrc_"
 
     line = models.ForeignKey(DocumentLine, on_delete=models.PROTECT, related_name="+")
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         """Concrete protecting model; no ``rebac_resource_type`` by design."""
 
         abstract = False
@@ -164,14 +164,14 @@ class LineReceipt(AngeeDataModel):
         db_table = "test_linesdemo_line_receipt"
 
 
-class _PinnedLineQuerySet(RowLockQuerySet, AngeeQuerySet):
+class _PinnedLineQuerySet(ProtectedRowLockQuerySet, ProtectedQuerySet):
     """Use the same lock contract for instance and collection writes."""
 
 
-_PinnedLineManager = AngeeManager.from_queryset(_PinnedLineQuerySet)
+_PinnedLineManager = ProtectedManager.from_queryset(_PinnedLineQuerySet)
 
 
-class PinnedLine(RowLockMixin, AngeeDataModel):
+class PinnedLine(ProtectedRowLockMixin, ProtectedDataModel):
     """A document part whose pinned rows are system rows (the row-lock handle).
 
     A pinned row's ``label`` is locked: editable lines may change its quantity
@@ -194,7 +194,7 @@ class PinnedLine(RowLockMixin, AngeeDataModel):
     position = models.IntegerField(default=0)
     pinned = models.BooleanField(default=False)
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         """Concrete row-locked child-line model; authorized through its document."""
 
         abstract = False

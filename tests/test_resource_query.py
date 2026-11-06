@@ -9,7 +9,9 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import strawberry
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.backends.postgresql.base import DatabaseWrapper
 from graphql import (
@@ -83,6 +85,7 @@ def _projection(**kwargs: object) -> ResourceQueryProjection:
             DataResourceFieldMetadata(name="created", kind="scalar", scalar="DateTime"),
         ),
         identity="id",
+        representation_policies={"Channel": "display_name"},
         filter_fields=("channel", "state", "created"),
         **kwargs,
     )
@@ -123,6 +126,77 @@ def test_query_separates_row_selections_from_bucket_keys() -> None:
     assert query.fields["payload.mailbox"].row.paths == ("payload",)
     assert query.fields["channel"].row.path == "channel.id"
     assert query.fields["channel"].row.paths == ("channel.id",)
+
+
+def test_group_drill_requires_a_selectable_row_identity_at_schema_build() -> None:
+    """A grouped page cannot match returned rows without its axis identity."""
+
+    projection = _projection(
+        axes=(DataQueryAxis(
+            field="channel", kind="relation",
+            server=DataQueryServerAxis("CHANNEL", "channel_id"),
+            drill=DataQueryDrill("identity", "channel", "channel_id"),
+        ),),
+    )
+    schema = build_schema(_SCHEMA.replace(
+        "type Channel implements Node { id: ID!, display_name: String! }",
+        "type Channel { display_name: String! }",
+    ))
+    message = r"Relation group axes \['channel'\] have a drill but no selectable row identity"
+    with pytest.raises(ImproperlyConfigured, match=message):
+        replace(projection, schema=schema).build()
+
+
+def test_unexposed_relation_drill_fails_in_a_complete_schema() -> None:
+    projection = _projection(
+        axes=(DataQueryAxis(
+            field="channel", kind="relation",
+            server=DataQueryServerAxis("CHANNEL", "channel_id"),
+            drill=DataQueryDrill("identity", "channel", "channel_id"),
+        ),),
+    )
+    schema = build_schema(_SCHEMA.replace("channel: Channel, ", ""))
+
+    with pytest.raises(ImproperlyConfigured) as error:
+        replace(projection, schema=schema).build()
+    assert "Relation group axes ['channel'] have a drill but no selectable row identity" in str(error.value)
+    assert "'Entry'" in str(error.value)
+    assert "expose the related row's public ID or remove the drill" in str(error.value)
+
+
+def test_unexposed_relation_drill_drops_only_in_a_declared_partial_schema() -> None:
+    projection = _projection(
+        axes=(DataQueryAxis(
+            field="channel", kind="relation",
+            server=DataQueryServerAxis("CHANNEL", "channel_id"),
+            drill=DataQueryDrill("identity", "channel", "channel_id"),
+        ),),
+    )
+    schema = build_schema(_SCHEMA.replace("channel: Channel, ", ""))
+
+    axis = replace(projection, schema=schema, partial_schema=True).build().axes["channel"]
+    assert axis.server is not None
+    assert axis.drill is None
+    assert axis.identity_path is None
+
+
+def test_scalar_group_drill_needs_no_related_row_identity() -> None:
+    # The row does not expose `created`, so the identity check would fail a
+    # relation axis; a scalar axis drills through its own filter field instead.
+    projection = replace(
+        _projection(
+            axes=(DataQueryAxis(
+                field="created", kind="date",
+                server=DataQueryServerAxis("CREATED", "created"),
+                drill=DataQueryDrill("identity", "created", "created"),
+            ),),
+        ),
+        schema=build_schema(_SCHEMA.replace(", created: DateTime }", " }")),
+    )
+
+    axis = projection.build().axes["created"]
+    assert axis.identity_path is None
+    assert axis.drill == DataQueryDrill("identity", "created", "created")
 
 
 def test_client_filter_only_field_has_no_invented_row_accessor() -> None:
@@ -271,15 +345,40 @@ def test_query_does_not_infer_relation_identity_from_an_unrelated_id_field() -> 
     assert relation.label_path == "channel.display_name"
 
 
-def test_unexposed_relation_uses_public_identity_constant(monkeypatch) -> None:
-    monkeypatch.setattr("angee.graphql.data.query.PUBLIC_ID_FIELD_NAME", "public_key")
+def test_query_uses_the_only_public_id_on_an_identity_projection() -> None:
+    """A declared non-Node identity can page a relation group."""
+
+    schema = build_schema(
+        _SCHEMA.replace(
+            "type Channel implements Node { id: ID!, display_name: String! }",
+            "type Channel { id: ID!, display_name: String! }",
+        )
+    )
+    assert replace(
+        _projection(), schema=schema, identity_policies={"Channel": "id"},
+    ).build().fields["channel"].relation.identity_path == "channel.id"
+
+
+def test_query_does_not_guess_non_node_identity_from_id_name() -> None:
+    schema = build_schema(
+        _SCHEMA.replace(
+            "type Channel implements Node { id: ID!, display_name: String! }",
+            "type Channel { id: ID!, display_name: String! }",
+        )
+    )
+    assert replace(_projection(), schema=schema).build().fields["channel"].relation.identity_path is None
+
+
+def test_unexposed_relation_uses_declared_identity_policy() -> None:
     schema = build_schema(
         _SCHEMA.replace(
             "type Channel implements Node { id: ID!, display_name: String! }",
             "type Channel { sqid: ID!, public_key: ID!, display_name: String! }",
         )
     )
-    relation = replace(_projection(), schema=schema).build().fields["channel"].relation
+    relation = replace(
+        _projection(), schema=schema, identity_policies={"Channel": "public_key"},
+    ).build().fields["channel"].relation
     assert relation.identity_path == "channel.public_key"
 
 
@@ -384,6 +483,7 @@ def _native_operator_resource(schema):
         types=types,
         fields=(),
         identity="id",
+        representation_policies={"Channel": "display_name"},
         filter_fields=tuple(_SCALAR_OPERANDS),
         model=QueryPattern,
         filter_operators=tuple(resource_filter_lookups(QueryPattern, ("name",))),

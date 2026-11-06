@@ -29,9 +29,9 @@ const fields: DataResourceFieldMetadata[] = Object.entries(query.fields).map(([n
   ...(name === "channel" ? { relationModelLabel: "messaging.Channel", relationObject: true } : {}),
 }));
 const resource = testDataResource("messaging.Message", {
-  roots: { groups: "messages_groups", aggregate: "messages_aggregate", deletePreview: "preview_delete_message", update: undefined, create: undefined },
+  roots: { groups: "messages_groups", groupedRows: "messages_grouped_rows", aggregate: "messages_aggregate", deletePreview: "preview_delete_message", update: undefined, create: undefined },
   capabilities: ["list", "detail", "delete"], fields, query, recordRepresentation: "title",
-  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy" },
+  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy", groupBySpec: "MessageGroupBySpec", groupedRowPage: "messages_grouped_rows_page" },
 });
 const { Provider, clearClients } = createUiTestProviders({
   resources: [resource, testDataResource("messaging.Thread")], apiUrl: "test://messages",
@@ -76,9 +76,14 @@ function dataProvider({ count = 2, fail = false, transportFailure = false, limit
       }
       return { data: { send_held_drafts: results, discard_held_drafts: results } };
     }
-    return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, aggregate: { count } }], totalCount: 1 } };
+    const variables = meta?.gqlVariables as Record<string, unknown> | undefined;
+    if (Array.isArray(variables?.pages)) {
+      const pages = variables.pages as { key: unknown; offset: number; limit: number }[];
+      return { data: { data: { rows: pages.map(({ key, offset, limit }) => ({ key, rows: rows.slice(offset, offset + limit) })) } } };
+    }
+    return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, label: "Discussion", aggregate: { count } }], totalCount: 1 } };
   });
-  const getList = vi.fn(async () => ({ data: [...rows], total: count }));
+  const getList = vi.fn(async () => ({ data: [], total: 0 }));
   return { rows, custom, getList, mutations: () => custom.mock.calls.filter(([request]) => request.meta?.gqlMutation) };
 }
 
@@ -167,7 +172,8 @@ test.each([false, true])("a grouped held action discarding=%s sends selected rev
   await waitFor(() => expect(checked(rowCheckbox("Message 1")) || checked(rowCheckbox("Message 2"))).toBe(false));
   expect(await screen.findByText(`${discarding ? "Discarded one held draft." : "Queued one held draft."}; Revision changed`, { selector: "h2" })).toBeTruthy();
   // Publishing invalidates the loaded rows. Reselecting captures the on-screen revision.
-  await waitFor(() => expect(f.getList.mock.calls.length).toBeGreaterThan(1));
+  await waitFor(() => expect(f.custom.mock.calls.filter(([request]) =>
+    Array.isArray((request.meta?.gqlVariables as Record<string, unknown> | undefined)?.pages)).length).toBeGreaterThan(1));
   fireEvent.click(rowCheckbox("Message 2"));
   const retry = await screen.findByRole("button", { name: discarding ? "Discard" : "Send now" });
   await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
@@ -192,10 +198,10 @@ test("a transport refusal keeps selection and permits another attempt", async ()
 });
 
 test("both held verbs disable above the server's selection bound", async () => {
-  const f = await fixture({ held: true, count: 101 });
-  const all = screen.getByRole("checkbox", { name: "Select all loaded rows" });
-  fireEvent.click(all);
-  expect(checked(all)).toBe(true);
+  const f = dataProvider({ count: 101 });
+  mount(() => <ResourceViewProvider resource="messaging.Message" scope="local">
+    <HeldDraftActions ids={new Set(f.rows.map((row) => row.id))} rows={f.rows} />
+  </ResourceViewProvider>, f);
   expect((await screen.findByRole("button", { name: "Send now" })).hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("button", { name: "Discard" }).hasAttribute("disabled")).toBe(true);
   const reason = await screen.findByText("Select at most 100 held drafts.");

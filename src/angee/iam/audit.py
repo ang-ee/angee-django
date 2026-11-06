@@ -4,8 +4,8 @@
 foreign keys on a row. Every audited GraphQL type needs the same projection of
 those keys: the actor's public id plus a display label, resolved **without**
 exposing the guarded user object — the id goes through IAM's ``user_public_id``
-and labels use IAM's narrow, elevated user-label queryset. Native Django prefetch
-batches each selected label relation; only the scalar leaves the resolver. This
+and labels use IAM's narrow scalar label projection. Django annotates each
+selected label relation in the record read; only the scalar leaves the resolver. This
 mixin owns that projection once so audited types compose the four resolvers;
 :class:`TrashedRefMixin` does the same for ``TrashMixin`` stamps.
 
@@ -17,22 +17,14 @@ into the concrete type without surfacing an extra GraphQL interface in the SDL.
 from __future__ import annotations
 
 from datetime import datetime
-from functools import partial
 from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from django.db.models import Prefetch
 from strawberry_django.utils.requests import get_request
 
 from angee.graphql.ids import optional_public_id
-from angee.iam.identity import user_display_label, user_label, user_label_queryset, user_public_id
-
-
-def user_label_prefetch(relation: str, _info: strawberry.Info) -> Prefetch:
-    """Bind native relation loading to IAM's scalar-label projection owner."""
-
-    return Prefetch(relation, queryset=user_label_queryset(), to_attr=f"_iam_{relation}_label_source")
+from angee.iam.identity import user_display_label, user_label_annotation, user_public_id
 
 
 @strawberry.type
@@ -40,8 +32,7 @@ class AuthoredRefMixin:
     """Project ``AuditMixin`` user references as ``{id, label}`` for a GraphQL type.
 
     Compose alongside the node base, e.g. ``class PageType(AuthoredRefMixin,
-    AngeeNode)``. Native field hints select the FK columns and prefetch narrow
-    label sources only when those labels are selected.
+    AngeeNode)``. Native field hints select only the scalar labels requested.
     """
 
     @strawberry_django.field(only=["created_by_id"])
@@ -50,13 +41,14 @@ class AuthoredRefMixin:
 
         return cast("strawberry.ID | None", optional_public_id(user_public_id(cast(Any, self).created_by_id)))
 
-    @strawberry_django.field(only=["created_by_id"], prefetch_related=[partial(user_label_prefetch, "created_by")])
+    @strawberry_django.field(
+        only=["created_by_id"], annotate={"_iam_created_by_label": user_label_annotation("created_by")},
+    )
     def created_by_label(self, info: strawberry.Info) -> str | None:
         """Return the creator's display label - no user object exposed."""
 
-        if hasattr(self, "_iam_created_by_label_source"):
-            user = cast(Any, self)._iam_created_by_label_source
-            return user_label(user) if user is not None else None
+        if "_iam_created_by_label" in cast(Any, self).__dict__:
+            return cast(str | None, cast(Any, self)._iam_created_by_label)
         return user_display_label(cast(Any, self).created_by_id, request=get_request(info))
 
     @strawberry_django.field(only=["updated_by_id"])
@@ -65,13 +57,14 @@ class AuthoredRefMixin:
 
         return cast("strawberry.ID | None", optional_public_id(user_public_id(cast(Any, self).updated_by_id)))
 
-    @strawberry_django.field(only=["updated_by_id"], prefetch_related=[partial(user_label_prefetch, "updated_by")])
+    @strawberry_django.field(
+        only=["updated_by_id"], annotate={"_iam_updated_by_label": user_label_annotation("updated_by")},
+    )
     def updated_by_label(self, info: strawberry.Info) -> str | None:
         """Return the last editor's display label - no user object exposed."""
 
-        if hasattr(self, "_iam_updated_by_label_source"):
-            user = cast(Any, self)._iam_updated_by_label_source
-            return user_label(user) if user is not None else None
+        if "_iam_updated_by_label" in cast(Any, self).__dict__:
+            return cast(str | None, cast(Any, self)._iam_updated_by_label)
         return user_display_label(cast(Any, self).updated_by_id, request=get_request(info))
 
 
@@ -95,11 +88,12 @@ class TrashedRefMixin:
 
         return str(cast(Any, self).trash_reason)
 
-    @strawberry_django.field(only=["trashed_by_id"], prefetch_related=[partial(user_label_prefetch, "trashed_by")])
+    @strawberry_django.field(
+        only=["trashed_by_id"], annotate={"_iam_trashed_by_label": user_label_annotation("trashed_by")},
+    )
     def trashed_by_label(self, info: strawberry.Info) -> str | None:
         """Return the display label of the user who moved the record to the trash."""
 
-        if hasattr(self, "_iam_trashed_by_label_source"):
-            user = cast(Any, self)._iam_trashed_by_label_source
-            return user_label(user) if user is not None else None
+        if "_iam_trashed_by_label" in cast(Any, self).__dict__:
+            return cast(str | None, cast(Any, self)._iam_trashed_by_label)
         return user_display_label(cast(Any, self).trashed_by_id, request=get_request(info))

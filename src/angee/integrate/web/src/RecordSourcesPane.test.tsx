@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { AppRuntimeProvider, CHATTER_CONTAINERS, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
+import { AppRuntimeProvider, CHATTER_CONTAINERS, RelatedCountProbe, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 
@@ -12,7 +12,7 @@ vi.mock("@angee/refine", async (original) => ({
   useAuthoredQuery: mocks.query,
 }));
 
-import { RecordSourcesDocument } from "./documents";
+import { RecordSourcesCountDocument, RecordSourcesDocument } from "./documents";
 import { recordSourcesGroup } from "./RecordSourcesPane";
 
 const context: ChatterViewContext = {
@@ -29,7 +29,11 @@ const context: ChatterViewContext = {
 };
 
 beforeEach(() => {
-  mocks.query.mockReset().mockReturnValue({
+  mocks.query.mockReset().mockImplementation((document: unknown) => document === RecordSourcesCountDocument ? {
+    data: { record_links_aggregate: { aggregate: { count: 1 } } },
+    error: null,
+    isLoading: false,
+  } : {
     data: { record_links: [{
       id: "rlk_1",
       external_key: "account.move:42",
@@ -52,10 +56,27 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+const containers = containersFromChildren(CHATTER_CONTAINERS, {
+  "related#groups": { "integrate.sources": recordSourcesGroup },
+});
+
+test("the Sources count probe reads only the filtered aggregate before the pane opens", () => {
+  render(<AppRuntimeProvider runtime={{ containers }}>
+    <RelatedCountProbe id="related" context={context} onCount={vi.fn()} />
+  </AppRuntimeProvider>);
+
+  expect(mocks.query).not.toHaveBeenCalledWith(RecordSourcesDocument, expect.anything(), expect.anything());
+  expect(mocks.query).toHaveBeenCalledWith(RecordSourcesCountDocument, {
+    modelLabel: "accounting.Bill", recordId: "bil_1",
+  }, {
+    enabled: true,
+    models: ["integrate.RecordLink"],
+    records: [{ model: "accounting.Bill", id: "bil_1" }],
+  });
+});
+
 test("the Sources group counts and lists each source as a row linking to its outbound URL", () => {
-  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { "integrate.sources": recordSourcesGroup },
-  }) }}><RelatedPane context={context} /></AppRuntimeProvider>);
+  render(<AppRuntimeProvider runtime={{ containers }}><RelatedPane context={context} /></AppRuntimeProvider>);
 
   expect(mocks.query).toHaveBeenCalledWith(RecordSourcesDocument, {
     modelLabel: "accounting.Bill",
@@ -65,6 +86,7 @@ test("the Sources group counts and lists each source as a row linking to its out
     models: ["integrate.RecordLink"],
     records: [{ model: "accounting.Bill", id: "bil_1" }],
   });
+  expect(mocks.query).not.toHaveBeenCalledWith(RecordSourcesCountDocument, expect.anything(), expect.anything());
   expect(screen.getByText("Sources").closest("li")?.textContent).toBe("Sources· 1");
   const row = screen.getByRole("link", { name: /Vendor bill 42/ });
   expect(row.getAttribute("href")).toBe("https://source.test/42");

@@ -1,6 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
-import { holdsPermission } from "@angee/metadata";
+import { holdsPermission, useModelMetadata } from "@angee/metadata";
 import * as React from "react";
 import {
   Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, createClientKey, errorMessage, textRoleVariants, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
@@ -26,8 +26,8 @@ import {
   MarkRecordThreadReadDocument,
   MessagingRecipientUsersDocument,
   PostRecordMessageDocument,
-  READ_MODELS,
   RecordRemovedMessagesDocument,
+  READ_MODELS,
   RestoreRecordMessageDocument,
   SetRecordMessageReactionDocument,
   SetRecordMessageStarredDocument,
@@ -38,7 +38,9 @@ import {
   type RecipientUserRow,
   type SuggestedRecipientRow,
 } from "./documents";
-import { useRecordThreadQuery } from "./useRecordThreadQuery";
+import { useAcceptRecordThreadState, useRecordThreadQuery } from "./useRecordThreadQuery";
+import { useRecordMessageFeed } from "./record-message-feed";
+import { messageFeedRows } from "./message-feed";
 
 const RECIPIENT_MODELS = ["iam.User"] as const;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -149,26 +151,35 @@ export function RecordThreadConversation({
   const activeSearch = stream && !stream.search ? "" : debouncedSearch;
   const scope = JSON.stringify([modelLabel, recordId, activeSearch, messageLimit, around,
     stream ? stream.messageTypes ?? [] : messageTypes ?? []]);
-  const [window, setWindow] = React.useState<{ scope: string; before?: string; after?: string; latest?: boolean }>({ scope });
+  const [window, setWindow] = React.useState<{ scope: string; latest?: boolean }>({ scope });
   const cursor = window.scope === scope ? window : undefined;
-  const variables = React.useMemo(
-    () => ({
-      modelLabel,
-      recordId,
-      search: activeSearch,
-      messageLimit,
-      around: cursor?.latest || cursor?.before || cursor?.after ? undefined : around,
-      before: cursor?.before,
-      after: cursor?.after,
-      messageTypes: stream ? [...(stream.messageTypes ?? [])] : [...(messageTypes ?? [])],
-    }),
-    [modelLabel, recordId, activeSearch, messageLimit, around, cursor?.before, cursor?.after, cursor?.latest, stream?.messageTypes, messageTypes, Boolean(stream)],
-  );
-  const threadQuery = useRecordThreadQuery(variables);
+  const anchor = cursor?.latest ? undefined : around;
+  const threadQuery = useRecordThreadQuery({ modelLabel, recordId });
   const threadPayload = threadQuery.data?.record_thread;
+  const feedScope = { modelLabel, recordId, search: activeSearch,
+    messageTypes: stream ? stream.messageTypes ?? [] : messageTypes ?? [], pageSize: messageLimit };
+  const feed = useRecordMessageFeed({ ...feedScope, around: anchor,
+    enabled: enabled && Boolean(threadPayload && !threadPayload.error_code) });
+  // The latest scope is the accepted post's owner even while browsing an anchor.
+  const latestFeed = useRecordMessageFeed({ ...feedScope,
+    enabled: Boolean(anchor) && enabled && Boolean(threadPayload && !threadPayload.error_code) });
+  const messageQuery = feed.query;
+  const acceptState = useAcceptRecordThreadState(modelLabel, recordId);
+  const model = useModelMetadata(modelLabel)?.resource.canonicalLabel ?? modelLabel;
+  const relatedRecords = [{ model, id: recordId }];
+  const messageEffects = (id: string | number, action: "create" | "update" | "delete" = "update") => [
+    { model: "messaging.Message", id, action, relatedRecords },
+  ];
+  const acceptMessage = async (message: RecordMessageRow | null | undefined) => {
+    if (!message) return;
+    return await feed.acceptResponse(message.is_trashed ? [] : [message], {
+      absent_ids: message.is_trashed ? [message.id] : [],
+    });
+  };
   const offeredKinds: readonly RecordMessagePostKind[] = threadPayload ? threadPayload.post_kinds ?? ["COMMENT", "NOTE"] : [];
   const canPost = Boolean(
-    enabled && !threadQuery.error && !threadPayload?.error_code &&
+    enabled && !threadQuery.error && !messageQuery.error && !threadPayload?.error_code &&
+    Boolean(messageQuery.data && (!anchor || latestFeed.query.data)) &&
     threadPayload?.thread_post_access &&
     offeredKinds.length > 0 &&
     holdsPermission(threadPayload, threadPayload.thread_post_access),
@@ -180,40 +191,84 @@ export function RecordThreadConversation({
     { enabled: canPost && (stream?.recipients ?? !stream), models: RECIPIENT_MODELS },
   );
   const [postMessage, postState] = useAuthoredMutation(PostRecordMessageDocument, {
-    invalidateModels: READ_MODELS,
+    records: (data) => data?.post_record_message.message
+      ? messageEffects(data.post_record_message.message.id, "create") : [],
     errorFrom: (data) => data?.post_record_message,
+    acceptResponse: async (data) => {
+      const result = data?.post_record_message;
+      if (!result?.message) return;
+      // Search membership stays server-owned. Unfiltered latest windows can adopt
+      // the accepted row immediately; filtered reads reconcile their own predicate.
+      const kindMatches = feedScope.messageTypes.length === 0 ||
+        feedScope.messageTypes.includes(result.message.message_type.toLowerCase());
+      return await latestFeed.acceptResponse([result.message], { insert: !activeSearch && kindMatches });
+    },
   });
   const [markReadMutation, markReadState] = useAuthoredMutation(MarkRecordThreadReadDocument, {
-    invalidateModels: READ_MODELS,
+    records: [{ model, id: recordId, action: "update" }],
     errorFrom: (data) => data?.mark_record_thread_read,
+    acceptResponse: async (data) => {
+      const result = data?.mark_record_thread_read;
+      if (result) return await acceptState({ unread_count: result.unread_count, needaction_count: result.needaction_count });
+    },
   });
   const [markMessageDone] = useAuthoredMutation(MarkRecordMessageDoneDocument, {
-    invalidateModels: READ_MODELS,
+    records: (_data, variables) => messageEffects(variables.messageId),
     errorFrom: (data) => data?.mark_record_message_done,
+    acceptResponse: async (data) => {
+      const result = data?.mark_record_message_done;
+      if (!result) return;
+      return [await acceptMessage(result.message),
+        await acceptState({ thread: result.thread, unread_count: result.unread_count, needaction_count: result.needaction_count })];
+    },
   });
   const [updateMessage] = useAuthoredMutation(UpdateRecordMessageDocument, {
-    invalidateModels: READ_MODELS,
+    records: (_data, variables) => messageEffects(variables.messageId),
     errorFrom: (data) => data?.update_record_message,
+    acceptResponse: async (data) => {
+      const result = data?.update_record_message;
+      if (!result) return;
+      return await acceptMessage(result.message);
+    },
   });
   const [deleteMessage] = useAuthoredMutation(DeleteRecordMessageDocument, {
-    invalidateModels: READ_MODELS,
+    records: (_data, variables) => messageEffects(variables.messageId, "delete"),
     errorFrom: (data) => data?.delete_record_message,
+    acceptResponse: async (data) => {
+      const result = data?.delete_record_message;
+      if (!result?.deleted_message_id) return;
+      return await feed.acceptResponse([], { absent_ids: [result.deleted_message_id] });
+    },
   });
   const [trashMessage] = useAuthoredMutation(TrashRecordMessageDocument, {
-    invalidateModels: READ_MODELS,
+    records: (_data, variables) => messageEffects(variables.messageId),
     errorFrom: (data) => data?.trash_record_message,
+    acceptResponse: async (data) => {
+      const result = data?.trash_record_message;
+      if (!result) return;
+      return [await acceptMessage(result.message),
+        await acceptState({ removed_message_count: result.removed_message_count })];
+    },
   });
   const [restoreMessage] = useAuthoredMutation(RestoreRecordMessageDocument, {
-    invalidateModels: READ_MODELS,
+    records: (_data, variables) => messageEffects(variables.messageId),
     errorFrom: (data) => data?.restore_record_message,
+    acceptResponse: async (data) => {
+      const result = data?.restore_record_message;
+      if (!result) return;
+      return [await acceptMessage(result.message),
+        await acceptState({ removed_message_count: result.removed_message_count })];
+    },
   });
   const [setReaction] = useAuthoredMutation(SetRecordMessageReactionDocument, {
-    invalidateModels: READ_MODELS,
+    records: (_data, variables) => messageEffects(variables.messageId),
     errorFrom: (data) => data?.set_record_message_reaction,
+    acceptResponse: async (data) => acceptMessage(data?.set_record_message_reaction.message),
   });
   const [setStarred] = useAuthoredMutation(SetRecordMessageStarredDocument, {
-    invalidateModels: READ_MODELS,
+    records: (_data, variables) => messageEffects(variables.messageId),
     errorFrom: (data) => data?.set_record_message_starred,
+    acceptResponse: async (data) => acceptMessage(data?.set_record_message_starred.message),
   });
 
   const [postKind, setPostKind] = React.useState<RecordMessagePostKind>(stream?.postKind ?? "COMMENT");
@@ -241,9 +296,9 @@ export function RecordThreadConversation({
       t,
     ],
   );
-  const messageResultCount = threadPayload?.message_result_count ?? 0;
-  // Messages arrive server-ordered (chronological ascending); render them verbatim.
-  const messages = threadPayload?.messages ?? [];
+  const messageResultCount = messageQuery.data?.pages[0]?.count ?? 0;
+  // Query retains native page ownership; the server's opaque key owns chronology.
+  const messages = messageFeedRows(messageQuery.data).reverse();
   const focusedMessageId = messages.find((message) => message.id === around)?.id;
   const conversationRef = React.useCallback((element: HTMLDivElement | null) => {
     if (focusedMessageId) {
@@ -255,14 +310,14 @@ export function RecordThreadConversation({
   // delete elsewhere, a filtered search) so we never edit or reply to a ghost row.
   // An older page is a window, not the feed: browsing it for context keeps the intent.
   React.useEffect(() => {
-    if (cursor?.before || cursor?.after || (around && !cursor?.latest)) return;
+    if (!messageQuery.data || anchor) return;
     if (editingMessageId && !messages.some((message) => message.id === editingMessageId)) {
       setEditingMessageId(null);
     }
     setReplyToMessage((current) =>
       current && !messages.some((message) => message.id === current.id) ? null : current,
     );
-  }, [messages, editingMessageId, cursor?.before, cursor?.after, cursor?.latest, around]);
+  }, [messages, editingMessageId, messageQuery.data, anchor]);
 
   const handleStartEdit = React.useCallback((messageId: string) => {
     setError(null);
@@ -271,15 +326,17 @@ export function RecordThreadConversation({
   const handleCancelEdit = React.useCallback(() => setEditingMessageId(null), []);
 
   const handleSaveEdit = React.useCallback(
-    async (messageId: string, body: string): Promise<void> => {
+    async (messageId: string, body: string): Promise<boolean> => {
       const next = body.trim();
-      if (!next) return;
+      if (!next) return false;
       setError(null);
       try {
         await updateMessage({ modelLabel, recordId, messageId, body: next });
-        setEditingMessageId(null);
+        setEditingMessageId((current) => current === messageId ? null : current);
+        return true;
       } catch (cause) {
         setError(errorMessage(cause, t("error.update")));
+        return false;
       }
     },
     [modelLabel, recordId, updateMessage, t],
@@ -402,7 +459,7 @@ export function RecordThreadConversation({
         const attempt = postAttempt.current;
         await postMessage({ ...input, idempotencyKey: attempt.idempotencyKey });
         if (postAttempt.current === attempt) postAttempt.current = null;
-        setReplyToMessage(null);
+        setReplyToMessage((current) => current === replyToMessage ? null : current);
         setWindow({ scope, latest: true });
         return true;
       } catch (cause) {
@@ -466,9 +523,9 @@ export function RecordThreadConversation({
     <div ref={conversationRef} className={cn("flex flex-col gap-4", stream ? "min-h-0" : "min-h-72")}>
       {/* Search and notification controls survive a new query's loading state. */}
       {header?.(chrome)}
-      {threadQuery.isFetching && threadQuery.data === undefined ? (
+      {(threadQuery.isFetching && threadQuery.data === undefined) || (messageQuery.isFetching && messageQuery.data === undefined) ? (
         <LoadingPanel message={t("chatter.loading")} />
-      ) : threadQuery.error || errorCode ? renderThreadError(errorCode, t) : <>
+      ) : threadQuery.error || messageQuery.error || errorCode ? renderThreadError(errorCode, t) : <>
         {(stream ? Boolean(stream.search) : searchPlacement === "inline") ? <SearchInput
           value={search}
           onChange={(event) => setSearch(event.currentTarget.value)}
@@ -476,8 +533,14 @@ export function RecordThreadConversation({
           placeholder={t("chatter.search")}
           aria-label={t("chatter.search")}
         /> : null}
-        {messages.length === 0 && (cursor?.before || cursor?.after || (around && !cursor?.latest)) ? <Button size="sm" variant="ghost"
-          onClick={() => setWindow({ scope, latest: true })}>{t("transcript.latest")}</Button> : null}
+        <div className="flex justify-between gap-2">
+          {messageQuery.hasNextPage ? <Button size="sm" variant="ghost" disabled={messageQuery.isFetching}
+                onClick={() => void messageQuery.fetchNextPage()}>{t("transcript.loadOlder")}</Button> : <span />}
+          {messageQuery.hasPreviousPage ? <Button size="sm" variant="ghost" disabled={messageQuery.isFetching}
+                onClick={() => void messageQuery.fetchPreviousPage()}>{t("transcript.loadNewer")}</Button> : null}
+          {anchor ? <Button size="sm" variant="ghost" disabled={messageQuery.isFetching}
+                onClick={() => setWindow({ scope, latest: true })}>{t("transcript.latest")}</Button> : null}
+        </div>
         {messages.length > 0 ? (
           <div className="space-y-3">
             {activeSearch ? (
@@ -485,14 +548,6 @@ export function RecordThreadConversation({
                 {t("chatter.results", { count: messageResultCount })}
               </div>
             ) : null}
-            <div className="flex justify-between gap-2">
-              {threadPayload?.has_older_messages ? <Button size="sm" variant="ghost" disabled={threadQuery.isFetching}
-                onClick={() => setWindow({ scope, before: messages[0]!.id })}>{t("transcript.loadOlder")}</Button> : <span />}
-              {threadPayload?.has_newer_messages ? <Button size="sm" variant="ghost" disabled={threadQuery.isFetching}
-                onClick={() => setWindow({ scope, after: messages.at(-1)!.id })}>{t("transcript.loadNewer")}</Button> : null}
-              {cursor?.before || cursor?.after || (around && !cursor?.latest) ? <Button size="sm" variant="ghost" disabled={threadQuery.isFetching}
-                onClick={() => setWindow({ scope, latest: true })}>{t("transcript.latest")}</Button> : null}
-            </div>
             <MessageFeed label={t("chatter.feedLabel")}>
               {messages.map((message) => <MessageFeedRow
                   key={`message:${message.id}`}
@@ -826,7 +881,7 @@ interface MessageFeedRowProps {
   audience?: string;
   onStartEdit: (messageId: string) => void;
   onCancelEdit: () => void;
-  onSaveEdit: (messageId: string, body: string) => void;
+  onSaveEdit: (messageId: string, body: string) => Promise<boolean>;
   onStartReply: (message: RecordMessageRow) => void;
   onDelete: (message: RecordMessageRow) => void;
   onTrash: (message: RecordMessageRow, reason: string) => void;

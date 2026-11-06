@@ -13,7 +13,7 @@ import {
   ModelMetadataProvider,
 } from "@angee/metadata";
 import { withTestResourceInventory, testResourceQuery, testQueryField } from "@angee/metadata/testing";
-import { OperationDocumentsProvider } from "@angee/refine";
+import { OperationDocumentsProvider, type MutationReconciliationScope } from "@angee/refine";
 import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
@@ -28,6 +28,12 @@ const sdk = vi.hoisted(() => {
     authoredCalls: [] as unknown[],
     refineMutations: [] as RefineMutation[],
     invalidations: [] as unknown[],
+    reconciliations: [] as unknown[],
+    batches: [] as string[],
+    failDeleteId: null as string | null,
+    refuseRestoreId: null as string | null,
+    blockedDeleteId: null as string | null,
+    scope: { reconcile: vi.fn(async () => undefined) },
   };
 });
 
@@ -50,7 +56,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
       trash: vi.fn(async () => true),
       restore: vi.fn(async (id: string) => {
         sdk.authoredCalls.push({ id });
-        return true;
+        return id !== sdk.refuseRestoreId;
       }),
     })),
   };
@@ -60,6 +66,12 @@ vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
+    useReconcileMutationResponse: () => Object.assign(async (_data: unknown, _input: unknown, options: unknown) => {
+      sdk.reconciliations.push(options);
+    }, { batch: async <T,>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>) => {
+      sdk.batches.push("start");
+      try { return await run(sdk.scope); } finally { sdk.batches.push("flush"); }
+    } }),
     useAuthoredMutation: vi.fn(() => [
       vi.fn(async (variables: unknown) => {
         sdk.authoredCalls.push(variables);
@@ -79,18 +91,30 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       return {
         mutateAsync: vi.fn(async (input: unknown) => {
           calls.push(input);
-          return { data: response(input) };
+          if (kind === "deletePreview" && (input as { values?: { id?: string } }).values?.id === sdk.failDeleteId) {
+            throw new Error("Deletion refused");
+          }
+          const result = { data: response(input) };
+          if (kind === "deletePreview" && (input as { values?: { id?: string } }).values?.id === sdk.blockedDeleteId) {
+            Object.assign(result.data as object, {
+              deleteFilePreview: { ...deletePreview, has_blockers: true, total_deleted_count: 0 },
+              deleteFolderPreview: { ...deletePreview, has_blockers: true, total_deleted_count: 0 },
+            });
+          }
+          const lifecycle = options.mutationOptions as { onSuccess?: (result: { data: unknown }, input: unknown) => Promise<void> } | undefined;
+          await lifecycle?.onSuccess?.(result, input);
+          return result;
         }),
         mutation: { error: null, isPending: false },
       };
     };
   const deletePreview = {
-    totalDeletedCount: 1,
+    total_deleted_count: 1,
     deleted: [],
     updated: [],
     blocked: [],
-    hasBlockers: false,
-    root: { label: "record", objectLabel: "Record", objectId: "row_1", children: [] },
+    has_blockers: false,
+    root: { label: "record", object_label: "Record", object_id: "row_1", children: [] },
   };
   return {
     ...actual,
@@ -109,6 +133,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
+import { ToastProvider } from "@angee/ui";
 import { useFileActions } from "./use-file-actions";
 import { useFolderActions } from "./use-folder-actions";
 
@@ -117,11 +142,15 @@ describe("storage file/folder actions", () => {
     sdk.authoredCalls.length = 0;
     sdk.refineMutations.length = 0;
     sdk.invalidations.length = 0;
+    sdk.reconciliations.length = 0;
+    sdk.batches.length = 0;
+    sdk.failDeleteId = null;
+    sdk.refuseRestoreId = null;
+    sdk.blockedDeleteId = null;
   });
 
   test("file actions use refine mutations and confirm soft deletes", async () => {
-    const onChanged = vi.fn();
-    const { result } = renderHook(() => useFileActions({ onChanged }), {
+    const { result } = renderHook(() => useFileActions(), {
       wrapper: MetadataWrapper,
     });
     const [deleteFile, updateFile] = sdk.refineMutations;
@@ -137,6 +166,7 @@ describe("storage file/folder actions", () => {
     await act(async () => {
       await result.current.trash("fil_1");
       await result.current.move("fil_1", "fld_1");
+      await result.current.move("fil_1", null, { errorNotification: false });
       await result.current.trashMany(["fil_2", "fil_3"]);
       await result.current.restore("fil_1");
     });
@@ -148,9 +178,57 @@ describe("storage file/folder actions", () => {
     ]);
     expect(updateFile?.calls).toEqual([
       { id: "fil_1", values: { folder: "fld_1" } },
+      { id: "fil_1", values: { folder: null }, errorNotification: false },
     ]);
     expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }]);
-    expect(onChanged).toHaveBeenCalledTimes(4);
+    expect(sdk.batches).toEqual(["start", "flush"]);
+  });
+
+  test("bulk trash preserves successful item effects and stops at a refusal", async () => {
+    sdk.failDeleteId = "fil_2";
+    const { result } = renderHook(() => useFileActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.trashMany(["fil_1", "fil_2", "fil_3"])).rejects.toThrow("Deletion refused");
+    });
+    expect(sdk.refineMutations[0]?.calls).toHaveLength(2);
+    expect(sdk.batches).toEqual(["start", "flush"]);
+    expect(sdk.reconciliations).toEqual([
+      expect.objectContaining({ records: [{ model: "storage.File", id: "fil_1" }], reconciliation: sdk.scope }),
+    ]);
+  });
+
+  test("bulk restore stops on the shared owner's reported refusal", async () => {
+    sdk.refuseRestoreId = "fil_2";
+    const { result } = renderHook(() => useFileActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.restoreMany(["fil_1", "fil_2", "fil_3"])).resolves.toBe(false);
+    });
+    expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }, { id: "fil_2" }]);
+    expect(sdk.batches).toEqual(["start", "flush"]);
+  });
+
+  test("bulk trash does not treat a blocked confirmation as deletion", async () => {
+    sdk.blockedDeleteId = "fil_2";
+    const { result } = renderHook(() => useFileActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.trashMany(["fil_1", "fil_2", "fil_3"], { errorNotification: false })).resolves.toBe(false);
+    });
+    expect(sdk.refineMutations[0]?.calls).toHaveLength(2);
+    expect(sdk.refineMutations[0]?.calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ errorNotification: false }),
+    ]));
+    expect(sdk.reconciliations).toHaveLength(1);
+    expect(sdk.batches).toEqual(["start", "flush"]);
+  });
+
+  test("a blocked folder deletion preserves the folder and does not reconcile its files", async () => {
+    sdk.blockedDeleteId = "fld_2";
+    const { result } = renderHook(() => useFolderActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.remove("fld_2")).resolves.toBe(false);
+    });
+    expect(sdk.reconciliations).toEqual([]);
+    expect(sdk.batches).toEqual(["start", "flush"]);
   });
 
   test("folder actions use refine mutations and confirm removes", async () => {
@@ -190,23 +268,11 @@ describe("storage file/folder actions", () => {
     expect(deleteFolder?.calls).toEqual([
       expect.objectContaining({ values: { id: "fld_1", confirm: true } }),
     ]);
-    expect(sdk.invalidations).toEqual([
-      {
-        resource: "console:storage.File",
-        dataProviderName: "console",
-        invalidates: ["resourceAll"],
-      },
-      {
-        resource: "console:storage.Folder",
-        dataProviderName: "console",
-        invalidates: ["resourceAll"],
-      },
-      {
-        resource: "console:storage.File",
-        dataProviderName: "console",
-        invalidates: ["resourceAll"],
-      },
-    ]);
+    expect(sdk.reconciliations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ records: [{ model: "storage.Folder", id: "row_1", action: "create" }] }),
+      expect.objectContaining({ records: [{ model: "storage.Folder", id: "fld_1" }], invalidateModels: ["storage.File"] }),
+      expect.objectContaining({ invalidateModels: ["storage.File"] }),
+    ]));
   });
 });
 
@@ -283,7 +349,7 @@ function MetadataWrapper({ children }: { children: ReactNode }): ReactElement {
   return (
     <OperationDocumentsProvider documents={STORAGE_OPERATION_DOCUMENTS}>
       <ModelMetadataProvider metadata={STORAGE_METADATA}>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
       </ModelMetadataProvider>
     </OperationDocumentsProvider>
   );

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useAuthoredQuery } from "@angee/refine";
+import { useAuthoredQuery, useSetAuthoredQueryData } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
 import { isStatusUpdate, MessageReader } from "@angee/messaging";
 import { senderDisplayName } from "@angee/parties";
@@ -22,12 +22,16 @@ import {
   type RecordChromeContext,
 } from "@angee/ui";
 
-import { InboxMessage } from "./documents";
+import { InboxMessage, InboxMessageUses } from "./documents";
 import { useNexusT } from "../i18n";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
 import { useInboxBreadcrumbs } from "./breadcrumbs";
 
 const MESSAGE_MODEL = "messaging.Message";
+const BROAD_CHILD_MODELS = new Set(["messaging.Part", "messaging.Participant", "messaging.MessageStar", "messaging.MessageEdge"]);
+const MESSAGE_MODELS = INBOX_MODELS.filter((model) =>
+  model !== "parties.Relationship" && model !== "parties.Circle" && model !== "parties.CircleMember");
+type RecordInterest = { model: string; id: string };
 
 /** A message replaces the results or transcript while their route state stays intact. */
 export function InboxMessageReader({
@@ -39,12 +43,45 @@ export function InboxMessageReader({
 }) {
   const t = useNexusT();
   const view = useResourceView();
+  const acceptQuery = useSetAuthoredQueryData();
+  const models = navigation.circle ? [...MESSAGE_MODELS, "parties.Circle", "parties.CircleMember"] : MESSAGE_MODELS;
+  const [relatedOpen, setRelatedOpen] = useState<string>();
+  const records = useMemo(() => [
+    { model: MESSAGE_MODEL, id: navigation.message },
+    ...(navigation.circle ? [{ model: "parties.Circle", id: navigation.circle }] : []),
+  ], [navigation.message, navigation.circle]);
   const query = useAuthoredQuery(
     InboxMessage,
     { ...scope, id: navigation.message },
     // The reader shows a missing message itself (the banner with Retry), so the read raises no toast.
-    { models: INBOX_MODELS, enabled: Boolean(navigation.message), errorNotification: false },
+    { models, records, relatedModels: models.filter((model) => model !== "parties.CircleMember" && !BROAD_CHILD_MODELS.has(model)),
+      recordsFromData: (data) => {
+        const message = data.inbox_message.message;
+        if (!message) return [];
+        const related: RecordInterest[] = [];
+        const add = (model: string, id: string | null | undefined) => { if (id) related.push({ model, id }); };
+        add(MESSAGE_MODEL, message.parent?.id);
+        add(MESSAGE_MODEL, message.merged_into?.id);
+        add("messaging.Thread", message.thread?.id);
+        add("messaging.Thread", message.parent?.thread?.id);
+        add("integrate.Integration", message.channel?.id);
+        for (const handle of [message.sender, message.parent?.sender, ...message.participants.map((part) => part.handle)]) {
+          add("parties.Handle", handle?.id);
+          add("parties.Party", handle?.party?.id);
+          add("storage.File", handle?.avatar?.id);
+          add("storage.File", handle?.party?.display_avatar?.id);
+        }
+        for (const part of message.parts) add("storage.File", part.file?.id);
+        return related;
+      },
+      enabled: Boolean(navigation.message), errorNotification: false },
   );
+  const usesQuery = useAuthoredQuery(InboxMessageUses, { id: navigation.message }, {
+    models: [MESSAGE_MODEL, "messaging.Part", "storage.File"],
+    records: [{ model: MESSAGE_MODEL, id: navigation.message }],
+    enabled: Boolean(navigation.message) && relatedOpen === navigation.message,
+    errorNotification: false,
+  });
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const message = query.data?.inbox_message.message;
@@ -56,14 +93,14 @@ export function InboxMessageReader({
   });
   const uses = useMemo(() => {
     // The server count is already distinct messages per target, not per part.
-    const byTarget = new Map((query.data?.inbox_message.uses ?? [])
+    const byTarget = new Map((usesQuery.data?.inbox_message_uses ?? [])
       .filter((use) => use.target.startsWith("file:") || use.count > 1)
       .map((use) => [use.target, use]));
     return [...byTarget.values()].map((use) => {
       const part = message?.parts.find((part) => part.id === use.part_id);
       return { ...use, label: part?.name || part?.fragment?.text || t("inbox.sharedText") };
     });
-  }, [query.data?.inbox_message.uses, message?.parts, t]);
+  }, [usesQuery.data?.inbox_message_uses, message?.parts, t]);
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(window.location.href);
@@ -125,6 +162,11 @@ export function InboxMessageReader({
         <div className="min-h-0 flex-1 overflow-auto p-6">
           <MessageReader
             message={message}
+            acceptResponse={(accepted) => acceptQuery(InboxMessage, { ...scope, id: navigation.message }, (current) => {
+              if (current?.inbox_message.message?.id !== accepted.id) return current;
+              return { ...current, inbox_message: { ...current.inbox_message,
+                message: { ...current.inbox_message.message, starred: accepted.starred } } };
+            }, { complete: false })}
             onOpenReply={navigation.openInContext}
             activePartId={navigation.part}
             onPreviewPartChange={(partId) => {
@@ -133,7 +175,14 @@ export function InboxMessageReader({
             }}
           >
             {/* One labelled action per exact content target, with its distinct message count. */}
-            {uses.length ? (
+            <Button size="sm" variant="secondary" aria-expanded={relatedOpen === message.id}
+              onClick={() => setRelatedOpen((current) => current === message.id ? undefined : message.id)}>
+              <Glyph name="link" />{t(relatedOpen === message.id ? "inbox.hideLinks" : "inbox.showLinks")}
+            </Button>
+            {relatedOpen === message.id && usesQuery.error ? <ErrorBanner description={usesQuery.error.message} /> : null}
+            {relatedOpen === message.id && !usesQuery.isPending && !usesQuery.error && uses.length === 0
+              ? <Alert tone="info">{t("inbox.noRelated")}</Alert> : null}
+            {relatedOpen === message.id && uses.length ? (
               <div className="flex flex-wrap gap-2">
                 {uses.map((use) => (
                   <Button key={use.target} size="sm" variant="secondary" className="max-w-full" onClick={() => navigation.connect(use.target, message.id)}>

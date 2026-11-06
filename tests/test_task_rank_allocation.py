@@ -11,7 +11,7 @@ from django.db import connection
 from rebac import system_context
 
 from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
-from angee.projects.testing.models import Task
+from angee.projects.testing.models import Project, Task
 
 
 @pytest.mark.django_db(transaction=True)
@@ -42,6 +42,36 @@ def test_task_ordering_allocation_retains_explicit_ranks() -> None:
         task.refresh_from_db(using=connection.alias)
         assert task.sort_order == 12.5
         assert task.sub_sort_order == 4096.0 + FractionalRankField.STEP
+
+
+@pytest.mark.django_db(transaction=True)
+def test_nullable_ordering_context_update_keeps_fk_types() -> None:
+    """A NULL destination writes native NULLs for both ordering foreign keys."""
+
+    with system_context(reason="test.task_rank.null_contexts"):
+        project = Project.objects.create(title="Project")
+        task = Task.objects.create(title="Project task", project=project)
+        assert Task._base_manager.filter(pk=task.pk).update(project=None, parent=None) == 1
+    task.refresh_from_db()
+    assert task.project_id is None
+    assert task.parent_id is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_deleting_project_clears_task_ordering_context() -> None:
+    """Django's SET_NULL collector clears task projects through the ordering queryset."""
+
+    with system_context(reason="test.task_rank.project_deletion"):
+        project = Project.objects.create(title="Project")
+        tasks = [
+            Task.objects.create(title=f"Task {index}", project=project, sort_order=index * 1024) for index in (1, 2)
+        ]
+        Project._base_manager.filter(pk=project.pk).delete()
+
+    assert not Project._base_manager.filter(pk=project.pk).exists()
+    assert list(
+        Task._base_manager.filter(pk__in=[task.pk for task in tasks]).order_by("pk").values_list("pk", "project_id")
+    ) == [(task.pk, None) for task in tasks]
 
 
 @pytest.mark.parametrize(("previous", "following", "expected"), [

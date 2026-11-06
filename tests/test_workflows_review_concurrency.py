@@ -18,6 +18,7 @@ from tests.test_workflows_review import answer, questions, start_review
 from tests.test_workflows_review import review as review
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
@@ -101,13 +102,11 @@ def test_busy_run_wakes_on_the_next_sweep(review):
     assert run.status == "succeeded"
 
 
-def test_answered_waiter_locks_only_the_step(review, monkeypatch):
+def test_answered_waiter_locks_only_the_step(review):
     """Recovery never joins or locks the decision through the step's query."""
     _, people, _, _ = review
     run, step = start_review(review)
-    with monkeypatch.context() as patch:
-        patch.setattr(type(runner), "wake_decisions", lambda *args, **kwargs: 0)
-        answer(questions(step)[0], people[0])
+    answer(questions(step)[0], people[0])
     with transaction.atomic(), CaptureQueriesContext(connection) as captured:
         row = StepRun.system_queryset().answered_decisions().select_for_update(no_key=True).get(pk=step.pk)
         assert row.pk == step.pk

@@ -29,10 +29,10 @@ export function InboxPage(): ReactElement {
       <Column field="kind_label" header={t("inbox.question")} />
       {/* The records the question concerns: the first by name, the rest as a count. */}
       <Column field="records" header={t("inbox.concerns")} sortable={false}
-        selectionPaths={["records.record_model", "records.record_id"]} render={(row) => <ConcernsCell row={row} />} />
+        selectionPaths={["records.record_model", "records.record_id", "records.record_label"]} render={(row) => <ConcernsCell row={row} />} />
       <Column field="created_at" header={t("inbox.asked")} />
       <Column field="verdict_label" header={t("inbox.answer")} render={(row) => row.is_open === false && typeof row.verdict_label === "string" && row.verdict_label
-        ? row.verdict_label : <StatusBadge value={OPEN_TONE}>{t("decision.open")}</StatusBadge>} selectionPaths={["is_open"]} />
+        ? row.verdict_label : <StatusBadge value={OPEN_TONE}>{t("decision.open")}</StatusBadge>} selectionPaths={["verdict_label", "is_open"]} />
       <Column field="answered_by.display_name" header={t("inbox.answeredBy")} />
     </List>
     <Form resource={DECISION_MODEL} readOnly eyebrow={t("decision.eyebrow")}
@@ -49,11 +49,12 @@ function ConcernsCell({ row }: { row: Row }): ReactElement | null {
   const value = rowValueAtPath(row, "records");
   const records = Array.isArray(value) ? value.flatMap((item) => item && typeof item === "object"
     && typeof (item as { record_model?: unknown }).record_model === "string" && typeof (item as { record_id?: unknown }).record_id === "string"
-    ? [item as { record_model: string; record_id: string }] : []) : [];
+    ? [item as { record_model: string; record_id: string; record_label?: unknown }] : []) : [];
   const [first, ...rest] = records;
   if (!first) return null;
   return <span className="inline-flex min-w-0 items-baseline gap-1">
-    <RecordReference model={first.record_model} id={first.record_id} />
+    <RecordReference model={first.record_model} id={first.record_id}
+      label={typeof first.record_label === "string" && first.record_label ? first.record_label : first.record_id} />
     {rest.length ? <span className="text-fg-muted">{t("inbox.more", { count: rest.length })}</span> : null}
   </span>;
 }

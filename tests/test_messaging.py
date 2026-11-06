@@ -13,6 +13,7 @@ receipts.
 from __future__ import annotations
 
 import contextlib
+from collections import deque
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -26,7 +27,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
-from django.db import IntegrityError, close_old_connections, connection, models, transaction
+from django.db import DatabaseError, IntegrityError, close_old_connections, connection, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import (
@@ -44,13 +45,12 @@ import angee.spaces.testing.models  # noqa: F401 -- register related models befo
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 from angee.agents.testing.models import Agent
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin
 from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
-from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
-from angee.messaging import managers as messaging_managers
+from angee.iam.graphql.access import ChangeReadGate
+from angee.iam.models.base import ProtectedModel
 from angee.messaging.backends import (
     ManualChannelBackend,
     ParsedHandle,
@@ -59,8 +59,10 @@ from angee.messaging.backends import (
     ParsedRecipient,
     ParsedThread,
 )
-from angee.messaging.events import message_ingested
+from angee.messaging.events import historical_import, message_ingested
+from angee.messaging.managers import content as messaging_content
 from angee.messaging.managers import derived_part_name, normalize_subject
+from angee.messaging.managers import messages as messaging_managers
 from angee.messaging.models import ThreadedModelMixin
 from angee.messaging.testing.models import (
     Channel,
@@ -81,6 +83,7 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
+from angee.projects.testing.models import Project
 from angee.projects.testing.models import Task as ProjectTask
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.statements import (
@@ -95,7 +98,7 @@ from tests.conftest import (
 from tests.mtidemo.models import MtiChild, MtiParent
 
 
-class ThreadedTicket(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
+class ThreadedTicket(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, ProtectedModel):
     """Concrete model that opts into record chatter for messaging tests."""
 
     sqid_prefix = "tkt_"
@@ -128,7 +131,7 @@ class ThreadedTicket(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, An
         return self.title
 
 
-class BroadcastRoom(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
+class BroadcastRoom(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, ProtectedModel):
     """A threaded host that opts its chatter into the ``changes(Thread)`` stream.
 
     Stands in for a chat room: ``thread_broadcasts_changes = True`` flips the F-stream
@@ -218,22 +221,138 @@ def _ingest(messages: list[ParsedMessage], *, channel: Any) -> int:
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("shared_body", (False, True), ids=("unique-body", "shared-body"))
+def test_ingest_batch_write_cost_and_events(
+    channel: Any, monkeypatch: pytest.MonkeyPatch, shared_body: bool,
+) -> None:
+    real_on_commit = transaction.on_commit
+    original_queries_log = connection.queries_log
+    connection.queries_log = deque(maxlen=30000)
+    callbacks: list[int] = []
+    events: list[int] = []
+    seen_ids: list[list[str]] = []
+    batch_payloads: list[list[tuple[str, ...]]] = []
+
+    def count_commit(func: Any, *args: Any, **kwargs: Any) -> None:
+        if getattr(getattr(func, "func", None), "__name__", "") == "observe_email_identity":
+            callbacks[-1] += 1
+        real_on_commit(func, *args, **kwargs)
+
+    def count_event(sender: Any, instance: Any, **kwargs: Any) -> None:
+        events[-1] += 1
+        assert connection.in_atomic_block
+        seen_ids[-1].append(instance.external_id)
+        if batch := kwargs.get("created_batch"):
+            batch_payloads[-1].append(tuple(row.external_id for row in batch))
+
+    monkeypatch.setattr(transaction, "on_commit", count_commit)
+    message_ingested.connect(count_event, dispatch_uid="tests.write_path.ingest_batch_pin", weak=False)
+    samples = []
+    chatter_reads = []
+    try:
+        for count in (1, 10, 20, 100):
+            callbacks.append(0)
+            events.append(0)
+            seen_ids.append([])
+            batch_payloads.append([])
+            messages = [
+                _parsed(
+                    f"write-path-batch-{count}-{index}", sent_at=_AT,
+                    text="Shared body" if shared_body else f"Unique body {count}-{index}",
+                )
+                for index in range(count)
+            ]
+            with system_context(reason="tests.write_path.ingest.batch"), CaptureQueriesContext(connection) as queries:
+                landed = Message.objects.ingest(messages, channel=channel, quote_edges=True)
+            assert len(landed) == count
+            samples.append(len(queries))
+            # The message read can embed the merged chatter permission arm as a
+            # subquery. Count every other statement that reads chatter attachments.
+            chatter_reads.append(sum(
+                query["sql"].lstrip().upper().startswith("SELECT")
+                and ThreadAttachment._meta.db_table in query["sql"]
+                and "'chatter'" in query["sql"]
+                and not query["sql"].partition(" FROM ")[2].startswith(f'"{Message._meta.db_table}"')
+                for query in queries
+            ))
+    finally:
+        message_ingested.disconnect(dispatch_uid="tests.write_path.ingest_batch_pin")
+        connection.queries_log = original_queries_log
+    print(
+        f"ingest statements ({'shared' if shared_body else 'unique'}): {samples}; "
+        f"identity callbacks: {callbacks}; "
+        f"events: {events}; chatter reads: {chatter_reads}"
+    )
+    assert callbacks == [1, 1, 1, 1]
+    assert events == [1, 10, 20, 100]
+    assert all(len(ids) == count for ids, count in zip(seen_ids, (1, 10, 20, 100), strict=True))
+    assert batch_payloads == [[tuple(ids)] for ids in seen_ids]
+    assert chatter_reads == [0, 0, 0, 0]
+    assert samples[0] <= 200
+    for previous, current, previous_size, current_size in zip(
+        samples[:-1], samples[1:], (1, 10, 20), (10, 20, 100), strict=True,
+    ):
+        assert current - previous <= 105 * (current_size - previous_size)
+
+
+@pytest.mark.postgresql
+@pytest.mark.django_db(transaction=True)
+def test_ingest_trigger_probe_database_error_rolls_back_batch(
+    channel: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("Transaction-abort behavior requires PostgreSQL")
+
+    from django.apps import apps
+
+    from angee.workflows_messaging.sources import MessageIngested
+
+    watch_model = apps.get_model("workflows", "StepWatch")
+    probes: list[None] = []
+
+    def broken_probe(cls: Any) -> Any:
+        probes.append(None)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1 / 0")
+        return cls._base_manager.all()
+
+    monkeypatch.setattr(watch_model, "system_queryset", classmethod(broken_probe))
+    message_ingested.connect(MessageIngested.record, dispatch_uid="tests.write_path.trigger_probe", weak=False)
+    try:
+        with system_context(reason="tests.write_path.ingest.trigger_probe"), pytest.raises(DatabaseError):
+            Message.objects.ingest([_parsed("write-path-probe-1"), _parsed("write-path-probe-2")], channel=channel)
+    finally:
+        message_ingested.disconnect(dispatch_uid="tests.write_path.trigger_probe")
+    assert probes
+    assert not Message._base_manager.filter(external_id__in=("write-path-probe-1", "write-path-probe-2")).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_ingest_commits_each_message_and_does_not_lock_an_unchanged_observation(channel: Any) -> None:
     """A later bad envelope cannot roll back the previous message's committed work."""
+    seen = []
+
+    def observe(sender: Any, instance: Any, **kwargs: Any) -> None:
+        seen.extend(row.external_id for row in kwargs.get("created_batch") or (instance,))
 
     def overlay(message: Any) -> None:
         if message.external_id == "bad-second":
             raise ValidationError("Rejected overlay")
 
-    with system_context(reason="per-message ingest transactions"), pytest.raises(ValidationError):
-        Message.objects.ingest(
-            [_parsed("committed-first", sent_at=_AT), _parsed("bad-second", sent_at=_AT)],
-            channel=channel,
-            quote_edges=False,
-            after_landing=overlay,
-        )
+    message_ingested.connect(observe, dispatch_uid="tests.write_path.partial_batch", weak=False)
+    try:
+        with system_context(reason="per-message ingest transactions"), pytest.raises(ValidationError):
+            Message.objects.ingest(
+                [_parsed("committed-first", sent_at=_AT), _parsed("bad-second", sent_at=_AT)],
+                channel=channel,
+                quote_edges=False,
+                after_landing=overlay,
+            )
+    finally:
+        message_ingested.disconnect(dispatch_uid="tests.write_path.partial_batch")
     first = Message._base_manager.get(external_id="committed-first")
     assert not Message._base_manager.filter(external_id="bad-second").exists()
+    assert seen == ["committed-first"]
     with system_context(reason="unchanged ingest lock intent"), CaptureQueriesContext(connection) as queries:
         (replayed,) = Message.objects.ingest(
             [_parsed("committed-first", sent_at=_AT)],
@@ -449,6 +568,44 @@ def test_threaded_model_resolves_one_chatter_thread(composed_tables: None) -> No
     assert attachment.thread_id == first.pk
     assert attachment.object_id == ticket.pk
     assert attachment.role == "chatter"
+    assert first.is_record_chatter
+    with system_context(reason="tests.write_path.detach.chatter"):
+        attachment.role = "source"
+        attachment.label = "Retained chatter"
+        attachment.save(update_fields={"label"})
+        first.refresh_from_db()
+        assert first.is_record_chatter
+        attachment.save(update_fields={"role"})
+        first.refresh_from_db()
+        assert not first.is_record_chatter
+        attachment.role = "chatter"
+        attachment.save(update_fields={"role"})
+        first.refresh_from_db()
+        assert first.is_record_chatter
+        attachment.role = "source"
+        attachment.delete()
+    first.refresh_from_db()
+    assert not first.is_record_chatter
+
+
+@pytest.mark.django_db(transaction=True)
+def test_historical_ingest_compatibility_alias_mutes_live_events(channel: Any) -> None:
+    seen: list[Any] = []
+
+    def capture(sender: Any, instance: Any, **kwargs: Any) -> None:
+        seen.append(instance.pk)
+
+    message_ingested.connect(capture, weak=False)
+    try:
+        with system_context(reason="historical ingest compatibility"):
+            landed = Message.objects.ingest(
+                [_parsed("historical-alias", sent_at=_AT)], channel=channel,
+                quote_edges=False, historical=True,
+            )
+    finally:
+        message_ingested.disconnect(capture)
+    assert len(landed) == 1
+    assert seen == []
 
 
 @pytest.mark.django_db(transaction=True)
@@ -463,7 +620,7 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
 
     message_ingested.connect(capture, weak=False)
     try:
-        with system_context(reason="test historical source ingest"):
+        with system_context(reason="test historical source ingest"), historical_import():
             ticket = ThreadedTicket.objects.create(title="Imported record")
             thread = ticket.message_thread()
             other = ThreadedTicket.objects.create(title="Different source record").message_thread()
@@ -471,22 +628,21 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
             parent = _parsed("source-parent", sent_at=_AT)
             reply = _parsed("source-reply", sent_at=_AT + timedelta(days=1), in_reply_to="source-parent")
             first = Message.objects.ingest(
-                [reply], channel=channel, explicit_thread=thread, historical=True, quote_edges=False
+                [reply], channel=channel, explicit_thread=thread, quote_edges=False
             )[0]
             assert first.parent_id is None
             # An unrelated record with the same source ID cannot become its parent.
             other_channel = make_integration("other-source", model=Channel, backend_class="manual")
             Message.objects.ingest(
-                [parent], channel=other_channel, explicit_thread=other, historical=True, quote_edges=False
+                [parent], channel=other_channel, explicit_thread=other, quote_edges=False
             )
-            Message.objects.ingest([reply], channel=channel, explicit_thread=thread, historical=True, quote_edges=False)
+            Message.objects.ingest([reply], channel=channel, explicit_thread=thread, quote_edges=False)
             first.refresh_from_db()
             assert first.parent_id is None
             landed = Message.objects.ingest(
                 [parent, reply],
                 channel=channel,
                 explicit_thread=thread,
-                historical=True,
                 quote_edges=False,
             )
             assert landed[1].pk == first.pk
@@ -505,14 +661,13 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
 def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any, changed_body: bool) -> None:
     """Neither an identical replay nor a source edit can move record chatter."""
 
-    with system_context(reason="test source message thread identity"):
+    with system_context(reason="test source message thread identity"), historical_import():
         thread = ThreadedTicket.objects.create(title="Original record").message_thread()
         other = ThreadedTicket.objects.create(title="Different record").message_thread()
         original = Message.objects.ingest(
             [_parsed("shared-source-id")],
             channel=channel,
             explicit_thread=thread,
-            historical=True,
             quote_edges=False,
         )[0]
         part_ids = list(original.parts.values_list("pk", flat=True))
@@ -522,7 +677,6 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
                 [replay],
                 channel=channel,
                 explicit_thread=other,
-                historical=True,
                 quote_edges=False,
             )
         original.refresh_from_db()
@@ -538,29 +692,30 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
 
 @pytest.mark.django_db(transaction=True)
 def test_source_thread_correction_compares_locked_prior_and_keeps_native_counters(channel: Any) -> None:
-    with system_context(reason="test source thread correction"):
+    with system_context(reason="test source thread correction"), historical_import():
         first, second, third = (
             Thread.objects.create(channel=channel, platform="other", external_id=f"source-audience-{index}")
             for index in range(3)
         )
         write_relationships([RelationshipTuple(to_object_ref(first), "reader", to_subject_ref(channel.owner))])
         parsed = _parsed("source-audience-message", sent_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
-        original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first, historical=True)[0]
-        moved = Message.objects.ingest([parsed], channel=channel, explicit_thread=second, expected_thread=first,
-                                       historical=True)[0]
+        original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first)[0]
+        moved = Message.objects.ingest(
+            [parsed], channel=channel, explicit_thread=second, expected_thread=first,
+        )[0]
         assert moved.pk == original.pk and moved.thread_id == second.pk
         first.refresh_from_db()
         second.refresh_from_db()
         assert (first.message_count, second.message_count) == (0, 1)
         assert parsed.sent_at is not None
         later_parsed = replace(parsed, sent_at=parsed.sent_at + timedelta(days=1))
-        moved = Message.objects.ingest([later_parsed], channel=channel, explicit_thread=third, expected_thread=second,
-                                       historical=True)[0]
+        moved = Message.objects.ingest(
+            [later_parsed], channel=channel, explicit_thread=third, expected_thread=second,
+        )[0]
         third.refresh_from_db()
         assert (third.message_count, third.last_message_at) == (1, later_parsed.sent_at)
         with pytest.raises(ValueError, match="changed after"):
-            Message.objects.ingest([parsed], channel=channel, explicit_thread=third, expected_thread=first,
-                                   historical=True)
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=third, expected_thread=first)
         moved.refresh_from_db()
         assert moved.thread_id == third.pk
         other_channel = make_integration("foreign-correction-source", model=Channel, backend_class="manual")
@@ -573,18 +728,19 @@ def test_source_thread_correction_compares_locked_prior_and_keeps_native_counter
             Message.objects.ingest([parsed], channel=channel, explicit_thread=first, expected_thread=third)
 
 
+@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 def test_source_thread_correction_race_has_one_compare_and_set_winner(channel: Any) -> None:
     if connection.vendor != "postgresql":
         pytest.skip("Concurrent row-lock admission requires PostgreSQL.")
-    with system_context(reason="prepare source correction race"):
+    with system_context(reason="prepare source correction race"), historical_import():
         first, second, third = (
             Thread.objects.create(channel=channel, platform="other", external_id=f"source-cas-race-{index}")
             for index in range(3)
         )
         write_relationships([RelationshipTuple(to_object_ref(first), "reader", to_subject_ref(channel.owner))])
         original = Message.objects.ingest([_parsed("source-cas-race")], channel=channel,
-                                           explicit_thread=first, historical=True)[0]
+                                           explicit_thread=first)[0]
     barrier = Barrier(2)
 
     def move(target: Any) -> str:
@@ -624,7 +780,8 @@ def test_source_thread_correction_same_content_preserves_event_policy(channel: A
             for index in range(2)
         )
         parsed = _parsed("source-events")
-        original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first, historical=True)[0]
+        with historical_import():
+            original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first)[0]
         received = []
 
         def receive(sender: Any, instance: Any, **kwargs: Any) -> None:
@@ -632,8 +789,8 @@ def test_source_thread_correction_same_content_preserves_event_policy(channel: A
 
         message_ingested.connect(receive, sender=Message)
         try:
-            Message.objects.ingest([parsed], channel=channel, explicit_thread=second, expected_thread=first,
-                                   historical=historical)
+            with historical_import() if historical else contextlib.nullcontext():
+                Message.objects.ingest([parsed], channel=channel, explicit_thread=second, expected_thread=first)
         finally:
             message_ingested.disconnect(receive, sender=Message)
         assert received == ([] if historical else [original.pk])
@@ -1021,6 +1178,78 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("survivor_first", (False, True))
+def test_deleting_merged_chatter_and_survivor_together_uses_native_protection(
+    composed_tables: None,
+    survivor_first: bool,
+) -> None:
+    """A batched host delete preserves Django's Thread.merged_into refusal."""
+    del composed_tables
+    with system_context(reason="test merged chatter batch protection"):
+        watcher = get_user_model().objects.create_user(username="merged-batch-watcher")
+        if survivor_first:
+            survivor = ThreadedTicket.objects.create(title="Survivor")
+            retired = ThreadedTicket.objects.create(title="Retired")
+        else:
+            retired = ThreadedTicket.objects.create(title="Retired")
+            survivor = ThreadedTicket.objects.create(title="Survivor")
+        retired.message_post("Before merge")
+        retired.message_subscribe(user=watcher, subtype_keys=("comment",))
+        retired.message_post("After subscription")
+        old_attachment = retired.message_thread_attachment()
+        old_thread = old_attachment.thread
+        survivor_attachment = survivor.message_thread_attachment()
+        survivor_attachment.thread.fold([old_thread])
+        with pytest.raises(models.deletion.ProtectedError) as refusal, transaction.atomic():
+            ThreadedTicket.objects.filter(pk__in=[retired.pk, survivor.pk]).delete()
+
+    assert refusal.value.args[0] == (
+        "Cannot delete some instances of model 'Thread' because they are referenced "
+        "through protected foreign keys: 'Thread.merged_into'."
+    )
+    assert refusal.value.protected_objects == {old_thread}
+    assert ThreadedTicket._base_manager.filter(pk__in=[retired.pk, survivor.pk]).count() == 2
+    assert ThreadAttachment._base_manager.filter(pk__in=[old_attachment.pk, survivor_attachment.pk]).count() == 2
+    assert Thread._base_manager.filter(pk__in=[old_thread.pk, survivor_attachment.thread_id]).count() == 2
+    assert ThreadFollower._base_manager.filter(thread_id=old_thread.pk).exists()
+    assert ThreadNotification._base_manager.filter(thread_id=old_thread.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_deleting_merged_chatter_with_shared_survivor_requires_chatter_attachment(
+    composed_tables: None,
+) -> None:
+    """A surviving source edge keeps the merged survivor thread out of Django's delete protection."""
+    del composed_tables
+    with system_context(reason="test merged chatter shared survivor"):
+        watcher = get_user_model().objects.create_user(username="merged-shared-watcher")
+        survivor = ThreadedTicket.objects.create(title="Survivor")
+        retired = ThreadedTicket.objects.create(title="Retired")
+        project = Project.objects.create(title="Source holder")
+        retired.message_post("Before merge")
+        retired.message_subscribe(user=watcher, subtype_keys=("comment",))
+        retired.message_post("After subscription")
+        old_attachment = retired.message_thread_attachment()
+        old_thread = old_attachment.thread
+        survivor_attachment = survivor.message_thread_attachment()
+        survivor_thread = survivor_attachment.thread
+        survivor_thread.fold([old_thread])
+        source_attachment = ThreadAttachment.objects.bind_source_thread(project, survivor_thread)
+        with pytest.raises(ValidationError) as refusal, transaction.atomic():
+            ThreadedTicket.objects.filter(pk__in=[retired.pk, survivor.pk]).delete()
+
+    assert refusal.value.messages == ["Retained chatter requires a surviving record attachment before deletion."]
+    assert ThreadedTicket._base_manager.filter(pk__in=[retired.pk, survivor.pk]).count() == 2
+    assert Project._base_manager.filter(pk=project.pk).exists()
+    assert ThreadAttachment._base_manager.filter(
+        pk__in=[old_attachment.pk, survivor_attachment.pk, source_attachment.pk],
+    ).count() == 3
+    assert Thread._base_manager.filter(pk__in=[old_thread.pk, survivor_thread.pk]).count() == 2
+    assert ThreadFollower._base_manager.filter(thread_id=old_thread.pk).exists()
+    assert ThreadNotification._base_manager.filter(thread_id=old_thread.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: None) -> None:
     """Deleting a threaded MTI child collects its chatter attachment, leaving no orphan.
 
@@ -1225,6 +1454,7 @@ def test_threaded_model_rejects_system_message_updates(composed_tables: None) ->
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_model_post_notifies_matching_followers(composed_tables: None) -> None:
     """Posting fans out delivery rows to inbox and email followers matching the subtype.
 
@@ -1474,43 +1704,6 @@ def test_threaded_model_post_can_autofollow_direct_recipient(composed_tables: No
     notification = ThreadNotification._base_manager.get(user=recipient)
     assert follower.attachment_id == notification.attachment_id
     assert notification.follower_id is None
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("failure_reason", ["SMTP server refused the message.", "SMTP\x00" + "é" * 9000])
-def test_threaded_model_delivery_error_counts_for_author(composed_tables: None, failure_reason: str) -> None:
-    """Delivery failures roll up to the author-facing chatter error counter."""
-
-    del composed_tables
-    user_model = get_user_model()
-    with system_context(reason="test threaded model delivery-error setup"):
-        author = user_model.objects.create_user(username="error-author", email="error-author@example.com")
-        recipient = user_model.objects.create_user(username="error-recipient", email="error-recipient@example.com")
-        ticket = ThreadedTicket.objects.create(title="Delivery error")
-
-    with actor_context(author):
-        message = ticket.message_post("This might bounce.", recipient_user_ids=(recipient.pk,))
-
-    notification = ThreadNotification.objects.mark_failed_for_message(
-        message,
-        user=recipient,
-        status="exception",
-        failure_type="mail_smtp",
-        failure_reason=failure_reason,
-    )
-
-    returned_reason = notification.failure_reason
-    assert returned_reason.startswith("SMTP")
-    assert "\x00" not in returned_reason
-    assert len(returned_reason) <= ThreadNotification._meta.get_field("failure_reason").max_length
-    if failure_reason == "SMTP server refused the message.":
-        assert returned_reason == failure_reason
-    notification.refresh_from_db()
-    assert notification.notification_status == "exception"
-    assert notification.failure_type == "mail_smtp"
-    assert notification.failure_reason == returned_reason
-    assert ThreadNotification.objects.error_count_for_record(ticket, user=author) == 1
-    assert ThreadNotification.objects.error_count_for_record(ticket, user=recipient) == 0
 
 
 def _record_holders(doc: Any, **holders: Any) -> None:
@@ -2405,7 +2598,7 @@ def test_null_bytes_are_stripped_on_write(channel: Any) -> None:
 
     _ingest([_parsed("m1", subject="Hi\x00there", text="body\x00text", sent_at=_AT)], channel=channel)
     message = Message._base_manager.get(external_id="m1")
-    assert message.title() == "Hithere"
+    assert message.get_title() == "Hithere"
     assert message.preview == "bodytext"
     body_part = Part._base_manager.select_related("fragment").get(
         message=message, role=Part.PartRole.BODY, fragment__isnull=False
@@ -2510,6 +2703,23 @@ def test_quote_edge_runs_from_earlier_to_later(channel: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_quote_sharer_read_is_bounded_in_sql(channel: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(messaging_content, "_BOILERPLATE_CUTOFF", 1)
+    with system_context(reason="tests.write_path.quote.setup"):
+        old, new = Message.objects.ingest(
+            [_parsed("quote-bound-old", text="Shared prose"), _parsed("quote-bound-new", text="Shared prose")],
+            channel=channel,
+            quote_edges=False,
+        )
+        with CaptureQueriesContext(connection) as queries:
+            MessageEdge.objects.create_for_message(new)
+    assert old.pk != new.pk
+    assert any(
+        Part._meta.db_table in query["sql"] and "LIMIT 2" in query["sql"] for query in queries
+    )
+
+
+@pytest.mark.django_db(transaction=True)
 def test_shared_title_fragment_mints_no_quote_edges(channel: Any) -> None:
     """Messages sharing ONLY a title fragment get zero quote edges.
 
@@ -2548,7 +2758,7 @@ def test_long_subject_lands_intact_and_groups_replies(channel: Any) -> None:
     message = Message._base_manager.get(external_id="long1")
     title_part = Part._base_manager.select_related("fragment").get(message=message, role=Part.PartRole.TITLE)
     assert title_part.fragment.text == subject
-    assert message.title() == subject
+    assert message.get_title() == subject
     thread = message.thread
     assert thread is not None
     assert thread.title is not None
@@ -2556,7 +2766,7 @@ def test_long_subject_lands_intact_and_groups_replies(channel: Any) -> None:
 
     _ingest([_parsed("long2", subject="Re: " + subject, sent_at=_AT + timedelta(hours=1))], channel=channel)
     reply = Message._base_manager.get(external_id="long2")
-    assert reply.title() == "Re: " + subject
+    assert reply.get_title() == "Re: " + subject
     assert reply.thread_id == thread.pk
     assert Thread._base_manager.count() == 1
 
@@ -2927,6 +3137,8 @@ def test_resubscribe_preserves_follower_policy(composed_tables: None) -> None:
         ticket = ThreadedTicket.objects.create(title="Resub case")
         first = ticket.message_subscribe(user=watcher, notification_policy="muted", subtype_keys=("comment",))
         assert first.notification_policy == "muted"
+        original_updated_at = first.updated_at
+        original_receipt = first.last_read_message_id
 
         # A bare re-subscribe preserves the muted policy and subtype filter.
         again = ticket.message_subscribe(user=watcher)
@@ -2934,6 +3146,12 @@ def test_resubscribe_preserves_follower_policy(composed_tables: None) -> None:
         assert again.pk == first.pk
         assert again.notification_policy == "muted"
         assert again.subtype_keys == ["comment"]
+        assert again.updated_at == original_updated_at
+        assert again.last_read_message_id == original_receipt
+        same = ticket.message_subscribe(user=watcher, notification_policy="muted", subtype_keys=("comment",))
+        same.refresh_from_db()
+        assert same.updated_at == original_updated_at
+        assert same.last_read_message_id == original_receipt
 
         # An explicit value still updates it.
         changed = ticket.message_subscribe(user=watcher, notification_policy="email")

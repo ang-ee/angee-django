@@ -3,6 +3,7 @@
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from rebac import RelationshipTuple, generic_target, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.actors import is_sudo
 
@@ -13,10 +14,12 @@ from angee.workflows.context import StepContext
 from angee.workflows.decision_steps import AskDecision, DecisionStep, apply_proposals
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
+
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 class ReviewPrefix(Step[None, None, None]):
@@ -101,6 +104,8 @@ def test_ask_answer_then_apply_as_run_actor(review):
     decision = questions(step)[0]
     before = question.review_subject.name
     answer(decision, people[0])
+    assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     assert StepRun.system_queryset().get(pk=step.pk).status == "ready"
     question.review_subject.refresh_from_db()
     assert question.review_subject.name == before
@@ -114,7 +119,7 @@ def test_ask_answer_then_apply_as_run_actor(review):
 
 @pytest.mark.parametrize("assignment_config", [{}, {"assignees": []}])
 def test_configured_decision_without_assignees_waits_answers_and_applies(execution, register_step, assignment_config):
-    actor, _sent = execution
+    actor, sent = execution
     register_step(AskDecision)
     subject = vault_for(actor)
     workflow = load_workflow({
@@ -136,6 +141,7 @@ def test_configured_decision_without_assignees_waits_answers_and_applies(executi
     decide(decision, actor=actor, chosen=["rename"])
     subject.refresh_from_db()
     assert subject.name != "Applied"
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     subject.refresh_from_db()
     assert run.status == "succeeded" and run.outcome == "renamed" and subject.name == "Applied"
@@ -143,26 +149,28 @@ def test_configured_decision_without_assignees_waits_answers_and_applies(executi
 
 
 def test_multiple_choices_receive_the_set_and_route_done(review):
-    _, people, _, _ = review
+    _, people, sent, _ = review
     run, step = start_review(review, input={"multiple": True})
     decision = questions(step)[0]
-    Decision.objects.decide(decision, actor=people[0], chosen=["reject", "approve"])
+    decision.decide(actor=people[0], chosen=["reject", "approve"])
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     assert run.outcome == "done" and run.output["chosen"] == ["approve", "reject"]
 
 
 def test_choose_is_applied_on_workflow_resume(review):
-    _, people, _, question = review
+    _, people, sent, question = review
     write_relationships([
         RelationshipTuple(to_object_ref(question.review_subject), "editor", to_subject_ref(people[0])),
     ])
     run, step = start_review(review, input={"choose": True})
     decision = questions(step)[0]
     values = {public_id_of(question.review_subject): {"name": "Answerer's value"}}
-    Decision.objects.decide(decision, actor=people[0], chosen=["approve"], values=values)
+    decision.decide(actor=people[0], chosen=["approve"], values=values)
     question.review_subject.refresh_from_db()
     assert question.review_subject.name != "Answerer's value"
     assert Decision.system_queryset().get(pk=decision.pk).verdict_values == values
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     question.review_subject.refresh_from_db()
     assert run.status == "succeeded" and run.outcome == "approved"
@@ -170,11 +178,12 @@ def test_choose_is_applied_on_workflow_resume(review):
 
 
 def test_apply_failure_rolls_back_record_writes_and_retains_answer(review, register_step):
-    actor, people, _, question = review
+    actor, people, sent, question = review
     run, step = start_review(review, input={"invalid": True})
     original_name = question.review_subject.name
     decision = questions(step)[0]
     answer(decision, people[0])
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     question.review_subject.refresh_from_db()
     assert run.status == "failed" and question.review_subject.name == original_name
@@ -193,16 +202,54 @@ def test_apply_failure_rolls_back_record_writes_and_retains_answer(review, regis
     assert run.status == "succeeded" and Decision.system_queryset().count() == 1
 
 
-def test_sweep_recovers_missed_answer_notification(review, monkeypatch):
+def test_sweep_recovers_missed_answer_notification(review):
     _, people, _, _ = review
     run, step = start_review(review)
-    with monkeypatch.context() as patch:
-        patch.setattr(type(runner), "wake_decisions", lambda *args, **kwargs: 0)
-        answer(questions(step)[0], people[0])
+    answer(questions(step)[0], people[0])
     assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"
     assert runner.wake_decisions() == 1
     run_until(run)
     assert run.status == "succeeded"
+
+
+def test_answer_enqueues_wake_on_commit_without_running_it_in_request(review, monkeypatch):
+    _, people, sent, _ = review
+    run, step = start_review(review)
+    decision = questions(step)[0]
+    before = len(sent)
+
+    def unexpected_wake(*args, **kwargs):
+        pytest.fail("Answering a decision ran the workflow wake inline.")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(type(runner), "wake_decisions", unexpected_wake)
+        with transaction.atomic(using=decision._state.db):
+            answer(decision, people[0])
+            assert sent[before:] == []
+            assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"
+
+    assert sent[before:] == [
+        (
+            "workflows.wake_decisions",
+            {"kwargs": {"decision_id": decision.pk, "using": decision._state.db}, "queue": None, "expires": None},
+        )
+    ]
+    assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
+    run_until(run)
+    assert run.status == "succeeded"
+
+    rollback_run, rollback_step = start_review(review)
+    rollback_decision = questions(rollback_step)[0]
+    before = len(sent)
+    with pytest.raises(RuntimeError, match="rollback answer"):
+        with transaction.atomic(using=rollback_decision._state.db):
+            answer(rollback_decision, people[0])
+            raise RuntimeError("rollback answer")
+    assert sent[before:] == []
+    assert Decision.system_queryset().get(pk=rollback_decision.pk).is_open
+    assert StepRun.system_queryset().get(pk=rollback_step.pk).status == "waiting"
+    assert rollback_run.status == "waiting"
 
 
 def test_terminal_failure_withdraws_an_open_sibling_question(review, register_step):
@@ -246,7 +293,7 @@ def test_cancel_withdraws_only_the_open_question(review, answered):
 
 
 def test_later_step_loads_only_this_runs_decision(review, register_step):
-    _, people, _, _ = review
+    _, people, sent, _ = review
 
     class UseAnswer(Step[None, None, None]):
         key = "use_answer"
@@ -263,7 +310,9 @@ def test_later_step_loads_only_this_runs_decision(review, register_step):
             "results": [{"from": "use"}],
         },
     )
-    answer(questions(step)[0], people[0])
+    decision = questions(step)[0]
+    answer(decision, people[0])
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     assert run.output == {"answered_by": public_id_of(people[0]), "verdict": ["approve"]}
 
@@ -291,6 +340,7 @@ def test_answered_question_can_be_replaced_without_losing_its_run_association(re
     run, step = start_review((actor, people, sent, Followup))
     first = questions(step)[0]
     answer(first, people[0])
+    assert deliver_decision_wakes(sent, first.pk) == [1]
     first.refresh_from_db()
     frozen = (first.proposal, first.context, first.verdict, first.answered_by_id)
     concerns = list(first.records.with_actor(actor).values_list("pk", flat=True))
@@ -320,6 +370,7 @@ def test_answered_question_can_be_replaced_without_losing_its_run_association(re
     with pytest.raises(PermissionDenied, match="inaccessible"):
         context(run, create_user("unrelated-review-reader")).decision(public_id_of(first))
     answer(second, people[1])
+    assert deliver_decision_wakes(sent, second.pk) == [1]
     run_until(run)
     assert run.status == "succeeded" and run.output == {"prior": ["approve"], "current": ["approve"]}
 
@@ -378,7 +429,7 @@ def test_concrete_action_owner_applies_child_fields_with_canonical_concern(compo
     ), actor=actor)
     concern = decision.records.with_actor(actor).get()
     assert type(concern.record) is MtiParent
-    decision = Decision.objects.decide(decision, actor=reader, chosen=["confirm"])
+    decision = decision.decide(actor=reader, chosen=["confirm"])
     with pytest.raises(PermissionDenied):
         apply_proposals(decision, actor=reader)
     record.refresh_from_db()
@@ -401,3 +452,21 @@ def test_action_model_must_share_the_concerned_identity(composed_tables, model):
                 "actions": {public_id_of(record): {"model": model, "fields": {"detail": {"set": "After"}}}},
             }]),
         )
+
+
+def test_requesting_workflow_filter_keeps_first_request_identity(review):
+    actor, _people, _sent, question = review
+    run, step = start_review(review)
+    decision = questions(step)[0]
+    later_workflow = load_workflow(
+        {"nodes": {"review": {"step": "question"}}, "results": [{"from": "review"}]},
+        key="later-request", actor=actor,
+    )
+    later = WorkflowRun.objects.start(later_workflow, actor=actor, subject=question.review_subject)
+    with system_context(reason="workflows.retained_request_identity"):
+        StepRun.objects.filter(run=later).update(decision=decision)
+        rows = Decision.objects.filter(pk=decision.pk)
+        expression = Decision.hasura_filter_expressions["requesting_workflow_key"](rows)
+        matches = rows.alias(_requesting_key=expression)
+        assert matches.filter(_requesting_key=run.version.workflow.key).exists()
+        assert not matches.filter(_requesting_key=later_workflow.key).exists()

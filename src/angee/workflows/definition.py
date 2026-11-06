@@ -1265,12 +1265,20 @@ class Definition(BaseModel):
         """A map body reports failure through its parent's failed port."""
         return "failed" if "." in key else ERROR_OUTCOME
 
-    def ready_nodes(self, rows: Iterable[StepRow], *, map_concurrency: int = 10) -> list[PlannedNode]:
+    def ready_nodes(
+        self,
+        rows: Iterable[StepRow],
+        *,
+        map_concurrency: int = 10,
+        body_progress: Mapping[str, tuple[int, int, int, int]] | None = None,
+    ) -> list[PlannedNode]:
         """Plan missing rows once all sources settle, propagating skips in one pass.
 
         Incoming edges are grouped by source: two alternative outcomes leading
         to the same target count as one predecessor for an ``all`` join.
         Failed ``error`` edges are live, matching the failure-routing contract.
+        Indexed body slots are created lowest first and never deleted, so the
+        maximum retained index identifies the next uncreated slot.
         """
         if type(map_concurrency) is not int or map_concurrency < 1:
             raise ValueError("Map concurrency must be a positive integer.")
@@ -1284,19 +1292,26 @@ class Definition(BaseModel):
                 parent = existing[key]
                 if (self.nodes[key].body is not None and parent.status == StepRunStatus.WAITING
                         and parent.waiting_kind == WaitingKind.MAP):
-                    bodies = {row.map_index: row for row in rows if row.node_key == map_body_key(key)}
                     total = len(parent.input["items"])
-                    open_count = sum(row.status not in StepRunStatus.terminal_values() for row in bodies.values())
-                    if len(bodies) == total and not open_count:
+                    if body_progress is None:
+                        bodies = {row.map_index: row for row in rows if row.node_key == map_body_key(key)}
+                        count = len(bodies)
+                        open_count = sum(row.status not in StepRunStatus.terminal_values() for row in bodies.values())
+                        next_indices: Iterable[int] = (index for index in range(total) if index not in bodies)
+                    else:
+                        count, open_count, last_index, _failed_count = body_progress.get(
+                            map_body_key(key), (0, 0, -1, 0)
+                        )
+                        next_indices = iter(range(last_index + 1, total))
+                    if count == total and not open_count:
                         planned.append(PlannedNode(key, "ready", rank, existing=True))
                     else:
                         slots = max(0, map_concurrency - open_count)
-                        for index in range(total):
+                        for index in next_indices:
                             if not slots:
                                 break
-                            if index not in bodies:
-                                planned.append(PlannedNode(map_body_key(key), "ready", rank, map_index=index))
-                                slots -= 1
+                            planned.append(PlannedNode(map_body_key(key), "ready", rank, map_index=index))
+                            slots -= 1
                 continue
             sources = incoming[key]
             if not sources:

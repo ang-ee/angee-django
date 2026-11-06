@@ -8,8 +8,9 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from django.db import models
-from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, Value, When
-from django.db.models.functions import Cast, TruncDate
+from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, Value, When, Window
+from django.db.models.functions import Cast, RowNumber, TruncDate
+from django.db.models.query import prefetch_related_objects
 from pydantic import BaseModel, ConfigDict, Field
 
 from angee.messaging.inbox import InboxPage, MessageInbox
@@ -169,14 +170,22 @@ class InboxResults:
     def page(self, *, scope: InboxGroupScope | None = None, page: int = 1, size: int = 25) -> InboxPage:
         """Page distinct content first, then fetch one bounded source use per row."""
 
+        if (not self.is_content and scope is not None and scope.axis == "conversation"
+                and (scope.value or "").startswith("thread:")):
+            read = self.conversation_pages([(scope, page, size)], include_channel=True)[0]
+            if isinstance(read, ValueError):
+                raise read
+            return read
         activity = self.scoped(scope)
         order = "_order_at" if self.options.oldest else "-_order_at"
         if not self.is_content:
             count = activity.count()
+            page_messages = list(activity.with_title_text().order_by(order, "pk")[InboxPage.window(page, size)])
+            self.inbox.cache_readable_threads(page_messages)
             return InboxPage(
                 [
                     InboxResultRow(f"message:{message.sqid}", message._order_at, 1, 0, message)
-                    for message in activity.order_by(order, "pk")[InboxPage.window(page, size)]
+                    for message in page_messages
                 ],
                 count,
                 count,
@@ -221,8 +230,11 @@ class InboxResults:
         )
         messages = {
             record.pk: record
-            for record in self.inbox.messages.filter(pk__in=[part.message_id for part in sources.values()])
+            for record in self.inbox.messages.filter(
+                pk__in=[part.message_id for part in sources.values()]
+            ).with_title_text()
         }
+        self.inbox.cache_readable_threads(messages.values())
         rows = []
         for group in selected:
             key = group["_identity"]
@@ -249,6 +261,82 @@ class InboxResults:
         )
         return InboxPage(rows, totals["records"], totals["messages"])
 
+    def conversation_pages(
+        self, pages: list[tuple[InboxGroupScope, int, int]], *, include_channel: bool = False,
+    ) -> list[InboxPage | ValueError]:
+        """Page readable conversation keys together with one thread proof."""
+
+        ids = [(scope.value or "").partition(":")[2] for scope, _, _ in pages]
+        readable = self.inbox.readable_threads(ids)
+        keys = [readable.get(public_id) for public_id in ids]
+        threads = {thread.pk: thread for thread in readable.values()}
+        selected_ids = sorted({thread.pk for thread in keys if thread is not None})
+        counts = dict(self.messages.filter(thread_id__in=selected_ids).order_by().values("thread_id")
+                      .annotate(total=Count("pk")).values_list("thread_id", "total"))
+        requested = Q(pk__in=[])
+        for thread, (_, page, size) in zip(keys, pages, strict=True):
+            window = InboxPage.window(page, size)
+            if thread is not None:
+                requested |= Q(thread_id=thread.pk, _page_rank__gt=window.start, _page_rank__lte=window.stop)
+        order = F("_order_at").asc() if self.options.oldest else F("_order_at").desc()
+        ranked = self.messages.filter(thread_id__in=selected_ids).with_title_text().annotate(
+            _page_rank=Window(RowNumber(), partition_by=[F("thread_id")], order_by=[order, F("pk").asc()]),
+        )
+        messages: dict[Any, list[Any]] = {}
+        if selected_ids:
+            loaded = list(ranked.filter(requested).order_by("thread_id", "_page_rank"))
+            self.inbox.cache_readable_threads(loaded, known=threads.values())
+            if include_channel:
+                prefetch_related_objects(
+                    loaded,
+                    models.Prefetch(
+                        "channel", queryset=self.inbox.collection("messaging", "Channel").prefetch_related("vendor"),
+                    ),
+                )
+            for message in loaded:
+                messages.setdefault(message.thread_id, []).append(message)
+        results: list[InboxPage | ValueError] = []
+        for thread, (_, page, size) in zip(keys, pages, strict=True):
+            if thread is None:
+                results.append(ValueError("Conversation unavailable."))
+                continue
+            window = InboxPage.window(page, size)
+            rows = [
+                InboxResultRow(f"message:{message.sqid}", message._order_at, 1, 0, message)
+                for message in messages.get(thread.pk, [])
+                if window.start < message._page_rank <= window.stop
+            ]
+            total = counts.get(thread.pk, 0)
+            results.append(InboxPage(rows, total, total))
+        return results
+
+    def pages(
+        self, pages: list[tuple[InboxGroupScope | None, int, int]], *, include_channel: bool = False,
+    ) -> list[InboxPage | ValueError]:
+        """Share the admitted thread read across a batch of conversation pages."""
+
+        results: list[InboxPage | ValueError | None] = [None] * len(pages)
+        conversation_indices = [
+            index for index, (scope, page, size) in enumerate(pages)
+            if not self.is_content and scope is not None and scope.axis == "conversation"
+            and (scope.value or "").startswith("thread:") and page >= 1 and 1 <= size <= 100
+        ]
+        if conversation_indices:
+            grouped = self.conversation_pages(
+                [cast(tuple[InboxGroupScope, int, int], pages[index]) for index in conversation_indices],
+                include_channel=include_channel,
+            )
+            for index, read in zip(conversation_indices, grouped, strict=True):
+                results[index] = read
+        for index, (scope, page, size) in enumerate(pages):
+            if results[index] is not None:
+                continue
+            try:
+                results[index] = self.page(scope=scope, page=page, size=size)
+            except ValueError as error:
+                results[index] = error
+        return cast(list[InboxPage | ValueError], results)
+
 
 class InboxConversationGroups(InboxGroups):
     """A mixed thread/standalone axis; model owners encode and resolve public IDs."""
@@ -260,9 +348,9 @@ class InboxConversationGroups(InboxGroups):
     def page(self, *, page: int = 1, size: int = 25) -> InboxGroupPage:
         result = super().page(page=page, size=size)
         keys = [int(cast(str, row.value)) for row in result.rows]
-        threads = self.inbox.threads.filter(pk__in=[key for key in keys if key > 0])
-        titles = threads.conversation_labels()
-        context = {thread.pk: thread for thread in threads.only("pk", "platform", "channel_id", "modality")}
+        threads = list(self.inbox.threads.filter(pk__in=[key for key in keys if key > 0]).select_related("title"))
+        titles = self.inbox.threads.conversation_labels(admitted=threads)
+        context = {thread.pk: thread for thread in threads}
         accounts = dict(self.inbox.collection("integrate", "Integration").filter(
             pk__in=[thread.channel_id for thread in context.values() if thread.channel_id],
         ).values_list("pk", "display_name"))
@@ -285,14 +373,14 @@ class InboxConversationGroups(InboxGroups):
     def scope(self, value: str | None) -> Any:
         kind, _, public_id = (value or "").partition(":")
         if kind == "thread":
-            record = self.inbox.threads.from_public_id(public_id)
+            thread = self.inbox.readable_threads((public_id,)).get(public_id)
+            if thread is None:
+                raise ValueError("Conversation unavailable.")
+            return self.rows.filter(**{self.scope_field: thread.pk})
         elif kind == "message":
             record = self.inbox.messages.from_public_id(public_id)
         else:
             raise ValueError("Unknown conversation selection.")
         if record is None:
             raise ValueError("Conversation unavailable.")
-        return (
-            self.rows.filter(**{self.scope_field: record.pk})
-            if kind == "thread" else self.rows.filter(_bucket=-record.pk)
-        )
+        return self.rows.filter(_bucket=-record.pk)

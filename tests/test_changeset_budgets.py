@@ -96,6 +96,8 @@ def test_tracked_save_and_queryset_update_query_budgets(composed_tables: None) -
         f"UPDATE {party_table}",
         f"SELECT {party_table}",
         f"INSERT {history_table}",
+        # Commit bookkeeping counts only retained rows after the savepoint succeeds.
+        f"SELECT {history_table}",
     ]
     # Frozen keys, REBAC's schema-revision check, the UPDATE, one re-select and
     # one history insert, then one key probe per tracked MTI child table.
@@ -108,6 +110,7 @@ def test_tracked_save_and_queryset_update_query_budgets(composed_tables: None) -
         # The capture's owner names the installed children: a class another module derived
         # from Party under isolate_apps stays a Python subclass until it is collected.
         *(f"SELECT {child._meta.db_table}" for child in concrete_child_models(Party)),
+        f"SELECT {history_table}",
     ]
 
 

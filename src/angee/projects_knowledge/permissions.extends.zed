@@ -1,0 +1,30 @@
+// @rebac_package: projects_knowledge
+// @rebac_schema_revision: 1
+
+definition knowledge/vault {
+    relation project: projects/project // rebac:field=project_bindings__project
+
+    permission read_granted = project->read
+    permission write_granted = project->write
+    permission share = project->share
+}
+
+definition knowledge/record_binding {
+    relation task: projects/task // rebac:field=target
+    relation project: projects/project // rebac:field=target
+
+    permission target_read = task->read + project->read
+    permission target_write = task->write + project->write
+}
+
+definition projects/project_binding {
+    relation vault: knowledge/vault // rebac:field=target
+    permission target_share = vault->share
+}
+
+definition projects/task {
+    relation subject_page: knowledge/page // rebac:field=subject
+    relation subject_vault: knowledge/vault // rebac:field=subject
+    permission subject_read = subject_page->read_as_subject + subject_vault->read_as_subject
+    permission subject_write = subject_page->write_as_subject + subject_vault->write_as_subject
+}

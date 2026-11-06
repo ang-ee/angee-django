@@ -12,6 +12,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured
+from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
@@ -37,7 +38,7 @@ from angee.graphql.data.hasura import hasura_model_resource
 from angee.messaging.testing.models import Handle, Organization, Party, Person, Thread, ThreadFollower
 from angee.nexus.testing.models import Cadence, Tie
 from angee.spaces.testing.models import Group, Membership
-from tests.conftest import execute_schema, result_data
+from tests.conftest import File, execute_schema, result_data
 from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _schema as nexus_schema
 from tests.test_parties_graphql import parties_schema
@@ -69,6 +70,8 @@ def follower_storage(request: pytest.FixtureRequest) -> Iterator[str]:
 @pytest.fixture
 def follower_schema(follower_storage: str, project_access_schema: Any) -> None:
     """Reuse the real composed permission fragments, including messaging and spaces."""
+
+    call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
 
 
 @pytest.fixture(scope="module")
@@ -150,8 +153,8 @@ def test_scoped_queryset_agrees_with_checks_for_every_follower_audience(follower
 
     f = followers
     cases: tuple[tuple[Any, set[int], set[int]], ...] = (
-        (f.reader, {f.person.pk, f.accountless.pk, f.party.pk}, set()),
-        (f.other_reader, {f.other.pk}, set()),
+        (f.reader, set(), set()),
+        (f.other_reader, set(), set()),
         (f.outsider, set(), set()),
         (AnonymousUser(), set(), set()),
         (
@@ -173,12 +176,39 @@ def test_scoped_queryset_agrees_with_checks_for_every_follower_audience(follower
                 assert scoped == checked == expected, (model.__name__, actor, action)
 
 
+def test_follower_account_remains_a_colleague_without_party_page_access(followers: SimpleNamespace) -> None:
+    """The picker keeps its narrow account arm when party and person reads are removed."""
+
+    f = followers
+    account = get_user_model()._base_manager.get(pk=f.person.user_id)
+    assert _allowed(account, f.reader, "colleague")
+    assert not _allowed(f.person, f.reader)
+    assert not _allowed(f.parent, f.reader)
+    assert not _allowed(account, f.other_reader, "colleague")
+
+
+@pytest.mark.postgresql
+def test_display_read_policy_statement_sizes(followers: SimpleNamespace) -> None:
+    """Measure the four implicated read statements on the same actor and schema."""
+
+    with actor_context(followers.reader), evaluator_scope():
+        sizes = {}
+        for model in (Party, Person, Thread, File):
+            query = model.objects.with_actor(followers.reader).scoped().filter(pk__in=[followers.thread.pk])
+            sql, _ = query.query.sql_with_params()
+            sizes[model._meta.label] = len(sql.encode())
+    assert sizes["parties.Party"] <= 20_000
+    assert sizes["parties.Person"] <= 20_000
+    assert sizes["messaging.Thread"] <= 170_000
+    assert sizes["storage.File"] <= 280_000
+
+
 def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fixed_cost(
     followers: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Both MTI paths and private intersections compile; 2/50-row SQL costs stay fixed."""
+    """Follower rows never make party populations readable, at any page size."""
 
     f = followers
     with system_context(reason="tests.follower_identity.page"):
@@ -195,61 +225,80 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
         assert isinstance(local, LocalBackend)
         local.schema()
         monkeypatch.setattr(type(local), "accessible", no_enumeration)
-        for model in (Party, Person, Tie):
+        for model, expected_bounded_queries in ((Party, 2), (Person, 3)):
             resource_type = model_resource_type(model)
             assert resource_type is not None
-            for action in ("read", "read_private") if model != Tie else ("read",):
-                scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
-                # Each fresh scope reads the schema revision and expands the actor's
-                # memberships (2). Read then prepares 23 arrow sources (a filed task
-                # reaches each of its declared subject types' direct holders, its
-                # removal authority's project write and its subject task's owner);
-                # Tie prepares one Party source. Private reads need only the final row SELECT.
-                expected_queries = 4 if model == Tie else 26 if action == "read" else 3
+            for action in ("read", "read_private"):
+                # A range keeps the generic follower scope for both page sizes;
+                # bounded pk__in uses a different candidate-root proof.
+                expected_queries = 3
                 counts = []
-                for size in (2, 50):
-                    ids = [row.pk for row in rows[:size]] if model != Tie else [tie.pk]
-                    query = scoped.filter(pk__in=ids).values_list("pk", flat=True)
+                for size in (1, 50):
+                    ids = [row.pk for row in rows[-size:]]
+                    scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
+                    query = scoped.filter(pk__gte=ids[0]).values_list("pk", flat=True)
                     sql, parameters = query.query.sql_with_params()
                     assert "SELECT" in sql and parameters
                     (tmp_path / f"{model.__name__}-{action}-{size}.sql").write_text(
                         f"{sql}\n-- parameters: {parameters!r}\n",
                         encoding="utf-8",
                     )
-                    # A fresh scope per measurement: one scope keeps the rows it decided,
-                    # so a repeated statement would skip its arrow sources.
+                    # A fresh scope per measurement keeps decisions independent.
                     with evaluator_scope(), CaptureQueriesContext(connection) as captured:
                         result = set(query)
                     counts.append(len(captured))
                     assert len(captured) == expected_queries, captured.captured_queries
-                    # The application row SELECT, and, for a party read, the arrow source of a
-                    # record task about a party.
+                    # Source facts remain inside the single application row SELECT.
                     assert (
                         sum(
                             query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
                             for query in captured.captured_queries
                         )
-                        == (2 if model is Party and action == "read" else 1)
+                        == 1
                     )
-                    assert result == (set(ids) if action == "read" and model != Tie else set())
+                    assert result == set()
                 assert counts[0] == counts[1]
+                # Native bounded pk__in keeps the candidate-root proof in the
+                # row statement at two, twenty and fifty candidates.
+                bounded_counts = []
+                for size in (2, 20, 50):
+                    ids = [row.pk for row in rows[:size]]
+                    with evaluator_scope(), CaptureQueriesContext(connection) as captured:
+                        query = model.objects.with_actor(f.reader).with_action(action).scoped().filter(pk__in=ids)
+                        query = query.values_list("pk", flat=True)
+                        query.query.sql_with_params()
+                        result = set(query)
+                    bounded_counts.append(len(captured))
+                    assert sum(
+                        item["sql"].startswith(f'SELECT "{model._meta.db_table}".') for item in captured
+                    ) == 1
+                    assert result == set()
+                # The native Party root uses two statements; Person's MTI
+                # scope keeps one additional fixed preparation at every size.
+                assert bounded_counts == [expected_bounded_queries] * 3, bounded_counts
+        # A genuine singleton uses the native point lower bound, so its actor
+        # proof is embedded and only the revision plus application read remain.
+        singleton = Tie.objects.with_actor(f.reader).scoped().filter(pk__in=[tie.pk]).values_list("pk", flat=True)
+        sql, parameters = singleton.query.sql_with_params()
+        assert "SELECT" in sql and parameters
+        (tmp_path / "Tie-read-singleton.sql").write_text(f"{sql}\n-- parameters: {parameters!r}\n", encoding="utf-8")
+        with evaluator_scope(), CaptureQueriesContext(connection) as captured:
+            result = set(singleton)
+        assert len(captured) == 2, captured.captured_queries
+        assert sum(query["sql"].startswith(f'SELECT "{Tie._meta.db_table}".') for query in captured) == 1
+        assert result == set()
         for model in (Party, Person):
             # Also exercise the native public queryset, with enumeration forbidden.
-            assert set(model.objects.filter(pk__in=[row.pk for row in rows]).values_list("pk", flat=True)) == {
-                row.pk for row in rows
-            }
+            assert not model.objects.filter(pk__in=[row.pk for row in rows]).exists()
 
 
 def test_thread_reader_gets_identity_but_every_private_native_field_is_null(followers: SimpleNamespace) -> None:
-    """Lossless carriers and MTI-inherited fields cannot bypass GraphQL redaction."""
+    """Following supplies a chip identity but no native party or person read."""
 
     f = followers
     for model, fields in ((Party, PARTY_PRIVATE), (Person, PERSON_PRIVATE)):
-        row = model.objects.with_actor(f.reader).get(pk=f.person.pk)
-        assert row.display_name == f.person.display_name
-        assert {name: getattr(row, name) for name in fields} == dict.fromkeys(fields)
-        assert row.created_by_id == f.owner.pk
-        assert row.updated_by_id == f.owner.pk
+        assert not model.objects.with_actor(f.reader).filter(pk=f.person.pk).exists()
+        assert not _allowed(f.person, f.reader)
         for actor in (f.owner, f.private_reader):
             row = model.objects.with_actor(actor).get(pk=f.person.pk)
             assert {name: getattr(row, name) for name in fields} == fields
@@ -259,7 +308,7 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
     followers: SimpleNamespace,
     identity_graphql: Any,
 ) -> None:
-    """Root lists preserve readable identity and attribution without private contact data."""
+    """Root lists exclude follower-only parties while direct grants retain full values."""
 
     f = followers
     query = f"""query Identity($id: String!) {{
@@ -270,6 +319,9 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
     }}"""
     for actor in (f.reader, f.owner, f.private_reader):
         data = result_data(execute_schema(identity_graphql, query, {"id": f.person.sqid}, user=actor))
+        if actor == f.reader:
+            assert data == {"parties": [], "people": []}
+            continue
         for root, fields in (
             ("parties", ("notes", "first_met_note", "handle_count")),
             ("people", ("notes", "first_met_note", "handle_count", "nickname", "birthday", "anniversary")),
@@ -284,15 +336,12 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
                 )
                 for name in fields
             }
-            assert {name: row[name] for name in fields} == (dict.fromkeys(fields) if actor == f.reader else expected)
+            assert {name: row[name] for name in fields} == expected
         assert data["parties"][0]["created_by"] is not None
         assert data["parties"][0]["updated_by"] is not None
         assert data["parties"][0]["created_by_label"] == f.owner.username
         assert data["parties"][0]["updated_by_label"] == f.owner.username
-        if actor == f.reader:
-            assert set(PARTY_PRIVATE) <= set(data["parties"][0]["redacted_fields"])
-        else:
-            assert data["parties"][0]["redacted_fields"] == []
+        assert data["parties"][0]["redacted_fields"] == []
 
 
 def test_hidden_introducer_is_null_without_losing_people_or_parties(
@@ -303,6 +352,9 @@ def test_hidden_introducer_is_null_without_losing_people_or_parties(
 
     f = followers
     with system_context(reason="tests.follower_identity.relations"):
+        for party in (f.person, f.accountless, f.party):
+            _grant(party, f.reader)
+            _grant(Party.objects.get(pk=party.pk), f.reader)
         for person, introducer in (
             (f.person, f.unfollowed),
             (f.accountless, f.party),
@@ -349,7 +401,7 @@ def test_organization_inherits_the_guarded_introducer(followers: SimpleNamespace
 def test_embedded_party_projections_keep_private_fields_redacted(
     followers: SimpleNamespace, identity_graphql: Any
 ) -> None:
-    """A readable handle supplies no extra authority over its followed party."""
+    """Readable handles and following supply no party page authority."""
 
     f = followers
     with system_context(reason="tests.follower_identity.embedded"):
@@ -361,16 +413,7 @@ def test_embedded_party_projections_keep_private_fields_redacted(
         execute_schema(identity_graphql, f"{{ handles {{ party {{ {PARTY_SELECTION} }} }} }}", user=f.reader)
     )
     rows = [row["party"] for row in data["handles"]]
-    assert rows.count(None) == 1
-    assert {row["id"] for row in rows if row} == {f.person.sqid, f.accountless.sqid, f.party.sqid}
-    for row in rows:
-        if row is not None:
-            assert row["display_name"]
-            assert {name: row[name] for name in ("notes", "first_met_note", "handle_count")} == {
-                "notes": None,
-                "first_met_note": None,
-                "handle_count": None,
-            }
+    assert rows == [None] * 4
 
 
 @pytest.mark.parametrize("axis", ("filterable", "sortable", "groupable", "aggregatable"))
@@ -427,36 +470,38 @@ def test_unfollow_revokes_identity_immediately_but_preserves_other_threads_and_p
     followers: SimpleNamespace,
     identity_graphql: Any,
 ) -> None:
-    """Deleting the sole FK edge revokes both parent and child without a sync."""
+    """Deleting the follower edge revokes its chip without changing party grants."""
 
     f = followers
     with system_context(reason="tests.follower_identity.second_path"):
         _grant(f.other_thread, f.reader)
         ThreadFollower.objects.create(thread=f.other_thread, party=f.accountless, created_by=f.owner)
-    query = "{ parties { id } people { id } }"
-    before = result_data(execute_schema(identity_graphql, query, user=f.reader))
-    assert f.person.sqid in {row["id"] for row in before["people"]}
+    before = set(ThreadFollower.objects.with_actor(f.reader).filter(thread=f.thread).values_list("party_id", flat=True))
+    assert {f.person.pk, f.accountless.pk} <= before
     with system_context(reason="tests.follower_identity.unfollow"):
         ThreadFollower.objects.filter(thread=f.thread, party_id__in=(f.person.pk, f.accountless.pk)).delete()
     for model in (Party, Person):
         assert not model.objects.with_actor(f.reader).filter(pk=f.person.pk).exists()
-        assert model.objects.with_actor(f.reader).filter(pk=f.accountless.pk).exists()
+        assert not model.objects.with_actor(f.reader).filter(pk=f.accountless.pk).exists()
         assert model.objects.with_actor(f.private_reader).filter(pk=f.person.pk).exists()
     assert not _allowed(f.parent, f.reader)
     assert not _allowed(f.person, f.reader)
-    assert _allowed(f.accountless, f.reader)
+    assert not _allowed(f.accountless, f.reader)
     assert _allowed(f.parent, f.private_reader, "read_private")
-    after = result_data(execute_schema(identity_graphql, query, user=f.reader))
-    for root in ("parties", "people"):
-        assert f.person.sqid not in {row["id"] for row in after[root]}
-        assert f.accountless.sqid in {row["id"] for row in after[root]}
+    after = set(ThreadFollower.objects.with_actor(f.reader).filter(thread=f.thread).values_list("party_id", flat=True))
+    assert not {f.person.pk, f.accountless.pk} & after
+    other = set(
+        ThreadFollower.objects.with_actor(f.reader).filter(thread=f.other_thread).values_list("party_id", flat=True)
+    )
+    assert f.accountless.pk in other
 
 
 def test_thread_reader_revocation_removes_follower_identity_without_a_sync(followers: SimpleNamespace) -> None:
-    """Revoking thread read removes the inherited identity arm on the next read."""
+    """Revoking thread read removes the follower chip, never a party grant."""
 
     f = followers
-    assert _allowed(f.person, f.reader)
+    assert not _allowed(f.person, f.reader)
+    assert ThreadFollower.objects.with_actor(f.reader).filter(thread=f.thread, party=f.person).exists()
     delete_relationships(
         RelationshipFilter(
             resource_type="messaging/thread",
@@ -468,6 +513,7 @@ def test_thread_reader_revocation_removes_follower_identity_without_a_sync(follo
     )
     for model in (Party, Person):
         assert not model.objects.with_actor(f.reader).filter(pk=f.person.pk).exists()
+    assert not ThreadFollower.objects.with_actor(f.reader).filter(thread=f.thread, party=f.person).exists()
     assert not _allowed(f.person, f.reader)
     assert not _allowed(f.parent, f.reader)
     assert _allowed(f.parent, f.private_reader)
@@ -520,7 +566,7 @@ def test_ties_and_cadences_require_private_access_to_followed_parties(
             user=f.reader,
         )
     )
-    assert payload == {"ties": [], "cadences": [], "parties_by_pk": {"cadence": None}}
+    assert payload == {"ties": [], "cadences": [], "parties_by_pk": None}
     denied = execute_schema(
         identity_graphql,
         """mutation Create($party: ID!) {
@@ -552,13 +598,8 @@ def test_nexus_graph_omits_redacted_handle_count_and_private_edges(
         zero = Party.objects.create(display_name="Zero handles", handle_count=0, created_by=f.owner)
         Tie.objects.create(party_a=f.person, party_b=zero)
     query = "query Graph($id: ID!) { party_graph(root_id: $id) { nodes edges } }"
-    graph = result_data(execute_schema(identity_graphql, query, {"id": f.person.sqid}, user=f.reader))["party_graph"]
-    assert graph["edges"] == []
-    assert len(graph["nodes"]) == 1
-    node = graph["nodes"][0]
-    assert node["id"] == f.person.sqid
-    assert "detail" not in node
-    assert "handle_count" not in node["meta"]
+    denied = execute_schema(identity_graphql, query, {"id": f.person.sqid}, user=f.reader)
+    assert denied.errors and denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
     graph = result_data(execute_schema(identity_graphql, query, {"id": f.person.sqid}, user=f.owner))["party_graph"]
     nodes = {node["id"]: node for node in graph["nodes"]}
     assert nodes[f.person.sqid]["meta"]["handle_count"] == 7
@@ -571,7 +612,7 @@ def test_public_group_thread_exposes_follower_identity_only_to_signed_in_strange
     followers: SimpleNamespace,
     identity_graphql: Any,
 ) -> None:
-    """A public group's signed-in read audience reaches explicit followers, never anonymous."""
+    """A public group's readers see follower chips but gain no party pages."""
 
     f = followers
     with system_context(reason="tests.follower_identity.public_group"):
@@ -581,19 +622,12 @@ def test_public_group_thread_exposes_follower_identity_only_to_signed_in_strange
     for actor, allowed in ((f.outsider, True), (AnonymousUser(), False)):
         assert _allowed(f.thread, actor) is allowed
         for model, row in ((Party, f.parent), (Person, f.person)):
-            assert _allowed(row, actor) is allowed
-            assert model.objects.with_actor(actor).filter(pk=row.pk).exists() is allowed
+            assert not _allowed(row, actor)
+            assert not model.objects.with_actor(actor).filter(pk=row.pk).exists()
             assert not _allowed(row, actor, "read_private")
         data = result_data(execute_schema(identity_graphql, f"{{ people {{ {PERSON_SELECTION} }} }}", user=actor))
-        if allowed:
-            assert {row["id"] for row in data["people"]} == {f.person.sqid, f.accountless.sqid}
-            for row in data["people"]:
-                assert all(
-                    row[name] is None
-                    for name in ("notes", "first_met_note", "handle_count", "nickname", "birthday", "anniversary")
-                )
-        else:
-            assert data["people"] == []
+        assert data["people"] == []
+        assert ThreadFollower.objects.with_actor(actor).filter(thread=f.thread, party=f.person).exists() is allowed
 
 
 def test_record_followers_project_explicit_account_and_accountless_identities_only(
@@ -618,11 +652,11 @@ def test_record_followers_project_explicit_account_and_accountless_identities_on
     payload = result_data(
         execute_schema(
             identity_graphql,
-            f"""query Followers($id: ID!) {{
-      record_thread(input: {{model_label: "messaging.ThreadedTicket", record_id: $id}}) {{
-        error_code follower_count followers {{ party {{ {PARTY_SELECTION} }} user {{ id username }} }}
-      }}
-    }}""",
+            """query Followers($id: ID!) {
+      record_thread(input: {model_label: "messaging.ThreadedTicket", record_id: $id}) {
+        error_code follower_count followers { party { id display_name } user { id username } }
+      }
+    }""",
             {"id": ticket.sqid},
             user=f.reader,
         )
@@ -632,8 +666,6 @@ def test_record_followers_project_explicit_account_and_accountless_identities_on
     assert {row["party"]["id"] for row in payload["followers"]} == {f.person.sqid, f.accountless.sqid}
     for row in payload["followers"]:
         assert row["party"]["display_name"]
-        assert row["party"]["notes"] is None
-        assert row["party"]["first_met_note"] is None
-        assert row["party"]["handle_count"] is None
+        assert set(row["party"]) == {"id", "display_name"}
         # Every reader sees an account's name; following grants none of its restricted fields.
         assert row["user"] is None or row["user"]["username"] is None, "Following grants no directory access"

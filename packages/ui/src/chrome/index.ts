@@ -39,7 +39,6 @@ export {
   type IconProps,
 } from "./icon-registry";
 export {
-  buildMenuTree,
   type BaseMenuItem,
   type ChromeMenuGroup,
   type ChromeMenuItem,

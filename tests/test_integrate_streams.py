@@ -7,7 +7,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, tzinfo
 from threading import Barrier, Lock
-from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -59,6 +58,8 @@ from angee.messaging.backends import ChannelBackend, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Message
 from tests.conftest import current_stream, make_integration
 from tests.stream_adapters import applied_history, failure_state
+
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 class AppliedRecord(models.Model):
@@ -238,6 +239,30 @@ def test_baseline_adoption_preserves_established_bases_and_delete_conflicts(
             )
         )
         assert (failure.kind, failure.code) == (SyncFailureKind.CONFLICT, "both_changed")
+
+
+def test_record_link_exposes_bridge_application_facts(stream_bridge: Channel) -> None:
+    """Bridge consumers can read the pinned aggregate base and retained application count."""
+
+    stream = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
+    link = RecordLink.objects.observe(stream, "remote-root")
+    assert link.applied_snapshot is None
+    assert link.application_count() == 0
+
+    RecordLink.objects.promote(
+        link, source_payload={"name": "applied"}, source_hash="snapshot-1",
+        mapped_payload={"name": "applied"}, remote_version="v1",
+    )
+    link.refresh_from_db()
+    assert link.applied_snapshot == link.applied_base
+    assert link.applied_snapshot.mapped_payload == {"name": "applied"}
+    assert link.application_count() == 1
+
+    child = RecordLink.objects.observe(stream, "remote-child")
+    child.parent = link
+    child.save(update_fields=["parent"])
+    assert child.applied_snapshot == link.applied_snapshot
+    assert child.application_count() == link.application_count()
 
 
 @pytest.mark.parametrize("tombstone", [False, True])
@@ -919,7 +944,7 @@ def test_data_error_quarantines_record_after_savepoint_rollback(
             assert [outcome.bound_target.key for outcome in outcomes] == ["first", "last"]
 
     if stage == "settle":
-        resolve_applied = stream_driver._resolve_applied
+        resolve_applied = SyncStream.resolve_applied
 
         def fail_settlement(stream: Any, record: Any) -> None:
             key = record.external_key if isinstance(record, RecordChange) else record
@@ -928,7 +953,7 @@ def test_data_error_quarantines_record_after_savepoint_rollback(
                 raise DataError("private record payload and database details")
             resolve_applied(stream, record)
 
-        monkeypatch.setattr(stream_driver, "_resolve_applied", fail_settlement)
+        monkeypatch.setattr(SyncStream, "resolve_applied", fail_settlement)
 
     stream = current_stream(
         stream_bridge,
@@ -1694,6 +1719,7 @@ def test_stream_rejects_non_json_cursors_before_applying(
     assert not AppliedRecord.objects.exists()
 
 
+@pytest.mark.postgresql
 @pytest.mark.parametrize("failed_partition", ["", "sent"])
 def test_parallel_partitions_close_each_adapter_once_even_after_failure(
     stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch, failed_partition: str
@@ -1776,6 +1802,9 @@ def test_partition_failure_preserves_safe_cause_logs_once_and_replaces_healthy_p
     if execution == "pool":
         # Exercise the future collector deterministically on SQLite. Native
         # threaded database behavior is covered by the PostgreSQL test above.
+        database = stream_driver.connections[stream_bridge._state.db]
+        native_vendor = database.vendor
+
         class InlinePool:
             def __init__(self, **kwargs: Any) -> None:
                 pass
@@ -1784,7 +1813,7 @@ def test_partition_failure_preserves_safe_cause_logs_once_and_replaces_healthy_p
                 return self
 
             def __exit__(self, *args: Any) -> None:
-                pass
+                monkeypatch.setattr(database, "vendor", native_vendor)
 
             def submit(self, fn: Any, *args: Any) -> Future:
                 future: Future = Future()
@@ -1794,15 +1823,14 @@ def test_partition_failure_preserves_safe_cause_logs_once_and_replaces_healthy_p
                     future.set_exception(error)
                 return future
 
-        monkeypatch.setattr(stream_driver, "connection", SimpleNamespace(vendor="postgresql", in_atomic_block=False))
+        monkeypatch.setattr(database, "vendor", "postgresql")
         monkeypatch.setattr(stream_driver, "ThreadPoolExecutor", InlinePool)
-        monkeypatch.setattr(
-            stream_driver,
-            "_drain_partition",
-            lambda bridge, definition, deadline: stream_driver._drain(
-                bridge, bridge.capability_impl, definition, deadline
-            ),
-        )
+        def inline_partition(bridge: Any, definition: StreamDefinition, deadline: float) -> int:
+            with monkeypatch.context() as selected:
+                selected.setattr(database, "vendor", native_vendor)
+                return stream_driver._drain(bridge, bridge.capability_impl, definition, deadline)
+
+        monkeypatch.setattr(stream_driver, "_drain_partition", inline_partition)
 
     monkeypatch.setattr(Channel, "capability_impl", property(lambda row: PartitionAdapter(sync_parallelism=2)))
     stream_bridge.config = {"sync_parallelism": 2 if execution == "pool" else 1, "sync_time_budget": 60}
@@ -1918,6 +1946,7 @@ def test_json_merge_uses_fresh_locked_row_for_stale_partition_instances(stream_b
     }
 
 
+@pytest.mark.postgresql
 def test_json_merge_preserves_concurrent_partition_writes(stream_bridge: Channel) -> None:
     if connection.vendor != "postgresql":
         pytest.skip("Concurrent row-lock contract requires PostgreSQL.")

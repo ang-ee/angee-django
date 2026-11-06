@@ -26,16 +26,17 @@ from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks as workflow_tasks
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.definition import Definition
-from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunQuerySet
+from angee.workflows.querysets import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, StepMode
-from angee.workflows.testing.drivers import decide, load_workflow, run_until
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_user, vault_for
 from tests.workflow_steps import Echo, document
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.usefixtures("workflow_step_classes"),
     pytest.mark.skipif(
@@ -115,7 +116,7 @@ def test_t1_duplicate_database_delivery_executes_one_body(execution, register_st
 
 def test_concurrent_answer_continuations_admit_only_one_replacement_question(execution, register_step):
     """A follow-up shares the DATABASE claim lock; duplicate deliveries cannot ask twice."""
-    actor, _sent = execution
+    actor, sent = execution
     subject = vault_for(actor)
     entered, release = Event(), Event()
 
@@ -147,6 +148,7 @@ def test_concurrent_answer_continuations_admit_only_one_replacement_question(exe
     step = row(run)
     first = Decision.system_queryset().get(pk=step.decision_id)
     decide(first, actor=actor, chosen=["approve"])
+    assert deliver_decision_wakes(sent, first.pk) == [1]
     with ThreadPoolExecutor(max_workers=2) as pool:
         first_delivery = pool.submit(in_connection, runner.execute, step.pk)
         assert entered.wait(10)
@@ -163,6 +165,7 @@ def test_concurrent_answer_continuations_admit_only_one_replacement_question(exe
     assert row(run).status == StepRunStatus.WAITING
     assert run in first.requesting_records()
     decide(second, actor=actor, chosen=["approve"])
+    assert deliver_decision_wakes(sent, second.pk) == [1]
     run_until(run)
     assert run.status == RunStatus.SUCCEEDED and run.output == {"prior": ["approve"]}
 
@@ -654,7 +657,7 @@ def test_t3_t4_worker_loss_obeys_the_durable_effect_marker(execution, register_s
                 if effect_idempotent is not None:
                     ctx.begin_effect()
                 raise WorkerDied()
-            assert ctx.retry_acknowledged is (effect_idempotent is False)
+            assert (ctx.attempt.acknowledged_by_id is not None) is (effect_idempotent is False)
             return ctx.done(ctx.input)
 
     LostWorker.effect_idempotent = bool(effect_idempotent)
@@ -704,7 +707,7 @@ def test_t4_marked_transient_failure_requires_acknowledged_redelivery(execution,
                 if failure == "retryable":
                     raise Retryable("Transient after effect")
                 raise OperationalError("Transient after effect") from psycopg.errors.DeadlockDetected("Transient")
-            assert ctx.retry_acknowledged
+            assert ctx.attempt.acknowledged_by_id is not None
             return ctx.done(ctx.input)
 
     register_step(MarkedTransient)
@@ -1055,7 +1058,12 @@ def test_io_settlement_stops_at_deadline_when_step_row_stays_locked(execution, r
             finish_body.set()
             release.set()
         holder.result(timeout=5)
-        assert pool.submit(in_connection, runner.reap).result(timeout=5) == 1
+        # Settlement uses the host clock; expiration belongs to the database clock.
+        limit = monotonic() + 5
+        while not StepRun.system_queryset().filter(pk=step_run.pk, deadline_at__lt=Now()).exists():
+            assert monotonic() < limit, "The database deadline did not expire."
+            sleep(0.02)
+        assert pool.submit(in_connection, runner.reap).result(timeout=max(0, limit - monotonic())) == 1
     assert bodies == [1]
     assert row(run).output == {"error": "The attempt deadline expired."}
     assert row(run).status == StepRunStatus.FAILED

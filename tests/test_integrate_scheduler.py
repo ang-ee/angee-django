@@ -8,11 +8,11 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import system_context
 
-from angee.integrate import queue as integrate_queue
 from angee.integrate import scheduler as integrate_scheduler
 from angee.integrate import sync_runner as integrate_sync_runner
 from angee.integrate import tasks as integrate_tasks
@@ -32,6 +32,9 @@ from tests.conftest import (
 class SchedulerBridge(Bridge, Integration):
     """Concrete bridge fixture driven by the integrate scheduler tests."""
 
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
+
     class Meta(Bridge.Meta):
         """Django model options for the scheduler bridge fixture."""
 
@@ -49,7 +52,7 @@ class SchedulerBridge(Bridge, Integration):
             raise IntegrationError("Vendor refused the login for ada@example.com.")
         items = int(self.config.get("items", 1))
         if self.config.get("assert_locked"):
-            assert self.is_syncing is True
+            assert self.get_is_syncing() is True
         if self.config.get("progress"):
             reporter = current_bridge_progress()
             assert reporter is not None
@@ -70,17 +73,6 @@ class SchedulerBridge(Bridge, Integration):
         manager.advance(stream, {"seen": items}, exhausted=True)
         return items
 
-    def handle_webhook(self, payload: Any) -> None:
-        """Accept one webhook payload for the test fixture."""
-
-        del payload
-
-    def verify_webhook(self, request: Any) -> bool:
-        """Return whether a webhook request is accepted by the fixture."""
-
-        del request
-        return True
-
     def start_live(self) -> None:
         """Start the fixture live subscription."""
 
@@ -93,7 +85,7 @@ def _enqueue_and_run_due(*, now: datetime) -> dict[str, int]:
 
     ran = 0
     errors = 0
-    original = integrate_scheduler.queue_bridge_sync
+    original = SchedulerBridge.request_sync
 
     def run_queued(bridge: SchedulerBridge, *, now: datetime | None = None, persist: bool = True) -> None:
         nonlocal ran, errors
@@ -113,11 +105,11 @@ def _enqueue_and_run_due(*, now: datetime) -> dict[str, int]:
             if not result.get("skipped"):
                 ran += 1
 
-    integrate_scheduler.queue_bridge_sync = run_queued
+    SchedulerBridge.request_sync = run_queued
     try:
         enqueue_due_bridges(now=now)
     finally:
-        integrate_scheduler.queue_bridge_sync = original
+        SchedulerBridge.request_sync = original
     return {"ran": ran, "errors": errors}
 
 
@@ -134,6 +126,19 @@ def _scan_only_the_fixture_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     """
 
     monkeypatch.setattr(integrate_scheduler, "models_with", lambda *, base: (SchedulerBridge,))
+
+
+@pytest.mark.django_db
+def test_scheduler_bridge_deferred_timestamp_reads_parent(composed_tables: None) -> None:
+    """The child mask preserves Django's descriptor for the parent timestamp."""
+
+    del composed_tables
+    with system_context(reason="test scheduler bridge parent timestamp"):
+        bridge = make_integration("deferred-timestamp", model=SchedulerBridge)
+        deferred = SchedulerBridge.objects.only("pk").get(pk=bridge.pk)
+        with CaptureQueriesContext(connection) as queries:
+            assert deferred.created_at == bridge.created_at
+    assert len(queries) == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -413,7 +418,7 @@ def test_sync_completion_uses_finish_time_and_keeps_detached_progress(
     del transactional_db
     queued_at = timezone.now()
     finished_at = queued_at + timedelta(seconds=17)
-    monkeypatch.setattr("angee.integrate.models.timezone.now", lambda: finished_at)
+    monkeypatch.setattr("django.utils.timezone.now", lambda: finished_at)
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
             "detached-progress",
@@ -453,6 +458,8 @@ def test_declined_sync_run_releases_its_queue_claim(transactional_db: None) -> N
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("declined-run", model=SchedulerBridge)
         bridge.mark_sync_queued(now=now)
+        assert bridge.sync_queue_occurrence == now.isoformat()
+        assert bridge.sync_queue_token_matches(now)
 
     # Hold the lock the way a live session does, then let a sync run decline.
     with bridge_advisory_lock(bridge):
@@ -556,15 +563,15 @@ def test_bridge_is_syncing_uses_live_lock_state(transactional_db: None) -> None:
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("live-lock", model=SchedulerBridge)
 
-    assert bridge.is_syncing is False
+    assert bridge.get_is_syncing() is False
 
     with bridge_advisory_lock(bridge) as acquired:
         assert acquired is True
-        assert bridge.is_syncing is True
+        assert bridge.get_is_syncing() is True
         with bridge_advisory_lock(bridge) as second_acquired:
             assert second_acquired is False
 
-    assert bridge.is_syncing is False
+    assert bridge.get_is_syncing() is False
 
 
 @contextmanager
@@ -576,10 +583,10 @@ def _cross_process_locks() -> Iterator[None]:
     observe (Postgres advisory locks in deployment).
     """
 
-    import angee.integrate.models as integrate_models
+    import angee.integrate.models.bridges as integrate_models
 
     original = integrate_models.task_locks_are_cross_process
-    integrate_models.task_locks_are_cross_process = lambda: True
+    integrate_models.task_locks_are_cross_process = lambda **kwargs: True
     try:
         yield
     finally:
@@ -605,16 +612,16 @@ def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transact
 
         # The suite's LocalLockBackend is process-local: no reconciliation.
         bridge.sync_stage = bridge.SyncStage.SYNCING
-        assert bridge.effective_sync_stage == bridge.SyncStage.SYNCING
+        assert bridge.get_effective_sync_stage() == bridge.SyncStage.SYNCING
 
     with _cross_process_locks():
         bridge.sync_stage = bridge.SyncStage.SYNCING
-        assert bridge.effective_sync_stage == bridge.SyncStage.FAILED
+        assert bridge.get_effective_sync_stage() == bridge.SyncStage.FAILED
         with bridge_advisory_lock(bridge) as acquired:
             assert acquired is True
-            assert bridge.effective_sync_stage == bridge.SyncStage.SYNCING
+            assert bridge.get_effective_sync_stage() == bridge.SyncStage.SYNCING
         bridge.sync_stage = bridge.SyncStage.DISCOVERING
-        assert bridge.effective_sync_stage == bridge.SyncStage.FAILED
+        assert bridge.get_effective_sync_stage() == bridge.SyncStage.FAILED
         for stage in (
             bridge.SyncStage.IDLE,
             bridge.SyncStage.QUEUED,
@@ -622,7 +629,7 @@ def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transact
             bridge.SyncStage.FAILED,
         ):
             bridge.sync_stage = stage
-            assert bridge.effective_sync_stage == stage
+            assert bridge.get_effective_sync_stage() == stage
 
 
 @pytest.mark.django_db(transaction=True)
@@ -647,7 +654,7 @@ def test_run_bridge_sync_job_holds_the_live_lock(transactional_db: None) -> None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_queue_bridge_sync_marks_queued_and_defers_task(
+def test_request_sync_marks_queued_and_defers_task(
     transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -658,14 +665,14 @@ def test_queue_bridge_sync_marks_queued_and_defers_task(
     enqueued: list[tuple[str, dict[str, Any]]] = []
 
     def fake_enqueue_task(task_name: str, *, kwargs: dict[str, Any], **options: Any) -> None:
-        assert options == {}
+        assert options == {"using": "default"}
         enqueued.append((task_name, kwargs))
 
-    monkeypatch.setattr(integrate_queue, "enqueue_task", fake_enqueue_task)
+    monkeypatch.setattr("angee.integrate.models.bridges.enqueue_task", fake_enqueue_task)
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-bridge", model=SchedulerBridge)
 
-    integrate_queue.queue_bridge_sync(bridge, now=now)
+    bridge.request_sync(now=now)
 
     assert enqueued == [
         (
@@ -674,6 +681,7 @@ def test_queue_bridge_sync_marks_queued_and_defers_task(
                 "model_label": SchedulerBridge._meta.label_lower,
                 "pk": bridge.pk,
                 "timestamp": now.isoformat(),
+                "using": "default",
             },
         )
     ]
@@ -684,7 +692,7 @@ def test_queue_bridge_sync_marks_queued_and_defers_task(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_queue_bridge_sync_can_enqueue_duplicate_requests(
+def test_request_sync_can_enqueue_duplicate_requests(
     transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -694,15 +702,14 @@ def test_queue_bridge_sync_can_enqueue_duplicate_requests(
     now = timezone.now()
     enqueued: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        integrate_queue,
-        "enqueue_task",
+        "angee.integrate.models.bridges.enqueue_task",
         lambda _task_name, *, kwargs, **_options: enqueued.append(kwargs),
     )
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-duplicate", model=SchedulerBridge)
 
-    integrate_queue.queue_bridge_sync(bridge, now=now)
-    integrate_queue.queue_bridge_sync(bridge, now=now)
+    bridge.request_sync(now=now)
+    bridge.request_sync(now=now)
 
     assert len(enqueued) == 2
     bridge.refresh_from_db()
@@ -721,15 +728,14 @@ def test_stale_bridge_sync_task_payload_is_skipped(
     first = timezone.now()
     second = first + timedelta(seconds=5)
     monkeypatch.setattr(
-        integrate_queue,
-        "enqueue_task",
+        "angee.integrate.models.bridges.enqueue_task",
         lambda _task_name, *, kwargs, **_options: None,
     )
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-stale", model=SchedulerBridge, config={"items": 9})
 
-    integrate_queue.queue_bridge_sync(bridge, now=first)
-    integrate_queue.queue_bridge_sync(bridge, now=second)
+    bridge.request_sync(now=first)
+    bridge.request_sync(now=second)
 
     stale = integrate_tasks.sync_bridge_now(SchedulerBridge._meta.label_lower, bridge.pk, first.isoformat())
 
@@ -741,7 +747,7 @@ def test_stale_bridge_sync_task_payload_is_skipped(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_queue_bridge_sync_inside_outer_transaction_preserves_caller(
+def test_request_sync_inside_outer_transaction_preserves_caller(
     transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -758,7 +764,7 @@ def test_queue_bridge_sync_inside_outer_transaction_preserves_caller(
         bridge = make_integration("queued-db-duplicate", model=SchedulerBridge)
 
     with transaction.atomic():
-        integrate_queue.queue_bridge_sync(bridge, now=now)
+        bridge.request_sync(now=now)
         assert SchedulerBridge._base_manager.filter(pk=bridge.pk).exists()
         assert enqueued == []
 
@@ -813,7 +819,7 @@ def test_enqueue_due_bridges_claims_and_queues_rows(
         assert persist is False
         enqueued.append((bridge.pk, now))
 
-    monkeypatch.setattr(integrate_scheduler, "queue_bridge_sync", fake_queue_bridge_sync)
+    monkeypatch.setattr(SchedulerBridge, "request_sync", fake_queue_bridge_sync)
     with system_context(reason="test integrate scheduler setup"):
         due = make_integration(
             "queued-due",
@@ -870,14 +876,15 @@ def test_enqueue_due_bridges_resets_claim_when_dispatch_fails(
 
 @pytest.mark.django_db(transaction=True)
 def test_enqueue_due_bridges_rejects_outer_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reject an outer transaction before scanning or claiming any bridges."""
+    """Reject the selected producer transaction before querying or claiming rows."""
+    monkeypatch.setattr(integrate_scheduler, "models_with", lambda *, base: (SchedulerBridge,))
 
-    def unexpected_scan(**_kwargs: Any) -> None:
-        raise AssertionError("Scheduler scanned before enforcing autocommit.")
+    def unexpected_query(*args: Any) -> None:
+        raise AssertionError("Scheduler queried before enforcing producer autocommit.")
 
-    monkeypatch.setattr(integrate_scheduler, "models_with", unexpected_scan)
-    with transaction.atomic(), pytest.raises(RuntimeError, match="requires autocommit"):
-        enqueue_due_bridges()
+    with transaction.atomic(), connection.execute_wrapper(unexpected_query):
+        with pytest.raises(RuntimeError, match="requires autocommit"):
+            enqueue_due_bridges()
 
 
 @pytest.mark.django_db(transaction=True)

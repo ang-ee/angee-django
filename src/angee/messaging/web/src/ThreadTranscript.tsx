@@ -15,6 +15,7 @@ import {
   PaneToolbar,
   ReactionBar,
   avatarInitials,
+  calendarDay,
   formatDayLabel,
   useReactionGroups,
   useResolvedWidget,
@@ -32,6 +33,8 @@ import { messageFeedRows } from "./message-feed";
 import { useThreadMessageFeed } from "./thread-message-feed";
 
 const ESTIMATED_ROW_HEIGHT = 96;
+// inbox_transcript.py accepts at most 1000 membership ids per read.
+const MATCH_WINDOW_SIZE = 1000;
 
 type MessagingT = ReturnType<typeof useMessagingT>;
 
@@ -56,9 +59,12 @@ export interface ThreadTranscriptProps {
   /** Host controls join the transcript's one native pane toolbar. */
   toolbarActions?: readonly PaneToolbarAction[];
   timezone?: string;
-  /** Wrap the visible window with an owner-provided annotation context. */
+  /** Wrap a bounded, loaded ID set with annotations; resolve navigation from the native viewport on demand. */
   renderWindow?: (
     messages: readonly ThreadTranscriptRow[],
+    positioned: boolean,
+    feedAnchor: string,
+    viewportMessageId: () => string,
     children: React.ReactElement,
   ) => React.ReactElement;
   renderMessageActions?: (message: ThreadTranscriptRow) => React.ReactNode;
@@ -110,10 +116,10 @@ export function ThreadTranscript({
           { icon: "copy", label: t(allCopies ? "copies.collapse" : "copies.showAll"), pressed: allCopies, onClick: () => setAllCopies(!allCopies) },
         ]}
       />
-      {/* Remount per thread, anchor and copy mode: each is a different row set, so the
-          virtualizer's measurements and the scroll anchor start over. */}
+      {/* A loaded message anchor scrolls this body in place. Thread and copy mode
+          change the row set and reset the virtualizer's measurements. */}
       <TranscriptBody
-        key={`${threadId}:${anchor}:${allCopies}`}
+        key={`${threadId}:${allCopies}`}
         threadId={threadId}
         allCopies={allCopies}
         order={order}
@@ -142,12 +148,20 @@ function TranscriptBody({
   onAnchorChange,
 }: ThreadTranscriptProps & { allCopies: boolean }): React.ReactElement {
   const t = useMessagingT();
-  const transcript = useThreadMessageFeed(threadId, anchor, allCopies);
+  const [feedAnchor, setFeedAnchor] = React.useState(anchor);
+  const previousAnchor = React.useRef(anchor);
+  const transcript = useThreadMessageFeed(threadId, feedAnchor, allCopies);
   // Render oldest-to-newest so the latest turn sits at the bottom.
   const messages = React.useMemo(
     () => messageFeedRows(transcript.data).reverse(),
     [transcript.data],
   );
+  React.useEffect(() => {
+    if (previousAnchor.current === anchor) return;
+    previousAnchor.current = anchor;
+    const loaded = anchor.startsWith("message:") && messages.some((message) => message.id === anchor.slice(8));
+    if (!loaded) setFeedAnchor(anchor);
+  }, [anchor, messages]);
   const hasOlder = transcript.hasNextPage;
   const conversation = order === "conversation";
 
@@ -173,6 +187,7 @@ function TranscriptBody({
     count: messages.length,
     getItemKey: (index) => messages[index]!.id,
     anchorTo: conversation ? "end" : "start",
+    followOnAppend: conversation,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
     // Seed a viewport so rows window before the scroll element measures (also lets
@@ -185,26 +200,35 @@ function TranscriptBody({
 
   // Conversation mode keeps the viewport anchored when "Load older" prepends
   // earlier turns. Open at the selected message, or at the latest turn by default.
-  const scrolledThreadRef = React.useRef<string | null>(null);
+  const positionedAnchorRef = React.useRef<string | null>(null);
+  const [positioned, setPositioned] = React.useState(!conversation);
   React.useLayoutEffect(() => () => {
     // The virtualizer cancels pending scroll reconciliation on effect teardown.
     // A StrictMode replay with cached rows must request the initial position again.
-    scrolledThreadRef.current = null;
+    positionedAnchorRef.current = null;
   }, []);
   React.useLayoutEffect(() => {
     const scroll = scrollRef.current;
     if (!conversation || scroll === null || messages.length === 0) return;
-    if (scrolledThreadRef.current !== threadId) {
+    if (positionedAnchorRef.current !== anchor) {
       const anchorIndex = anchor.startsWith("message:")
         ? messages.findIndex((message) => message.id === anchor.slice(8))
         : -1;
+      if (anchor.startsWith("message:") && anchorIndex < 0) return;
+      if (anchorIndex < 0 && feedAnchor !== anchor) return;
       if (anchorIndex >= 0)
         virtualizer.scrollToIndex(anchorIndex, { align: "center" });
-      else if (!anchor)
+      else if (anchor.startsWith("date:")) {
+        const day = anchor.slice(5).split("@")[0]!;
+        const index = messages.findIndex((message) =>
+          calendarDay(new Date(message.sent_at ?? message.created_at), timezone) >= day);
+        virtualizer.scrollToIndex(index < 0 ? messages.length - 1 : index, { align: "center" });
+      } else if (!anchor)
         virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
-      scrolledThreadRef.current = threadId;
+      positionedAnchorRef.current = anchor;
+      setPositioned(true);
     }
-  }, [conversation, threadId, messages, totalSize, anchor, virtualizer]);
+  }, [conversation, messages, totalSize, anchor, feedAnchor, timezone, virtualizer]);
 
   function loadOlder(): void {
     if (!transcript.hasNextPage || transcript.isFetching) return;
@@ -301,14 +325,20 @@ function TranscriptBody({
       ) : null}
     </div>
   );
-  return renderWindow
-    ? renderWindow(
-        virtualItems.flatMap((item) =>
-          messages[item.index] ? [messages[item.index]!] : [],
-        ),
-        content,
-      )
-    : content;
+  // Membership depends on loaded IDs alone. Keep the latest 1000 when older
+  // history exceeds the server bound; scrolling cannot change the query key.
+  const matchWindow = messages.slice(-MATCH_WINDOW_SIZE);
+  const viewportMessageId = () => {
+    const offset = virtualizer.scrollOffset ?? 0;
+    const anchoredIndex = anchor.startsWith("message:")
+      ? messages.findIndex((message) => message.id === anchor.slice(8)) : -1;
+    const anchoredItem = virtualizer.getVirtualItems().find((item) => item.index === anchoredIndex);
+    if (anchoredItem && anchoredItem.start < offset + (scrollRef.current?.clientHeight ?? 0)
+      && anchoredItem.end > offset) return messages[anchoredIndex]!.id;
+    const item = virtualizer.getVirtualItemForOffset(offset);
+    return messages[item?.index ?? 0]?.id ?? "";
+  };
+  return renderWindow ? renderWindow(matchWindow, positioned, feedAnchor, viewportMessageId, content) : content;
 }
 
 /** The keyset "load more" control, one shape in both directions. */

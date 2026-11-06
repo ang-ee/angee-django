@@ -14,9 +14,9 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.base.fields.identity import SqidField
-from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.models.base import ProtectedModel
 from tests.tables import model_tables
 
 _model_counter = count()
@@ -61,7 +61,7 @@ def test_angee_node_id_uses_generic_public_id_boundary_for_plain_model() -> None
     instance = _bound_sqid_model(prefix="plain")(id=13)
 
     with patch("angee.graphql.node.public_id_of", return_value="plain-13") as public_id_of:
-        assert AngeeNode.id(instance) == "plain-13"
+        assert ProtectedNode.id(instance) == "plain-13"
 
     public_id_of.assert_called_once_with(instance)
 
@@ -85,7 +85,7 @@ def test_batch_identity_preserves_field_codec_input_keys_and_queryset_scope(
     fields["public_id_lookup"] = classmethod(lambda cls, value: {lookup_field: value})
     model = type(
         f"IdentityBatchThing{next(_model_counter)}",
-        (AngeeModel if is_sqid or identity_kind == "unique" else models.Model,),
+        (ProtectedModel if is_sqid or identity_kind == "unique" else models.Model,),
         {
             "__module__": __name__,
             "Meta": type("Meta", (), {"app_label": "tests", "managed": False}),
@@ -115,7 +115,7 @@ def test_batch_identity_preserves_field_codec_input_keys_and_queryset_scope(
             assert instance_from_public_id(
                 model, value, queryset=scoped,
             ) == resolved.get(value)
-            if issubclass(model, AngeeModel):
+            if issubclass(model, ProtectedModel):
                 assert scoped.from_public_id(value) == resolved.get(value)
 
 
@@ -124,7 +124,7 @@ def test_queryset_identity_treats_invalid_uuid_as_a_lookup_miss() -> None:
 
     model = type(
         f"IdentityUUIDThing{next(_model_counter)}",
-        (AngeeModel,),
+        (ProtectedModel,),
         {
             "__module__": __name__,
             "id": models.UUIDField(primary_key=True),
@@ -149,7 +149,7 @@ def test_batch_identity_preserves_native_custom_lookup_contract(
 
     model = type(
         f"IdentityCustomLookupThing{next(_model_counter)}",
-        (AngeeModel,),
+        (ProtectedModel,),
         {
             "__module__": __name__,
             "code": models.CharField(max_length=20),

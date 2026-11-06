@@ -47,7 +47,7 @@ def pairing_graphql(
     }
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "angee.integrate.impl.enqueue_task",
+        "angee.integrate.backends.base.enqueue_task",
         lambda name, *, kwargs, queue=None, expires=None, **_: sent.append(
             {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
         ),
@@ -102,8 +102,8 @@ def test_channel_pairing_bounds_arbitrary_backend_value_error(
     channel = _live_channel("msg-pairing-error")
     secret = "provider-secret-value"
     monkeypatch.setattr(
-        messaging_schema.connect,
-        "channel_pairing",
+        type(channel),
+        "pairing",
         lambda _channel: (_ for _ in ()).throw(ValueError(secret)),
     )
 
@@ -194,7 +194,7 @@ def test_reset_channel_pairing_wipes_store_and_restarts(
 ) -> None:
     """Reset stops, proves exit, clears identity/store, and resumes the channel."""
 
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: True)
     admin = _platform_admin("msg-pairing-reset-admin")
     channel = _live_channel("msg-pairing-reset")
     with system_context(reason="test.messaging.pairing.reset.seed"):
@@ -226,7 +226,7 @@ def test_reset_channel_pairing_refuses_without_a_cross_process_lock(
     """Destructive reset never trusts a process-local view of session liveness."""
 
     del pairing_graphql
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: False)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: False)
     admin = _platform_admin("msg-pairing-reset-blind-admin")
     channel = _live_channel("msg-pairing-reset-blind")
     store = session_store_path(channel)
@@ -252,7 +252,7 @@ def test_reset_channel_pairing_wipes_backend_declared_transients_only(
     """Reset preserves durable login material outside the backend's transient keys."""
 
     del pairing_graphql
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: True)
     monkeypatch.setattr(
         FakePairingBackend,
         "transient_material_keys",
@@ -629,7 +629,8 @@ def _schema() -> Any:
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
         for module in (iam_schema, integrate_schema, parties_schema, messaging_schema)
     ]
-    return GraphQLSchemas(addons).build("console")
+    # An addon-only build: donor addons are left out, so it declares itself partial.
+    return GraphQLSchemas(addons, partial_schema=True).build("console")
 
 
 def _execute(admin: Any, operation: str, variables: dict[str, Any]) -> dict[str, Any]:

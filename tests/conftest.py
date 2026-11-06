@@ -5,22 +5,21 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import re
 import sys
 import tempfile
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 from importlib.util import spec_from_file_location
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 from typing import Any, cast
 
 import pytest
 import tomlkit
 from django.apps import AppConfig
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
-from django.db import models
-from django.test import RequestFactory
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
@@ -29,6 +28,9 @@ from angee.agents.testing import models as agents_models  # noqa: F401 -- regist
 from angee.base.testing.packages import write_addon_distribution
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.testing.graphql import execute_schema as execute_schema
+from angee.iam.testing.graphql import graphql_request as graphql_request
+from angee.iam.testing.graphql import result_data as result_data
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
 from angee.intake.models import Need as AbstractNeed
@@ -41,7 +43,7 @@ from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscri
 from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import StreamPage
 from angee.integrate.testing.integration import Integration
-from angee.integrate_vcs.backend import Checkout, RepoDescriptor, TreeEntry, VCSBackend
+from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
 from angee.integrate_vcs.models import Source as AbstractSource
 from angee.integrate_vcs.models import Template as AbstractTemplate
@@ -52,7 +54,7 @@ from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
 from angee.knowledge_integrate_notion.models import NotionConnection as AbstractNotionConnection
-from angee.messaging.testing import models as messaging_models  # noqa: F401 -- register messaging test models
+from angee.messaging.testing import models as messaging_models
 from angee.messaging.testing.models import Channel
 from angee.platform.models import Addon as AbstractAddon
 from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
@@ -63,7 +65,8 @@ from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
-from angee.projects.models import DriveProjects, FolderProjects, VaultProjects
+from angee.projects.models import DriveProjects, FolderProjects
+from angee.projects_knowledge.models import VaultProjects
 from angee.proposals.models import DriveProposalAccess, FileProposalAccess
 from angee.spaces.models import VaultSpace
 from angee.storage.models import Backend as AbstractStorageBackend
@@ -84,17 +87,21 @@ from tests import (
 from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
+collect_ignore = ["provenance_engine"]
+if settings.SETTINGS_MODULE == "tests.settings":
+    # These contracts run in the isolated settings hosts selected by CI.
+    collect_ignore.extend(
+        [
+            "test_permissionless_base.py",
+            "test_permissionless_iam_composition.py",
+            "test_permissionless_graphql.py",
+            "test_permissioned_graphql.py",
+        ]
+    )
+
 # Settings reloads in the suite compose through ProjectContract, which starts
 # Sentry for a configured DSN; a developer's exported DSN never receives test errors.
 os.environ.pop("SENTRY_DSN", None)
-
-
-def standalone_relation(source: type[models.Model], name: str) -> models.Field:
-    """Keep a test model's copied FK without claiming its source's reverse accessor."""
-
-    field = source._meta.get_field(name)
-    _, _, args, kwargs = field.deconstruct()
-    return type(field)(*args, **(kwargs | {"related_name": "+"}))
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -116,8 +123,8 @@ def source_change_publishers() -> Iterator[None]:
 def composed_tables(composed_tables: None) -> None:
     """The source host's composed tables also carry the declared statement principals.
 
-    Extends the ``angee.base.testing`` plugin fixture of the same name: after its REBAC
-    sync, the install-tier principals and grants that admission reads are loaded
+    Extends the ``angee.iam.testing`` plugin fixture of the same name: after its
+    session REBAC sync, the install-tier principals and grants that admission reads are loaded
     (``angee.provenance.testing.load_statement_sources``), exactly as the composed
     host does.
     """
@@ -133,6 +140,9 @@ def activity_catalog(composed_tables: None) -> None:
 
     del composed_tables
     with system_context(reason="tests.projects.activity_catalog"):
+        from angee.resources.testing.models import Resource
+
+        Resource.objects.load_xref("angee.projects.activity_done", model=messaging_models.MessageSubtype)
         projects_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
         projects_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
 
@@ -257,6 +267,9 @@ class Page(RecordChangedOptIn, AbstractPage):
 class MarkdownPage(AbstractMarkdownPage, Page):
     """Concrete knowledge markdown child used by source-addon tests."""
 
+    created_at = Page.created_at
+    updated_at = Page.updated_at
+
     class Meta(AbstractMarkdownPage.Meta):
         """Django model options for the canonical test markdown page."""
 
@@ -269,6 +282,9 @@ class MarkdownPage(AbstractMarkdownPage, Page):
 
 class NotionConnection(AbstractNotionConnection, Integration):
     """Native Notion integration child for source-addon contract tests."""
+
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
 
     class Meta(AbstractNotionConnection.Meta):
         abstract = False
@@ -284,6 +300,9 @@ class VcsBridge(AbstractVcsBridge, Integration):
     module) rather than in a single test file — otherwise importing the schema from
     one test depends on another test having been collected first.
     """
+
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
 
     class Meta(AbstractVcsBridge.Meta):
         """Django model options for the canonical test VCS bridge."""
@@ -302,6 +321,9 @@ class Mount(AbstractMount, Integration):
     type follows the emitted runtime model so the ``integration_ptr`` relation
     in ``storage_integrate/permissions.zed`` resolves through the parent row.
     """
+
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
 
     class Meta(AbstractMount.Meta):
         """Django model options for the canonical test Mount."""
@@ -454,25 +476,6 @@ class StubVCSBackend(VCSBackend):
 
         del repository, ref
         return "stubsha"
-
-    @contextmanager
-    def materialize(self, repository: Any, *, ref: str, checkout: Checkout) -> Iterator[tuple[Path, str]]:
-        """Provide the configured source files through the native ingestion seam."""
-
-        del repository, ref, checkout
-        with tempfile.TemporaryDirectory(prefix="angee-stub-source-") as temporary:
-            root = Path(temporary).resolve()
-            for name, content in self.bridge.config.get("stub_blobs", {}).items():
-                path = root / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(str(content), encoding="utf-8")
-            yield root, "stubsha"
-
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
-        """Accept every webhook in tests."""
-
-        del vcs_bridge, request
-        return True
 
 
 class StubInferenceBackend(InferenceBackend):
@@ -669,7 +672,7 @@ class ExtcontribRole(Role):
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
-from angee.projects.testing import models as projects_models  # noqa: E402, F401
+from angee.projects.testing import models as projects_models  # noqa: E402
 from angee.provenance.testing import load_statement_sources  # noqa: E402
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
@@ -770,6 +773,9 @@ class Feed(AbstractFeed, Channel):
     ``Feed(AbstractFeed, Channel)``. Lives in conftest (like ``VcsBridge``) because
     ``angee.posts.schema`` binds its console types at import time via ``apps.get_model``.
     """
+
+    created_at = Channel.created_at
+    updated_at = Channel.updated_at
 
     class Meta(AbstractFeed.Meta):
         """Django model options for the canonical test feed."""
@@ -937,7 +943,7 @@ def catalogue_package(name: str, *, depends_on: tuple[str, ...] = (), descriptio
     }
 
 
-def SchemaAddon(schemas: dict[str, dict[str, tuple[object, ...]]]) -> AppConfig:  # noqa: N802 - kept for call sites
+def SchemaAddon(schemas: dict[str, dict[str, tuple[object, ...]]]) -> AppConfig:
     """Build a package-backed addon exposing the supplied executable schema objects."""
 
     return make_addon(schemas=schemas)
@@ -948,49 +954,24 @@ def addon_schema(schemas: dict[str, Any], name: str, *composed: dict[str, Any]) 
 
     ``composed`` mappings (another addon's ``schemas``, e.g. the shared record
     verbs) contribute their same-named bucket parts after the addon's own.
+    This helper explicitly declares the build partial because donor addons may
+    be absent from these isolated test schemas.
     """
 
     parts = {
         key: tuple(part for source in (schemas, *composed) for part in source.get(name, {}).get(key, ()))
         for key in SCHEMA_PART_KEYS
     }
-    return GraphQLSchemas([SchemaAddon({name: parts})]).build(name)
+    return GraphQLSchemas([SchemaAddon({name: parts})], partial_schema=True).build(name)
 
 
-def graphql_request(user: Any) -> Any:
-    """Return a bare POST request carrying ``user``."""
+def authored_graphql_document(path: Path, export: str) -> str:
+    """Read the GraphQL document selected by an authored web fragment."""
 
-    request = RequestFactory().post("/graphql/public/")
-    request.user = user
-    return request
-
-
-def execute_schema(
-    schema: Any,
-    query: str,
-    variables: dict[str, Any] | None = None,
-    *,
-    user: Any | None = None,
-    request: Any | None = None,
-) -> Any:
-    """Execute a GraphQL operation with a request-shaped context."""
-
-    request = request or graphql_request(user or AnonymousUser())
-    actor = getattr(request, "user", AnonymousUser())
-    with actor_context(actor):
-        return schema.execute_sync(
-            query,
-            variable_values=variables or {},
-            context_value=SimpleNamespace(request=request),
-        )
-
-
-def result_data(result: Any) -> dict[str, Any]:
-    """Return result data after asserting the operation succeeded."""
-
-    assert result.errors is None, result.errors
-    assert result.data is not None
-    return cast(dict[str, Any], result.data)
+    source = path.read_text(encoding="utf-8")
+    match = re.search(rf"export const {re.escape(export)} = graphql\(`(.*?)`\);", source, re.S)
+    assert match is not None, f"{export} missing from {path}"
+    return match.group(1)
 
 
 def assert_private_hasura_insert_access(

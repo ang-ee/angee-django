@@ -5,43 +5,45 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from types import NotImplementedType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.expressions import BaseExpression
-from django.db.models.functions import Coalesce, NullIf
 from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     actor_context,
     check_new,
     current_actor,
+    database_context,
     system_context,
     to_object_ref,
     user_subject_type,
 )
 from rebac.backends import backend
-from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.exceptions import DomainError, RecordAccessSubjectRefused
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.permissions import actor_user_id, instance_actor
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
-from angee.intake.choices import NeedAccessAction
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.permissions import actor_user_id, instance_actor
+from angee.intake.choices import NeedAccessAction, NeedImportance
+from angee.intake.managers import NeedManager
+from angee.intake.querysets import (
+    _requested_by_viewer_filter,
+    _requester_name_filter,
+    filer_name_expression,
+)
 from angee.intake.resources import NeedResource
-from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
-from angee.provenance.contrib.angee.managers import AngeeHistoryManager
-from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
@@ -70,301 +72,15 @@ def _require_user_create() -> None:
         raise PermissionDenied("Account create access is required.")
 
 
-class NeedImportance(models.TextChoices):
-    """Binary requester signal, deliberately distinct from planning priority."""
-
-    NORMAL = "normal", "Normal"
-    IMPORTANT = "important", "Important"
-
-
-class NeedQuerySet[NeedT: Need](AngeeHistoryQuerySet[NeedT]):
-    """Request collections follow their stored target, including project tasks."""
-
-    def for_project(self, project: models.Model) -> Self:
-        """Include direct requests and requests on the project's tasks."""
-
-        return self.filter(models.Q(project=project) | models.Q(task__project=project))
-
-
-_NeedManagerBase = AngeeHistoryManager.from_queryset(NeedQuerySet)
-
-
-class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
-    """Own manual capture, message capture, and triage-task construction."""
-
-    TARGET_FIELDS = {
-        "projects.project": "project",
-        "projects.task": "task",
-    }
-
-    def file_task(
-        self,
-        *,
-        queue: Any,
-        title: str,
-        body: str,
-        party: Any,
-        idempotency_key: str,
-        due_date: Any = None,
-        estimate: float | None = None,
-        importance: str = "normal",
-    ) -> Any:
-        """File an actor-owned task and its need atomically, replaying the whole request."""
-
-        if not queue.has_access("read"):
-            raise PermissionDenied("Queue read access is required to select a task container.")
-        if not party.has_access("read"):
-            raise PermissionDenied("Party read access is required to file a request.")
-        task_model = apps.get_model("projects", "Task")
-        actor = current_actor()
-        scope = actor_user_id(actor)
-        if scope is None:
-            raise PermissionDenied("Filing a task requires a user actor.")
-        values = dict(queue_id=queue.pk, title=title, note=body, due_date=due_date, estimate=estimate)
-        claim_values = {"task": values, "party": party, "importance": importance}
-
-        with changeset(fresh=True), transaction.atomic():
-            created = changeset_model().objects.claim_created(
-                f"intake.file-task:{scope}",
-                idempotency_key,
-                values=claim_values,
-                model=task_model,
-                unavailable=ValidationError(
-                    {"idempotency_key": "The claimed task is unavailable."},
-                ),
-            )
-            if created is not None:
-                return task_model.objects.with_actor(actor).get(pk=created.pk)
-            task = task_model.objects.with_actor(actor).create(**values, created_by_id=scope)
-            self.capture(target=task, party=party, body=body, importance=importance)
-            require_changeset().record_created(task)
-            return task
-
-    def target_model(self, model_label: str) -> type[Project] | type[Task]:
-        """Return the declared relation target for one allowed need target label."""
-
-        normalized = str(model_label).strip().lower()
-        if normalized not in self.TARGET_FIELDS:
-            raise ValidationError({"target": "Needs may target only projects or tasks."})
-        field = self.TARGET_FIELDS[normalized]
-        return self.model.task.field.related_model if field == "task" else self.model.project.field.related_model
-
-    @classmethod
-    def target_field(cls, target: models.Model) -> str:
-        """Return the stored target field owned by ``target``'s model."""
-
-        try:
-            return cls.TARGET_FIELDS[target._meta.label_lower]
-        except KeyError as error:
-            raise ValidationError({"target": "Needs may target only projects or tasks."}) from error
-
-    def capture(
-        self,
-        *,
-        target: Project | Task,
-        body: str,
-        party: models.Model | None = None,
-        importance: str = "normal",
-    ) -> NeedT:
-        """Capture one exact manual request onto ``target`` under its write lock.
-
-        The authored action has no separate idempotency token, so its replay
-        identity is the normalized manual payload: target, body, party, and
-        importance. A caller intentionally recording distinct identical evidence
-        can edit the wording; ordinary action retries converge on the existing row.
-        PostgreSQL makes that convergence exact with a target-row lock; SQLite
-        provides the single-writer boundary through database-level serialization.
-        """
-
-        if target.pk is None:
-            raise ValidationError({"target": "A saved project or task is required."})
-        body = str(body or "").strip()
-        if not body:
-            raise ValidationError({"body": "A manual need requires a body."})
-        try:
-            importance_value = NeedImportance(getattr(importance, "value", importance))
-        except ValueError as error:
-            raise ValidationError({"importance": "Choose normal or important."}) from error
-
-        target_field = self.target_field(target)
-        target_filter = {f"{target_field}_id": target.pk}
-        actor = current_actor()
-        with transaction.atomic():
-            with system_context(reason="intake.need.capture.lookup"):
-                locked_target = type(target).objects.sudo(reason="intake.need.capture.target").locked_get(pk=target.pk)
-                existing = (
-                    self.model._base_manager.filter(
-                        **target_filter,
-                        party_id=None if party is None else party.pk,
-                        body=body,
-                        importance=importance_value,
-                        source_message__isnull=True,
-                    )
-                    .order_by("pk")
-                    .first()
-                )
-            if existing is not None:
-                return existing.with_actor(actor)
-
-            need = self.model(
-                **{target_field: locked_target},
-                party=party,
-                body=body,
-                importance=importance_value,
-            )
-            need.full_clean(validate_unique=False, validate_constraints=False)
-            if party is not None:
-                need.validate_party_assignment()
-            # ``Need.save()`` deliberately persists an authorized party assignment
-            # as a second, elevated write after the actor-scoped insert.  Keep the
-            # actor on the instance rather than wrapping the whole save in the
-            # queryset insertion scope: that scope would also pin the nested write
-            # and defeat the instance-local elevation.
-            need.with_actor(actor).save(force_insert=True, using=self.db)
-            return need
-
-    def capture_from_message(
-        self,
-        message: Message,
-        *,
-        queue: Queue,
-        values: dict[str, Any] | None = None,
-    ) -> NeedT:
-        """Capture one message into triage; its clean replay no-op is SELECT-FOR-UPDATE-backed."""
-
-        if message.pk is None or queue.pk is None:
-            raise ValidationError("A saved message and intake queue are required.")
-        message_model = type(message)
-        with system_context(reason="intake.need.capture_message"), transaction.atomic():
-            locked_message = (
-                message_model.objects.sudo(reason="intake.need.capture_message.message")
-                .lock_if_supported()
-                .select_related("sender", "thread__title")
-                .get(pk=message.pk)
-            )
-            existing = (
-                self.model._base_manager.select_related("task").filter(source_message_id=locked_message.pk).first()
-            )
-            if existing is not None:
-                return existing
-
-            channel = locked_message.transport_channel(reason="intake.capture.configuration")
-            if channel is None:
-                raise ValidationError("Message capture requires its intake channel.")
-            mapped = dict(channel.mapped_task_values(locked_message) if values is None else values)
-            claimed_name = mapped.pop("claimed_name", "")
-            submission = locked_message.webform_submission()
-            task = self._create_triage_task(
-                queue=queue,
-                title=mapped.pop("title", self._message_title(locked_message)),
-                note=mapped.pop("note", str(locked_message.preview or "")),
-                created_by_id=locked_message.created_by_id,
-                values=mapped,
-            )
-            need = self.model(
-                task=task,
-                claimed_name=claimed_name,
-                claimed_email=(submission.unverified_submitter_email or "") if submission else "",
-                source_message=locked_message,
-                importance=NeedImportance.NORMAL,
-                created_by_id=locked_message.created_by_id,
-                updated_by_id=locked_message.updated_by_id,
-            )
-            need.full_clean(validate_unique=False, validate_constraints=False)
-            need.sudo(reason="intake.need.capture_message.create").save(_access_decision=True)
-            attachment_model = apps.get_model("messaging", "ThreadAttachment")
-            attachment_model.objects.bind_source_thread(task, locked_message.thread)
-            try:
-                # Identity refusals roll back linking, never the captured evidence.
-                with transaction.atomic():
-                    need.party_id = self._resolved_sender_party_id(locked_message)
-                    if need.party_id is None and need.claimed_email and channel.intake_requester_domains:
-                        need._link_requester(
-                            allow_create=need.claimed_email.rsplit("@", 1)[-1].lower()
-                            in channel.intake_requester_domains,
-                            system_reason=f"intake.requester_domain:{channel.slug}",
-                        )
-                    if need.party_id is not None:
-                        need.save(_access_decision=True, update_fields=("party",))
-            except DomainError, ValidationError, PermissionDenied:
-                logger.info("Requester linking was refused for need %s; capture is retained.", need.pk)
-                need.refresh_from_db()
-            # Capture owns the initial question only after identity hydration;
-            # no transient actorless question needs to be withdrawn.
-            need.access_decision = need._new_access_decision()
-            self.model.system_queryset().filter(pk=need.pk).update(access_decision=need.access_decision)
-            return need
-
-    def _create_triage_task(
-        self,
-        *,
-        queue: Queue,
-        title: str,
-        note: str,
-        project: Project | None = None,
-        created_by_id: Any = None,
-        values: dict[str, Any] | None = None,
-    ) -> Task:
-        """Create one task in ``queue``'s system triage stage."""
-
-        stage_model = apps.get_model("work", "Stage")
-        triage = stage_model._base_manager.filter(queue_id=queue.pk, category="triage").first()
-        if triage is None:
-            raise ValidationError({"queue": "The intake queue has no triage stage."})
-        task_model = apps.get_model("projects", "Task")
-        title_limit = task_model.title.field.max_length
-        assert title_limit is not None
-        normalized_title = " ".join(str(title or "").split())[:title_limit]
-        task = task_model(
-            queue=queue,
-            stage=triage,
-            project=project,
-            title=normalized_title or "Captured need",
-            note=str(note or ""),
-            created_by_id=created_by_id,
-            updated_by_id=created_by_id,
-            owner=None,
-            **(values or {}),
-        )
-        with task._work_verb_write():
-            task.full_clean(validate_unique=False, validate_constraints=False)
-            task.sudo(reason="intake.need.create_triage_task").save(ownerless=True)
-        return task
-
-    @staticmethod
-    def _message_title(message: Message) -> str:
-        """Return a stable task title from the message preview or thread title."""
-
-        preview = str(message.preview or "").strip()
-        if preview:
-            return preview
-        thread = getattr(message, "thread", None)
-        title = getattr(getattr(thread, "title", None), "text", "")
-        return str(title or "Captured message")
-
-    @staticmethod
-    def _resolved_sender_party_id(message: Message) -> Any | None:
-        """Resolve the sender through parties' matching owner and return its party id."""
-
-        sender = message.sender
-        if sender is None:
-            return None
-        if sender.party_id is None:
-            party_model = apps.get_model("parties", "Party")
-            party_model.objects.suggest_for(sender)
-            sender.refresh_from_db(fields=("party", "party_link_confirmed"))
-        return sender.party_id if sender.party_link_confirmed else None
-
-
-class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One external or manually-authored request attached to one semantic target."""
 
     resource_class = NeedResource
     sqid_prefix = "ned_"
-    # The requester's name is a sort axis through the linked party: an empty
-    # name and an unreadable party both tie as NULL through the shared guard.
-    hasura_aliases = {
-        "filer_name": NullIf(models.F("party__display_name"), models.Value(""), output_field=models.TextField()),
+    # The Need owner's projection supplies the same display name to filtering
+    # and ordering, preserving the project-filed party gate.
+    hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], BaseExpression]]] = {
+        "filer_name": filer_name_expression,
     }
 
     party = models.ForeignKey(
@@ -459,14 +175,23 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 raise ValidationError({"canonical": error.code}) from error
         return None
 
-    def _lock_access_question(self) -> Any:
+    def _lock_access_question(self, *, using: str | None = None) -> Any:
         """Lock the observed question before its Need; callers recheck the FK."""
 
-        decision_id = type(self).system_queryset().filter(pk=self.pk).values_list(
-            "access_decision_id", flat=True,
-        ).get()
+        using = using or self._state.db
+        decision_id = (
+            type(self)
+            .system_queryset()
+            .using(using)
+            .filter(pk=self.pk)
+            .values_list(
+                "access_decision_id",
+                flat=True,
+            )
+            .get()
+        )
         if decision_id is not None:
-            apps.get_model("decisions", "Decision").objects.sudo(
+            apps.get_model("decisions", "Decision").objects.db_manager(using).sudo(
                 reason="intake.need.assignment_question",
             ).locked_get(pk=decision_id)
         return decision_id
@@ -479,11 +204,6 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
     @property
     def access_verdict(self) -> list[str] | None:
         return self.access_decision.verdict if self.access_decision is not None else None
-
-    @property
-    def access_answered_by_id(self) -> Any:
-        """Project the readable decision's answerer identity for server-side consumers."""
-        return self.access_decision.answered_by_id if self.access_decision is not None else None
 
     @property
     def access_answered_by(self) -> Any:
@@ -500,37 +220,51 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
 
         if decision_id is not None:
             with system_context(reason="intake.need.replace_access_question"):
-                apps.get_model("decisions", "Decision").objects.withdraw(decision_id, actor=actor)
+                (
+                    apps.get_model("decisions", "Decision")
+                    .objects.db_manager(self._state.db)
+                    .get(pk=decision_id)
+                    .withdraw(actor=actor)
+                )
 
     def _new_access_decision(self) -> Any:
         """Ask one question assigned to the target's current sharers."""
-        with system_context(reason="intake.need.access_question"):
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), system_context(reason="intake.need.access_question"):
             readers = backend().lookup_subjects(
-                resource=to_object_ref(self), action="share", subject_type=user_subject_type(),
+                resource=to_object_ref(self),
+                action="share",
+                subject_type=user_subject_type(),
             )
             assignees = tuple(
-                get_user_model().objects.filter(pk__in=[actor_user_id(ref) for ref in readers], is_active=True)
+                get_user_model()
+                .objects.db_manager(using)
+                .filter(pk__in=[actor_user_id(ref) for ref in readers], is_active=True)
             )
-            return apps.get_model("decisions", "Decision").objects.ask(
-                DecisionRequest(
-                    kind="intake.access",
-                    records=(self,),
-                    assignees=assignees,
-                    requester=None,
-                    proposal=DecisionProposal.model_validate(
-                        {
-                            "alternatives": (
-                                {
-                                    "key": NeedAccessAction.INTAKE_APPROVE,
-                                    "label": "Approve access",
-                                    "outcome": "approved",
-                                },
-                                {"key": NeedAccessAction.INTAKE_DENY, "label": "Deny access", "outcome": "denied"},
-                            )
-                        }
+            return (
+                apps.get_model("decisions", "Decision")
+                .objects.db_manager(using)
+                .ask(
+                    DecisionRequest(
+                        kind="intake.access",
+                        records=(self,),
+                        assignees=assignees,
+                        requester=None,
+                        proposal=DecisionProposal.model_validate(
+                            {
+                                "alternatives": (
+                                    {
+                                        "key": NeedAccessAction.INTAKE_APPROVE,
+                                        "label": "Approve access",
+                                        "outcome": "approved",
+                                    },
+                                    {"key": NeedAccessAction.INTAKE_DENY, "label": "Deny access", "outcome": "denied"},
+                                )
+                            }
+                        ),
                     ),
-                ),
-                actor=None,
+                    actor=None,
+                )
             )
 
     @property
@@ -538,9 +272,9 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         """Load the target for server-side validation, without exposing its projection."""
 
         if self.task_id is not None:
-            return type(self).task.field.related_model._base_manager.get(pk=self.task_id)
+            return type(self).task.field.related_model._base_manager.using(self._state.db).get(pk=self.task_id)
         assert self.project_id is not None
-        return type(self).project.field.related_model._base_manager.get(pk=self.project_id)
+        return type(self).project.field.related_model._base_manager.using(self._state.db).get(pk=self.project_id)
 
     def clean(self) -> None:
         """Reject missing or double targets; a task's project is never copied."""
@@ -560,14 +294,17 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             if user is not None:
                 self.validate_record_access_subject("party", user)
 
-    def _account_for_party(self, party_id: Any) -> Any | None:
+    def _account_for_party(self, party_id: Any, *, using: str | None = None) -> Any | None:
         """Resolve an assignment through the parties identity owner."""
 
         if party_id is None:
             return None
         party_model = type(self).party.field.related_model
+        using = using or self._state.db
         with system_context(reason="intake.need.party_subject"):
-            return party_model.objects.user_for(party_model._base_manager.get(pk=party_id))
+            return party_model.objects.db_manager(using).user_for(
+                party_model._base_manager.using(using).get(pk=party_id),
+            )
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """A request's holder must also satisfy the target's holder invariant."""
@@ -584,6 +321,8 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         assignment-only ``save_base`` persists the authorized relation change.
         """
 
+        using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        kwargs["using"] = using
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             update_fields = set(update_fields)
@@ -603,16 +342,17 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             ):
                 super().save(**kwargs)
                 return
-        with transaction.atomic():
+        with database_context(using), transaction.atomic(using=using):
             observed_decision = None
             if not self._state.adding:
-                observed_decision = self._lock_access_question()
+                observed_decision = self._lock_access_question(using=using)
             previous: Mapping[str, object] | None = (
                 None
                 if self._state.adding
                 else (
                     type(self)
-                    .objects.sudo(reason="intake.need.assignment_before")
+                    .objects.db_manager(using)
+                    .sudo(reason="intake.need.assignment_before")
                     .lock_if_supported()
                     .filter(pk=self.pk)
                     .values("task_id", "project_id", "party_id", "access_decision_id")
@@ -629,6 +369,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 for name in assignment_names
             }
             candidate = type(self)(pk=self.pk, **values)
+            candidate._state.db = using
             candidate.clean()
             assignment_changed = (
                 previous is None or any(values[name] != previous[name] for name in assignment_names)
@@ -642,8 +383,8 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 candidate.validate_party_assignment()
             reset_decision = False
             if previous is not None and values["party_id"] != previous["party_id"] and not _access_decision:
-                old_user = self._account_for_party(previous["party_id"])
-                new_user = self._account_for_party(values["party_id"])
+                old_user = self._account_for_party(previous["party_id"], using=using)
+                new_user = self._account_for_party(values["party_id"], using=using)
                 reset_decision = values["party_id"] is None or old_user != new_user
             if assignment_changed and not elevated:
                 if previous is not None and not self.has_access("share"):
@@ -667,7 +408,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                     self.sudo(reason="intake.assign_party")
                     try:
                         if separate_assignment:
-                            self.save_base(force_update=True, update_fields=set(values))
+                            self.save_base(using=using, force_update=True, update_fields=set(values))
                         else:
                             super().save(**{**kwargs, "update_fields": set(values)})
                     finally:
@@ -679,14 +420,16 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 # This owner-controlled FK write is part of the same save/revision.
                 self.access_decision = self._new_access_decision()
                 self.admitted_user = None
-                type(self).system_queryset().filter(pk=self.pk).update(
+                type(self).system_queryset().using(using).filter(pk=self.pk).update(
                     access_decision=self.access_decision,
                     admitted_user=None,
                 )
             if reset_decision and previous is not None:
                 self._withdraw_access_decision(previous["access_decision_id"], actor=instance_actor(self))
             if reset_decision:
-                apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(self.target)
+                apps.get_model("messaging", "ThreadFollower").objects.db_manager(using).end_unreadable_for_record(
+                    self.target
+                )
             if assignment_changed and values["task_id"] is not None and values["party_id"] is not None:
                 with system_context(reason="intake.need.follow_requester"):
                     account = candidate._account_for_party(values["party_id"])
@@ -701,7 +444,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         is written, and an existing person is never attached to a user.
         """
 
-        users = get_user_model().objects
+        users = get_user_model().objects.db_manager(self._state.db)
         existing = self._account_for_party(self.party_id)
         if existing is not None and not existing.is_active:
             raise ValidationError({"conflict": "The assigned account is inactive."})
@@ -722,13 +465,17 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             else:
                 user = users.create_person_as_system(username=email, email=email, reason=system_reason)
         with system_context(reason="intake.need.link_requester"):
-            party = apps.get_model("parties", "Party").objects.for_user(user)
-            handle = apps.get_model("parties", "Handle").objects.upsert(platform="email", value=email)
+            party = apps.get_model("parties", "Party").objects.db_manager(self._state.db).for_user(user)
+            handle = (
+                apps.get_model("parties", "Handle")
+                .objects.db_manager(self._state.db)
+                .upsert(platform="email", value=email)
+            )
             # A claimed address is unverified: parties' claim owner records it for
             # review, with this request as its readable evidence, and it decides
             # nothing. Both callers' gates already authorized it, so it runs as their
             # system work, never as a decider's write on the requester's party.
-            apps.get_model("parties", "Party").objects.propose_claimed_handle_as_system(
+            apps.get_model("parties", "Party").objects.db_manager(self._state.db).propose_claimed_handle_as_system(
                 party, handle, evidence=self, reason="intake.need.link_requester"
             )
             self.party = party
@@ -746,15 +493,17 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         if self.access_decision_id is None:
             raise ValidationError({"action": "This need has no access question; create a new access request."})
         # Both entrypoints lock the decision first, then its asking owner.
-        with actor_context(actor), transaction.atomic():
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), actor_context(actor), transaction.atomic(using=using):
             decision = (
                 apps.get_model("decisions", "Decision")
-                .objects.sudo(
+                .objects.db_manager(using)
+                .sudo(
                     reason="intake.answer.lock",
                 )
                 .locked_get(pk=self.access_decision_id)
             )
-            locked = type(self).objects.sudo(reason="intake.answer.need").locked_get(pk=self.pk)
+            locked = type(self).objects.db_manager(using).sudo(reason="intake.answer.need").locked_get(pk=self.pk)
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if locked.access_decision_id != decision.pk:
@@ -770,7 +519,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 if decision.verdict == [NeedAccessAction.INTAKE_APPROVE]:
                     raise ValidationError({"action": "Approved access is final."})
                 decision = locked._new_access_decision()
-                type(self).objects.filter(pk=locked.pk).update(access_decision=decision)
+                type(self).objects.db_manager(using).filter(pk=locked.pk).update(access_decision=decision)
             decision = decision.decide(actor=actor, chosen=[action], revision=decision.revision)
         self.refresh_from_db()
         return self.admitted_user
@@ -785,29 +534,33 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             decision_revision=decision.revision,
         )
 
-    @transaction.atomic
     def admit_requester(self, user: models.Model) -> Any:
         """Assign, approve, and follow one person through the existing decision owner."""
 
-        if getattr(user, "kind", None) != "person":
-            raise ValidationError({"user": "Choose a person account."})
-        with system_context(reason="intake.need.admit_requester.party"):
-            party = apps.get_model("parties", "Party").objects.for_user(user)
-        self.party = party
-        self.save(update_fields=("party", "updated_at"))
-        approved = self.decide_access(str(NeedAccessAction.INTAKE_APPROVE))
-        if approved is None or not self.target.thread_reader_allowed(user):
-            raise PermissionDenied("The admitted requester must be able to read the record.")
-        with system_context(reason="intake.need.admit_requester.follow"):
-            self.target.message_subscribe(user=user)
-        return approved
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        if user._state.db != using:
+            raise ValueError("A request and its admitted user must use the same database.")
+        with database_context(using), transaction.atomic(using=using):
+            if getattr(user, "kind", None) != "person":
+                raise ValidationError({"user": "Choose a person account."})
+            with system_context(reason="intake.need.admit_requester.party"):
+                party = apps.get_model("parties", "Party").objects.db_manager(self._state.db).for_user(user)
+            self.party = party
+            self.save(update_fields=("party", "updated_at"))
+            approved = self.decide_access(str(NeedAccessAction.INTAKE_APPROVE))
+            if approved is None or not self.target.thread_reader_allowed(user):
+                raise PermissionDenied("The admitted requester must be able to read the record.")
+            with system_context(reason="intake.need.admit_requester.follow"):
+                self.target.message_subscribe(user=user)
+            return approved
 
-    @transaction.atomic
     def remove_requester(self) -> None:
         """Remove the requester seat and its decision-backed read together."""
 
-        self.party = None
-        self.save(update_fields=("party", "updated_at"))
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            self.party = None
+            self.save(update_fields=("party", "updated_at"))
 
     def reset_access(self, *, confirmed: bool, expected_revision: int) -> Any:
         """Retain requester identity and ask a fresh independent access question.
@@ -820,9 +573,10 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         if not confirmed:
             raise ValidationError({"confirmed": "Confirm resetting requester access."})
         actor = instance_actor(self)
-        with actor_context(actor), transaction.atomic():
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), actor_context(actor), transaction.atomic(using=using):
             observed_decision = self._lock_access_question()
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             if locked.access_decision_id != observed_decision:
                 raise ValidationError({"revision": "The access question has changed; reload it."})
             if not locked.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
@@ -837,9 +591,11 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 expected_revision=expected_revision,
                 update_fields=("admitted_user", "updated_at"),
             )
-            type(self).system_queryset().filter(pk=locked.pk).update(access_decision=decision)
+            type(self).system_queryset().using(using).filter(pk=locked.pk).update(access_decision=decision)
             locked._withdraw_access_decision(observed_decision, actor=actor)
-            apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(locked.target)
+            apps.get_model("messaging", "ThreadFollower").objects.db_manager(using).end_unreadable_for_record(
+                locked.target
+            )
         self.refresh_from_db()
         return self
 
@@ -855,8 +611,14 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         if action not in NeedAccessAction.values:
             raise ValidationError({"action": "Choose approve or deny."})
         actor = instance_actor(self)
-        with actor_context(actor), transaction.atomic():
-            locked = type(self).objects.sudo(reason="intake.need.decide_access.lock").locked_get(pk=self.pk)
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), actor_context(actor), transaction.atomic(using=using):
+            locked = (
+                type(self)
+                .objects.db_manager(using)
+                .sudo(reason="intake.need.decide_access.lock")
+                .locked_get(pk=self.pk)
+            )
             # Authorization uses the actor; the locked copy retains unredacted facts.
             if not self.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
                 "share"
@@ -905,11 +667,19 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         if self.pk is None or queue.pk is None:
             raise ValidationError("A saved need and queue are required for conversion.")
         actor = current_actor()
-        with system_context(reason="intake.need.convert_to_task"), transaction.atomic():
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        if queue._state.db != using:
+            raise ValueError("A request and its task queue must use the same database.")
+        with (
+            database_context(using),
+            system_context(reason="intake.need.convert_to_task"),
+            transaction.atomic(using=using),
+        ):
             observed_decision = self._lock_access_question()
             locked = (
                 type(self)
-                .objects.sudo(reason="intake.need.convert_to_task.need")
+                .objects.db_manager(using)
+                .sudo(reason="intake.need.convert_to_task.need")
                 .lock_if_supported()
                 .select_related("task", "project", "source_message")
                 .get(pk=self.pk)
@@ -921,12 +691,16 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 task = locked.task
             else:
                 title = locked.body or getattr(locked.source_message, "preview", "")
-                task = type(self).objects._create_triage_task(
-                    queue=queue,
-                    project=locked.project,
-                    title=title,
-                    note=locked.body,
-                    created_by_id=locked.created_by_id,
+                task = (
+                    apps.get_model("projects", "Task")
+                    .objects.db_manager(self._state.db)
+                    .capture_triage(
+                        queue=queue,
+                        project=locked.project,
+                        title=title,
+                        note=locked.body,
+                        created_by_id=locked.created_by_id,
+                    )
                 )
                 locked.task = task
                 locked.project = None
@@ -935,73 +709,6 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             task.with_actor(actor)
         self.refresh_from_db()
         return task
-
-
-def task_requester_rows(task: str = "pk") -> models.QuerySet[Any]:
-    """A task's requests in attribution order; the first is the one the task shows as filed by.
-
-    ``task`` names the outer query's column holding the task id.
-    """
-
-    return (
-        apps.get_model("intake", "Need")
-        ._base_manager.filter(
-            task_id=models.OuterRef(task),
-        )
-        .order_by("created_at", "pk")
-    )
-
-
-def task_requester_name() -> models.Subquery:
-    """The name a task shows for its requester: the first request's party, else the name it claimed."""
-
-    blank = models.Value("", output_field=models.TextField())
-    return models.Subquery(
-        task_requester_rows()
-        .annotate(
-            name=Coalesce(
-                NullIf(models.F("party__display_name"), blank),
-                NullIf(models.F("claimed_name"), blank),
-                output_field=models.TextField(),
-            )
-        )
-        .values("name")[:1],
-        output_field=models.TextField(null=True),
-    )
-
-
-def _requester_name_filter(queryset: models.QuerySet[Any]) -> models.Subquery:
-    """Filter on the first request's shown name, never its email or a later request's name."""
-
-    del queryset
-    return task_requester_name()
-
-
-def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expression:
-    """Whether the first Need's party is the viewer's person (MTI child), regardless of later Needs.
-
-    It compares the actor with itself only, so it reveals nothing about anyone else's requests;
-    an actor without a user matches nothing. REBAC's broader requester relation
-    can include later approved requests; this filter only attributes the first.
-    """
-
-    user_id = actor_user_id(relation_actor(queryset))
-    if user_id is None:
-        return models.Value(False, output_field=models.BooleanField())
-    # Uncorrelated, so the database evaluates it once from the viewer's own requests.
-    filed = (
-        apps.get_model("intake", "Need")
-        ._base_manager.filter(
-            party__person__user=user_id,
-            pk=models.Subquery(task_requester_rows("task_id").values("pk")[:1]),
-        )
-        .values("task_id")
-    )
-    return models.Case(
-        models.When(pk__in=filed, then=models.Value(True)),
-        default=models.Value(False),
-        output_field=models.BooleanField(),
-    )
 
 
 class TaskIntakeFilters(Composable, extends="projects.Task"):
@@ -1019,7 +726,6 @@ class TaskIntakeFilters(Composable, extends="projects.Task"):
 class ProjectIntakeSetup(Composable, extends="projects.Project"):
     """Link unassigned request parties before downstream setup admits people."""
 
-
     class Meta:
         abstract = True
 
@@ -1028,9 +734,11 @@ class ProjectIntakeSetup(Composable, extends="projects.Project"):
 
         need_model = apps.get_model("intake", "Need")
         needs = (
-            need_model.objects.none()
+            need_model.objects.db_manager(self._state.db).none()
             if self.converted_from_id is None
-            else need_model.objects.filter(task_id=self.converted_from_id, party__isnull=True)
+            else need_model.objects.db_manager(self._state.db).filter(
+                task_id=self.converted_from_id, party__isnull=True
+            )
         )
         for need in needs:
             if party is None:
@@ -1043,14 +751,10 @@ class ProjectIntakeSetup(Composable, extends="projects.Project"):
 class ChannelIntake(Composable, extends="messaging.Channel"):
     """Same-row intake fields and capture behavior for ``messaging.Channel``."""
 
-
     class IntakeTrigger(models.TextChoices):
-        """Declared capture triggers; only all-messages is implemented in v1."""
+        """Implemented channel capture trigger."""
 
         ALL_MESSAGES = "all_messages", "All messages"
-        REACTION = "reaction", "Reaction"
-        MENTION = "mention", "Mention"
-        COMMAND = "command", "Command"
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "intake_queue",
@@ -1061,7 +765,7 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("intake_queue", "intake_trigger")
     hasura_sortable_fields: ClassVar[tuple[str, ...]] = hasura_filterable_fields
     hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ()
-    hasura_groupable_fields: ClassVar[tuple[str, ...]] = hasura_filterable_fields
+    hasura_groupable_fields: ClassVar[tuple[str, ...]] = (*hasura_filterable_fields, "intake_queue__name")
     hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
 
     intake_queue = models.ForeignKey(
@@ -1111,9 +815,10 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
                 used.add(name)
         self._validate_requester_domains()
 
-    def _validate_requester_domains(self) -> None:
+    def _validate_requester_domains(self, *, using: str | None = None) -> None:
         """A domain configuration is ingress authorization, checked before writing."""
 
+        using = using or self._state.db or router.db_for_write(type(self), instance=self)
         domains = self.intake_requester_domains
         if not isinstance(domains, list):
             raise ValidationError({"intake_requester_domains": "Use a list of lower-case domains."})
@@ -1130,7 +835,8 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
             []
             if self._state.adding
             else type(self)
-            ._base_manager.filter(pk=self.pk)
+            ._base_manager.using(using)
+            .filter(pk=self.pk)
             .values_list(
                 "intake_requester_domains",
                 flat=True,
@@ -1142,7 +848,7 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
             if not elevated:
                 if not self.has_access("write"):
                     raise PermissionDenied("Configuring requester domains requires channel write permission.")
-                with actor_context(actor):
+                with database_context(using), actor_context(actor):
                     _require_user_create()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
@@ -1150,7 +856,7 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
 
         update_fields = kwargs.get("update_fields")
         if self._state.adding or update_fields is None or "intake_requester_domains" in update_fields:
-            self._validate_requester_domains()
+            self._validate_requester_domains(using=kwargs.get("using"))
         super().save(*args, **kwargs)
 
     def mapped_task_values(self, message: Message) -> dict[str, Any]:
@@ -1178,15 +884,13 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
         return values
 
     def should_capture_message(self, message: Message) -> bool:
-        """Return whether this channel's configured v1 trigger accepts ``message``."""
+        """Return whether this channel accepts ``message``."""
 
         if self.intake_queue_id is None:
             return False
         match str(self.intake_trigger):
             case self.IntakeTrigger.ALL_MESSAGES:
                 return True
-            case self.IntakeTrigger.REACTION | self.IntakeTrigger.MENTION | self.IntakeTrigger.COMMAND:
-                return False
             case _:
                 raise ValidationError({"intake_trigger": "Unknown intake trigger."})
 
@@ -1198,4 +902,4 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
         queue = self.intake_queue
         assert queue is not None  # should_capture_message required the configured queue.
         need_model = apps.get_model("intake", "Need")
-        return need_model.objects.capture_from_message(message, queue=queue)
+        return need_model.objects.db_manager(self._state.db).capture_from_message(message, queue=queue)

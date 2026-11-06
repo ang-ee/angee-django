@@ -1,3 +1,4 @@
+import { useReconcileMutationResponse } from "@angee/refine";
 import { type Row } from "@angee/metadata";
 import {
   useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
@@ -5,75 +6,85 @@ import { useBusyRun, useDeleteWithPreview, useTrashRecord } from "@angee/ui";
 import {
   refineResourceName,
   useModelMetadata,
+  useResourceInvalidates,
 } from "@angee/metadata";
 import type {
   DataResourceMetadata,
 } from "@angee/metadata";
 
+type DeleteOptions = Parameters<ReturnType<typeof useDeleteWithPreview>["remove"]>[1];
+type MoveOptions = Pick<NonNullable<Parameters<ReturnType<typeof useUpdate<RowRecord, HttpError, Record<string, unknown>>>["mutateAsync"]>[0]>, "errorNotification">;
+
 export interface FileActions {
   busy: boolean;
   /** Soft-delete a file into the Trash. */
-  trash: (id: string) => Promise<void>;
+  trash: (id: string, options?: DeleteOptions) => Promise<boolean>;
   /** Pull a file back out of the Trash. */
-  restore: (id: string) => Promise<void>;
+  restore: (id: string) => Promise<boolean>;
   /** Move a file into a folder by public id, or `null` for the root. */
-  move: (id: string, folder: string | null) => Promise<void>;
+  move: (id: string, folder: string | null, options?: MoveOptions) => Promise<void>;
   /** Soft-delete many files in one pass, refetching once. */
-  trashMany: (ids: Iterable<string>) => Promise<void>;
+  trashMany: (ids: Iterable<string>, options?: DeleteOptions) => Promise<boolean>;
   /** Restore many files in one pass, refetching once. */
-  restoreMany: (ids: Iterable<string>) => Promise<void>;
+  restoreMany: (ids: Iterable<string>) => Promise<boolean>;
 }
 
 /**
  * The single-file lifecycle verbs (trash, restore) over the shared record
  * soft-delete verbs. Renames go through the record form's own update. Resource
- * caches invalidate in the owners; `onChanged` lets a caller refresh a separate
- * authored view.
+ * and authored queries reconcile through the shared mutation owner.
  */
-export function useFileActions(
-  options: { onChanged?: () => void } = {},
-): FileActions {
-  const { onChanged } = options;
+export function useFileActions(): FileActions {
   const metadata = useModelMetadata(FILE_MODEL);
   const resource = metadata?.resource ?? null;
   const deleteWithPreview = useDeleteWithPreview(resource);
   const trashRecord = useTrashRecord(resource);
+  const reconcile = useReconcileMutationResponse();
+  const invalidates = useResourceInvalidates([FILE_MODEL],
+    (_data: unknown, input: { id?: string | number }) => [{ model: FILE_MODEL, id: String(input.id) }]);
   const updateFile = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
-    invalidates: ["list", "many", "detail"],
+    invalidates: [],
+    mutationOptions: { onSuccess: (result, input) => reconcile(result.data, input, {
+      records: [{ model: FILE_MODEL, id: String(input.id) }], invalidates,
+    }) },
   });
-  const { busy, run } = useBusyRun(onChanged);
+  const { busy, run } = useBusyRun();
 
   return {
     busy,
-    trash: (id) =>
+    trash: (id, options) =>
       run(async () => {
         requireFileResource(resource);
-        await deleteWithPreview.remove(id);
+        return deleteWithPreview.remove(id, options);
       }),
     restore: (id) =>
       run(async () => {
         requireFileResource(resource);
-        await trashRecord.restore(id);
+        return trashRecord.restore(id);
       }),
-    move: (id, folder) =>
+    move: (id, folder, options) =>
       run(async () => {
         requireFileResource(resource);
-        await updateFile.mutateAsync({ id, values: { folder } });
+        await updateFile.mutateAsync({ id, values: { folder }, ...options });
       }),
-    trashMany: (ids) =>
-      run(async () => {
+    trashMany: (ids, options) =>
+      run(() => reconcile.batch(async (reconciliation) => {
         for (const id of ids) {
           requireFileResource(resource);
-          await deleteWithPreview.remove(id);
+          if (!(await deleteWithPreview.remove(id, { ...options, reconciliation }))) return false;
         }
-      }),
+        return true;
+      })),
     restoreMany: (ids) =>
-      run(async () => {
+      run(() => reconcile.batch(async (reconciliation) => {
         requireFileResource(resource);
-        for (const id of ids) await trashRecord.restore(id);
-      }),
+        for (const id of ids) {
+          if (!(await trashRecord.restore(id, { reconciliation }))) return false;
+        }
+        return true;
+      })),
   };
 }
 

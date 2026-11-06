@@ -21,7 +21,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/schema.py` | Strawberry types, resources, authored roots, the `schemas` mapping | `src/angee/tags/schema.py:44-72,205-261`, `src/angee/money/schema.py:62-109`, `examples/src/example/notes/schema.py:22-95` |
-| `<addon>/pyproject.toml` `[tool.angee.graphql] schema` | Only a non-default schema module reference; default is `schema.py` | `src/angee/graphql/schema.py:668` (`_raw_schemas`) |
+| `<addon>/pyproject.toml` `[tool.angee.graphql] schema` | Only a non-default schema module reference; default is `schema.py` | `src/angee/graphql/schema.py:636` (`_raw_schemas`) |
 | `src/angee/graphql/schema.py` | Buckets `SCHEMA_PART_KEYS:75`, merge/build per name and finalized metadata `GraphQLSchemas:306`, error sanitizer `AngeeSchema:90` | `:237` `SchemaParts`, `:650` `schema_parts_for` |
 | `src/angee/graphql/data/hasura.py` | `hasura_model_resource:1374`, `AngeeHasuraWriteBackend:201`, `HasuraLines:107`, `public_pk_decoder:644`, `declared_hasura_resource_fields:1005` | `:1796` writable-relation decode guard |
 | `src/angee/graphql/data/pydantic_resource.py` | `hasura_pydantic_resource:50` (computed, read-only rows) | `src/angee/iam/schema.py:692-709` |
@@ -35,8 +35,8 @@ Run `angee-design` first for the owner map; `angee-models` and
 
 - `AngeeNode` gives every type `id`, `display_name`, `redacted_fields`; `permissions_field(names)` answers held permissions. Never re-declare them.
 - `hasura_model_resource` + `AngeeHasuraWriteBackend(model, public_id_fields=…)` + `public_pk_decoder` own list/detail/aggregate/groups/insert/update/delete roots and the resource metadata; a model never gets a hand-written CRUD root.
-- Donors other addons already ship: `TaggedNode` + `tags_input_extensions` (`tags/schema.py:116,147`), `AuthoredRefMixin` (`iam/audit.py:39`), `integration_input_extensions` (`integrate/schema.py:1631`).
-- Verbs: `ActionResult` + `action_guard` + `authorized_action_target`/`authorized_permission_target`; cascade preview via `delete_by_public_id` + `attach_delete_preview_metadata`; sharing via `angee.graphql.sharing`.
+- Donors other addons already ship: `TaggedNode` + `tags_input_extensions` (`tags/schema.py:116,147`), `AuthoredRefMixin` (`iam/audit.py:39`), `integration_input_extensions` (`integrate/schema.py:1710`).
+- Verbs: `ActionResult` + `action_guard` + `authorized_action_target`/`authorized_permission_target`; cascade preview via `delete_by_public_id` + `attach_delete_preview_metadata`; sharing via `angee.iam.graphql.sharing`.
 - Live reads: `changes(Model, field=…)`; computed rows: `hasura_pydantic_resource`.
 - Upstream first: `strawberry_django.type/field` (`only`, `select_related`, `prefetch_related`, `annotate`), `extend=True`, strawberry-django-hasura and -aggregates native knobs (`docs/stack.md#backend` rows at `:55-60`).
 - Web: `graphql()` from `@angee/gql/<schema>` with `useAuthoredQuery`/`useAuthoredMutation` (`@angee/refine`), `useRecordActionMutation` (`packages/ui/src/views/resource/record-action.ts:93`); resource views read metadata and need no documents.
@@ -62,7 +62,7 @@ Run `angee-design` first for the owner map; `angee-models` and
            return f"{self.code} — {self.name}"
    ```
 
-   A relation projects as the target's node type (`currency: CurrencyType`); a computed label binds `AngeeNode.display_name` with the columns `__str__` reads (notes `:26-28`). If a closed set is hand-typed → an `enum.StrEnum` with `@strawberry.enum`, never `str`.
+   A relation projects as the target's node type (`currency: CurrencyType`); inherited `AngeeNode.display_name` takes direct label dependencies from the model's `record_display_paths`. A custom computed label declares native `only`, `select_related`, or `annotate` hints on its field. If a closed set is hand-typed → an `enum.StrEnum` with `@strawberry.enum`, never `str`.
    **Owner rule:** the model owns fields, choices and relations; the type projects them from the composed runtime class, so enums and extensions already reflect every addon ([Rules](../../../docs/backend/guidelines.md#rules) **GraphQL types and enums bind to the composed runtime model**).
 
 2. **Declare the resource once.** Query intent is declared here; capabilities are finalized from the composed schema.
@@ -186,7 +186,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 - A hand-written list query or CRUD mutation for a model → `hasura_model_resource`; [Rules](../../../docs/backend/guidelines.md#rules) "GraphQL schema files declare Strawberry types".
 - `from <addon>.models import Model` to bind a type → `apps.get_model`; [Rules](../../../docs/backend/guidelines.md#rules) "Cross-addon and generated-model references go through Django's app registry".
 - Editing another addon's type or input, or importing its schema to add a field → `type_extensions` / `input_extensions`; [Rules](../../../docs/backend/guidelines.md#rules) **Extension is symmetric across five axes**.
-- Permission, status or implementation branching in a resolver → model/manager verb + `authorized_*_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy). Caveated subjects are rejected by `angee.E024` (`src/angee/base/checks.py:37`); the path is field-backed conditional relations.
+- Permission, status or implementation branching in a resolver → model/manager verb + `authorized_*_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy). Caveated subjects are rejected by `angee.E024` (`src/angee/iam/checks.py:37`); the path is field-backed conditional relations.
 - A writable FK or M2M without a decode → `public_id_fields` / `field_id_decode`; `src/angee/graphql/data/hasura.py:1796`.
 - `readOnly` in a form to hide a server-owned column → exclude it from `insertable`/`updatable`; [GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **Server-owned fields are excluded from the write surface**.
 - `= None` on an optional create input over a non-null column → `strawberry.UNSET`; [GraphQL pitfalls](references/pitfalls.md) **`hasura_model_resource` create `full_clean`s the input**.
@@ -196,7 +196,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 
 ## Verify
 
-Validators: `angee.graphql.E001`/`E002` from Django system checks (every named schema builds, `src/angee/graphql/checks.py`), `schema --check` for SDL and metadata drift, host codegen for documents, `tests/test_layering.py` for the contracts import closure, the focused pytest module, `ruff` and `mypy` on touched files. Commands and roots: [Python and composition contracts](../../../docs/checks.md#python-and-composition-contracts) (lane), [Composition and schema](../../../docs/checks.md#composition-and-schema) and [Frontend packages and addon fragments](../../../docs/checks.md#frontend-packages-and-addon-fragments) (stack root). Loop: `.agents/skills/slice/SKILL.md`.
+Validators: `angee.graphql.E001`/`E002` from Django system checks (every named schema builds, `src/angee/graphql/checks.py`), `angee.graphql.E003` (the in-memory channel layer refused when a non-eager worker broadcasts; set `REDIS_URL` or the test opt-in `ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER`), `schema --check` for SDL and metadata drift, host codegen for documents, `tests/test_layering.py` for the contracts import closure, the focused pytest module, `ruff` and `mypy` on touched files. Commands and roots: [Python and composition contracts](../../../docs/checks.md#python-and-composition-contracts) (lane), [Composition and schema](../../../docs/checks.md#composition-and-schema) and [Frontend packages and addon fragments](../../../docs/checks.md#frontend-packages-and-addon-fragments) (stack root). Loop: `.agents/skills/slice/SKILL.md`.
 
 Done means: `check` is clean; `runtime/schemas/<name>.graphql` shows the roots the resource declaration and authored fields imply, and `<name>.metadata.json` lists the resource with those roots as in the notes snapshot (`test_schema_metadata.py:15-60`); `runtime/gql/<name>/` exports each authored document; the composed and per-package web typechecks pass; a non-admin reader test passes and a denied actor reads not-found.
 
@@ -206,7 +206,7 @@ A jj workspace lane has no host, database or JS install: run the focused pytest 
 
 - Create `full_clean`s the input: model and input defaults must agree, `JSONField(default=dict)` needs `blank=True`, and factory invariants belong on the queryset's `insert()` ([GraphQL pitfalls](references/pitfalls.md) **`hasura_model_resource` create `full_clean`s the input**).
 - A status reads as the uppercase enum name and writes as the lowercase model value, inside line inputs too ([GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **A status field is read/write-asymmetric**).
-- `only=[...]` must list every column the resolver or an inherited `display_name` dereferences; test narrow selections at several row counts ([GraphQL pitfalls](references/pitfalls.md) **A `strawberry_django.field(only=[...])` hint must list every column the resolver dereferences**, [Rules](../../../docs/backend/guidelines.md#rules) "Declare computed GraphQL field dependencies with native Strawberry-Django").
+- `only=[...]` must list every column a custom resolver dereferences. Inherited `display_name` takes direct model-owned columns and relations from `record_display_paths`; a column beyond a relation needs specialized GraphQL hints (`only` with `select_related` or an annotation). Test narrow selections at several row counts ([GraphQL pitfalls](references/pitfalls.md) **A `strawberry_django.field(only=[...])` hint must list every column the resolver dereferences**, [Rules](../../../docs/backend/guidelines.md#rules) "Declare computed GraphQL field dependencies with native Strawberry-Django").
 - Intersect write-only fields out of the read selection or the detail query is invalid and the form loads blank ([GraphQL pitfalls](references/pitfalls.md) **Intersect write-only fields out of the read/return selection**).
 - Input coercion errors fire before resolvers and never reach `validationErrors`; guard required inputs from `rootFields.requiredCreateFields` ([GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **Validation surfaces two ways**).
 - A custom value field registers its wire type beside its field module (`register_field_type`, `src/angee/graphql/field_types.py:33`), never from a later `ready()` ([Schema lifecycle and change publication](../../../docs/backend/guidelines.md#schema-lifecycle-and-change-publication) **A custom model value field registers its GraphQL wire type when its field module imports**).

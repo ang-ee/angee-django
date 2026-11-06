@@ -31,9 +31,9 @@ from rebac import system_context
 
 from angee.base.models.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.integrate import queue as integrate_queue
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.events import EventKind
+from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.states import StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
@@ -65,10 +65,6 @@ User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
 integrate_vcs_schema = importlib.import_module("angee.integrate_vcs.schema")
-_BRIDGE_SYNCED = str(EventKind.BRIDGE_SYNCED)
-"""Raw stored value of one integration event kind (``str`` for clean typing)."""
-
-
 def test_integration_node_resolves_nested_relations(
     composed_tables: None,
 ) -> None:
@@ -144,6 +140,145 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
     }
     assert {row["display_name"] for row in rows["record_links"]} == {f"person:{index}" for index in range(1, 6)}
     assert len(many) <= len(one) + 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_record_link_source_fields_are_batched_at_one_five_ten_twenty(composed_tables: None) -> None:
+    """Connector URL and label share a page prefetch, independent of link count."""
+
+    del composed_tables
+    bridge = make_integration("link-source-budget", model=Channel)
+    with system_context(reason="test link source budget"):
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        for index in range(20):
+            RecordLink.objects.observe(stream, f"person:{index}")
+    schema = _schema()
+    document = """query LinkSources($limit: Int!) {
+        record_links(limit: $limit) { id source_url source_label }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=bridge.owner)
+        for size in (1, 5, 10, 20)
+    }
+    admin = _platform_admin("link-source-budget-admin")
+    admin_reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["record_links"]) == size
+        assert [row["source_label"] for row in read.data["record_links"]] == [
+            f"person:{index}" for index in range(size)
+        ]
+        assert all(row["source_url"] is None for row in read.data["record_links"])
+        # One page hook supplies streams and connectors; the merged read proof
+        # now uses nine fixed statements at every page size.
+        assert read.statement_count == 9, (size, read.statement_count)
+        read.assert_no_audit_writes()
+        read.assert_bytes(
+            total=120_000, largest=30_000,
+            cause="the composed policy pre-reads each referenced type (policy fan-out)",
+        )
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+    for size, read in admin_reads.items():
+        assert len(read.data["record_links"]) == size
+        assert read.statement_count == 11, (size, read.statement_count)
+        read.assert_no_audit_writes()
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        admin_reads[larger].assert_flat_from(admin_reads[smaller])
+
+
+def test_stream_failure_labels_use_projected_source(composed_tables: None) -> None:
+    """A linked failure uses the stream's selected connector for its labels."""
+
+    del composed_tables
+    bridge = make_integration("failure-source-label", model=Channel)
+    with system_context(reason="test stream failure source label"):
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "person:1")
+        link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
+    schema = _schema()
+    result = _data(_execute(schema, "{ sync_streams { failures { source_label source_url } } }", user=bridge.owner))
+    assert len(result["sync_streams"]) == 1
+    assert result["sync_streams"][0]["failures"] == [{"source_label": "person:1", "source_url": None}]
+
+
+@pytest.mark.postgresql
+@pytest.mark.django_db(transaction=True)
+def test_bridge_status_fields_share_page_reads_at_one_five_ten_twenty(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bridge failure counts and live-lock status have fixed page query overhead."""
+
+    del composed_tables
+    admin = _platform_admin("bridge-status-budget")
+    for index in range(20):
+        make_integration(f"bridge-status-{index:02d}", model=VcsBridge)
+    schema = _schema()
+    document = """query BridgeStatus($limit: Int!) {
+        vcs_bridges(limit: $limit) { id open_failure_count is_syncing }
+    }"""
+    snapshot = integrate_schema.task_lock_snapshot
+    calls: list[str] = []
+
+    def record_snapshot(*, using: str) -> Any:
+        calls.append(using)
+        return snapshot(using=using)
+
+    monkeypatch.setattr(integrate_schema, "task_lock_snapshot", record_snapshot)
+    reads = {}
+    for size in (1, 5, 10, 20):
+        calls.clear()
+        reads[size] = measure_graphql_document(schema, document, {"limit": size}, actor=admin)
+        assert calls == ["default"], (size, calls)
+    for size, read in reads.items():
+        assert len(read.data["vcs_bridges"]) == size
+        assert all(row["open_failure_count"] == 0 and row["is_syncing"] is False
+                   for row in read.data["vcs_bridges"])
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        assert read.statement_count == (8 if connection.vendor == "postgresql" else 7), (size, read.statement_count)
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=16_000, largest=4_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+
+
+@pytest.mark.postgresql
+def test_live_bridge_stage_uses_one_postgresql_lock_snapshot(composed_tables: None) -> None:
+    """Live rows share a lock snapshot and distinguish a held lock from stale stages."""
+
+    del composed_tables
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL advisory lock snapshot")
+    admin = _platform_admin("bridge-live-stage-budget")
+    bridges = [make_integration(f"bridge-live-stage-{index:02d}", model=VcsBridge) for index in range(20)]
+    with system_context(reason="test bridge live stage budget"):
+        VcsBridge._base_manager.filter(pk__in=[bridge.pk for bridge in bridges]).update(
+            sync_stage=VcsBridge.SyncStage.SYNCING,
+        )
+    schema = _schema()
+    document = """query BridgeStages($limit: Int!) {
+        vcs_bridges(limit: $limit, order_by: [{created_at: asc}]) { id is_syncing sync_stage }
+    }"""
+    with bridge_advisory_lock(bridges[0]) as acquired:
+        assert acquired
+        reads = {
+            size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
+            for size in (1, 5, 10, 20)
+        }
+    for size, read in reads.items():
+        assert len(read.data["vcs_bridges"]) == size
+        assert read.data["vcs_bridges"][0]["is_syncing"] is True
+        assert read.data["vcs_bridges"][0]["sync_stage"] == "SYNCING"
+        assert all(row["is_syncing"] is False and row["sync_stage"] == "FAILED"
+                   for row in read.data["vcs_bridges"][1:])
+        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
+        assert read.statement_count == 5, (size, read.statement_count)
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=18_000, largest=8_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
 
 
 def test_sync_stream_filter_and_batched_integration_projection(composed_tables: None) -> None:
@@ -330,14 +465,21 @@ def test_record_sources_filter_by_readable_target_and_project_connector_url(comp
       }
     """
     variables = {"model": "integrate.SyncStream", "id": _public_id(stream)}
-    visible = _data(_execute(_schema(), query, variables, user=bridge.owner))["record_links"]
+    schema = _schema()
+    with CaptureQueriesContext(connection) as captured:
+        visible = _data(_execute(schema, query, variables, user=bridge.owner))["record_links"]
     assert visible == [{
         "id": _public_id(link),
         "external_key": "message:1",
         "source_url": None,
         "stream": {"key": "messages", "integration": {"display_name": bridge.record_display_label}},
     }]
-    assert _data(_execute(_schema(), query, variables, user=outsider_bridge.owner))["record_links"] == []
+    proof_sql = [item["sql"] for item in captured if "_angee_reference_key" in item["sql"]]
+    assert len(proof_sql) == 1
+    assert f'FROM "{RecordLink._meta.db_table}"' in proof_sql[0]
+    assert f'FROM "{SyncStream._meta.db_table}"' in proof_sql[0]
+    assert proof_sql[0].count("_angee_reference_key") == 1
+    assert _data(_execute(schema, query, variables, user=outsider_bridge.owner))["record_links"] == []
 
 
 @pytest.mark.parametrize(
@@ -526,6 +668,24 @@ def test_concrete_target_list_query_cost_is_bounded_by_child_types(
         many_rows = _data(_execute(schema, query, user=admin))["integrations"]
     assert sum(row["concrete_target"]["state"] == "AVAILABLE" for row in many_rows) == 5
     assert len(many) <= len(one) + 1
+
+
+def test_prepared_concrete_children_rescope_actor_and_exposure(composed_tables: None) -> None:
+    """A page's visible child cannot be reused for a different actor or schema."""
+
+    del composed_tables
+    bridge = make_integration("target-cache-scope", model=VcsBridge)
+    admin = _platform_admin("target-cache-admin")
+    outsider = User.objects.create_user(username="target-cache-outsider")
+    exposed = {VcsBridge._meta.label}
+    row = (
+        Integration.objects.with_actor(admin)
+        .with_concrete_children(actor=admin)
+        .get(pk=bridge.pk)
+    )
+    assert len(row.concrete_children(actor=admin, exposed_model_labels=exposed)[1]) == 1
+    assert row.concrete_children(actor=admin, exposed_model_labels=set())[1] == []
+    assert row.concrete_children(actor=outsider, exposed_model_labels=exposed)[1] == []
 
 
 def test_integration_groups_aggregate_runs_with_rebac_scope(
@@ -742,7 +902,7 @@ def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
         )
     )["insert_oauth_clients_one"]
 
-    client = OAuthClient.objects.as_user(admin).get(sqid=created["id"])
+    client = OAuthClient.objects.with_actor(admin).get(sqid=created["id"])
     assert client.discovery_url == "https://accounts.google.com/.well-known/openid-configuration"
     assert client.authorize_endpoint == "https://accounts.google.com/o/oauth2/v2/auth"
     assert client.default_scopes == [
@@ -848,7 +1008,6 @@ def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None
             owner=user,
             backend_class="stub",
             lifecycle="disconnected",
-            webhook_secret="created-secret",
         )
         integration = Integration.objects.get(pk=bridge.pk)
 
@@ -859,7 +1018,6 @@ def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None
         assert bridge.owner_id == integration.owner_id
         assert bridge.vendor_id == integration.vendor_id
         assert bridge.credential_id == integration.credential_id
-        assert str(bridge.webhook_secret) == "created-secret"
 
 
 def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
@@ -1132,6 +1290,8 @@ def test_webhook_crud_secret_write_only(
     # ``secret`` is accepted on the input but never rendered on the output type.
     assert "secret" in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
     assert "secret" not in _sdl_block(console_sdl, "type WebhookSubscriptionType")
+    assert "event_kinds" not in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
+    assert "event_kinds" not in _sdl_block(console_sdl, "type WebhookSubscriptionType")
     # The creator owns a new subscription; ownership is never a client-written column.
     assert "owner" not in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
     # The create mutation is contributed to the console mutation root.
@@ -1162,7 +1322,6 @@ def test_webhook_crud_secret_write_only(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="top-secret",
-            event_kinds=[_BRIDGE_SYNCED],
         )
     subscription_id = str(subscription.sqid)
 
@@ -1175,7 +1334,6 @@ def test_webhook_crud_secret_write_only(
               webhook_subscriptions_by_pk(id: $id) {
                 target_url
                 enabled
-                event_kinds
                 owner { username }
               }
             }
@@ -1187,7 +1345,6 @@ def test_webhook_crud_secret_write_only(
     assert read_back == {
         "target_url": "https://hooks.example.test/events",
         "enabled": True,
-        "event_kinds": [_BRIDGE_SYNCED],
         "owner": {"username": "webhook-owner"},
     }
     # Querying the absent ``secret`` field is a schema error, proving it is write-only.
@@ -1237,7 +1394,6 @@ def test_integration_action_mutations_are_admin_only(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="original-secret",
-            event_kinds=[_BRIDGE_SYNCED],
         )
     sub_id = str(subscription.sqid)
 
@@ -1418,9 +1574,7 @@ def test_sync_integration_queues_bridge_for_an_admin(
         queued_bridge.sync_progress = {"stage": queued_bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
         queued_bridge.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"])
 
-    monkeypatch.setattr(integrate_queue, "queue_bridge_sync", fake_queue_bridge_sync)
-    monkeypatch.setattr("angee.integrate.schema.queue_bridge_sync", fake_queue_bridge_sync)
-    monkeypatch.setattr("angee.integrate_vcs.schema.queue_bridge_sync", fake_queue_bridge_sync)
+    monkeypatch.setattr(VcsBridge, "request_sync", fake_queue_bridge_sync)
 
     result = _data(
         _execute(
@@ -1478,7 +1632,6 @@ def test_rotate_webhook_secret_changes_the_stored_secret(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="original-secret",
-            event_kinds=[_BRIDGE_SYNCED],
         )
     sub_id = str(subscription.sqid)
 
@@ -1512,7 +1665,6 @@ def test_test_webhook_delivery_records_failure_status(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="original-secret",
-            event_kinds=[_BRIDGE_SYNCED],
         )
 
     def fail_delivery(self: WebhookSubscription, body: bytes) -> str:

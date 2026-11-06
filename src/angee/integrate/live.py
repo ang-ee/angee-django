@@ -8,6 +8,7 @@ QR rendering libraries; ``integrate.session`` owns the worker-only qrcode import
 from __future__ import annotations
 
 import enum
+import hashlib
 import shutil
 import time
 from collections.abc import Mapping
@@ -17,12 +18,14 @@ from typing import Any
 import strawberry
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.db import DEFAULT_DB_ALIAS
+from rebac.database import write_alias
 
+from angee.base.locks import task_locks_are_cross_process
 from angee.integrate.constants import SESSION_PROCESS_STOP_SECONDS
 from angee.integrate.constants import STOP_JOIN_SECONDS as STOP_JOIN_SECONDS
 from angee.integrate.constants import WAKE_SECONDS as WAKE_SECONDS
 from angee.integrate.locks import bridge_is_locked
-from angee.jobs.locks import task_locks_are_cross_process
 
 AWAITING_PASSWORD_WAKE_SECONDS = 1.0
 """Deliberate 1 Hz wake while awaiting a password; bounded by operator action."""
@@ -98,9 +101,13 @@ class SessionLoggedOut(Exception):
 
 
 def session_store_path(bridge: Any) -> Path:
-    """Return the bridge's session directory under the stack-persisted data dir."""
+    """Preserve the default store path; isolate nondefault database identities below the provider."""
 
-    return Path(settings.ANGEE_DATA_DIR) / bridge.live_impl.key / str(bridge.sqid)
+    using = write_alias(type(bridge), using=bridge._state.db, instance=bridge)
+    provider = Path(settings.ANGEE_DATA_DIR) / bridge.live_impl.key
+    if using != DEFAULT_DB_ALIAS:
+        provider = provider / ".databases" / hashlib.sha256(using.encode("utf-8")).hexdigest()
+    return provider / str(bridge.sqid)
 
 
 def reset_session_store(bridge: Any) -> None:
@@ -112,7 +119,8 @@ def reset_session_store(bridge: Any) -> None:
 def await_session_exit(bridge: Any, *, timeout: float | None = None) -> None:
     """Wait for the bridge's advisory lock to clear before touching its store."""
 
-    if not task_locks_are_cross_process():
+    using = write_alias(type(bridge), using=bridge._state.db, instance=bridge)
+    if not task_locks_are_cross_process(using=using):
         raise ImproperlyConfigured(
             "Resetting live pairing needs a cross-process task lock backend to prove the "
             "live session released its store; this deployment's lock backend is process-local. "

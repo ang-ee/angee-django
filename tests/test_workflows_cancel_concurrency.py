@@ -15,6 +15,7 @@ from tests.test_workflows_review_concurrency import submit, wait_for_lock
 from tests.workflow_steps import Echo, document
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.usefixtures("workflow_step_classes"),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
@@ -40,7 +41,7 @@ def test_cross_run_cancellation_releases_the_caller_before_locking_the_target(ex
         key = "cancel_other"
 
         def run(self, ctx):
-            ctx.cancel_run(ctx.load(WorkflowRun, target.sqid))
+            ctx.load(WorkflowRun, target.sqid).cancel_on_commit(ctx.actor)
             requested.set()
             assert release_caller.wait(10)
             return ctx.fail("Discard this body.") if case == "caller_rollback" else ctx.done(ctx.input)

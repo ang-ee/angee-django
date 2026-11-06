@@ -31,7 +31,6 @@ dependencies = [
     "angee-integrate-vcs==3.0.0",
     "angee-jobs==3.0.0",
     "angee-knowledge==3.0.0",
-    "angee-knowledge-graph-pgvector==3.0.0",
     "angee-knowledge-integrate-notion==3.0.0",
     "angee-mcp==3.0.0",
     "angee-messaging==3.0.0",
@@ -49,6 +48,7 @@ dependencies = [
     "angee-portfolio==3.0.0",
     "angee-posts==3.0.0",
     "angee-projects==3.0.0",
+    "angee-projects-knowledge==3.0.0",
     "angee-proposals==3.0.0",
     "angee-proposals-work==3.0.0",
     "angee-provenance==3.0.0",
@@ -88,10 +88,11 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 [dependency-groups]
 dev = [
     "daphne>=4.0",
-    "django-zed-rebac[caveats] @ git+https://github.com/ang-ee/django-zed-rebac.git@f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13",
+    "copier>=9,<10",
+    "django-zed-rebac[caveats] @ git+https://github.com/ang-ee/django-zed-rebac.git@89a982e3d1e6773bc0a2b0e21c13a32cbbcbe07b",
     "faker>=30.0",
     "psycopg[binary,pool]>=3.2",
-    "angee-django-stubs[compatible-mypy]==6.1.2.post3",
+    "angee-django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@10bf2bdd683fc11a9def78a8e985edb3a8717dc6",
     "angee-mypy==2.1.0",
     "pytest>=8.0",
     "pytest-django>=4.8",
@@ -101,6 +102,7 @@ dev = [
     "vulture>=2.16",
     "pytest-split>=0.11",
     "tomlkit>=0.13",
+    "angee-knowledge-graph-pgvector==3.0.0",
     "example-notes==3.0.0",
     "example-theme==3.0.0",
     "tests-blankchoices==3.0.0",
@@ -116,7 +118,7 @@ default-groups = ["dev"]
 # other invocation uses uv's default per-user cache.
 
 [tool.uv.workspace]
-members = ["src/angee/*", "examples/src/example/*", "tests/blankchoices"]
+members = ["src/angee/*", "examples/src/example/*", "examples/src/angee/knowledge_graph_pgvector", "tests/blankchoices"]
 
 [tool.uv.sources]
 angee-agents = {workspace = true}
@@ -158,6 +160,7 @@ angee-pm = {workspace = true}
 angee-portfolio = {workspace = true}
 angee-posts = {workspace = true}
 angee-projects = {workspace = true}
+angee-projects-knowledge = {workspace = true}
 angee-proposals = {workspace = true}
 angee-proposals-work = {workspace = true}
 angee-provenance = {workspace = true}
@@ -200,11 +203,13 @@ only-include = ["pyproject.toml", "LICENSE", "LICENSE.GPL"]
 
 [tool.pytest.ini_options]
 cache_dir = ".pytest_cache"
+django_find_project = false
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
 testpaths = ["tests", "src/angee/resources/tests"]
 pythonpath = ["src", "examples/src", "."]
 addopts = "-ra --strict-markers --import-mode=importlib -p no:randomly"
+markers = ["postgresql: requires PostgreSQL locking and concurrency behavior"]
 
 [tool.ruff]
 line-length = 120
@@ -233,7 +238,7 @@ exclude = [
 select = ["E", "F", "I"]
 
 [tool.mypy]
-plugins = ["angee.base.typing", "angee.provenance.typing"]
+plugins = ["angee.iam.typing", "angee.provenance.typing"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true

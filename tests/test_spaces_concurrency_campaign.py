@@ -15,6 +15,7 @@ from tests.spaces_campaign_helpers import spaces_storage as spaces_storage
 from tests.test_spaces import spaces_tables as spaces_tables
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL roster row-lock and two-writer contract"),
 ]

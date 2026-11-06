@@ -1,9 +1,8 @@
 import { useCallback, useMemo } from "react";
-import { useQueries, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import {
   useCustomMutation,
   useDataProvider,
-  useInvalidate,
   useKeys,
   useResourceSubscription,
   type BaseRecord,
@@ -41,14 +40,13 @@ import {
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { invalidateAuthoredQueries } from "../query-invalidation";
-import { useAuthoredQueryBatch, type AuthoredQueryOptions } from "./authored-hooks";
+import { useReconcileMutationResponse, type MutationReconciliationOptions, type MutationExecutionOptions } from "../query-invalidation";
+import { useAuthoredQueryBatch, useOperationMutation, type AuthoredQueryOptions } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
 import { stableKey, useStableArray } from "../stable-deps";
 
 type Row = Record<string, unknown>;
-type InvalidateParams = Parameters<ReturnType<typeof useInvalidate>>[0];
 
 export interface ListBatchTarget extends ListQueryTarget {
   dataProviderName: string | undefined;
@@ -61,7 +59,7 @@ export interface DialectDocumentOptions {
 }
 
 type DialectQueryOptions = DialectDocumentOptions
-  & Pick<AuthoredQueryOptions, "enabled" | "refetchInterval">;
+  & Pick<AuthoredQueryOptions, "enabled" | "refetchInterval" | "records" | "relatedModels">;
 
 export interface UseAngeeAggregateResult {
   aggregate: AggregateBucket | null;
@@ -86,7 +84,7 @@ const EMPTY_GROUP_BY_RESULT: GroupByResult = {
   buckets: [],
 };
 
-export interface UseAngeeFacetsOptions {
+export interface UseAngeeFacetsOptions extends Pick<AuthoredQueryOptions, "records" | "relatedModels"> {
   enabled?: boolean;
   facets: readonly FacetRequestSpec[];
 }
@@ -134,7 +132,8 @@ export interface UseAngeeDeletePreviewResult {
   preview: DeletePreview | null;
   fetching: boolean;
   error: HttpError | null;
-  mutate: (variables: DeletePreviewVariables) => Promise<DeletePreview | null>;
+  /** Native Refine notification opt-out when the invoking surface owns feedback. */
+  mutate: (variables: DeletePreviewVariables, options?: { errorNotification?: false }) => Promise<DeletePreview | null>;
   reset: () => void;
 }
 
@@ -157,10 +156,14 @@ export type ActionArguments = Readonly<Record<string, unknown>>;
 export type ActionMutate = (
   id: string,
   arguments_?: ActionArguments,
+  execution?: MutationExecutionOptions,
 ) => Promise<ActionOutcome | undefined>;
 
-export interface UseActionMutationOptions {
+export interface UseActionMutationOptions extends MutationReconciliationOptions<ActionOutcome | undefined, Record<string, unknown>> {
   dataProviderName?: string;
+  /** One-shot secret inputs/results use the shared zero-retention mutation lifecycle. */
+  transient?: boolean;
+  errorNotification?: false;
   /** Declared record argument. Defaults to `id`; null sends only explicit arguments. */
   idArgument?: string | null;
   /**
@@ -168,8 +171,6 @@ export interface UseActionMutationOptions {
    * This metadata-free package exact-matches them and does not resolve aliases.
    */
   invalidateModels?: readonly string[];
-  /** Refine invalidation calls this action should trigger after success. */
-  invalidates?: readonly InvalidateParams[];
   /**
    * The action records its outcome even when it fails (`ok=false`) — a failed
    * provision stores the error it hit — so invalidate after a domain failure too.
@@ -190,7 +191,7 @@ export function useAngeeAggregate(
   target: CustomGraphQLOperationTarget | null,
   options: AggregateRequestOptions & DialectQueryOptions,
 ): UseAngeeAggregateResult {
-  const { document, enabled = true, refetchInterval, ...query } = options;
+  const { document, enabled = true, refetchInterval, records, relatedModels, ...query } = options;
   const queryKey = stableKey(query);
   const request = useMemo(
     () => (target ? aggregateRequest(target, query, { document }) : null),
@@ -201,7 +202,9 @@ export function useAngeeAggregate(
     document: graphqlDocumentIdentity(request.meta.gqlQuery).document as TypedDocumentNode<unknown, Record<string, unknown>>,
     variables: request.meta.gqlVariables as Record<string, unknown>,
     models: target?.modelLabel ? [target.modelLabel] : [],
-  }] : [], [request, target?.modelLabel]);
+    records,
+    relatedModels,
+  }] : [], [request, target?.modelLabel, records, relatedModels]);
   const run = useAuthoredQueryBatch(scopes, {
     enabled: enabled && target !== null,
     dataProviderName: request?.dataProviderName,
@@ -220,13 +223,13 @@ export function useAngeeGroupBy(
   target: CustomGraphQLOperationTarget | null,
   options: GroupByRequestOptions & DialectQueryOptions,
 ): UseAngeeGroupByResult {
-  const { document, enabled = true, refetchInterval, ...query } = options;
+  const { document, enabled = true, refetchInterval, records, relatedModels, ...query } = options;
   const queryKey = stableKey(query);
   const scopes = useMemo<readonly GroupByBatchScope[]>(
     () => [{ key: "single", query }],
     [queryKey],
   );
-  const run = useGroupByRequestBatch(target, scopes, { document, enabled, refetchInterval });
+  const run = useGroupByRequestBatch(target, scopes, { document, enabled, refetchInterval, records, relatedModels });
   const entry = run.get("single");
   let result = EMPTY_GROUP_BY_RESULT;
   let decodeError: Error | null = null;
@@ -250,14 +253,14 @@ export function useAngeeFacets(
   target: CustomGraphQLOperationTarget | null,
   options: UseAngeeFacetsOptions & DialectDocumentOptions,
 ): UseAngeeFacetsResult {
-  const { document, enabled = true, facets } = options;
+  const { document, enabled = true, facets, records, relatedModels } = options;
   const canQuery = enabled && target !== null && facets.length > 0;
   const activeFacets = canQuery ? facets : EMPTY_FACETS;
   const scopes = useMemo<readonly GroupByBatchScope[]>(
     () => activeFacets.map((facet) => ({ key: facet.id, query: facet })),
     [activeFacets],
   );
-  const batch = useGroupByRequestBatch(target, scopes, { document, enabled: canQuery });
+  const batch = useGroupByRequestBatch(target, scopes, { document, enabled: canQuery, records, relatedModels });
   const root = target?.root ?? "";
   return useMemo(() => {
     const values = [...new Set(batch.values())];
@@ -291,7 +294,7 @@ function useGroupByRequestBatch(
   scopes: readonly GroupByBatchScope[],
   options: DialectQueryOptions,
 ): ReadonlyMap<string, GroupByRequestBatchEntry> {
-  const { document, enabled = true, refetchInterval } = options;
+  const { document, enabled = true, refetchInterval, records, relatedModels } = options;
   const canQuery = enabled && target !== null;
   const activeScopes = canQuery ? scopes : EMPTY_GROUP_BY_SCOPES;
   const scopesKey = stableKey(activeScopes);
@@ -304,9 +307,11 @@ function useGroupByRequestBatch(
         document: graphqlDocumentIdentity(request.meta.gqlQuery).document as TypedDocumentNode<unknown, Record<string, unknown>>,
         variables: request.meta.gqlVariables as Record<string, unknown>,
         models: target.modelLabel ? [target.modelLabel] : [],
+        records,
+        relatedModels,
       };
     });
-  }, [activeScopes, document, target, scopesKey]);
+  }, [activeScopes, document, target, scopesKey, records, relatedModels]);
   // The authored owner deduplicates requests and unions invalidation interests;
   // the dialect owns only group variables and the caller's result labels.
   const batch = useAuthoredQueryBatch(requests, {
@@ -332,8 +337,8 @@ function useGroupByRequestBatch(
 }
 
 /**
- * Batch the per-level `_groups` aggregates of a server-grouped view into one
- * request round. Each scope resolves to the same {@link GroupByResult} a single
+ * Run the per-level `_groups` aggregates concurrently, one request per scope.
+ * Each scope resolves to the same {@link GroupByResult} a single
  * {@link useAngeeGroupBy} would, keyed by the scope's `key`.
  */
 export function useAngeeGroupByBatch(
@@ -425,13 +430,13 @@ export function useAngeeListBatch(
         .action("list")
         .params({ ...meta, filters: [], pagination, sorters: [] })
         .get(),
-      queryFn: () =>
+      queryFn: (context) =>
         dataProvider(schemaName).getList({
           resource: resourceName,
           pagination,
           filters: [],
           sorters: [],
-          meta,
+          meta: { ...meta, get signal() { return context.signal; } },
         }),
       enabled: canQuery,
     })),
@@ -466,13 +471,14 @@ export function useAngeeDeletePreview(
   const root = target?.root ?? "";
   const run = useCustomMutation<BaseRecord, HttpError, DeletePreviewVariables>();
   const mutate = useCallback(
-    async (variables: DeletePreviewVariables) => {
+    async (variables: DeletePreviewVariables, options?: { errorNotification?: false }) => {
       if (!target) return null;
       const request = deletePreviewRequest(target, variables, { document });
       const response = await run.mutateAsync({
         url: "",
         method: "post",
         values: variables,
+        ...options,
         dataProviderName: request.dataProviderName,
         meta: request.meta,
       });
@@ -550,70 +556,35 @@ export function useActionMutation<TField extends string = string>(
   const dataProviderName =
     options.dataProviderName ?? activeDataProviderName ?? "default";
   const operationDocuments = useOperationDocuments();
-  const invalidate = useInvalidate();
-  const invalidateModels = useStableArray(options.invalidateModels ?? []);
-  const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;
-  const queryClient = useQueryClient();
-  const run = useCustomMutation<BaseRecord, HttpError, Record<string, unknown>>();
-  const mutate = useCallback<ActionMutate>(
-    async (id, arguments_ = {}) => {
-      const idArgument = options.idArgument === undefined ? "id" : options.idArgument;
-      const variables = idArgument === null ? { ...arguments_ } : { ...arguments_, [idArgument]: id };
+  const reconcileMutationResponse = useReconcileMutationResponse();
+  const [run, state] = useOperationMutation<ActionOutcome, Record<string, unknown>>({
+    transient: options.transient,
+    errorNotification: options.errorNotification,
+    request: (variables) => {
       const request = actionRequest(field, variables, {
         dataProviderName,
-        document: operationDocument(
-          operationDocuments,
-          dataProviderName,
-          "actions",
-          field,
-        ),
+        document: operationDocument(operationDocuments, dataProviderName, "actions", field),
       });
-      const response = await run.mutateAsync({
-        url: "",
-        method: "post",
-        values: variables,
-        dataProviderName: request.dataProviderName,
-        meta: request.meta,
+      return { url: "", method: "post", dataProviderName: request.dataProviderName, meta: request.meta };
+    },
+    select: (data) => extractActionOutcome(data, field) ?? undefined,
+    onResponse: async (outcome, variables, execution) => {
+      const effects = !outcome || outcome.ok || options.invalidateOnFailure;
+      await reconcileMutationResponse(outcome, variables, {
+        ...(effects ? options : {}),
+        ...execution,
+        // A recorded failure may have effects, but is never accepted as success.
+        acceptResponse: outcome?.ok ? options.acceptResponse : undefined,
       });
-      const outcome =
-        extractActionOutcome(response.data, request.root) ?? undefined;
-      // A domain failure (ok=false) normally mutated nothing — skip invalidation
-      // so a failed write never refreshes caches (the same posture as the
-      // authored hooks' errorFrom gating) — unless the verb declares that its
-      // failures are recorded state.
-      if (!outcome || outcome.ok || options.invalidateOnFailure) {
-        await Promise.all([
-          ...invalidates.map((target) => invalidate(target)),
-          ...(invalidateModels.length > 0
-            ? [invalidateAuthoredQueries(queryClient, invalidateModels)]
-            : []),
-        ]);
-      }
-      return outcome;
     },
-    [
-      dataProviderName,
-      field,
-      invalidate,
-      invalidateModels,
-      invalidates,
-      operationDocuments,
-      options.idArgument,
-      options.invalidateOnFailure,
-      queryClient,
-      run.mutateAsync,
-    ],
-  );
-  return [
-    mutate,
-    {
-      fetching: run.mutation.isPending,
-      error: run.mutation.error as Error | null,
-    },
-  ];
+  });
+  const mutate = useCallback<ActionMutate>(async (id, arguments_ = {}, execution) => {
+    const idArgument = options.idArgument === undefined ? "id" : options.idArgument;
+    const variables = idArgument === null ? { ...arguments_ } : { ...arguments_, [idArgument]: id };
+    return run(variables, execution);
+  }, [run, options.idArgument]);
+  return [mutate, state];
 }
-
-const EMPTY_INVALIDATIONS: readonly InvalidateParams[] = [];
 
 function errorFromHttp(error: unknown): Error | null {
   if (!error) return null;

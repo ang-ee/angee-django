@@ -18,19 +18,21 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils.text import slugify
 from django_compose.models import Composable
-from rebac import PermissionDenied, current_actor
+from rebac import PermissionDenied
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin
-from angee.base.models.ownership import OwnerMixin
+from angee.base.models.scope import NullableScopeMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.permissions import instance_actor
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.parties.mixins import MembershipDecisionMixin
-from angee.spaces.managers import GroupManager, MembershipManager
+from angee.spaces.managers import GroupManager, MembershipManager, ThreadSpaceManager
 
 
-class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
+class Group(NullableScopeMixin, ThreadAudienceMixin, HierarchyMixin, OwnerMixin, ProtectedDataModel, concrete=True):
     """A shared group with one canonical roster and an unscoped parent tree."""
 
     sqid_prefix = "grp_"
@@ -67,9 +69,9 @@ class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel, con
         """Read participating roster parties; messaging owns delivery and read checks."""
 
         membership_model = apps.get_model("spaces", "Membership")
+        memberships = membership_model.system_queryset()
         rows = (
-            membership_model.system_queryset()
-            .confirmed()
+            memberships.confirmed()
             .filter(
                 group_id=self.pk,
                 role__in=(
@@ -120,7 +122,7 @@ class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel, con
         return candidate
 
 
-class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Membership(MembershipDecisionMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One party's role-bearing roster row in a shared group.
 
     Confirmation resolves live through the canonical ``Person.user`` identity
@@ -194,7 +196,7 @@ class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel, concrete=T
     def set_notifications(self, policy: NotificationPolicy, subtype_keys: Sequence[str]) -> Self:
         """Set this holder's preference after checking its live identity under a row lock."""
 
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
         if actor is None:
             raise PermissionDenied("An acting user is required to set notification preferences.")
         with transaction.atomic():
@@ -226,6 +228,7 @@ class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel, concrete=T
 class ThreadSpace(Composable, extends="messaging.Thread"):
     """Group audience contributed onto ``messaging.Thread`` as a same-row field."""
 
+    objects = ThreadSpaceManager()
 
     groups = models.ManyToManyField(
         "spaces.Group",

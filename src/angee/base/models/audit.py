@@ -7,17 +7,15 @@ from typing import Any, TypeVar
 
 from django.conf import settings
 from django.db import models
-from rebac import system_context
-from rebac.managers import TrackedQuerySet
 
+from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
-from angee.base.permissions import actor_user_id, instance_actor
-from angee.base.querysets import ClosedUpdateQuerySet, _AngeeQuerySetMixin, by_key
+from angee.base.querysets import AngeeQuerySetMixin, by_key
 
-_ModelT = TypeVar("_ModelT", bound=models.Model)
+_ModelT = TypeVar("_ModelT", bound=PersistenceMixin)
 
 
-class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_ModelT]):
+class RetainedReferenceQuerySet(AngeeQuerySetMixin[_ModelT]):
     """Django collector updates dispatched to the record's declared persistence owner."""
 
     _hints: dict[str, models.Model]
@@ -25,18 +23,13 @@ class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_M
     def update(self, **kwargs: Any) -> int:
         """Keep exact collector selection and alias while preserving native capture."""
 
-        with system_context(reason="delete.retain"):
-            rows = self.model._base_manager.db_manager(self.db, hints=self._hints).get_queryset()
-            rows.query = self.query.chain()
-            if isinstance(rows, ClosedUpdateQuerySet):
-                return rows.owner_update(**kwargs)
-            return rows.update(**kwargs)
+        return self.model.retained_reference_update(self, **kwargs)
 
 
 def retained_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
     """Schedule retained-edge removal as system work inside Django's delete transaction."""
 
-    rows: RetainedReferenceQuerySet[models.Model] = RetainedReferenceQuerySet(model=field.model, using=using)
+    rows: RetainedReferenceQuerySet[PersistenceMixin] = RetainedReferenceQuerySet(model=field.model, using=using)
     if isinstance(sub_objs, models.QuerySet):
         rows.query = sub_objs.query.chain()
         collector.add_field_update(field, None, rows)
@@ -49,7 +42,7 @@ setattr(retained_set_null, "lazy_sub_objs", True)
 
 
 
-class AuditMixin(models.Model):
+class AuditMixin(PersistenceMixin, models.Model):
     """Add conventional user-owned audit foreign keys to a model."""
 
     created_by = models.ForeignKey(
@@ -85,7 +78,7 @@ class AuditMixin(models.Model):
                 super().save(*args, **kwargs)
                 return
 
-        user_id = actor_user_id(instance_actor(self))
+        user_id = self.attributed_user_id()
         touched: set[str] = set()
         if user_id is not None:
             if self._state.adding:

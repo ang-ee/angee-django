@@ -6,10 +6,10 @@ import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { createAngeeChangeLiveProvider } from "../provider";
-import { useAuthoredQuery } from "./authored-hooks";
+import { useAuthoredQuery, type AuthoredQueryOptions } from "./authored-hooks";
 import { groupByVariables } from "../operations";
 import type { TypedDocumentNode } from "../typed-document";
-import { invalidateAuthoredQueries } from "../query-invalidation";
+import { createAuthoredLiveInvalidation, invalidateAuthoredQueries } from "../query-invalidation";
 import { createRefineTestProviders } from "../testing";
 import { useAngeeAggregate, useAngeeFacets, useAngeeGroupBy, useAngeeGroupByBatch, type GroupByBatchScope } from "./hooks";
 
@@ -74,8 +74,10 @@ test("group-only views refresh lanes and counts through native live model invali
   expect(f.custom).toHaveBeenCalledTimes(2);
   await act(async () => { await invalidateAuthoredQueries(f.client, ["notes.Note"]); });
   expect(f.custom).toHaveBeenCalledTimes(2);
+  vi.useFakeTimers();
   rerender({ scopes: SCOPES, enabled: false });
-  await waitFor(() => expect(f.disposers[0]).toHaveBeenCalledTimes(1));
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+  expect(f.disposers[0]).toHaveBeenCalledTimes(1);
   expect(result.current.size).toBe(0);
   rerender({ scopes: [], enabled: true });
   expect(f.subscribe).toHaveBeenCalledTimes(1);
@@ -90,7 +92,9 @@ test("active group scopes share one changes subscription and tear it down with t
   f.custom.mockResolvedValue(response(3));
   await act(async () => { f.change(); });
   await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
+  vi.useFakeTimers();
   unmount();
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
   expect(f.disposers[0]).toHaveBeenCalledTimes(1);
 });
 
@@ -233,16 +237,21 @@ test("single group read retains its last buckets with the refetch error", async 
   expect(f.onError).toHaveBeenCalledTimes(1);
 });
 
-test("a live event during initial group discovery restarts the native query and ignores its late stale response", async () => {
+test("a live event during initial group discovery lets the native query settle before one refetch", async () => {
   let accept!: (value: ReturnType<typeof response>) => void;
   const pending = new Promise<ReturnType<typeof response>>((resolve) => { accept = resolve; });
   const f = fixture(vi.fn().mockReturnValueOnce(pending).mockResolvedValue(response(2)));
   const { result } = renderHook(() => useAngeeGroupByBatch(TARGET, SCOPES, { document: DOCUMENT }), { wrapper: f.wrapper });
   await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  const [request] = f.custom.mock.calls[0] as unknown as [{ meta: { signal: AbortSignal } }];
   await act(async () => { f.change(); });
-  await waitFor(() => expect(result.current.get("channels")?.totalCount).toBe(2));
+  expect(request.meta.signal.aborted).toBe(false);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+  expect(f.custom).toHaveBeenCalledTimes(1);
   await act(async () => { accept(response(1)); });
-  expect(result.current.get("channels")?.totalCount).toBe(2);
+  await waitFor(() => expect(result.current.get("channels")?.totalCount).toBe(2));
+  expect(request.meta.signal.aborted).toBe(false);
+  expect(f.custom).toHaveBeenCalledTimes(2);
 });
 
 test("group and general authored reads share one request and model invalidation", async () => {
@@ -320,4 +329,45 @@ test("native aggregate and group polling survives unrelated renders, pauses with
   unmount();
   await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
   expect(custom).toHaveBeenCalledTimes(6);
+});
+
+
+test.each(["aggregate", "single", "batch", "facets"] as const)("%s grouped reads retain explicit direct and related live interests", async (mode) => {
+  const f = fixture(vi.fn(async () => ({ data: { ...response(1).data, messages_aggregate: { aggregate: { count: 4 } } } })));
+  const direct: Pick<AuthoredQueryOptions, "records" | "relatedModels"> = { records: [{ model: "messaging.Message", id: "message-a" }] };
+  const { result, rerender } = renderHook(({ interests }) => {
+    const single = useAngeeGroupBy(TARGET, { document: DOCUMENT, ...SCOPES[0]!.query, ...interests, enabled: mode === "single" });
+    const batch = useAngeeGroupByBatch(TARGET, SCOPES, { document: DOCUMENT, ...interests, enabled: mode === "batch" });
+    const facets = useAngeeFacets(TARGET, { document: DOCUMENT, facets: [{ id: "channels", ...SCOPES[0]!.query }], ...interests, enabled: mode === "facets" });
+    const aggregate = useAngeeAggregate({ ...TARGET, root: "messages_aggregate" }, {
+      document: "query Total { messages_aggregate { aggregate { count } } }", ...interests, enabled: mode === "aggregate",
+    });
+    return { single, batch, facets, aggregate };
+  }, { wrapper: f.wrapper, initialProps: { interests: direct } });
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(result.current.single.fetching || result.current.batch.get("channels")?.fetching || result.current.facets.fetching || result.current.aggregate.fetching).toBe(false));
+  const live = createAuthoredLiveInvalidation(f.client);
+  vi.useFakeTimers();
+  await act(async () => {
+    live.push({ model: "messaging.Message", id: "message-other" });
+    await vi.advanceTimersByTimeAsync(300);
+  });
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    live.push({ model: "messaging.Message", id: "message-a" });
+    await vi.advanceTimersByTimeAsync(300);
+  });
+  expect(f.custom).toHaveBeenCalledTimes(2);
+  rerender({ interests: { records: [{ model: "notes.Note", id: "note-a" }], relatedModels: ["messaging.Message"] } });
+  await act(async () => {
+    live.push({ model: "messaging.Message", id: "message-unrelated" });
+    await vi.advanceTimersByTimeAsync(300);
+  });
+  expect(f.custom).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    live.push({ model: "messaging.Message", id: "message-related", relatedRecords: [{ model: "notes.Note", id: "note-a" }] });
+    await vi.advanceTimersByTimeAsync(300);
+  });
+  expect(f.custom).toHaveBeenCalledTimes(3);
+  live.clear();
 });

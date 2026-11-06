@@ -16,7 +16,7 @@ from rebac import system_context
 from rebac.models import active_relationship_model
 from tests.tables import model_tables
 
-from angee.base.models.base import AngeeModel
+from angee.iam.models.base import ProtectedModel
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
@@ -95,13 +95,13 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
 
     events = []
 
-    class PipelineTag(AngeeModel):
+    class PipelineTag(ProtectedModel):
         name = models.CharField(max_length=30)
 
         class Meta:
             app_label = "base"
 
-    class PipelineItem(AngeeModel):
+    class PipelineItem(ProtectedModel):
         model = models.CharField(max_length=24)
         tags = models.ManyToManyField(PipelineTag)
 

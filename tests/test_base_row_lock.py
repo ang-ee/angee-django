@@ -9,9 +9,10 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections, models
 from django.test.utils import isolate_apps
-from rebac import actor_context, system_context
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, write_relationships
+from rebac.actors import to_subject_ref
 
-from angee.base.models.locks import RowLockMixin
+from angee.iam.models.locks import ProtectedRowLockMixin
 from tests.conftest import create_user
 from tests.linesdemo.models import Document, PinnedLine
 
@@ -34,9 +35,31 @@ def test_collection_writes_cannot_mutate_or_create_system_rows(composed_tables: 
     assert (row.label, row.quantity) == ("System", 2)
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("pinned_actor", (False, True))
+def test_parent_queryset_delete_refuses_cascade_to_system_line(composed_tables: None, pinned_actor: bool) -> None:
+    user = create_user(f"row-lock-cascade-{pinned_actor}")
+    with system_context(reason="test.row_lock.cascade_seed"):
+        parent = Document.objects.create(title="Document")
+        row = PinnedLine.objects.create(document=parent, label="System", pinned=True)
+        write_relationships([RelationshipTuple(to_object_ref(parent), "manager", to_subject_ref(user))])
+
+    if pinned_actor:
+        context = system_context(reason="test.row_lock.cascade_pinned")
+        selected = Document.objects.with_actor(user).filter(pk=parent.pk)
+    else:
+        context = actor_context(user)
+        selected = Document.objects.filter(pk=parent.pk)
+    with context, pytest.raises(ValidationError, match="cannot be deleted"):
+        selected.delete()
+    with system_context(reason="test.row_lock.cascade_read"):
+        assert Document._base_manager.filter(pk=parent.pk).exists()
+        assert PinnedLine._base_manager.filter(pk=row.pk).exists()
+
+
 @isolate_apps()
 def test_row_lock_model_requires_collection_guard_on_default_and_base_managers() -> None:
-    class Unguarded(RowLockMixin, models.Model):
+    class Unguarded(ProtectedRowLockMixin):
         objects = models.Manager()
         _angee_base = models.Manager()
 
@@ -70,6 +93,7 @@ def test_unfiltered_conflict_updates_cannot_mutate_system_rows(composed_tables: 
     assert row.label == "System"
 
 
+@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real READ COMMITTED interleaving is required.")
 @pytest.mark.parametrize("manager_path", ("default", "base"))

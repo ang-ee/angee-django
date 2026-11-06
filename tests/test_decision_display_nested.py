@@ -13,6 +13,7 @@ from angee.workflows.testing.models import StepRun
 from tests.conftest import create_user, execute_schema, result_data, vault_for
 from tests.test_workflows_review_graphql import schema as schema
 
+pytestmark = pytest.mark.postgresql
 
 @pytest.fixture
 def nested_reviews(execution, register_step, composed_permissions):
@@ -103,6 +104,13 @@ def test_nested_question_read_is_batched(schema, nested_reviews):
     one_count, one = measure()
     for _ in range(4):
         admit()
-    many_count, many = measure()
-    assert len(one) == 1 and len(many) == 5
-    assert many_count == one_count
+    five_count, five = measure()
+    for _ in range(5):
+        admit()
+    ten_count, ten = measure()
+    for _ in range(10):
+        admit()
+    twenty_count, twenty = measure()
+    assert (len(one), len(five), len(ten), len(twenty)) == (1, 5, 10, 20)
+    # REBAC L8 shares the actor-set proof across every page size.
+    assert (one_count, five_count, ten_count, twenty_count) == (8, 8, 8, 8)

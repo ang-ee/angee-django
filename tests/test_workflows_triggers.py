@@ -9,6 +9,7 @@ from django.core.exceptions import ImproperlyConfigured, PermissionDenied, Valid
 from django.db import IntegrityError, OperationalError, connection, models, transaction
 from django.db.models.functions import Now, Upper
 from django.db.models.signals import post_save
+from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, current_actor, system_context, to_object_ref, to_subject_ref
 from rebac.actors import is_sudo
 from rebac.models import active_relationship_model
@@ -18,11 +19,13 @@ from angee.base.fields.implementation import impl_choices_enum
 from angee.base.querysets import row_lock_paths
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
-from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.knowledge import schema as knowledge_schema
+from angee.workflows import managers as workflow_managers
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
+from angee.workflows.querysets import TriggerEventQuerySet
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import (
@@ -68,6 +71,19 @@ def capture(record):
     triggers.RecordChanged.dispatch(type(record), record)
 
 
+def test_disabled_trigger_dispatch_avoids_savepoint_and_target_lock(trigger_setup):
+    _actor, _workflow, record, _trigger = trigger_setup
+    with transaction.atomic(), CaptureQueriesContext(connection) as queries:
+        capture(record)
+    statements = [query["sql"].upper() for query in queries]
+    print(
+        f"no-trigger statements: {len(statements)}, "
+        f"savepoints: {sum('SAVEPOINT' in item for item in statements)}, "
+        f"locks: {sum('FOR UPDATE' in item for item in statements)}"
+    )
+    assert not any("SAVEPOINT" in statement or "FOR UPDATE" in statement for statement in statements)
+
+
 @pytest.mark.parametrize("failure", [ValueError, ValidationError])
 def test_trigger_capture_logs_unexpected_ledger_errors(trigger_setup, monkeypatch, caplog, failure):
     actor, _workflow, record, trigger = trigger_setup
@@ -76,7 +92,7 @@ def test_trigger_capture_logs_unexpected_ledger_errors(trigger_setup, monkeypatc
     def fail_write(*args, **kwargs):
         raise failure("Trigger ledger interrupted")
 
-    monkeypatch.setattr(triggers.TriggerEventQuerySet, "update_or_create", fail_write)
+    monkeypatch.setattr(TriggerEventQuerySet, "update_or_create", fail_write)
     capture(record)
     assert not TriggerEvent.system_queryset().filter(trigger=trigger).exists()
     assert "Workflow trigger capture failed" in caplog.text and "Trigger ledger interrupted" in caplog.text
@@ -113,7 +129,7 @@ def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup
     capture(record)
     assert not TriggerEvent.system_queryset().exists()
     Trigger.objects.enable(trigger, actor=actor)
-    post_save.send(sender=Vault, instance=record, raw=True, created=False)
+    post_save.send(sender=Vault, instance=record, raw=True, created=False, using=record._state.db)
     assert not TriggerEvent.system_queryset().exists()
     with actor_context(actor):
         record.save()
@@ -416,7 +432,7 @@ def test_deleted_record_is_rejected_instead_of_remaining_pending(trigger_setup):
 def test_drain_bound_counts_candidates_including_rejections(trigger_setup, monkeypatch):
     actor, _, _, trigger = trigger_setup
     Trigger.objects.enable(trigger, actor=actor)
-    monkeypatch.setattr(triggers, "TRIGGER_DRAIN_LIMIT", 3)
+    monkeypatch.setattr(workflow_managers, "TRIGGER_DRAIN_LIMIT", 3)
     for index in range(5):
         capture(vault_for(actor, name=f"Pending {index}"))
     assert Trigger.objects.drain() == 0
@@ -499,7 +515,7 @@ def test_capture_failure_preserves_the_enclosing_write(trigger_setup, monkeypatc
     def fail(*args, **kwargs):
         raise IntegrityError("capture failed")
 
-    monkeypatch.setattr(triggers.TriggerEventQuerySet, "update_or_create", fail)
+    monkeypatch.setattr(TriggerEventQuerySet, "update_or_create", fail)
     with transaction.atomic(), actor_context(actor):
         record.name = "Retained"
         record.save()
@@ -545,7 +561,7 @@ def test_resource_condition_reuses_expression_extensions_and_public_id_decoders(
     actor, _, record, _ = trigger_setup
 
     @strawberry_django.type(Vault)
-    class FilterVault(AngeeNode):
+    class FilterVault(ProtectedNode):
         name: str
 
     resource = hasura_model_resource(
@@ -889,9 +905,12 @@ def test_trigger_hook_contributions_are_source_scoped_and_conflicts_fail():
         Trigger._trigger_hooks(Conflict(), "trigger_input")
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires native PostgreSQL table lock modes.")
-def test_source_capture_locks_untyped_concrete_ancestors(monkeypatch):
+def test_source_capture_locks_untyped_concrete_ancestors(trigger_setup, monkeypatch):
     """Selecting only the child's PK must not silently drop its parent's OF lock."""
+    actor, _workflow, _subject, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
     with system_context(reason="native source ancestor lock fixture"):
         record = TypedCaptureChild.objects.create(title="Parent", detail="Observed child")
     seen = []

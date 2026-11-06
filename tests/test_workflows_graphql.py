@@ -1,5 +1,6 @@
 """Native execution reads and manager-backed operator mutations under REBAC."""
 
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.workflows import schema as workflow_schema
 from angee.workflows.definition import Definition
 from angee.workflows.runner import runner
@@ -94,9 +96,9 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
     assert "layout" in schema._schema.get_type("WorkflowType").fields
     for type_name, pair, obsolete in (
         ("WorkflowRunType", {"subject_model", "subject_id", "subject_label"}, set()),
-        ("StepRecordType", {"record_model", "record_id"}, {"model_label"}),
-        ("StepWatchType", {"record_model", "record_id"}, {"record_model_label", "record_public_id"}),
-        ("TriggerEventType", {"record_model", "record_id"}, set()),
+        ("StepRecordType", {"record_model", "record_id", "record_label"}, {"model_label"}),
+        ("StepWatchType", {"record_model", "record_id", "record_label"}, {"record_model_label", "record_public_id"}),
+        ("TriggerEventType", {"record_model", "record_id", "record_label"}, set()),
     ):
         fields = set(schema._schema.get_type(type_name).fields)
         assert pair <= fields
@@ -176,7 +178,7 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
       stepattempt { display_name }
       steprecord { display_name }
     }"""
-    run_label = str(run)
+    run_label = run.get_workflow_label()
     with CaptureQueriesContext(connection) as one:
         assert result_data(execute_schema(schema, labels, user=owner)) == {
             "workflow": [{"display_name": workflow.name}],
@@ -191,7 +193,14 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
     with CaptureQueriesContext(connection) as many:
         expanded = result_data(execute_schema(schema, labels, user=owner))
     assert len(expanded["workflowrun"]) == len(expanded["steprecord"]) == 2
-    assert len(many) == len(one)
+    for _ in range(2):
+        extra = start_run(workflow, actor=owner)
+        run_until(extra)
+    with CaptureQueriesContext(connection) as four:
+        expanded_four = result_data(execute_schema(schema, labels, user=owner))
+    assert len(expanded_four["workflowrun"]) == len(expanded_four["steprecord"]) == 4
+    # Native singleton and population plans differ; population work stays constant.
+    assert len(one) <= len(many) == len(four), [len(one), len(many), len(four)]
     artifact.label = ""
     assert str(artifact) == artifact.sqid
 
@@ -213,12 +222,104 @@ def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schem
     run = start_run(workflow, actor=owner, input={"value": 1})
     run_until(run)
     run.with_actor(owner).grant_record_access("reader", reader)
-    query = "{ steprecord { record_model record_id } steprun { records { record_model record_id } } }"
-    hidden = {"record_model": None, "record_id": None}
+    query = """{
+      steprecord { record_model record_id record_label }
+      steprun { records { record_model record_id record_label } }
+    }"""
+    hidden = {"record_model": None, "record_id": None, "record_label": None}
     assert result_data(execute_schema(schema, query, user=reader)) == {
         "steprecord": [hidden],
         "steprun": [{"records": [hidden]}],
     }
+
+
+def test_run_subject_label_is_redacted_without_subject_read(schema, callers):
+    """Run visibility never lends its reader the subject's label."""
+
+    admin, owner, reader = callers
+    source = vault_for(owner, name="Private run subject")
+    workflow = load_workflow(document("entry"), actor=admin, subject_model=source._meta.label)
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    run = start_run(workflow, actor=owner, subject=source)
+    run.with_actor(owner).grant_record_access("reader", reader)
+    query = "{ workflowrun { subject_model subject_id subject_label } }"
+    assert result_data(execute_schema(schema, query, user=owner)) == {
+        "workflowrun": [{
+            "subject_model": source._meta.label, "subject_id": source.sqid, "subject_label": str(source),
+        }],
+    }
+    assert result_data(execute_schema(schema, query, user=reader)) == {
+        "workflowrun": [{"subject_model": None, "subject_id": None, "subject_label": None}],
+    }
+
+
+def test_run_subject_labels_share_the_target_proof(schema, execution, capture_graphql_document):
+    """One admitted subject read serves each run page and its label."""
+
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), actor=actor, subject_model="knowledge.Vault")
+    targets = [vault_for(actor, name=f"Run target {index}") for index in range(20)]
+    for target in targets:
+        start_run(workflow, actor=actor, subject=target)
+    query = """query($limit: Int!) {
+      workflowrun(limit: $limit, order_by: {created_at: asc}) { id subject_id subject_label }
+    }"""
+    reads = {
+        count: capture_graphql_document(schema, query, {"limit": count}, actor=actor)
+        for count in (1, 5, 20)
+    }
+    for count, read in reads.items():
+        assert [row["subject_label"] for row in read.data["workflowrun"]] == [
+            str(target) for target in targets[:count]
+        ]
+        assert sum(bool(re.match(rf'^SELECT .* FROM "{targets[0]._meta.db_table}"', statement))
+                   for statement in read.statements) == 1
+        read.assert_no_audit_writes()
+    reads[5].assert_flat_from(reads[1])
+    reads[20].assert_flat_from(reads[5])
+    assert reads[20].total_sql_bytes <= reads[1].total_sql_bytes + 8_000
+
+
+def test_grouped_run_subject_labels_share_one_page_proof(schema, execution):
+    """Grouped run pages prove and label all selected subject references together."""
+
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), actor=actor, subject_model="knowledge.Vault")
+    targets = [vault_for(actor, name=f"Grouped run target {index}") for index in range(40)]
+    for target in targets[:20]:
+        start_run(workflow, actor=actor, subject=target)
+    for target in targets[20:]:
+        run_until(start_run(workflow, actor=actor, subject=target))
+    query = """query GroupedRuns($limit: Int!) {
+      workflowrun_grouped_rows(
+        group_by: {field: STATUS}, pages: [
+          {key: "RUNNING", limit: $limit}, {key: "SUCCEEDED", limit: $limit}
+        ],
+        order_by: [{created_at: asc}]
+      ) {
+        key rows {
+          id version { workflow { id name } } display_name status subject_id
+          origin created_at finished_at outcome_label subject_model subject_label
+        }
+      }
+    }"""
+    reads = {
+        count: measure_graphql_document(schema, query, {"limit": count}, actor=actor)
+        for count in (1, 5, 20)
+    }
+    for count, read in reads.items():
+        pages = read.data["workflowrun_grouped_rows"]
+        assert [page["key"] for page in pages] == ["RUNNING", "SUCCEEDED"]
+        for page, expected in zip(pages, (targets[:count], targets[20:20 + count]), strict=True):
+            assert [row["subject_label"] for row in page["rows"]] == [str(target) for target in expected]
+            assert all(row["subject_model"] == targets[0]._meta.label for row in page["rows"])
+        assert sum(bool(re.match(rf'^SELECT .* FROM "{targets[0]._meta.db_table}"', statement))
+                   for statement in read.statements) == 1
+        read.assert_no_audit_writes()
+        assert read.statement_count == 13
+        read.assert_bytes(total=150_000, largest=60_000)
+    reads[5].assert_flat_from(reads[1])
+    reads[20].assert_flat_from(reads[5])
 
 
 def test_run_input_reads_declared_mti_sources_under_their_own_permission(schema, callers, register_step):
@@ -328,6 +429,7 @@ def test_retry_action_uses_run_permission_instead_of_engine_row_write(schema, ca
     assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.RUNNING
 
 
+@pytest.mark.django_db(transaction=True)
 def test_duplicate_retry_action_records_requesting_operator(schema, callers, register_step):
     """Only explicit acknowledgment permits retry after an uncertain external effect."""
 
@@ -373,6 +475,14 @@ def test_duplicate_retry_action_records_requesting_operator(schema, callers, reg
             "step_runs": [{"can_retry": True, "requires_duplicate_acknowledgement": True}],
         }
     ]
+    graph = result_data(execute_schema(
+        schema,
+        """query($id: String!) { workflowrun_by_pk(id: $id) {
+          graph { nodes { step_run { can_retry requires_duplicate_acknowledgement } } }
+        } }""",
+        {"id": run.sqid}, user=operator,
+    ))["workflowrun_by_pk"]["graph"]
+    assert graph["nodes"][0]["step_run"] == {"can_retry": True, "requires_duplicate_acknowledgement": True}
     assert not result_data(action(schema, "retry_step", step, operator))["retry_step"]["ok"]
     acknowledged = result_data(action(schema, "retry_step_accepting_duplicate", step, operator))
     assert acknowledged["retry_step_accepting_duplicate"]["ok"]
@@ -428,20 +538,23 @@ def test_narrow_outcome_label_uses_published_vocabulary_without_row_queries(sche
     assert counts[0] == counts[1]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_narrow_step_run_relation_projection_does_not_fetch_each_foreign_key(schema, execution):
     """A selected forward relation includes its FK column in the parent query."""
 
     actor, _sent = execution
     workflow = load_workflow(document("entry"), actor=actor)
     counts = []
-    for count in (1, 5):
+    for count in (1, 5, 10, 20):
         while StepRun.system_queryset().count() < count:
             run_until(start_run(workflow, actor=actor))
         with CaptureQueriesContext(connection) as queries:
             data = result_data(execute_schema(schema, "{ steprun { run { id } } }", user=actor))
         assert len(data["steprun"]) == count
         counts.append(len(queries))
-    assert counts[0] == counts[1]
+    # REBAC L8 shares the actor-set proof across one and many rows;
+    # the relation projection stays batched through twenty rows.
+    assert counts == [8, 8, 8, 8], counts
 
 
 def test_diagnostics_distinguish_run_operators_editors_and_readers(schema, callers, register_step):
@@ -540,7 +653,7 @@ def test_terminal_cancel_reports_open_step_cleanup_without_claiming_run_cancella
     run = start_run(workflow, actor=actor)
     run_until(run)
     assert run.status == "failed"
-    assert run.can_cancel(actor)
+    assert run.get_can_cancel(actor)
     retained = (run.status, run.outcome, run.output, run.error, run.finished_at)
     query = "mutation($id: ID!) { cancel_workflow_run(id: $id) { ok message } }"
     first = result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))
@@ -552,7 +665,7 @@ def test_terminal_cancel_reports_open_step_cleanup_without_claiming_run_cancella
     assert second["cancel_workflow_run"] == {"ok": True, "message": "Nothing to cancel."}
     run = WorkflowRun.system_queryset().get(pk=run.pk)
     assert (run.status, run.outcome, run.output, run.error, run.finished_at) == retained
-    assert not run.can_cancel(actor)
+    assert not run.get_can_cancel(actor)
 
 
 def test_origin_enum_has_native_choice_labels(schema):
@@ -700,35 +813,49 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
 
     workflow = create("studio_one")
     fields = "id permissions draft draft_revision layout"
-    query = f"""query($id: String!) {{
+    query = f"""query($id: String!, $limit: Int) {{
       workflow_by_pk(id: $id) {{ {fields} }}
-      workflow {{ {fields} }}
-      workflowrun {{ version {{ workflow {{ {fields} }} }} }}
-      workflowversion {{ workflow {{ {fields} }} }}
-      trigger {{ workflow {{ {fields} }} }}
+      workflow(limit: $limit) {{ {fields} }}
+      workflowrun(limit: $limit) {{ version {{ workflow {{ {fields} }} }} }}
+      workflowversion(limit: $limit) {{ workflow {{ {fields} }} }}
+      trigger(limit: $limit) {{ workflow {{ {fields} }} }}
     }}"""
     with CaptureQueriesContext(connection) as one:
-        data = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
-    rows = [
-        data["workflow_by_pk"],
-        *data["workflow"],
-        *(row["version"]["workflow"] for row in data["workflowrun"]),
-        *(row["workflow"] for row in data["workflowversion"]),
-        *(row["workflow"] for row in data["trigger"]),
-    ]
-    assert len(rows) == 5
-    for row in rows:
-        assert row["permissions"] == (
-            ["monitor"] if visible else ["start"] if relation in {"starter", "operator"} else []
-        )
-        assert row["draft"] == (document("entry") if visible else None)
-        assert row["draft_revision"] == (1 if visible else None)
-        assert row["layout"] == ({} if visible else None)
+        data = result_data(execute_schema(schema, query, {"id": workflow.sqid, "limit": 1}, user=reader))
+    def assert_projection(data, count):
+        rows = [
+            data["workflow_by_pk"],
+            *data["workflow"],
+            *(row["version"]["workflow"] for row in data["workflowrun"]),
+            *(row["workflow"] for row in data["workflowversion"]),
+            *(row["workflow"] for row in data["trigger"]),
+        ]
+        assert len(data["workflow"]) == count
+        assert len(rows) == 1 + 4 * count
+        for row in rows:
+            assert row["permissions"] == (
+                ["monitor"] if visible else ["start"] if relation in {"starter", "operator"} else []
+            )
+            assert row["draft"] == (document("entry") if visible else None)
+            assert row["draft_revision"] == (1 if visible else None)
+            assert row["layout"] == ({} if visible else None)
+
+    assert_projection(data, 1)
     create("studio_two")
     with CaptureQueriesContext(connection) as many:
         larger = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
-    assert len(larger["workflow"]) == 2
-    assert len(many) == len(one)
+    assert_projection(larger, 2)
+    create("studio_three")
+    create("studio_four")
+    with CaptureQueriesContext(connection) as four:
+        largest = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
+    assert_projection(largest, 4)
+    with CaptureQueriesContext(connection) as limited:
+        limited_data = result_data(execute_schema(schema, query, {"id": workflow.sqid, "limit": 1}, user=reader))
+    assert_projection(limited_data, 1)
+    # Native singleton and population plans differ; compare growth within each plan.
+    assert len(one) == len(limited), [len(one), len(limited)]
+    assert len(many) == len(four), [len(many), len(four)]
 
 
 def test_studio_save_conflict_precedes_validation_and_publish_checks_revision(schema, callers):

@@ -1,5 +1,23 @@
 # IAM access and credential actions
 
+IAM is optional. Base models and querysets remain ordinary Django when it is
+absent. Selecting IAM contributes native REBAC model behavior and scoped/tracked
+querysets through the compiler’s abstract-target `extends` and `compose_querysets`
+contracts. Source declarations using native REBAC Meta options import
+`ProtectedModel` or `ProtectedDataModel` from `angee.iam.models.base`; custom
+protected collections and factories use `angee.iam.querysets` and
+`angee.iam.managers`. Native manager factories, configuration and database
+bindings remain with their source owners.
+Field-free models with explicitly protected querysets compose
+`ProtectedPersistenceMixin` for owner-controlled `system_queryset` reads without
+adding AngeeModel fields or native per-record authorization. Aggregate membership
+owners retain their own write admission.
+
+IAM owns schema composition, permission settings, provisioning and access
+checks. Its GraphQL, web and resource modules are contributions to those optional
+capabilities; none is required to load IAM’s auth/model lifecycle.
+
+
 The Share dialog is IAM's one-record People surface. `record_readers` lists
 named effective person readers through REBAC's subject lookup after the
 model's declared share permissions are checked. Wildcard and authenticated
@@ -26,7 +44,10 @@ confirmed opening verb.
 - **Names for everyone signed in.** `auth/user#read` is `authenticated`, so a
   record embedding an account (assignee, owner, requester, `run_as`) shows its display name to every reader. The web draws the
   avatar's initials from that name. Records that carry a label instead resolve
-  the same IAM label elevated (`angee.iam.identity`).
+  the same IAM label as a scalar projection (`angee.iam.identity`), with no
+  User row returned to the caller or permission bypass audit. For a nameless
+  account the label discloses its sign-in name (`read_private` username) on
+  every readable record.
 - **Restricted fields** are field gates on `read_private` (`self + list`):
   username, email, last sign-in, staff and active state, and UI preferences.
   The person and people managers read them; for anyone else they are null.
@@ -35,7 +56,7 @@ confirmed opening verb.
 - **The full list is for people managers.** `auth/user#list` admits platform
   admins, the named readers of the whole directory (`iam/directory:main#reader`)
   or of one account (`directory_reader`), and the roles a consumer unions in.
-  `UserManager.directory` and the `users` resource's `directory` filter list
+  `UserQuerySet.directory` and the `users` resource's `directory` filter list
   their rows; the managed people list applies that filter, so it is empty,
   without an error, for anyone who manages no one. Neither reader relation
   accepts a wildcard, and the demo resources seed no directory reader.
@@ -45,7 +66,7 @@ confirmed opening verb.
   relation declared on `auth/user` makes every write to its backing rows need
   `write` on the account, so team and space rosters, whose moderators edit
   memberships, contribute no arm.
-  `UserManager.colleagues` scopes the `users` resource and the `colleagues`
+  `UserQuerySet.colleagues` scopes the `users` resource and the `colleagues`
   query. Their search and ordering use the sign-in name and email only where
   the viewer reads them.
 - **Query axes.** Gated columns are never filters, sorts or groups. The `users`

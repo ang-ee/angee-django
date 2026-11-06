@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Sequence
 from functools import cached_property
-from typing import Any
+from typing import Any, cast
 
 from django.apps import apps
 from django.db import models
-from rebac import GenericTarget, generic_target, system_context
+from django.db.models.query import EmptyQuerySet
+from rebac import GenericTarget, generic_target
 
-from angee.graphql.relations import with_record_reference_access
+from angee.decisions.querysets import DecisionQuerySet
+from angee.iam.graphql.relations import with_record_reference_access
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
+from angee.workflows.querysets import run_record_sources
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 
 KIND = "workflows.run"
@@ -26,13 +29,15 @@ def run_records(run: Any) -> list[RecordIdentity]:
     Timeline invalidation owns the audited system context for these relation reads.
     """
 
+    using = run._state.db
+    content_types = apps.get_model("contenttypes", "ContentType").objects.db_manager(using)
     seen: set[tuple[int, Any]] = set()
     records: list[RecordIdentity] = []
 
     def add(content_type_id: int, object_id: Any) -> None:
         if (content_type_id, object_id) in seen:
             return
-        content_type = apps.get_model("contenttypes", "ContentType").objects.get_for_id(content_type_id)
+        content_type = content_types.get_for_id(content_type_id)
         model = content_type.model_class()
         if model is None:
             return
@@ -43,17 +48,25 @@ def run_records(run: Any) -> list[RecordIdentity]:
 
     if run.subject_content_type_id and run.subject_object_id:
         add(run.subject_content_type_id, run.subject_object_id)
-    evidence = run.records.all()
+    evidence = (
+        apps.get_model("workflows", "StepRecord")
+        ._default_manager.db_manager(using)
+        .filter(run_id=run.pk)
+    )
     for content_type_id, object_id in evidence.order_by().values_list("content_type_id", "object_id").distinct():
         add(content_type_id, object_id)
     if run.parent_step_id:
         parent_run_id = (
-            apps.get_model("workflows", "StepRun").objects
-            .filter(pk=run.parent_step_id).values_list("run_id", flat=True).first()
+            apps.get_model("workflows", "StepRun")
+            .objects.db_manager(using)
+            .filter(pk=run.parent_step_id)
+            .values_list("run_id", flat=True)
+            .first()
         )
         if parent_run_id:
-            run_type = apps.get_model("contenttypes", "ContentType").objects.get_for_model(
-                apps.get_model("workflows", "WorkflowRun"), for_concrete_model=False,
+            run_type = content_types.get_for_model(
+                apps.get_model("workflows", "WorkflowRun"),
+                for_concrete_model=False,
             )
             add(run_type.pk, parent_run_id)
     return records
@@ -70,30 +83,68 @@ class RunKind(TimelineKind):
         return True
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor)
-        rows = runs.about(record, ancestors=False)
+        # First bound run identities by the admitted record, then prove the
+        # actor's run read only for that small candidate set.
+        run_model = apps.get_model("workflows", "WorkflowRun")
+        runs = run_model._base_manager.db_manager(record._state.db, hints={"instance": record}).all()
+        subject_filter, links = run_record_sources(runs, record)
+        rows: models.QuerySet = runs.filter(subject_filter | models.Q(pk__in=links.values("run_id"))).distinct()
         if isinstance(record, rows.model):
             rows = (rows | runs.filter(parent_step__run=record).distinct()).exclude(pk=record.pk)
-        rows = rows.scoped()
-        waiting = apps.get_model("workflows", "StepRun").system_queryset().filter(
+        candidate_ids = tuple(rows.order_by().values_list("pk", flat=True))
+        rows = (
+            run_model.objects.db_manager(record._state.db).with_actor(actor).with_action("read").filter(
+                pk__in=candidate_ids,
+            ).scoped()
+            if candidate_ids else runs.none()
+        )
+        waiting = apps.get_model("workflows", "StepRun")._base_manager.filter(
             status=StepRunStatus.WAITING,
         ).defer("input", "output", "state", "notes").order_by("rank", "map_index")
-        return rows.select_related("version__workflow", "run_as").prefetch_related(
+        return rows.defer("input", "output", "error", "request_key").select_related(
+            "version__workflow", "run_as",
+        ).prefetch_related(
             models.Prefetch("step_runs", queryset=waiting, to_attr="timeline_waits"),
         )
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        decisions = apps.get_model("decisions", "Decision").objects.with_actor(actor).waiting_on(actor).scoped()
-        steps = apps.get_model("workflows", "StepRun").objects.with_actor(actor).scoped().filter(
-            status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
-            decision_id__in=decisions.values("pk"),
+    def waiting_on_expression(self, rows: Any, actor: Any) -> models.Expression:
+        """Pre-read this record's admitted waiting runs before projecting attention."""
+        decisions = apps.get_model("decisions", "Decision").objects.using(rows.db).waiting_on(actor)
+        if isinstance(decisions, EmptyQuerySet):
+            return models.Value(False, output_field=models.BooleanField())
+        run_ids = tuple(rows.filter(status=RunStatus.WAITING).order_by().values_list("pk", flat=True))
+        if not run_ids:
+            return models.Value(False, output_field=models.BooleanField())
+        # The actor-admitted run owns its waiting step; the decision still needs
+        # its own actor-bound read and act scope.
+        steps = apps.get_model("workflows", "StepRun")._base_manager.using(rows.db)
+        pairs = tuple(steps.filter(
+            run_id__in=run_ids, status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
+            decision_id__isnull=False,
+        ).order_by().values_list("run_id", "decision_id"))
+        if not pairs:
+            return models.Value(False, output_field=models.BooleanField())
+        decision_ids = {decision_id for _, decision_id in pairs}
+        actionable = set(decisions.with_actor(actor).scoped_for_aggregate().filter(
+            pk__in=decision_ids,
+        ).order_by().values_list("pk", flat=True))
+        waiting_runs = {run_id for run_id, decision_id in pairs if decision_id in actionable}
+        return models.Case(
+            models.When(status=RunStatus.WAITING, pk__in=waiting_runs, then=models.Value(True)),
+            default=models.Value(False), output_field=models.BooleanField(),
         )
-        return rows.filter(status=RunStatus.WAITING, pk__in=steps.values("run_id"))
 
     def targets(self, row: Any) -> Iterable[models.Model]:
-        return (row,) if row._meta.label == RUN_MODEL else apps.get_model(
-            "workflows", "WorkflowRun",
-        ).objects.filter(pk=row.run_id)
+        return (
+            (row,)
+            if row._meta.label == RUN_MODEL
+            else apps.get_model(
+                "workflows",
+                "WorkflowRun",
+            )
+            .objects.db_manager(row._state.db, hints={"instance": row})
+            .filter(pk=row.run_id)
+        )
 
     def records(self, run: Any) -> Iterable[RecordIdentity]:
         return run_records(run)
@@ -122,30 +173,28 @@ class TimelineSelection:
         """The shared run-owner selection, ready for a schema-specific optimizer."""
 
         runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(self.actor)
-        events = apps.get_model("workflows", "TriggerEvent").objects.with_actor(self.actor)
         return runs.about(self.records, limit=self.run_limit).order_by("-created_at", "-pk").select_related(
             "parent_step",
-        ).prefetch_related("records", models.Prefetch(
-            "trigger_event", queryset=with_record_reference_access(events),
-        ))
+        ).prefetch_related("records")
 
     @cached_property
     def open_decision_count(self) -> int:
         """Preserve record-level attention independently of question readability."""
 
+        if not self.records:
+            return 0
         decisions = apps.get_model("decisions", "Decision")
-        with system_context(reason="workflows.timeline.selection_attention"):
-            return int(decisions.objects.open_for(*self.records).count())
+        rows = decisions._base_manager.using(self.records[0]._state.db)
+        return int(DecisionQuerySet.for_records(cast(Any, rows.all()), *self.records).filter(
+            verdict__isnull=True,
+        ).count())
 
-    def entries(self, runs: Sequence[Any]) -> Iterator[tuple[GenericTarget, list[Any], list[Any]]]:
-        """Group selected runs with their ancestors and readable open decisions."""
-
-        decisions = apps.get_model("decisions", "Decision").objects.with_actor(self.actor)
-        links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
-        questions = list(decisions.open_for(*self.records).prefetch_related(models.Prefetch(
-            "records", queryset=with_record_reference_access(links),
-        )))
+    @cached_property
+    def runs_by_record(self) -> dict[GenericTarget, tuple[int, ...]]:
+        """Run identities grouped once, independently of a schema's projection."""
+        runs = list(self.runs)
         by_run = {run.pk: run for run in runs}
+        grouped = {}
         for target in self.targets:
             identity = (target.content_type.pk, target.object_id)
             selected = {run.pk for run in runs if (
@@ -158,12 +207,23 @@ class TimelineSelection:
                     if run.pk in selected:
                         break
                     selected.add(run.pk)
-            yield (
-                target,
-                list(reversed([run for run in runs if run.pk in selected][:self.run_limit])),
-                [decision for decision in questions if any(
-                    (link.content_type_id, link.object_id) == identity for link in decision.records.all())],
-            )
+            grouped[target] = tuple(reversed([run.pk for run in runs if run.pk in selected][:self.run_limit]))
+        return grouped
+
+    @cached_property
+    def decisions_by_record(self) -> dict[GenericTarget, list[Any]]:
+        """Readable open questions, loaded only by a question projection."""
+        decisions = apps.get_model("decisions", "Decision").objects.with_actor(self.actor)
+        links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
+        questions = list(decisions.open_for(*self.records).prefetch_related(models.Prefetch(
+            "records", queryset=with_record_reference_access(links),
+        )))
+        return {
+            target: [decision for decision in questions if any(
+                (link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
+                for link in decision.records.all())]
+            for target in self.targets
+        }
 
 
 def timeline_kinds() -> tuple[TimelineKind, ...]:

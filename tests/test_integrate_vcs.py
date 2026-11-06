@@ -8,17 +8,20 @@ themselves).
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.db import connections, models
+from django.test.utils import isolate_apps
 from django.utils import timezone
 from rebac import system_context
+from rebac.models import PermissionAuditEvent
 
-from angee.integrate_vcs.backend import LocalVCSBackend, VCSBackend, source_path, tree_entries
+from angee.integrate_vcs.backend import LocalVCSBackend, source_path, tree_entries
+from angee.integrate_vcs.managers import TemplateManager
 from tests.conftest import (
     Repository,
     Source,
@@ -27,6 +30,7 @@ from tests.conftest import (
     VcsBridge,
     make_integration,
 )
+from tests.tables import model_tables
 
 REPOS = [
     {
@@ -223,41 +227,6 @@ def test_local_vcs_backend_walks_the_working_tree(tmp_path: Any) -> None:
         backend.cat_file(None, ref="main", path="../escape")
 
 
-def test_remote_materialization_pins_the_backend_revision_and_scopes_cleanup(tmp_path):
-    events = []
-
-    class Backend(VCSBackend):
-        def rev_parse(self, repository, ref):
-            assert ref == "main"
-            return "a" * 40
-
-    @contextmanager
-    def checkout(remote, revision):
-        assert remote == "https://example.com/repo.git" and revision == "a" * 40
-        events.append("open")
-        try:
-            yield tmp_path, revision
-        finally:
-            events.append("closed")
-
-    backend = Backend(SimpleNamespace(config={}))
-    repository = SimpleNamespace(remote="https://example.com/repo.git")
-    with backend.materialize(repository, ref="main", checkout=checkout) as source:
-        assert source == (tmp_path, "a" * 40) and events == ["open"]
-    assert events == ["open", "closed"]
-
-
-def test_local_materialization_retains_unsaved_working_tree_files(tmp_path):
-    (tmp_path / "uncommitted").write_text("current")
-    backend = LocalVCSBackend(SimpleNamespace(config={"local_root": str(tmp_path)}))
-
-    def no_remote(*args):
-        raise AssertionError("Local working trees must not ask the operator to clone")
-
-    with backend.materialize(None, ref="main", checkout=no_remote) as (root, revision):
-        assert (root / "uncommitted").read_text() == "current" and revision == ""
-
-
 def test_materialized_marker_policy_preserves_path_boundaries_and_ignores_jj(tmp_path, monkeypatch):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "pyproject.toml").write_text("[project]")
@@ -303,3 +272,74 @@ def test_discovery_uses_one_resolved_revision_for_tree_and_blobs(composed_tables
         source = Source.objects.create(repository=repository, kind="template", path="templates")
     assert source.refresh() == 1
     assert observed == ["stubsha", "stubsha"]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("bound", [False, True])
+def test_template_reconciliation_rolls_back_on_the_source_database(tmp_path, bound, django_db_blocker):
+    """Failed completion cannot leave replacement inventory on another connection."""
+
+    alias = "vcs_source_probe"
+    connections.databases[alias] = {
+        **connections.databases["default"],
+        "ENGINE": "django.db.backends.sqlite3",
+        "OPTIONS": {},
+        "CONN_MAX_AGE": 0,
+        "NAME": str(tmp_path / "source.sqlite3"),
+        "TEST": {"NAME": str(tmp_path / "source.sqlite3")},
+    }
+    database = connections[alias]
+    try:
+        with django_db_blocker.unblock(), isolate_apps("tests"):
+            class SourceProbe(models.Model):
+                last_synced_at = models.DateTimeField(null=True)
+
+                class Meta:
+                    app_label = "tests"
+
+                @property
+                def repository(self):
+                    def discover(source, **kwargs):
+                        assert not database.in_atomic_block
+                        assert not connections["default"].in_atomic_block
+                        return [{"path": "new", "name": "New", "kind": "workspace", "inputs": []}]
+
+                    return SimpleNamespace(vcs_bridge=SimpleNamespace(discover=discover))
+
+                def complete_sync(self, *, now):
+                    self.last_synced_at = now
+                    self.save(using=self._state.db)
+                    raise ValueError("completion refused")
+
+            class TemplateProbe(models.Model):
+                source = models.ForeignKey(SourceProbe, on_delete=models.CASCADE)
+                path = models.CharField(max_length=200)
+                name = models.CharField(max_length=100)
+                kind = models.CharField(max_length=50)
+                inputs = models.JSONField(default=list)
+                created_at = models.DateTimeField()
+                updated_at = models.DateTimeField()
+                objects = TemplateManager()
+
+                class Meta:
+                    app_label = "tests"
+                    unique_together = (("source", "path"),)
+
+            with (
+                model_tables((PermissionAuditEvent, SourceProbe, TemplateProbe), using=alias),
+                system_context(reason="tests.vcs.routed_inventory"),
+            ):
+                source = SourceProbe.objects.using(alias).create()
+                rows = TemplateProbe.objects.db_manager(alias)
+                now = timezone.now()
+                rows.create(source=source, path="old", name="Old", kind="workspace", created_at=now, updated_at=now)
+                manager = rows if bound else TemplateProbe.objects
+                with pytest.raises(ValueError, match="completion refused"):
+                    manager.sync_from_source(source)
+                source.refresh_from_db()
+                assert source.last_synced_at is None
+                assert list(rows.values_list("path", flat=True)) == ["old"]
+    finally:
+        database.close()
+        del connections[alias]
+        connections.databases.pop(alias)

@@ -17,6 +17,8 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Prefetch
+from rebac import current_actor
 from strawberry import auto
 from strawberry.permission import BasePermission, PermissionExtension
 from strawberry.scalars import JSON
@@ -25,22 +27,18 @@ from strawberry_django.utils.requests import get_request
 
 from angee.agents import provisioning
 from angee.agents.context import render_view_context
-from angee.base.identity import public_subject_ref
-from angee.graphql.actions import (
-    ActionResult,
-    action_target,
-    authorized_permission_target,
-    resolve_action_target,
-    session_user,
-)
-from angee.graphql.capabilities import permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.actions import ActionResult
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import PlatformAdminPermission
+from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.graphql.access import PlatformAdminPermission
+from angee.iam.graphql.actions import action_target, authorized_permission_target, resolve_action_target, session_user
+from angee.iam.graphql.capabilities import permissions_field
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.iam.identity import public_subject_ref
 from angee.iam.schema import UserType
 from angee.integrate.connect import connect_integration_target
 from angee.integrate.oauth.errors import OAuthFlowError
@@ -66,6 +64,11 @@ AgentRuntimeImpl = Agent._meta.get_field("runtime_class").choices_enum
 strawberry.enum(cast(Any, AgentRuntimeImpl))
 AgentSessionModel = apps.get_model("agents", "AgentSession")
 AgentTurn = apps.get_model("agents", "AgentTurn")
+_TURN_UPDATE_BATCHES = Prefetch(
+    "update_batches",
+    queryset=AgentTurn.update_model()._base_manager.order_by("start_index"),
+    to_attr="_prefetched_update_batches",
+)
 Integration = apps.get_model("integrate", "Integration")
 Vendor = apps.get_model("integrate", "Vendor")
 Credential = apps.get_model("integrate", "Credential")
@@ -76,7 +79,7 @@ User = get_user_model()
 
 
 @strawberry_django.type(InferenceProvider)
-class InferenceProviderType(IntegrationLabelMixin, IntegrationOAuthMixin, AngeeNode):
+class InferenceProviderType(IntegrationLabelMixin, IntegrationOAuthMixin, ProtectedNode):
     """Admin projection of an inference provider child model."""
 
     vendor: VendorType
@@ -108,7 +111,7 @@ class IntegrationInferenceProviderExtension:
 
 
 @strawberry_django.type(InferenceModel)
-class InferenceModelType(AngeeNode):
+class InferenceModelType(ProtectedNode):
     """Admin projection of one model in a provider's catalogue."""
 
     provider: InferenceProviderType
@@ -128,7 +131,7 @@ class InferenceModelType(AngeeNode):
 
 
 @strawberry_django.type(Skill)
-class SkillType(AngeeNode):
+class SkillType(ProtectedNode):
     """Admin projection of one discovered skill."""
 
     source: SourceType
@@ -141,7 +144,7 @@ class SkillType(AngeeNode):
 
 
 @strawberry_django.type(MCPServer)
-class MCPServerType(AngeeNode):
+class MCPServerType(ProtectedNode):
     """Admin projection of one MCP server."""
 
     name: auto
@@ -156,8 +159,8 @@ class MCPServerType(AngeeNode):
 
 
 @strawberry_django.type(MCPTool)
-class MCPToolType(AngeeNode):
-    """Admin projection of one MCP tool."""
+class MCPToolType(ProtectedNode):
+    """Admin projection of one MCP tool, including its read-only approval gate."""
 
     server: MCPServerType
     name: auto
@@ -170,7 +173,7 @@ class MCPToolType(AngeeNode):
 
 
 @strawberry_django.type(Agent)
-class AgentType(AngeeNode):
+class AgentType(ProtectedNode):
     """Admin projection of an agent (or, when ``is_template``, an agent template)."""
 
     owner: UserType | None
@@ -224,9 +227,27 @@ class AgentType(AngeeNode):
 
 
 @strawberry_django.type(AgentSessionModel)
-class AgentSessionType(AngeeNode):
+class AgentSessionType(ProtectedNode):
     """Projection of one persisted agent conversation, readable by its user."""
 
+    @strawberry_django.field(
+        only=["title", "agent_id"],
+        prefetch_related=[
+            lambda info: Prefetch(
+                "agent",
+                queryset=Agent.objects.with_actor(session_user(info)).with_action("read"),
+                to_attr="_display_agent",
+            ),
+        ],
+    )
+    def display_name(self) -> str:
+        """Use the readable agent's name only when this session has no title."""
+
+        row = cast(Any, self)
+        if row.title:
+            return str(row.title)
+        agent = getattr(row, "_display_agent", None)
+        return str(agent) if agent is not None else str(row._meta.verbose_name)
     agent: AgentType
     user: UserType | None
     title: auto
@@ -239,7 +260,7 @@ class AgentSessionType(AngeeNode):
 
 
 @strawberry_django.type(AgentTurn)
-class AgentTurnType(AngeeNode):
+class AgentTurnType(ProtectedNode):
     """Projection of one persisted agent turn, readable through its session."""
 
     session: AgentSessionType
@@ -247,7 +268,7 @@ class AgentTurnType(AngeeNode):
     prompt: auto
     context: JSON
     status: auto
-    updates: JSON
+    updates: JSON = strawberry_django.field(prefetch_related=[_TURN_UPDATE_BATCHES], metadata={"angee_widget": "json"})
     text: auto
     usage: JSON
     error: auto
@@ -338,7 +359,7 @@ _AGENT_RESOURCE = hasura_model_resource(
         "mcp_tools": public_pk_decoder(MCPTool),
         "workspace_template": public_pk_decoder(Template),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Agent,
         public_id_fields=(
             "model",
@@ -357,10 +378,10 @@ _AGENT_SESSION_RESOURCE = hasura_model_resource(
     filterable=["id", "agent", "user", "status", "updated_at"],
     sortable=["title", "status", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["agent", "user", "status"],
+    groupable=["agent", "agent__name", "user", "user__first_name", "status"],
     insert=False,
     update=False,
-    write_backend=AngeeHasuraWriteBackend(AgentSessionModel),
+    write_backend=ProtectedHasuraWriteBackend(AgentSessionModel),
     field_id_decode={
         "agent": public_pk_decoder(Agent),
         "user": public_pk_decoder(User),
@@ -373,7 +394,7 @@ _AGENT_TURN_RESOURCE = hasura_model_resource(
     filterable=["id", "session", "index", "status", "updated_at"],
     sortable=["session", "index", "status", "created_at", "updated_at"],
     aggregatable=["id", "index"],
-    groupable=["session", "status"],
+    groupable=["session", "session__title", "status"],
     insert=False,
     update=False,
     delete=False,
@@ -403,7 +424,7 @@ _MCP_SERVER_RESOURCE = hasura_model_resource(
     insertable=["name", "description", "placement", "transport", "url", "credential", "config"],
     updatable=["name", "description", "placement", "transport", "url", "credential", "config"],
     field_id_decode={"credential": public_pk_decoder(Credential)},
-    write_backend=AngeeHasuraWriteBackend(MCPServer, public_id_fields=("credential",)),
+    write_backend=ProtectedHasuraWriteBackend(MCPServer, public_id_fields=("credential",)),
 )
 _MCP_TOOL_RESOURCE = hasura_model_resource(
     MCPToolType,
@@ -413,10 +434,10 @@ _MCP_TOOL_RESOURCE = hasura_model_resource(
     sortable=["server", "name", "enabled", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["server", "server__name", "enabled", "updated_at"],
-    insertable=["server", "name", "description", "input_schema", "enabled", "requires_approval"],
-    updatable=["description", "input_schema", "enabled", "requires_approval"],
+    insertable=["server", "name", "description", "input_schema", "enabled"],
+    updatable=["description", "input_schema", "enabled"],
     field_id_decode={"server": public_pk_decoder(MCPServer)},
-    write_backend=AngeeHasuraWriteBackend(MCPTool, public_id_fields=("server",)),
+    write_backend=ProtectedHasuraWriteBackend(MCPTool, public_id_fields=("server",)),
 )
 _INFERENCE_PROVIDER_RESOURCE = hasura_model_resource(
     InferenceProviderType,
@@ -490,7 +511,7 @@ _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
         "provider": public_pk_decoder(InferenceProvider),
         "publisher": public_pk_decoder(Vendor),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         InferenceModel,
         public_id_fields=("provider", "publisher"),
     ),
@@ -543,13 +564,12 @@ class AgentSessionQuery:
         agent = Agent.objects.chat_for_actor()
         if agent is None:
             return None
-        model = agent.model
         session = AgentSessionModel.objects.current_for_agent(agent)
         return AgentChatTarget(
             agent_id=PublicID(str(agent.sqid)),
             agent_name=str(agent.name),
             status=str(agent.runtime_status),
-            model_handle=str(agent.service_model_handle()) if model is not None else "",
+            model_handle=agent.readable_model_handle(current_actor()),
             runtime_class=agent.runtime_class,
             runs_in_process=agent.runs_in_process,
             session_id=PublicID(str(session.sqid)) if session is not None else None,
@@ -572,7 +592,7 @@ class InferenceActionMutation:
         ) as provider:
             try:
                 count = provider.refresh_models()
-            except Exception as error:  # noqa: BLE001 — backend failure is the result, not a 500
+            except Exception as error:  # backend failure is the result, not a 500
                 return ActionResult(ok=False, message=f"Refresh failed: {error}")
         return ActionResult(ok=True, message=f"Synced {count} model(s).")
 
@@ -615,25 +635,33 @@ class AgentActionMutation:
     def provision_agent(self, id: PublicID) -> ActionResult:
         """Render the agent into an operator workspace and service."""
 
-        return provisioning.provision_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.provision_agent")
+        result = provisioning.provision_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def reprovision_agent(self, id: PublicID) -> ActionResult:
         """Recreate the agent service over its existing workspace."""
 
-        return provisioning.reprovision_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.reprovision_agent")
+        result = provisioning.reprovision_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def adopt_agent(self, id: PublicID) -> ActionResult:
         """Record the conflicting instance as the agent's own, keeping its container as it is."""
 
-        return provisioning.adopt_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.adopt_agent")
+        result = provisioning.adopt_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def replace_agent(self, id: PublicID) -> ActionResult:
         """Destroy the conflicting instance, then provision the agent afresh."""
 
-        return provisioning.replace_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.replace_agent")
+        result = provisioning.replace_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
     @strawberry.mutation(permission_classes=[AgentChatEndpointPermission])
     def agent_chat_endpoint(self, info: strawberry.Info, id: PublicID) -> AgentChatEndpoint:
@@ -660,7 +688,9 @@ class AgentActionMutation:
     def deprovision_agent(self, id: PublicID) -> ActionResult:
         """Tear down the agent's operator workspace and service."""
 
-        return provisioning.deprovision_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.deprovision_agent")
+        result = provisioning.deprovision_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
 
 _CONSOLE_TYPES: list[object] = [

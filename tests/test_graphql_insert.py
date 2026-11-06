@@ -22,27 +22,27 @@ from rebac import (
 from rebac.models import active_relationship_model
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from tests.conftest import create_platform_admin, create_user, execute_schema, result_data
 from tests.scopedemo.models import FactoryCompanion, FactoryDoc, ProjectionDoc, Scope, SharedDoc
 
 
 @strawberry_django.type(FactoryDoc)
-class FactoryDocType(AngeeNode):
+class FactoryDocType(ProtectedNode):
     """Public document projection for the prepared factory contract."""
 
     title: strawberry.auto
 
 
 @strawberry_django.type(ProjectionDoc)
-class ProjectionDocType(AngeeNode):
+class ProjectionDocType(ProtectedNode):
     """Public projection for a relation that is unknown before insertion."""
 
     title: strawberry.auto
 
 
 @strawberry_django.type(SharedDoc)
-class SharedDocType(AngeeNode):
+class SharedDocType(ProtectedNode):
     """Public projection for create-time shared-reader authorization."""
 
     title: strawberry.auto
@@ -223,7 +223,7 @@ def test_hasura_create_uses_filtered_constant(rebac_storage: str, eligible: bool
         relationships = active_relationship_model().objects.filter(resource_type="scopedemo/shared_doc")
         if eligible:
             public_id = result_data(result)["insert_shared_docs_one"]["id"]
-            document = SharedDoc.objects.as_user(actor).get(sqid=public_id)
+            document = SharedDoc.objects.with_actor(actor).get(sqid=public_id)
             assert document.is_shared is True
             assert SharedDoc._base_manager.count() == 1
             assert not relationships.exists()

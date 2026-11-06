@@ -59,13 +59,17 @@ PROJECT_SETTINGS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template"
 SHARED_SERVICES = {"operator", "postgres", "redis", "django", "celery-worker"}
 DJANGO_READY = {
     "cmd": [
-        "uv", "run", "--no-sync", "python", "-c",
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "-c",
         "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2).close()",
     ],
-    "interval": "5s",
+    "interval": "1s",
     "timeout": "3s",
-    "start_period": "30s",
-    "retries": 180,
+    "start_period": "1s",
+    "retries": 900,
 }
 # The slim node image has neither wget nor curl, so the container probes with node.
 FRONTEND_READY = {
@@ -75,10 +79,10 @@ FRONTEND_READY = {
         "require('net').connect(5173, '127.0.0.1')"
         ".on('connect', () => process.exit(0)).on('error', () => process.exit(1))",
     ],
-    "interval": "5s",
+    "interval": "1s",
     "timeout": "3s",
-    "start_period": "30s",
-    "retries": 180,
+    "start_period": "1s",
+    "retries": 900,
 }
 
 
@@ -566,8 +570,11 @@ def _render_project_settings(
             '{% if addons_profile == "full" %}': addons_profile == "full",
             "{% if framework_workspace %}": framework_workspace,
             "{% if include_arp %}": include_arp,
-            '{% if framework_source_path and not framework_workspace and framework != "baked" %}':
-                bool(framework_source_path) and not framework_workspace and framework != "baked",
+            '{% if framework_source_path and not framework_workspace and framework != "baked" %}': bool(
+                framework_source_path
+            )
+            and not framework_workspace
+            and framework != "baked",
         },
     )
     replacements = {
@@ -600,11 +607,11 @@ def _render_project_pyproject(
     text = _render_project_settings_conditionals(
         text,
         conditions={
-            '{% if framework_source_path and framework != "baked" %}':
-                bool(framework_source_path) and framework != "baked",
-            '{% if framework_workspace %}': framework_workspace,
+            '{% if framework_source_path and framework != "baked" %}': bool(framework_source_path)
+            and framework != "baked",
+            "{% if framework_workspace %}": framework_workspace,
             '{% if addons_profile == "full" %}': addons_profile == "full",
-            '{% if include_arp %}': include_arp,
+            "{% if include_arp %}": include_arp,
         },
     )
     replacements = {
@@ -690,8 +697,10 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
 
     # The stack overlay overwrites the project's root AGENTS.md, so the stack contract
     # ends by including the project host body the project template renders on its own.
-    assert SHARED_AGENTS.read_text(encoding="utf-8").rstrip().endswith(
-        '{% include "../../projects/_shared/AGENTS.md.jinja" %}'
+    assert (
+        SHARED_AGENTS.read_text(encoding="utf-8")
+        .rstrip()
+        .endswith('{% include "../../projects/_shared/AGENTS.md.jinja" %}')
     )
     assert _inline_includes(DEV_AGENTS_TEMPLATE).count("# Angee Project Host") == 1
 
@@ -793,7 +802,7 @@ def test_local_django_baked_mode_uses_the_shared_environment() -> None:
     assert "uv sync" not in " ".join(stack["services"]["django"]["command"])
     assert stack["jobs"]["provision"]["command"][-3:] == ["provision", "--wait-db", "60"]
     command = stack["jobs"]["frontend-build"]["command"][-1]
-    assert '\"packages/*\",\"src/angee/*/web\"' in command
+    assert '"packages/*","src/angee/*/web"' in command
     assert "sources/angee" not in command
 
 
@@ -969,7 +978,8 @@ def test_project_python_dependencies_use_native_package_metadata() -> None:
         assert "angee-runtime" not in rendered
     _rendered, source = _render_project_pyproject(framework_source_path="workspaces/src/angee")
     assert source["tool"]["uv"]["sources"]["angee"] == {
-        "path": "workspaces/src/angee", "editable": True,
+        "path": "workspaces/src/angee",
+        "editable": True,
     }
 
 
@@ -1069,7 +1079,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
         Changeset = apps.get_model(settings.ANGEE_CHANGESET_MODEL)
         context = Changeset._base_manager.get()
         history = apps.get_model("notes", "Note").history.get()
-        assert history.changeset_id == context.pk
+        assert history.history_changeset_id == context.pk
         assert history.history_change_reason == context.change_reason == "manage.captureprobe"
         assert context.actor_ref == ""
         assert context.activity == "system"
@@ -1093,7 +1103,7 @@ def test_rendered_management_command_closes_its_changeset(tmp_path: Path) -> Non
     """A real one-shot command attributes its captured write through rendered manage.py."""
 
     rendered = (PROJECT_SETTINGS_TEMPLATE.parent / "manage.py.jinja").read_text().replace("{{ project_name }}", "probe")
-    assert "from django_compose.management import execute" in rendered
+    assert "from angee.server.management import execute" in rendered
     result = _run_probe_command(tmp_path, rendered)
     assert result.returncode == 0, f"rendered management command failed:\n{result.stdout}\n{result.stderr}"
 
@@ -1132,10 +1142,17 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
         assert jobs["py-sync"]["holds"] == ["django", "celery-worker", "celery-queues"]
         assert jobs["compose"]["holds"] == ["django", "celery-worker", "celery-queues"]
         assert jobs["py-sync"]["depends_on"] == ["deps"]
-        assert jobs["compose"]["command"] == ["uv", "run", "--no-sync", "python", "manage.py", "compose"]
+        assert jobs["compose"]["command"] == ["uv", "run", "--no-sync", "python", "manage.py", "compose", "--if-stale"]
         assert jobs["compose"]["depends_on"] == ["py-sync"]
         assert jobs["provision"]["command"] == [
-            "uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60",
+            "uv",
+            "run",
+            "--no-sync",
+            "python",
+            "manage.py",
+            "provision",
+            "--wait-db",
+            "60",
         ]
         assert jobs["provision"]["depends_on"] == (
             ["compose", "postgres"] if jobs["provision"]["runtime"] == "container" else ["compose"]
@@ -1185,9 +1202,7 @@ def test_dev_stack_external_postgres_uses_server_without_stack_resources(
     assert "pgdata" not in stack["persist"]
     assert stack["secrets"]["db-password"] == {"required": True}
     assert "${ports.postgres}" not in json.dumps(stack)
-    assert stack["jobs"]["provision"]["depends_on"] == (
-        ["compose"]
-    )
+    assert stack["jobs"]["provision"]["depends_on"] == (["compose"])
     assert stack["services"]["redis"] == bundled["services"]["redis"]
     assert stack["ports"].get("redis") == bundled["ports"].get("redis")
 
@@ -1960,7 +1975,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
         sync_command = stack["jobs"]["py-sync"]["command"][-1]
         assert "exec uv sync --locked" in sync_command
         assert ("--no-editable" in sync_command) == (serve_mode == "production")
-        assert stack["jobs"]["compose"]["command"][-1] == "compose"
+        assert stack["jobs"]["compose"]["command"][-2:] == ["compose", "--if-stale"]
         if serve_mode == "production":
             assert "manage.py serve" in command
             assert "--workers 0" in command
@@ -2003,7 +2018,9 @@ def test_process_render_is_development_even_when_serve_validator_is_bypassed() -
 
 @pytest.mark.parametrize("application", ("angee.server.application", "custom.asgi.application"))
 def test_production_serve_workers_use_configured_app_cpu_count_and_reject_one(
-    monkeypatch: pytest.MonkeyPatch, settings: Any, application: str,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Any,
+    application: str,
 ) -> None:
     from django.core.management.base import CommandError
 
@@ -2016,8 +2033,12 @@ def test_production_serve_workers_use_configured_app_cpu_count_and_reject_one(
 
     monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: started.append({"app": app, **kwargs}))
     options = {
-        "require_provisioned": False, "workers": 0, "production": True, "host": "0.0.0.0",
-        "port": 8000, "forwarded_allow_ips": "10.0.0.2",
+        "require_provisioned": False,
+        "workers": 0,
+        "production": True,
+        "host": "0.0.0.0",
+        "port": 8000,
+        "forwarded_allow_ips": "10.0.0.2",
     }
     serve.Command().handle(**options)
     module, _, attribute = application.rpartition(".")
@@ -2282,12 +2303,12 @@ def test_celery_queues_share_one_queue_worker_in_both_modes() -> None:
     for render in (_render_dev_stack, _render_dev_docker_stack, _render_local_stack):
         stack = render()
         assert {name for name in stack["services"] if name.startswith("celery-")} == {"celery-worker"}
-        assert stack["services"]["celery-worker"]["stop_grace_period"] == "30s"
+        assert stack["services"]["celery-worker"]["stop_grace_period"] == "10s"
 
     dev = _render_dev_stack(celery_queues="whatsapp")
     dev_service = dev["services"]["celery-queues"]
     assert dev_service["runtime"] == "local"
-    assert dev_service["stop_grace_period"] == "30s"
+    assert dev_service["stop_grace_period"] == "10s"
     command = dev_service["command"]
     assert command[command.index("-Q") + 1] == "whatsapp"
     assert command[command.index("--pool") + 1] == "threads"
@@ -2392,7 +2413,7 @@ def test_stack_install_roots_compose_the_shared_pnpm_policy() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "COPY packages ./packages" in dockerfile
     assert "COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./" in dockerfile
-    for surface in [workspace, yaml.safe_load(template[template.index("allowBuilds:"):])]:
+    for surface in [workspace, yaml.safe_load(template[template.index("allowBuilds:") :])]:
         assert "overrides" not in surface
         assert "packageExtensions" not in surface
         assert "patchedDependencies" not in surface
@@ -2414,8 +2435,8 @@ def test_js_dependencies_author_only_an_absent_lock_and_fail_closed(tmp_path: Pa
         '#!/bin/sh\nprintf "%s\\n" "$*" >>"$PROBE_OUTPUT"\n'
         'if [ "$2" = --lockfile-only ]; then\n'
         '  [ "$PROBE_STATE" != author-fails ] || exit 7\n'
-        '  : >pnpm-lock.yaml\n'
-        'fi\n'
+        "  : >pnpm-lock.yaml\n"
+        "fi\n"
         '[ "$PROBE_STATE" != drift ] || exit 9\n'
     )
     pnpm.chmod(0o755)
@@ -2427,9 +2448,12 @@ def test_js_dependencies_author_only_an_absent_lock_and_fail_closed(tmp_path: Pa
     if retained:
         lockfile.write_text("existing lock")
     result = subprocess.run(
-        ["/bin/sh", "-c", command], cwd=tmp_path,
+        ["/bin/sh", "-c", command],
+        cwd=tmp_path,
         env={"PATH": str(tmp_path), "PROBE_OUTPUT": str(output), "PROBE_STATE": state},
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     expected = [] if retained else ["install --lockfile-only --no-frozen-lockfile"]
     if state != "author-fails":
@@ -2444,12 +2468,18 @@ def test_py_sync_cold_bootstrap_needs_only_native_uv(tmp_path: Path) -> None:
     """The sync branch works before any Angee or Django package is importable."""
     command = _render_dev_stack()["jobs"]["py-sync"]["command"]
     uv = tmp_path / "uv"
-    uv.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PROBE_OUTPUT\"\n")
+    uv.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$PROBE_OUTPUT"\n')
     uv.chmod(0o755)
     output = tmp_path / "argv"
-    result = subprocess.run(command, cwd=tmp_path, executable="/bin/sh",
+    result = subprocess.run(
+        command,
+        cwd=tmp_path,
+        executable="/bin/sh",
         env={"PATH": str(tmp_path), "ANGEE_DEPENDENCY_ACTION": "sync", "PROBE_OUTPUT": str(output)},
-        capture_output=True, text=True, check=False)
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     assert result.returncode == 0, result.stderr
     assert output.read_text().splitlines() == ["sync", "--locked"]
 
@@ -2457,9 +2487,10 @@ def test_py_sync_cold_bootstrap_needs_only_native_uv(tmp_path: Path) -> None:
 def test_project_template_delegates_native_bootstrap() -> None:
     directory = PROJECT_SETTINGS_TEMPLATE.parent
     launcher = (directory / "manage.py.jinja").read_text()
-    assert "from django_compose.management import execute" in launcher
+    assert "from angee.server.management import execute" in launcher
     assert 'os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")' in launcher
-    assert 'angee.management' not in launcher
+    assert "angee.management" not in launcher
+    assert "django_compose.management" not in launcher
     assert (directory / "settings.py").read_text() == "from angee.base.conf import configure\n\nconfigure(globals())\n"
 
 
