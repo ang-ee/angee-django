@@ -4,7 +4,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
 import {
   errorMessage, useToast, Button, Card, CardContent, CommandBand, ControlBandProvider, EmptyState, ErrorBanner, formatDate, formatSize,
-  Glyph, LoadingPanel, RecordHeader, useConfirm, type RecordChromeContext, type RecordNavigation,
+  Glyph, LoadingPanel, RecordHeader, SkeletonStatus, SkeletonText, useConfirm, type RecordChromeContext, type RecordNavigation,
 } from "@angee/ui";
 
 import { StorageFileById } from "../data/documents";
@@ -109,7 +109,7 @@ export function FilePreviewFrame({
           title={file
             ? file.title || file.filename
             : fetching
-              ? t("loadingFile")
+              ? <SkeletonStatus label={t("loadingFile")} className="py-1"><SkeletonText lines={1} size="lg" lineClassName="w-64 max-w-full" /></SkeletonStatus>
               : error ? t("preview.loadError") : t("file.notFoundTitle")}
           meta={facts}
           status={file?.is_trashed ? { label: t("file.inTrash"), tone: "warning" } : undefined}

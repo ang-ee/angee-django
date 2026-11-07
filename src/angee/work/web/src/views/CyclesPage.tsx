@@ -29,7 +29,8 @@ export function CyclesPage(): React.ReactElement {
   return (
     <QueueRecordPage
       eyebrow={t("queue.eyebrow.cycles")}
-      title={name ?? t("queue.loading")}
+      title={name}
+      loadingLabel={t("queue.loading")}
       description={t("cycle.description")}
       verbs={<QueueSettingsLink queueId={queueId} />}
     >

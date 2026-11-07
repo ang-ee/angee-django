@@ -124,7 +124,6 @@ export const enIamMessages: Record<string, string> = {
   "principalAccess.noPermissions": "No permission paths reach this principal.",
   "principalAccess.permissionsDescription":
     "Permission paths reached by effective roles and explicit grants. Runtime conditions still apply.",
-  "principalAccess.loading": "Loading access…",
   "principalAccess.missingSubject": "This record has no authorization principal.",
   "roles.declaration": "Declaration",
   "roles.declared": "Schema",

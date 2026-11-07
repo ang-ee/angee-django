@@ -23,7 +23,8 @@ export function QueueBoardPage(): React.ReactElement {
   return (
     <QueueRecordPage
       eyebrow={t("queue.eyebrow.board")}
-      title={name ?? t("queue.loading")}
+      title={name}
+      loadingLabel={t("queue.loading")}
       description={t("board.description")}
       verbs={<QueueSettingsLink queueId={queueId} />}
       gutter="none"

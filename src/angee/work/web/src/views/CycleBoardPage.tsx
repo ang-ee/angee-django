@@ -24,7 +24,8 @@ export function CycleBoardPage(): React.ReactElement {
   return (
     <QueueRecordPage
       eyebrow={queueFacts?.name ? t("cycle.eyebrow", { queue: queueFacts.name }) : t("cycle.eyebrowBare")}
-      title={cycleFacts?.name ?? t("cycle.loading")}
+      title={cycleFacts?.name}
+      loadingLabel={t("cycle.loading")}
       description={t("cycle.board.description")}
       verbs={cycleFacts ? (
         <CycleCloseControl
