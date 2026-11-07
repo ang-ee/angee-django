@@ -35,6 +35,7 @@ from strawberry_django.utils.requests import get_request
 
 from angee.base.exceptions import exception_text
 from angee.base.models.identity import public_id_of
+from angee.base.pagination import MAX_PAGE_SIZE
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -1940,11 +1941,14 @@ _CONSOLE_TYPES: list[object] = [
 
 
 def related_counts() -> tuple[RelatedCount, ...]:
-    """A record's retained sources: the record_links rows the Sources group lists, by exact pointer."""
+    """A record's retained sources: the record_links rows the Sources group lists, by exact pointer.
+
+    The group lists one page of the bound every page shares, so its count stops there too.
+    """
 
     return (RelatedCount("integrate.sources", lambda record: RecordLink._default_manager.filter(
         **generic_target(record).lookups(RecordLink, "target"),
-    )),)
+    ), limit=MAX_PAGE_SIZE),)
 
 
 schemas = {

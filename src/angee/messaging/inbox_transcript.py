@@ -45,8 +45,8 @@ class InboxTranscript:
         if anchor is not None:
             before = before.filter(_MESSAGE_ORDER.before(anchor.chronological_key))
             after = after.filter(_MESSAGE_ORDER.after(anchor.chronological_key))
-        previous = before.order_by("-_order_at", "-pk").first()
-        following = after.order_by("_order_at", "pk").first()
+        previous = before.order_by(*_MESSAGE_ORDER.ordering()).first()
+        following = after.order_by(*_MESSAGE_ORDER.ordering(oldest_first=True)).first()
         return InboxTranscriptMatches(
             thread=self.thread,
             count=self.matching.count(),

@@ -6,11 +6,10 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
-from angee.graphql.testing.documents import execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_groups import InboxGroupScope
 from angee.messaging.inbox_navigator import InboxNavigator, InboxNavigatorOptions
@@ -638,8 +637,7 @@ def test_live_schema_projects_sections_and_independent_message():
             channel=channel,
             created_by=owner, sender=handle, status="synced", direction="inbound", sent_at=T0
         )
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
+    request = graphql_request(owner, "/graphql/console/")
     result = execute_schema(
         _schema(),
         """query($id: ID!) {
@@ -743,8 +741,7 @@ def test_result_page_loads_each_message_relation_once():
         messages { id title sender { id display_name } thread { id title { text } } channel { id display_name } }
       }
     }"""
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
+    request = graphql_request(owner, "/graphql/console/")
 
     def statements() -> int:
         with CaptureQueriesContext(connection) as captured:

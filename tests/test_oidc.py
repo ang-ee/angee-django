@@ -25,13 +25,13 @@ from django.contrib.sessions.backends.signed_cookies import SessionStore
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
 from django.db import connection
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
 from angee.graphql.schema import GraphQLSchemas
-from angee.graphql.testing.documents import execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.iam import schema as iam_schema
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
@@ -2077,8 +2077,7 @@ def test_oauth_completion_returns_typed_outage_for_refused_endpoint(
         mutation = {
             "login": "login_complete", "link": "link_account_complete", "connect": "connect_account_complete",
         }[flow_name]
-        request = RequestFactory().post("/graphql/console/")
-        request.user = AnonymousUser() if flow_name == "login" else user
+        request = graphql_request(AnonymousUser() if flow_name == "login" else user, "/graphql/console/")
         result = result_data(execute_schema(schema, f'''mutation {{
           {mutation}(code: "code", state: "{token}", redirect_uri: "{redirect}") {{
             error error_code
@@ -2217,8 +2216,7 @@ def test_oidc_login_with_blank_secret_public_client(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
     monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
-    request = RequestFactory().post("/graphql/console/")
-    request.user = AnonymousUser()
+    request = graphql_request(AnonymousUser(), "/graphql/console/")
     request.session = SessionStore()
     result = result_data(execute_schema(schema, f'''mutation {{
       login_complete(code: "code", state: "{token}", redirect_uri: "{redirect}") {{ ok error error_code }}
@@ -2246,8 +2244,7 @@ def test_oidc_completion_returns_typed_integration_error(
     monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
     monkeypatch.setattr(identity, f"complete_{flow_name}", refuse)
     mutation = "login_complete" if flow_name == "login" else "link_account_complete"
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user if flow_name == "link" else AnonymousUser()
+    request = graphql_request(user if flow_name == "link" else AnonymousUser(), "/graphql/console/")
     result = result_data(execute_schema(schema, f'''mutation {{
       {mutation}(code: "code", state: "state", redirect_uri: "https://app.example/callback") {{ error error_code }}
     }}''', request=request))[mutation]

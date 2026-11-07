@@ -21,8 +21,6 @@ from typing import Any
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
-from django.test import RequestFactory
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -67,11 +65,11 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
     admin = _platform_admin("add-source-admin")
 
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             _ADD_SOURCE,
             {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
-            user=admin,
+            user=admin
         )
     )["add_source"]
 
@@ -96,17 +94,17 @@ def test_scan_prepares_native_package_metadata_into_the_registry(
     bridge = _bridge(tmp_path)
     admin = _platform_admin("scan-admin")
     _data(
-        _execute(
+        execute_schema(
             _schema(),
             _ADD_SOURCE,
             {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
-            user=admin,
+            user=admin
         )
     )
     with system_context(reason="test.marketplace.scan.lookup"):
         source = Source.objects.get(kind="addon")
 
-    result = _data(_execute(_schema(), _SCAN, {"id": _public_id(source)}, user=admin))["scan"]
+    result = _data(execute_schema(_schema(), _SCAN, {"id": _public_id(source)}, user=admin))["scan"]
 
     assert result["ok"] is True
     assert "1 addon" in result["message"]
@@ -131,7 +129,7 @@ def test_scan_refuses_a_non_addon_source(
         repository = Repository.objects.create(vcs_bridge=bridge, org="acme", name="acme/addons", remote="r")
         source = Source.objects.create(repository=repository, kind="template", path="templates")
 
-    result = _data(_execute(_schema(), _SCAN, {"id": _public_id(source)}, user=admin))["scan"]
+    result = _data(execute_schema(_schema(), _SCAN, {"id": _public_id(source)}, user=admin))["scan"]
 
     assert result["ok"] is False
     assert "not an addon source" in result["message"].lower()
@@ -146,11 +144,11 @@ def test_add_source_denies_a_non_admin(
     bridge = _bridge(tmp_path)
     plain = User.objects.create_user(username="mkt-plain", password="mkt-plain")
 
-    result = _execute(
+    result = execute_schema(
         _schema(),
         _ADD_SOURCE,
         {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
-        user=plain,
+        user=plain
     )
 
     assert result.errors is not None
@@ -166,14 +164,6 @@ def _schema() -> Any:
         for module in (platform_schema, vcs_schema)
     ]
     return GraphQLSchemas(addons).build("console")
-
-
-def _execute(schema: Any, query: str, variables: dict[str, Any] | None = None, *, user: Any | None = None) -> Any:
-    """Execute one operation against the merged console schema as ``user``."""
-
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user or AnonymousUser()
-    return execute_schema(schema, query, variables, request=request)
 
 
 def _public_id(value: Any) -> str:

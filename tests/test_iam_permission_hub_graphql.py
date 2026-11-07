@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.http import HttpResponse
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
 from rebac import (
     ObjectRef,
     RelationshipTuple,
@@ -26,7 +26,7 @@ from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant, revoke
 
 from angee.graphql.data.metadata import _grantable_relations
-from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import execute_schema, graphql_request
 from angee.graphql.testing.documents import result_data as _data
 from angee.projects.testing.models import Project
 from tests.conftest import addon_schema
@@ -1027,8 +1027,7 @@ def _execute(
 def _request(user: Any) -> Any:
     """Return a request with the configured native Django session backend."""
 
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user
+    request = graphql_request(user, "/graphql/console/")
     SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
     return request
 

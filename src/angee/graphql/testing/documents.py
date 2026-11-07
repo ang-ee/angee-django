@@ -14,10 +14,10 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
 
-def graphql_request(user: Any) -> Any:
-    """Return a bare POST request carrying ``user``."""
+def graphql_request(user: Any, path: str = "/graphql/public/") -> Any:
+    """Return a bare POST request to ``path`` carrying ``user``."""
 
-    request = RequestFactory().post("/graphql/public/")
+    request = RequestFactory().post(path)
     request.user = user
     return request
 

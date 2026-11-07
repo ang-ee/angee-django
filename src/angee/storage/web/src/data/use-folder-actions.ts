@@ -5,13 +5,12 @@ import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
   refineResourceName, } from "@angee/metadata";
-import { useDeleteWithPreview } from "@angee/ui";
+import { useBusyRun, useDeleteWithPreview } from "@angee/ui";
 import {
   useModelMetadata,
   useResourceInvalidates,
 } from "@angee/metadata";
 
-import { useStorageActionRun } from "./use-action-run";
 
 export interface FolderActions {
   busy: boolean;
@@ -30,7 +29,7 @@ export interface FolderActions {
 /**
  * Folder write verbs over the Hasura resource mutations; folder creation is
  * backed by the storage manager factory server-side. `remove` settles its
- * failures through `useStorageActionRun`, the storage verbs' one error surface.
+ * failures through `useBusyRun`'s `settle`, the verbs' one error surface.
  * `onChanged` fires after each so the navigator can refetch its tree.
  */
 export function useFolderActions(
@@ -57,7 +56,7 @@ export function useFolderActions(
   });
   const deleteWithPreview = useDeleteWithPreview(resource);
   const invalidate = useInvalidate();
-  const { busy, run, settle } = useStorageActionRun(onChanged);
+  const { busy, run, settle } = useBusyRun(onChanged);
   const invalidateFiles = async () => {
     if (!fileResource) {
       throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
@@ -84,7 +83,7 @@ export function useFolderActions(
         if (!(await deleteWithPreview.remove(id, { errorNotification: false }))) return false;
         await invalidateFiles();
         return true;
-      }),
+      }, false),
   };
 }
 

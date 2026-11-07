@@ -466,7 +466,7 @@ def test_profiling_is_absent_until_the_project_roots_silk(tmp_path: Path) -> Non
 def test_rooting_silk_profiles_requests_for_platform_admins(tmp_path: Path) -> None:
     """Silk's middleware leads, silk's UI requires login and IAM's platform-admin predicate; authored values win."""
 
-    from angee.server.autoconfig import profiling_permitted
+    from angee.server.profiling import profiling_permitted
 
     namespace: dict[str, Any] = {"INSTALLED_APPS": ["angee.iam", "silk"], "SILKY_MAX_RECORDED_REQUESTS": 50}
     _configure(namespace, tmp_path)

@@ -1,5 +1,6 @@
 import { decisionFixture } from "@angee/decisions/testing";
 import type { TimelineData, TimelineSelection } from "./RecordTimeline";
+import { runGraphReadFixture } from "./testing";
 
 export type TimelineState = "decision" | "clean" | "error" | "run" | "stopped" | "interrupted" | "set" | "empty" | "unknown";
 type Run = TimelineData[number]["runs"][number];
@@ -58,9 +59,7 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
   }
   // A status the client does not know: the generated enums cannot name it, so the fixture widens the type.
   if (state === "unknown") { (run as { status: string }).status = "FUTURE_STATE"; (review as { status: string }).status = "FUTURE_STATE"; }
-  // The read names each node's step by id and lists the step rows once.
-  run.graph = { nodes: nodes.map(({ step_run: _step, ...rest }) => rest), edges: [] };
-  run.graph_step_runs = nodes.flatMap(({ step_run }) => step_run ? [step_run] : []);
+  Object.assign(run, runGraphReadFixture({ nodes, edges: [] }));
   const entry: TimelineData[number] = {
     record_model: "notes.Note", record_id: "nte_7",
     decisions: decision.is_open && state !== "error" && state !== "run" ? [decision] : [], runs: [run],

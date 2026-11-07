@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from django.apps import apps
+from django.conf import settings
+from django.conf.urls.static import static
+from django.contrib.staticfiles.views import serve
 from django.urls import URLPattern, URLResolver, include, path
 
 from angee.base.addons import addon_modules
@@ -27,11 +30,8 @@ def contributions() -> Iterator[tuple[str, URLPattern | URLResolver]]:
 
     yield __package__, path("", include([path(READINESS_ROUTE, readiness, name="angee-server-readiness")]))
     if apps.is_installed("silk"):
-        # Importing staticfiles' URLconf evaluates its own DEBUG patterns; keep that behind the opt-in.
-        from django.contrib.staticfiles.urls import staticfiles_urlpatterns
-
         yield __package__, path("profiling/", include("silk.urls"))
-        yield __package__, path("", include(staticfiles_urlpatterns()))
+        yield __package__, path("", include(static(settings.STATIC_URL, view=serve)))
     for config, module in addon_modules("urls"):
         if config.name != __package__:
             yield config.name, path("", include(module))

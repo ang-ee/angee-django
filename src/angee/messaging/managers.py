@@ -1505,7 +1505,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             selection |= models.Q(
                 content_type=content_type,
                 object_id__in=rows.order_by().values("pk"),
-                role=rows.model.thread_attachment_role,
+                role=attachment_model.AttachmentRole.CHATTER,
             )
         with system_context(reason="messaging.follower.access_revoked"):
             attachments = attachment_model._base_manager.filter(selection).values_list(
@@ -2777,7 +2777,10 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
                     time.min,
                     ZoneInfo(zone) if zone else timezone.get_current_timezone(),
                 )
-                around = queryset.filter(_order_at__gte=instant).order_by("_order_at", "pk").first() or queryset.first()
+                around = (
+                    queryset.filter(_order_at__gte=instant).order_by(*_MESSAGE_ORDER.ordering(oldest_first=True)).first()
+                    or queryset.first()
+                )
             else:
                 raise ValueError("Unknown transcript anchor.")
             if around is None and kind == "message":
@@ -3408,7 +3411,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         count = int(queryset.count())
         # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
         # return the page chronological ascending so the client renders it verbatim.
-        ascending = ("_order_at", "pk")
+        ascending = _MESSAGE_ORDER.ordering(oldest_first=True)
         descending = _MESSAGE_ORDER.ordering()
         if around not in (None, ""):
             anchor = self._record_message_anchor(queryset, around)

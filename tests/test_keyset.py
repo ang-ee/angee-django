@@ -83,3 +83,12 @@ def test_a_declared_key_field_ends_the_cut_and_the_position() -> None:
         _at, _kind, _key = at, "a", 7
 
     assert composed.position(Row()) == (at, "a", 7)
+
+
+def test_one_declaration_orders_newest_or_oldest_first() -> None:
+    """Every stage reads its direction from the declared ordering, tie breakers included."""
+
+    composed = KeysetOrder("_at", tie_breakers=("_kind",), key_field="_key")
+    assert composed.ordering() == ("-_at", "_kind", "-_key")
+    assert composed.ordering(oldest_first=True) == ("_at", "-_kind", "_key")
+    assert KeysetOrder("created_at").ordering("u_", oldest_first=True) == ("u_created_at", "u_pk")

@@ -14,7 +14,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, connections, models, transaction
-from django.test import RequestFactory, TransactionTestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLInputObjectType, get_named_type, parse, validate
 from rebac import PermissionDenied, actor_context, system_context
@@ -24,6 +24,7 @@ from rebac.roles import grant as grant_role
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import graphql_request
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 
 
@@ -287,8 +288,7 @@ class IntakeAccessCase(TransactionTestCase):
 
     def graphql(self, query, variables, *, user=None, bucket="public", error_code=None):
         user = user or self.admin
-        request = RequestFactory().post("/graphql/")
-        request.user = user
+        request = graphql_request(user, "/graphql/")
         with actor_context(user):
             result = (
                 GraphQLSchemas.from_discovery()

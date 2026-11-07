@@ -266,9 +266,6 @@ class ThreadedModelMixin(models.Model):
     :mod:`angee.base.refs`).
     """
 
-    thread_attachment_role: ClassVar[str] = "chatter"
-    """The attachment role used for the model's primary chatter thread."""
-
     @classmethod
     def thread_messages_expression(cls, record_id: Any) -> MessageQuerySet[Message]:
         """Return messages of the record's primary thread for a SQL subquery.
@@ -294,7 +291,7 @@ class ThreadedModelMixin(models.Model):
         attached = thread_model._base_manager.redirect_group(survivor).filter(
             attachments__content_type_id=models.Subquery(content_type),
             attachments__object_id=models.OuterRef("_record_id"),
-            attachments__role=cls.thread_attachment_role,
+            attachments__role=ThreadAttachment.AttachmentRole.CHATTER,
         )
         return rows.alias(_record_attached=models.Exists(attached)).filter(
             thread_id__isnull=False,
@@ -411,10 +408,10 @@ class ThreadedModelMixin(models.Model):
         if create:
             return attachment_model.objects.ensure_for_record(
                 self,
-                role=self.thread_attachment_role,
+                role=ThreadAttachment.AttachmentRole.CHATTER,
                 title=self.message_thread_title(),
             )
-        return attachment_model.objects.for_record(self, role=self.thread_attachment_role)
+        return attachment_model.objects.for_record(self, role=ThreadAttachment.AttachmentRole.CHATTER)
 
     def message_post(
         self,
@@ -772,7 +769,7 @@ class ThreadedModelMixin(models.Model):
             self,
             party=party,
             user=user,
-            role=self.thread_attachment_role,
+            role=ThreadAttachment.AttachmentRole.CHATTER,
             notification_policy=notification_policy,
             subtype_keys=subtype_keys,
         )
@@ -785,7 +782,7 @@ class ThreadedModelMixin(models.Model):
                 self,
                 party=party,
                 user=user,
-                role=self.thread_attachment_role,
+                role=ThreadAttachment.AttachmentRole.CHATTER,
             )
         )
 
@@ -797,7 +794,7 @@ class ThreadedModelMixin(models.Model):
                 self,
                 party=party,
                 user=user,
-                role=self.thread_attachment_role,
+                role=ThreadAttachment.AttachmentRole.CHATTER,
             )
         )
 
@@ -805,7 +802,7 @@ class ThreadedModelMixin(models.Model):
         """Return this row's chatter followers."""
 
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        return follower_model.objects.for_record(self, role=self.thread_attachment_role)
+        return follower_model.objects.for_record(self, role=ThreadAttachment.AttachmentRole.CHATTER)
 
     def message_suggested_recipients(
         self,
@@ -920,7 +917,7 @@ class ThreadedModelMixin(models.Model):
                     follower_model.objects.db_manager(self._state.db).subscribe(
                         self,
                         user=account,
-                        role=self.thread_attachment_role,
+                        role=ThreadAttachment.AttachmentRole.CHATTER,
                     )
 
     def can_post(self, user: Any = None) -> bool:
@@ -1477,6 +1474,12 @@ class Thread(
         """Return the thread title for Django displays."""
 
         return self.display_title or f"thread:{self.public_id}"
+
+    @classmethod
+    def display_title_fields(cls) -> tuple[str, ...]:
+        """Fields :attr:`display_title`, and so ``__str__``, reads from a projected row (``title`` selected)."""
+
+        return ("title__text", "modality")
 
     @property
     def display_title(self) -> str:

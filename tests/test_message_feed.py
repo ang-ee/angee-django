@@ -11,12 +11,12 @@ from unittest.mock import patch
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
 
-from angee.graphql.testing.documents import execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.messaging.testing.models import (
     Circle,
     CircleMember,
@@ -71,8 +71,7 @@ def _query(
 ) -> Any:
     """Execute the real composed GraphQL field under its current request actor."""
 
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
+    request = graphql_request(owner, "/graphql/console/")
     return execute_schema(
         _schema(),
         f"""
@@ -351,8 +350,7 @@ def _revalidate(
 ) -> Any:
     """Read the complete survivor partition through the composed schema."""
 
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
+    request = graphql_request(owner, "/graphql/console/")
     return execute_schema(
         _schema(),
         f"""query Revalidate($root: ID!, $ids: [ID!]!, $search: String!) {{

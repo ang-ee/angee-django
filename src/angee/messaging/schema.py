@@ -649,13 +649,13 @@ class ThreadType(TaggedNode, AngeeNode):
 
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name,
-        only=["title__text", "modality"],
+        only=Thread.display_title_fields(),
         select_related=["title"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )
 
     @strawberry_django.field(
-        only=["title__text", "modality"],
+        only=Thread.display_title_fields(),
         select_related=["title"],
         description=(
             "The thread title, else the people in the conversation for this viewer; empty when "
