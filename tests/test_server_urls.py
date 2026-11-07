@@ -55,7 +55,8 @@ PROFILING_HOST = """
 from django.conf import settings
 settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "angee.server", "silk"],
-    ROOT_URLCONF="angee.server.urls", SECRET_KEY="profiling", DEBUG={debug!r},
+    ROOT_URLCONF="angee.server.urls", SECRET_KEY="profiling", DEBUG={debug!r}, STATIC_URL="/static/",
+    ALLOWED_HOSTS=["testserver"],
     ANGEE_PROFILING_ALLOW_PRODUCTION={allow!r}, ANGEE_PROFILING_PERMISSION="operator.truth",
 )
 import django
@@ -82,10 +83,40 @@ assert errors == {expected!r}, errors
 """)
 
 
-def test_profiling_is_unmounted_and_unchecked_without_silk():
-    run("""
+SILK_ASSET = "/static/silk/css/pages/root_base.css"
+
+
+@pytest.mark.parametrize("debug", [True, False])
+def test_rooted_silk_assets_are_served_by_django_static_view_only_in_debug(debug):
+    """Django's static view finds silk's packaged assets in DEBUG; outside it no static route exists."""
+    run(PROFILING_HOST.format(debug=debug, allow=True) + f"""
+from django.contrib.staticfiles.views import serve
+from django.test import Client
+from django.urls import Resolver404
+if {debug!r}:
+    assert resolve({SILK_ASSET!r}).func is serve
+    response = Client().get({SILK_ASSET!r})
+    assert response.status_code == 200, response.status_code
+    response.close()
+else:
+    try:
+        resolve({SILK_ASSET!r})
+    except Resolver404:
+        pass
+    else:
+        raise AssertionError("static route exists with DEBUG off")
+assert run_checks(tags=[Tags.urls]) == []
+""")
+
+
+@pytest.mark.parametrize("debug", [True, False])
+def test_profiling_is_unmounted_and_unchecked_without_silk(debug):
+    run(f"""
 from django.conf import settings
-settings.configure(INSTALLED_APPS=["angee.server"], ROOT_URLCONF="angee.server.urls", SECRET_KEY="quiet", DEBUG=False)
+settings.configure(
+    INSTALLED_APPS=["angee.server"], ROOT_URLCONF="angee.server.urls", SECRET_KEY="quiet",
+    DEBUG={debug!r}, STATIC_URL="/static/",
+)
 import django
 django.setup()
 from django.core.checks import Tags, run_checks
@@ -96,6 +127,12 @@ except Resolver404:
     pass
 else:
     raise AssertionError("/profiling/ resolved without silk")
+try:
+    resolve("/static/silk/css/pages/root_base.css")
+except Resolver404:
+    pass
+else:
+    raise AssertionError("a static route exists without silk")
 assert [error for error in run_checks(tags=[Tags.security]) if error.id.startswith("angee.")] == []
 """)
 

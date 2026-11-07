@@ -257,8 +257,9 @@ web, GraphQL or MCP declares it through native requirements. Model-only projects
 need no HTTP server. Ordinary Django URL settings remain valid.
 
 [`angee.server.urls`](../src/angee/server/urls.py) is the default `ROOT_URLCONF`:
-its readiness route, django-silk's UI under `profiling/` when the project roots
-`silk`, then each enabled addon's `urls` module through Django's `include()`, in
+its readiness route, django-silk's UI under `profiling/` with Django's
+DEBUG-only static view when the project roots `silk`, then each enabled addon's
+`urls` module through Django's `include()`, in
 installed app order; an addon's `app_name` selects its namespace. The registered
 `angee.server.E001` check reports identical native matching chains;
 `angee.server.E002` refuses silk with `DEBUG` off unless

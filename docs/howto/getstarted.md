@@ -478,7 +478,11 @@ string is not accepted).
    The UI dev proxy and the ingress route only the app's API paths.
 
 With `silk` rooted, the server puts silk's middleware first, so it records the
-queries of every middleware after it, and mounts silk's UI at `profiling/`. Only
+queries of every middleware after it, and mounts silk's UI at `profiling/` beside
+Django's own static view, which serves silk's stylesheets and scripts under
+`/static/` only while `DEBUG` is on. Production serving of `/static/` is the
+ingress's job: the stack ingress forwards `/static/*` to Django, which has no
+static view with `DEBUG` off, so there silk's UI renders unstyled. Only
 signed-in users that the `ANGEE_PROFILING_PERMISSION` hook admits can open it;
 IAM fills the hook with its platform-admin check. Silk keeps the latest 1,000
 requests and skips the stack's readiness probe. Its cProfile profiler stays off,
