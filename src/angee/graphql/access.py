@@ -196,6 +196,11 @@ class ChangeReadGate:
         together by the upstream batch that redacts ordinary query rows: one
         statement per distinct ``read__<field>`` permission, so a row-readable
         actor keeps fields it may read and loses only denied ones.
+
+        The batch returns definite holds only, so a conditional answer redacts the
+        field. Query rows agree only under REBAC's default
+        ``REBAC_FIELD_READ_FAIL_CLOSED_ON_CONDITIONAL = True``; ``angee.E024``
+        refuses caveated relations, so no field decision here is conditional.
         """
 
         if not self.gated_fields or payload.changed_fields is None:
