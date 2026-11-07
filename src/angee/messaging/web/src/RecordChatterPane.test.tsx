@@ -108,8 +108,6 @@ function threadPayload(messages: RecordMessageRow[]): unknown {
       subtypes: [],
       unread_count: 0,
       needaction_count: 0,
-      message_has_error: false,
-      message_has_error_counter: 0,
       attachment_count: 0,
       notifications: [],
       followers: [],

@@ -63,7 +63,6 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.base.fields import DiagnosticTextField
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instances_from_public_ids
@@ -1906,9 +1905,6 @@ class NotificationPointerIterable(ModelIterable):
 class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](AngeeQuerySet[ThreadNotificationT]):
     """Chainable read scopes for per-recipient delivery rows."""
 
-    DELIVERY_ERROR_STATUSES = ("bounce", "exception")
-    """Notification statuses that mean the author has a delivery error."""
-
     def with_message_pointers(self) -> Self:
         """Batch the recipient's narrow message context after filtering and pagination."""
 
@@ -1922,11 +1918,6 @@ class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](AngeeQ
         return self.filter(
             thread_id__in=attachment.thread.member_threads().values("pk"),
         )
-
-    def delivery_errors(self) -> Self:
-        """Return notifications whose delivery bounced or raised an exception."""
-
-        return self.filter(notification_status__in=self.DELIVERY_ERROR_STATUSES)
 
 
 _ThreadNotificationManagerBase = AngeeManager.from_queryset(ThreadNotificationQuerySet)
@@ -1942,7 +1933,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
 
         Elevated bookkeeping loads never authorize a message. Only a current
         recipient who can still read its threaded record gets the pointer.
-        Record-less inbox rows retain their delivery state but have no record pointer.
+        Record-less inbox rows have no record pointer.
         """
 
         from angee.messaging.models import ThreadedModelMixin
@@ -2061,81 +2052,6 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             .exclude(message__is_trashed=True)
         )
 
-    def error_count_for_record(
-        self,
-        record: Any,
-        *,
-        user: Any = None,
-        user_id: Any = None,
-        role: str = "chatter",
-    ) -> int:
-        """Return the delivery-error count authored by ``user`` on ``record``."""
-
-        resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
-        if resolved_user_id is None:
-            return 0
-        attachment = _record_attachment(record, role=role)
-        if attachment is None:
-            return 0
-        return int(
-            self.sudo(reason="messaging.notification.error_count")
-            .for_attachment(attachment)
-            .filter(created_by_id=resolved_user_id)
-            .delivery_errors()
-            .count()
-        )
-
-    def mark_failed(
-        self,
-        notification: Any,
-        *,
-        status: str = "exception",
-        failure_type: str = "unknown",
-        failure_reason: str = "",
-    ) -> Any:
-        """Mark one notification as a delivery failure."""
-
-        if status not in ThreadNotificationQuerySet.DELIVERY_ERROR_STATUSES:
-            raise ValueError("Delivery failure status must be 'bounce' or 'exception'.")
-        cleaned_failure_type = strip_null_bytes(failure_type or "unknown")
-        failure_field = cast(DiagnosticTextField, self.model._meta.get_field("failure_reason"))
-        cleaned_failure_reason = failure_field.get_prep_value(failure_reason or "")
-        now = timezone.now()
-        self.model._base_manager.filter(pk=notification.pk).update(
-            notification_status=status,
-            failure_type=cleaned_failure_type,
-            failure_reason=cleaned_failure_reason,
-            updated_at=now,
-        )
-        notification.notification_status = status
-        notification.failure_type = cleaned_failure_type
-        notification.failure_reason = cleaned_failure_reason
-        notification.updated_at = now
-        return notification
-
-    def mark_failed_for_message(
-        self,
-        message: Any,
-        *,
-        user: Any = None,
-        user_id: Any = None,
-        status: str = "exception",
-        failure_type: str = "unknown",
-        failure_reason: str = "",
-    ) -> Any:
-        """Mark one message notification for ``user`` as failed."""
-
-        resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
-        if resolved_user_id is None:
-            raise ValueError("A user is required to mark a notification failed.")
-        notification = self.model._base_manager.get(message=message, user_id=resolved_user_id)
-        return self.mark_failed(
-            notification,
-            status=status,
-            failure_type=failure_type,
-            failure_reason=failure_reason,
-        )
-
     def fanout_for_message(
         self,
         message: Any,
@@ -2246,7 +2162,6 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
                         message_id=message.pk,
                         user_id=user_id,
                         **values,
-                        notification_status=self.model.NotificationStatus.READY,
                         created_by_id=created_by_id,
                     )
                 )

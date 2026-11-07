@@ -29,6 +29,19 @@ own native migration history. No framework addon or consumer reads these facts.
   `RemoveField(model_name="extraction", name="correction_decision")` in its
   `extraction` history; the drop guard admits the autodetected removal while
   the column is null on every row.
+- **Notification delivery states.** No worker ever advanced or failed a
+  notification, so its delivery lifecycle and diagnostics are removed:
+  `ThreadNotification.NotificationStatus`, `notification_status`,
+  `failure_type`, `failure_reason`, the `ix_thread_notification_pending` and
+  `ix_thread_notification_failed` partial indexes,
+  `ThreadNotificationManager.mark_failed`, `mark_failed_for_message` and
+  `error_count_for_record`, and the queryset's `delivery_errors`. GraphQL drops
+  the three fields from both notification types and the `thread_notifications`
+  filter, and the record chatter state drops `message_has_error` and
+  `message_has_error_counter`; clients stop selecting them. A project composing
+  `angee.messaging` removes the two indexes and three columns (`RemoveIndex` and
+  `RemoveField` on `messaging.threadnotification`); the drop guard admits the
+  autodetected removal while every row holds `ready` and empty failure text.
 
 ## Unreleased — jj workspace slots in the templates
 

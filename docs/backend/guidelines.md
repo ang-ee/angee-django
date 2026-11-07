@@ -1260,13 +1260,12 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `ModelLabelField` from [`angee.base.fields`](../../src/angee/base/fields/__init__.py), so
   instance saves and queryset writes share their storage rules.
   [`MessageSubtype.model_label`](../../src/angee/messaging/models.py) and
-  [`ThreadNotification.failure_reason`](../../src/angee/messaging/models.py)
+  [`ExternalAccount.last_error`](../../src/angee/integrate/models.py)
   compose these field owners. A deployment crossing the
   [upgrade cutoff](#migration-history) must preflight
-  unknown/colliding subtype labels and retained diagnostics before canonicalizing
-  them on its pre-refactor snapshot, preserving IDs/keys, global blank semantics
-  and retained text. Those completed transition bodies are absent from current
-  source. The persisted subtype business key `activity_done` remains current;
+  unknown/colliding subtype labels before canonicalizing them on its
+  pre-refactor snapshot, preserving IDs/keys and global blank semantics. Those
+  completed transition bodies are absent from current source. The persisted subtype business key `activity_done` remains current;
   renaming it requires mapping subtype rows, follower choices and callers together.
   Never replace these rules with a database trigger or function.
 - **Row locks must keep the SQLite floor.** Call the Angee queryset/manager

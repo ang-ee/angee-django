@@ -62,7 +62,7 @@ from rebac.backends import backend
 from rebac.resources import model_resource_type
 
 from angee.base.exceptions import DomainError
-from angee.base.fields import DiagnosticTextField, ModelLabelField
+from angee.base.fields import ModelLabelField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
@@ -2498,11 +2498,10 @@ class Message(
 
 
 class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
-    """A recipient's delivery ledger and acknowledgement of one inbox item.
+    """One recipient's inbox item and its acknowledgement.
 
-    ``read_at`` records acknowledgement of this notification independently of
-    the delivery lifecycle and failure diagnostics. A derived-audience recipient
-    need not follow the record. ``ThreadFollower.last_read_message`` instead
+    ``read_at`` records acknowledgement of this notification. A derived-audience
+    recipient need not follow the record. ``ThreadFollower.last_read_message`` instead
     records an explicit follower's position in the record's message history;
     acknowledging an inbox item neither creates a follow nor advances that cursor.
     Every account told under inbox or email policy gets a delivery row, including
@@ -2515,17 +2514,6 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
 
         INBOX = "inbox", "Inbox"
         EMAIL = "email", "Email"
-
-    class NotificationStatus(models.TextChoices):
-        """Delivery lifecycle for a notification."""
-
-        READY = "ready", "Ready to send"
-        PROCESS = "process", "Processing"
-        PENDING = "pending", "Sent"
-        SENT = "sent", "Delivered"
-        BOUNCE = "bounce", "Bounced"
-        EXCEPTION = "exception", "Exception"
-        CANCELED = "canceled", "Canceled"
 
     sqid_prefix = "ntf_"
     thread = models.ForeignKey(
@@ -2558,13 +2546,6 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
         related_name="+",
     )
     notification_type = StateField(choices_enum=NotificationType, default=NotificationType.INBOX, db_index=True)
-    notification_status = StateField(
-        choices_enum=NotificationStatus,
-        default=NotificationStatus.READY,
-        db_index=False,
-    )
-    failure_type = models.CharField(max_length=64, blank=True, default="")
-    failure_reason = DiagnosticTextField(blank=True, default="")
     read_at = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(blank=True, default=dict)
 
@@ -2582,22 +2563,7 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
                 name="uq_thread_notification_message_user",
             ),
         )
-        indexes = (
-            models.Index(fields=("thread", "user")),
-            # The delivery worker's queue: only undelivered rows enter the index
-            # (the Zulip scheduled-send pattern), so it stays tiny at any volume.
-            models.Index(
-                fields=("notification_status", "created_at"),
-                condition=models.Q(notification_status__in=("ready", "process")),
-                name="ix_thread_notification_pending",
-            ),
-            # Delivery-error surfacing per user.
-            models.Index(
-                fields=("user", "notification_status"),
-                condition=models.Q(notification_status__in=("bounce", "exception")),
-                name="ix_thread_notification_failed",
-            ),
-        )
+        indexes = (models.Index(fields=("thread", "user")),)
 
     def __str__(self) -> str:
         """Return a readable notification label."""
