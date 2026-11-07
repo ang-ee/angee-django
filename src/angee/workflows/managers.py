@@ -1286,14 +1286,16 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
             actor = run.require_access("write", actor)
             if accept_duplicate and actor is None:
                 raise PermissionDenied("A duplicate-effect acknowledgement requires an actor.")
+            # The authorized run carries the requester's pin, which its related
+            # manager would scope to; the step rows are read and written elevated.
             with system_context(reason="workflows.retry_step"):
-                current = run.step_runs.filter(pk=step_run.pk).lock_if_supported(no_key=True).get()
+                current = self.filter(run=run, pk=step_run.pk).lock_if_supported(no_key=True).get()
                 current.run = run
                 if blocker := current.retry_blocker:
                     raise ValidationError(blocker)
                 if current.requires_duplicate_acknowledgement and not accept_duplicate:
                     raise ValidationError("Retry requires accepting a possible duplicate effect.")
-                run.step_runs.filter(pk=current.pk).to_ready(
+                self.filter(run=run, pk=current.pk).to_ready(
                     acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,
                     reset_dispatches=True,
                 )
