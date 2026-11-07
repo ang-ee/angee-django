@@ -17,11 +17,10 @@ from django.utils import timezone
 MAX_PAGE_SIZE = 100
 """Largest page one read returns, records or group headers alike; refine's ``MAX_PAGE_SIZE`` mirrors it.
 
-A read that returns a first page clamps the size it is asked for: a model list
-root caps its page here (upstream ``max_rows``), and a first-N read passes its
-argument through :func:`clamp_page_size`. A read whose client pages by an explicit
-size (offset pages, a group's declared page) refuses a size outside
-``1..MAX_PAGE_SIZE`` through :func:`valid_page_size`, since clamping would move every later page.
+A read that returns its first rows clamps the size it is asked for through
+:func:`clamp_page_size`. A read whose client pages by an explicit size (offset
+pages, a group's declared page) refuses a size outside ``1..MAX_PAGE_SIZE`` through
+:func:`valid_page_size`, since clamping would move every later page.
 """
 
 

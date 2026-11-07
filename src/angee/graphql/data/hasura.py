@@ -1690,10 +1690,6 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``context_fields`` declares the readable fields whose native widgets render
     the compact record-header facts line.
 
-    The list root and aggregate nodes return at most ``MAX_PAGE_SIZE`` rows a page
-    (upstream ``max_rows``): a larger or missing ``limit`` is clamped, aggregate
-    math stays unpaged.
-
     A groupable resource's ``<res>_group`` carries ``rows(limit, order_by)``:
     each group's first page read through the list root's own scoped read, filter
     and ordering, keyed by each group's drill and windowed by
@@ -1962,7 +1958,6 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         write_backend=resource_write_backend,
         id_decode=id_decode,
         id_column=id_column,
-        max_rows=MAX_PAGE_SIZE,
     )
     if contributed_filters:
         resource.types.append(_resource_filter_projection(

@@ -57,7 +57,9 @@ describe("IAM overview page", () => {
     }));
   });
 
-  test("offers only writable roles, excluding derived and legacy rows", async () => {
+  test("offers every grantable role the overview reads", async () => {
+    // The overview reads grantable roles only (the document's `where`), so derived and legacy
+    // rows never reach the picker; every row it reads is an option.
     mocks.overview.data = overviewData();
     renderPage(<OverviewPage />);
 
@@ -65,7 +67,6 @@ describe("IAM overview page", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Role" }));
     expect(await screen.findByRole("option", { name: "angee / Reader" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "angee / Admin" })).toBeTruthy();
-    expect(screen.queryByRole("option", { name: "angee / Removed" })).toBeNull();
   });
 
   test.each([false, undefined])("keeps a refused or missing grant result open for retry (%s)", async (granted) => {
@@ -116,11 +117,10 @@ function overviewData(): unknown {
     iam_roles: [
       { id: "angee/role:reader", role_id: "reader", namespace: "angee", label: "Reader", declared: true, grantable: true },
       { id: "angee/role:admin", role_id: "admin", namespace: "angee", label: "Admin", declared: true, grantable: true },
-      { id: "angee/role:removed", role_id: "removed", namespace: "angee", label: "Removed", declared: false, grantable: false },
     ],
     iam_overview: {
       user_count: 0,
-      role_count: 3,
+      role_count: 2,
       grant_count: 0,
       relationship_count: 0,
       privileged_grant_count: 0,

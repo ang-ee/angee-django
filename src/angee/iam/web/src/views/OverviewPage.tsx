@@ -61,7 +61,7 @@ export function OverviewPage(): ReactElement {
 
   const roleOptions = useMemo(
     () =>
-      roles.filter((role) => role.grantable).map((role) => ({
+      roles.map((role) => ({
         value: role.id,
         label: `${role.namespace} / ${role.label}`,
       })),

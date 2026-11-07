@@ -27,9 +27,10 @@ Consumer-facing renames and removals, each with its replacement.
 - `useStorageActionRun` is deleted; storage verbs settle through
   `useBusyRun().settle(action, fallback, failureTitle?)`.
 - `GROUP_ROWS_MAX_LIMIT` is deleted; `angee.base.pagination.MAX_PAGE_SIZE` is the
-  one page bound. Model list roots clamp to it; an explicit page size outside it
-  (group rows' `limit`, inbox pages, provenance history) is refused as
-  `BAD_USER_INPUT` through `valid_page_size`.
+  one page bound. An explicit page size outside it (group rows' `limit`, inbox
+  pages, provenance history) is refused as `BAD_USER_INPUT` through
+  `valid_page_size`; first-N reads (timeline, removed tasks, people search,
+  answered decisions, record runs) clamp to it.
 - `angee.graphql.E003` (the in-memory channel layer beside a Celery broker) runs
   only for the serving commands (`serve`, `runserver`, plain `check`) through
   `SERVING_TAG`; build and data commands no longer meet it.
