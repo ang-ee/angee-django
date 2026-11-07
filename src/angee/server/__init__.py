@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from asgiref.typing import ASGIReceiveCallable, ASGISendCallable, Scope
 
+READINESS_ROUTE = "health/ready"
+"""The readiness route stack probes poll; request profiling never records it."""
+
 
 async def application(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
     """Load the configured native application only when an ASGI server enters it."""

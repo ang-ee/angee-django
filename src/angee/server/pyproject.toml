@@ -8,5 +8,9 @@ keywords = ["server", "asgi", "http"]
 dependencies = ["angee-base>=3,<4", "django-compose>=0.1.0.dev9,<0.2", "uvicorn[standard]>=0.30"]
 dynamic = ["entry-points"]
 
+[project.optional-dependencies]
+# Installs django-silk; a project still opts in by rooting `silk` in INSTALLED_APPS.
+profiling = ["django-silk>=5.6,<6"]
+
 [tool.angee.platform]
 category = "Foundation"

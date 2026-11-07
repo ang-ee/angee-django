@@ -14,6 +14,8 @@ SETTINGS = {
     "AUTH_USER_MODEL": "iam.User",
     # IAM owns the platform-admin role used by its schema and bootstrap command.
     "REBAC_UNIVERSAL_ADMIN_ROLE": "angee/role:admin",
+    # Only platform admins open the server's request profiling UI.
+    "ANGEE_PROFILING_PERMISSION": "angee.iam.permissions.is_platform_admin",
     "MIDDLEWARE:append": [
         "django.contrib.sessions.middleware.SessionMiddleware",
         "django.middleware.csrf.CsrfViewMiddleware",
