@@ -37,7 +37,8 @@ test.each(["escape", "selection"])("closing by %s resets the remote filter with 
 test("a pending remote search shows option-line skeletons, never loading copy", async () => {
   render(<RelationField aria-label="Related row" options={[]} onSearchChange={vi.fn()} searchState={{ pending: true }} />);
   fireEvent.click(screen.getByRole("combobox", { name: "Related row" }));
-  const status = (await screen.findAllByRole("status")).find((element) => element.textContent === "Searching…");
+  // Base UI's live status marks its first announcement with an invisible word joiner.
+  const status = (await screen.findAllByRole("status")).find((element) => element.textContent?.includes("Searching…"));
   expect(status?.querySelectorAll(".rounded-full")).toHaveLength(3);
   expect(screen.queryAllByText("Searching…", { ignore: ".sr-only, script, style" })).toEqual([]);
 });
