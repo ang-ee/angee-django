@@ -2307,7 +2307,6 @@ def _record_thread_payload(
             after=after,
             around=around,
             message_types=message_types,
-            attachment=attachment,
         )
         if thread is not None
         else ([], 0)
@@ -2342,7 +2341,7 @@ def _record_thread_payload(
     is_following = self_follower is not None
     notifications = (
         list(
-            ThreadNotification.objects.for_record(record, user=user, role=role, attachment=attachment).select_related(
+            ThreadNotification.objects.for_record(record, user=user, role=role).select_related(
                 "thread", "attachment", "follower", "message", "message__subtype", "user"
             )[:50]
         )
@@ -2350,7 +2349,7 @@ def _record_thread_payload(
         else []
     )
     unread_count = (
-        ThreadFollower.objects.unread_count_for_record(record, user=user, role=role, attachment=attachment)
+        ThreadFollower.objects.unread_count_for_record(record, user=user, role=role)
         if thread is not None and user is not None
         else 0
     )
@@ -2370,7 +2369,7 @@ def _record_thread_payload(
         for message in messages:
             setattr(message, "_current_user_needaction", message.pk in needaction_message_ids)
     message_has_error_counter = (
-        ThreadNotification.objects.error_count_for_record(record, user=user, role=role, attachment=attachment)
+        ThreadNotification.objects.error_count_for_record(record, user=user, role=role)
         if thread is not None and user is not None
         else 0
     )

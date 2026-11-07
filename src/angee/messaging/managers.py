@@ -1031,6 +1031,10 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
             self.for_channel(channel).delete()
 
 
+_READABLE_ATTACHMENTS = "_messaging_readable_attachments"
+"""The instance attribute holding a record's remembered readable thread edges."""
+
+
 class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryManager[ThreadAttachmentT]):
     """Owns the polymorphic edge from a model row to its chatter thread.
 
@@ -1079,13 +1083,29 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
 
         An admitted record implies only its own chatter role. Any other role, such
         as an attached ``source`` conversation, also requires the thread's read.
+        The edge is remembered on ``record`` per role and actor, so the reads of
+        one record payload resolve it once. An absent edge is not remembered (a
+        verb may create it next), and the verbs that bind or remove a record's
+        edges forget the record's remembered ones.
         """
 
+        remembered = vars(record).setdefault(_READABLE_ATTACHMENTS, {})
+        key = (role, current_actor())
+        if (attachment := remembered.get(key)) is not None:
+            return attachment
         attachment = self.for_record(record, role=role)
         own_role = role == record.thread_attachment_role
         if attachment is not None and not own_role and not attachment.thread.has_access("read"):
             raise PermissionDenied("Reading this attachment requires thread read access.")
+        if attachment is not None:
+            remembered[key] = attachment
         return attachment
+
+    @staticmethod
+    def forget_for_record(record: Any) -> None:
+        """Drop the edges :meth:`readable_for_record` remembered on ``record``."""
+
+        vars(record).pop(_READABLE_ATTACHMENTS, None)
 
     def source_threads_for_record(self, record: Any) -> Any:
         """Return every source-conversation edge attached to ``record``."""
@@ -1133,6 +1153,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         with transaction.atomic():
             self._lock_ends(key, thread)
             attachment, _created = self.get_or_create(thread_id=thread.pk, role="source", **key, defaults=values)
+        self.forget_for_record(record)
         return attachment
 
     def unbind_source_thread(self, record: Any, thread: Any) -> int:
@@ -1144,6 +1165,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         with transaction.atomic():
             self._lock_ends(key, thread)
             deleted, _details = self.filter(thread=thread, role="source", **key).delete()
+        self.forget_for_record(record)
         return int(deleted)
 
     @staticmethod
@@ -1257,6 +1279,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         native cascade. Source threads retain their independently owned graph.
         """
 
+        self.forget_for_record(target)
         if target.pk is None:
             return
         content_type, object_id = generic_pointer_target(target)
@@ -1791,11 +1814,10 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         user: Any = None,
         user_id: Any = None,
         role: str = "chatter",
-        attachment: ThreadAttachment | None = None,
     ) -> int:
         """Return ``user``'s unread message count on ``record``'s chatter thread."""
 
-        attachment = _record_attachment(record, role=role, attachment=attachment)
+        attachment = _record_attachment(record, role=role)
         if attachment is None:
             return 0
         return int(self.unread_messages(attachment.thread, party=party, user=user, user_id=user_id).count())
@@ -2019,14 +2041,13 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         user: Any = None,
         user_id: Any = None,
         role: str = "chatter",
-        attachment: ThreadAttachment | None = None,
     ) -> Any:
         """Return delivery rows for ``user`` on ``record`` and ``role``."""
 
         resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
         if resolved_user_id is None:
             return self.none()
-        attachment = _record_attachment(record, role=role, attachment=attachment)
+        attachment = _record_attachment(record, role=role)
         if attachment is None:
             return self.none()
         # Notification bookkeeping bypasses per-row REBAC: the record-level gate has
@@ -2048,14 +2069,13 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         user: Any = None,
         user_id: Any = None,
         role: str = "chatter",
-        attachment: ThreadAttachment | None = None,
     ) -> int:
         """Return the delivery-error count authored by ``user`` on ``record``."""
 
         resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
         if resolved_user_id is None:
             return 0
-        attachment = _record_attachment(record, role=role, attachment=attachment)
+        attachment = _record_attachment(record, role=role)
         if attachment is None:
             return 0
         return int(
@@ -2261,22 +2281,17 @@ def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type:
         )
 
 
-def _record_attachment(
-    record: Any, *, role: str = "chatter", attachment: ThreadAttachment | None = None,
-) -> ThreadAttachment | None:
+def _record_attachment(record: Any, *, role: str = "chatter") -> ThreadAttachment | None:
     """Return the chatter attachment edge for ``record`` via its owning manager.
 
     The resolution logic (content-type lookup, ``select_related`` on the thread,
     unscoped read) lives once on :meth:`ThreadAttachmentManager.for_record`; the
     message, follower and notification managers resolve their bookkeeping edge
     through :meth:`ThreadAttachmentManager.readable_for_record`, so a role other
-    than the record's own chatter also requires the thread's read. A request that
-    already resolved that edge for ``record`` and ``role`` passes it as
-    ``attachment`` instead of resolving it again.
+    than the record's own chatter also requires the thread's read, and the
+    reads of one record payload resolve that edge once.
     """
 
-    if attachment is not None:
-        return attachment
     return apps.get_model("messaging", "ThreadAttachment").objects.readable_for_record(record, role=role)
 
 
@@ -3318,13 +3333,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         search: str = "",
         message_types: tuple[str, ...] = (),
         trashed: bool = False,
-        attachment: ThreadAttachment | None = None,
     ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
         """The record-gated, hydrated message scope shared by transcript windows."""
 
         rows = self.db_manager(hints={"instance": record}).all()
         using = rows.db
-        attachment = _record_attachment(record, role=role, attachment=attachment)
+        attachment = _record_attachment(record, role=role)
         if attachment is None:
             return rows.none().annotate(_order_at=self.chronological_time())
         # Chatter reads bypass per-row REBAC: the record-level gate (and, for any other
@@ -3380,7 +3394,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         around: Any | None = None,
         message_types: tuple[str, ...] = (),
         trashed: bool = False,
-        attachment: ThreadAttachment | None = None,
     ) -> tuple[list[Any], int]:
         """Return fetched chatter messages for a record, optionally search-filtered.
 
@@ -3390,7 +3403,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         limit = max(1, min(int(limit or 50), 200))
         queryset = self.record_scope(
-            record, role=role, search=search, message_types=message_types, trashed=trashed, attachment=attachment,
+            record, role=role, search=search, message_types=message_types, trashed=trashed,
         )
         count = int(queryset.count())
         # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
