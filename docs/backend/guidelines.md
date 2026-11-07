@@ -236,8 +236,9 @@ Use these owners instead of maintaining another contract in an addon:
   [`InstancePrefetch`](../../src/angee/base/prefetch.py) hinted through a native
   `Prefetch(..., to_attr=...)`; a row's per-reader answers live in a
   `ReaderMemo`, never remembered without an actor or under sudo. A resolver reads
-  the hint's attribute through `prefetched(row, hint)`, so a row loaded another
-  way reads its own value through the same prefetch.
+  the hint's attribute through `prefetched(row, to_attr, build)`, which builds the
+  hint only for a row loaded another way, so it reads its own value through the
+  same prefetch; each hint factory declares its `to_attr` once.
 - Model-backed `hasura_model_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
   that Angee exposes but does not own, pass an explicit sqid public identity

@@ -80,6 +80,9 @@ _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
 _CLARIFICATION_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "clarification")
 """Anonymous attribution shared by clarification content and nested history."""
 
+_ROSTER = "_roster_entries"
+"""Where a round's roster facts land, through ``Round.roster_prefetch``."""
+
 
 class ClarificationWidenBlocked(DomainError, ValidationError):
     """Sharing an asker's message would reveal an identity the round keeps hidden."""
@@ -652,7 +655,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             )
             .order_by("responder_id")
         )
-        return models.Prefetch("proposals", queryset=rows, to_attr="_roster_entries")
+        return models.Prefetch("proposals", queryset=rows, to_attr=_ROSTER)
 
     def roster(self, *, permitted: bool | None = None, status: bool | None = None) -> list[RosterEntry]:
         """Use batched permission answers and prefetched scalar facts on lists."""
@@ -664,7 +667,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             status = self.has_access("roster_status")
         return [
             RosterEntry(row.responder_id, row._roster_name, row._roster_track_status if status else None)
-            for row in prefetched(self, type(self).roster_prefetch())
+            for row in prefetched(self, _ROSTER, type(self).roster_prefetch)
         ]
 
     def requester_user_id(self) -> Any | None:

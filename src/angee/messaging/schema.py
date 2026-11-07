@@ -29,7 +29,6 @@ from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.trash import TrashQuerySet
-from angee.base.prefetch import prefetched
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -832,8 +831,7 @@ class ThreadNotificationType(AngeeNode):
     def message(self) -> NotificationMessagePointerType | None:
         """Project only recipient context authorized by the attached record's read owner."""
 
-        pointer = prefetched(cast(Any, self), ThreadNotification.message_pointers_prefetch(current_actor()))
-        return cast(NotificationMessagePointerType | None, pointer)
+        return cast(NotificationMessagePointerType | None, cast(Any, self).message_pointer(current_actor()))
 
     user: "UserType | None" = actor_scoped_to_one("user")
     notification_type: auto

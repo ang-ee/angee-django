@@ -57,14 +57,20 @@ class InstancePrefetch:
         return rows, row_key, instance_key, self.single, self.name, False
 
 
-def prefetched(row: models.Model, prefetch: models.Prefetch) -> Any:
-    """``row``'s ``prefetch.to_attr``, read for ``row`` alone when no list read prefetched it."""
+def prefetched(row: models.Model, to_attr: str, build: Callable[[], models.Prefetch]) -> Any:
+    """``row``'s ``to_attr``, read for ``row`` alone through ``build()``'s hint when no list read prefetched it.
 
-    if prefetch.to_attr is None:
-        raise ValueError(f"Reading {prefetch.prefetch_through} for one row requires a to_attr.")
-    if not hasattr(row, prefetch.to_attr):
+    The hint is built only on that miss, so a listed row's resolve never builds one
+    (an optimized queryset, a reader's scope). ``build`` returns the same hint the
+    field declares, whose ``to_attr`` is this one.
+    """
+
+    if not hasattr(row, to_attr):
+        prefetch = build()
+        if prefetch.to_attr != to_attr:
+            raise ValueError(f"Reading {to_attr} for one row needs a hint to it, not to {prefetch.to_attr}.")
         models.prefetch_related_objects([row], prefetch)
-    return getattr(row, prefetch.to_attr)
+    return getattr(row, to_attr)
 
 
 class ReaderMemo:

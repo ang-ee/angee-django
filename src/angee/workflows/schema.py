@@ -80,13 +80,16 @@ _STEP_POLICY_VERSION = WorkflowRun.policy_version_prefetch("run__")
 _RUN_LABEL = {"_workflow_name": F("version__workflow__name")}
 
 
+_GRAPH_STEP_RUNS = "_graph_step_runs"
+
+
 def _graph_step_runs(info: strawberry.Info) -> Prefetch:
     """Read the listed runs' declared node rows once, with what their selected step fields need."""
     actor = get_current_user(info)
     rows = cast("StepRunQuerySet[Any]", require_rebac_queryset(StepRun, actor=actor)).nodes()
     return Prefetch(
         "step_runs", queryset=optimize(rows, info, store=OptimizerStore.with_hints(only=["run_id"])),
-        to_attr="_graph_step_runs",
+        to_attr=_GRAPH_STEP_RUNS,
     )
 
 
@@ -201,7 +204,8 @@ class WorkflowRunType(RecordReferenceNode):
         A run list reads every run's rows once, with what the selected step fields
         need; a run read another way reads its own rows the same way.
         """
-        return cast(list[StepRunType], prefetched(cast(Any, self), _graph_step_runs(info)))
+        rows = prefetched(cast(Any, self), _GRAPH_STEP_RUNS, lambda: _graph_step_runs(info))
+        return cast(list[StepRunType], rows)
 
     @strawberry_django.field(only=["status", "stopped_at"], prefetch_related=[_run_cancel])
     def can_cancel(self, info: strawberry.Info) -> bool:

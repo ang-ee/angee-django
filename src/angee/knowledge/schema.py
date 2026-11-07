@@ -167,13 +167,17 @@ class WikilinkType:
     page: strawberry.ID | None
 
 
+_ANCESTORS = "_knowledge_ancestors"
+_WIKILINKS = "_knowledge_wikilinks"
+
+
 def _ancestors_prefetch(info: strawberry.Info) -> Prefetch:
     """Optimize readable ancestors using the nested Page selection's native hints."""
 
     # The native optimizer clones the supplied queryset but declares its return
     # as QuerySet; retain Page's hierarchy API at that upstream type boundary.
     rows = cast("PageQuerySet[PageModel]", optimize(Page.objects.untrashed(), info))
-    return rows.model.ancestors_prefetch(rows, to_attr="_knowledge_ancestors")
+    return rows.model.ancestors_prefetch(rows, to_attr=_ANCESTORS)
 
 
 def _wikilinks_prefetch(_info: strawberry.Info) -> Prefetch:
@@ -184,7 +188,7 @@ def _wikilinks_prefetch(_info: strawberry.Info) -> Prefetch:
         queryset=Link.objects.only("source_page_id", "target_text", "target_page_id").prefetch_related(Prefetch(
             "target_page", queryset=Page.objects.untrashed().only("id"),
         )),
-        to_attr="_knowledge_wikilinks",
+        to_attr=_WIKILINKS,
     )
 
 
@@ -213,7 +217,8 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     def ancestors(self, info: strawberry.Info) -> list[PageType]:
         """Readable ancestors in path order; hidden containers contribute no label."""
 
-        return cast("list[PageType]", prefetched(cast("PageModel", self), _ancestors_prefetch(info)))
+        ancestors = prefetched(cast("PageModel", self), _ANCESTORS, lambda: _ancestors_prefetch(info))
+        return cast("list[PageType]", ancestors)
 
     @strawberry_django.field(only=["id"], prefetch_related=[_wikilinks_prefetch])
     def wikilinks(self, info: strawberry.Info) -> list[WikilinkType]:
@@ -224,7 +229,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
                 title=link.target_text,
                 page=require_public_id(Page, link.target_page.pk) if link.target_page is not None else None,
             )
-            for link in prefetched(cast("PageModel", self), _wikilinks_prefetch(info))
+            for link in prefetched(cast("PageModel", self), _WIKILINKS, lambda: _wikilinks_prefetch(info))
         ]
 
     @strawberry_django.field(only=["id", "markdown__kind"], prefetch_related=["markdown"])

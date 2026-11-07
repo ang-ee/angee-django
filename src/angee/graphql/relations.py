@@ -160,7 +160,7 @@ class RecordReferenceNode(AngeeNode):
         row = cast(Any, self)
         if current_actor() is None or not _record_readable(row):
             return None
-        target = prefetched(row, record_reference_targets(info))
+        target = prefetched(row, _REFERENCE_TARGET, lambda: record_reference_targets(info))
         return record_display_label(target) if target is not None else None
 
 

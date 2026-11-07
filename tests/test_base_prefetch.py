@@ -9,7 +9,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import SubjectRef, actor_context, system_context
 
-from angee.base.prefetch import InstancePrefetch, ReaderMemo
+from angee.base.prefetch import InstancePrefetch, ReaderMemo, prefetched
 
 ALICE = SubjectRef.of("auth/user", "1")
 BOB = SubjectRef.of("auth/user", "2")
@@ -59,3 +59,20 @@ def test_instance_prefetch_owns_the_protocol_tuple_and_the_hint_reader() -> None
     with actor_context(ALICE):
         Owner.pairs.get_prefetch_querysets(rows, [get_user_model().objects.none()])
     assert seen == [ALICE, None]
+
+
+def test_prefetched_builds_its_hint_only_for_a_row_no_list_read_prefetched() -> None:
+    """A listed row answers from its attribute; only a miss builds the hint, which must name that attribute."""
+
+    built: list[str] = []
+
+    def hint(to_attr: str) -> Any:
+        built.append(to_attr)
+        return SimpleNamespace(to_attr=to_attr)
+
+    listed = SimpleNamespace(_answer="listed")
+    assert prefetched(listed, "_answer", lambda: hint("_answer")) == "listed"
+    assert built == []
+    with pytest.raises(ValueError, match="needs a hint to it"):
+        prefetched(SimpleNamespace(), "_answer", lambda: hint("_other"))
+    assert built == ["_other"]
