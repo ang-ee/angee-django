@@ -96,7 +96,7 @@ export function AgentProvisioning({
     <div className="flex flex-col gap-5">
       {!agent ? (
         fetching ? (
-          <LoadingPanel message={t("provisioning.loading")} density="inline" />
+          <LoadingPanel loadingLabel={t("provisioning.loading")} density="inline" />
         ) : (
           <p className={textRoleVariants({ role: "meta" })}>
             {t("provisioning.saveFirst")}

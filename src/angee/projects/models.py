@@ -19,7 +19,6 @@ from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     current_actor,
-    database_context,
     generic_target,
     system_context,
     to_object_ref,
@@ -460,7 +459,7 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         kinds = self.model.activity_type.field.related_model
         tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
         using = tasks.db
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             self.model.validate_target(record)
             task = self.model(
                 title=title,
@@ -495,7 +494,7 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
             title, rest = title[: length - 1] + "…", note
         tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
         using = tasks.db
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             task = tasks.schedule(
                 record,
                 title=title,
@@ -1528,7 +1527,7 @@ class Task(
             update_fields = kwargs.get("update_fields")
             structure_fields = {"project", "project_id", "milestone", "milestone_id", "parent", "parent_id"}
             if self._state.adding or update_fields is None or structure_fields.intersection(update_fields):
-                with transaction.atomic():
+                with transaction.atomic(using=using):
                     self._validate_structure()
                     super().save(*args, **kwargs)
                     # The persisted candidate lets REBAC evaluate every composed share arm.

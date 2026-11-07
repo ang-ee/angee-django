@@ -10,8 +10,8 @@ import { buildColumns, withQueryOnlyColumnsHidden } from "../resource-view-list-
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
-import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths } from "../resource-view-codecs";
-import type { ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
+import { defaultResourceOrder, groupingStateFromResourceGroups, leafTableRows, requestedFieldPaths } from "../resource-view-codecs";
+import type { ListRecordFacts, ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
 
 export function useResourceRowsSnapshot<TRow extends Row = Row>(
@@ -39,6 +39,7 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       pageCount: list.pageCount,
       hasNext: list.hasNext,
       hasPrev: list.hasPrev,
+      ...(list.records ? { records: list.records } : {}),
       fetching: list.fetching,
       error: list.error,
       ...(navigationScope ? { navigationScope } : {}),
@@ -51,6 +52,7 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       list.pageCount,
       list.hasNext,
       list.hasPrev,
+      list.records,
       list.fetching,
       list.error,
       navigationScope,
@@ -83,6 +85,7 @@ export function listResultFromPageState<TRow extends Row>({
     ? undefined
     : Math.max(1, Math.ceil(total / pageSize)),
   hasNext = pageCount !== undefined && page < pageCount,
+  pageUnit = "records",
 }: {
   resourceView: ResourceViewContextValue;
   error: unknown;
@@ -94,6 +97,7 @@ export function listResultFromPageState<TRow extends Row>({
   pageSize?: number;
   pageCount?: number | undefined;
   hasNext?: boolean;
+  pageUnit?: ResourceListResult["pageUnit"];
 }): ResourceListResult {
   return {
     rows,
@@ -103,6 +107,7 @@ export function listResultFromPageState<TRow extends Row>({
     pageSize,
     pageInfo: undefined,
     hasNext,
+    pageUnit,
     hasPrev: page > 1,
     setPage: resourceView.setPage,
     firstPage: () => resourceView.setPage(1),
@@ -277,12 +282,44 @@ export function useResourceViewTableState<TRow extends Row>({
 }
 
 
+/**
+ * Keep the view's page inside the settled page count: a page beyond it (a stale URL, a
+ * set that shrank) moves to the last page. Nothing moves while a read is in flight: the
+ * count is not known yet, and clamping then would discard the page the URL asked for.
+ */
+export function useSettledPageClamp(
+  resourceView: ResourceViewContextValue,
+  pageCount: number | undefined,
+  settled: boolean,
+): void {
+  const page = resourceView.state.pagination.pageIndex + 1;
+  const { setPage } = resourceView;
+  React.useEffect(() => {
+    if (!settled || pageCount === undefined || page <= pageCount) return;
+    setPage(pageCount);
+  }, [page, pageCount, settled, setPage]);
+}
+
+/**
+ * A grouping client table pages its root groups; the record pager needs the records
+ * behind those pages and how many precede the current one. Absent when pages are records.
+ */
+export function tableRecordFacts<TRow extends Row>(table: Table<TRow>): ListRecordFacts | undefined {
+  if (table.options.manualPagination || table.getState().grouping.length === 0) return undefined;
+  const { pageIndex, pageSize } = table.getState().pagination;
+  return {
+    total: table.getFilteredRowModel().rows.length,
+    before: leafTableRows(table.getPrePaginationRowModel().rows.slice(0, pageIndex * pageSize)).length,
+  };
+}
+
 /** Presentation projection over the native table/query owners; no paging state. */
 export function listResultFromTable<TRow extends Row>(
   table: Table<TRow>,
   { rows, total, fetching, error, refetch }: Pick<ResourceListResult, "rows" | "total" | "fetching" | "refetch"> & { error: unknown },
 ): ResourceListResult {
   const { pageIndex, pageSize } = table.getState().pagination;
+  const records = tableRecordFacts(table);
   return {
     rows, total, fetching, error: errorFromUnknown(error), refetch,
     page: pageIndex + 1,
@@ -291,6 +328,8 @@ export function listResultFromTable<TRow extends Row>(
     pageCount: total === undefined ? undefined : Math.max(1, table.getPageCount()),
     hasNext: total !== undefined && table.getCanNextPage(),
     hasPrev: table.getCanPreviousPage(),
+    pageUnit: records ? "groups" : "records",
+    ...(records ? { records } : {}),
     setPage: (page) => table.setPageIndex(page - 1),
     firstPage: table.firstPage,
     nextPage: table.nextPage,

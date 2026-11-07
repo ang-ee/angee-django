@@ -33,6 +33,8 @@ export interface AssignmentSubjectsResult {
   options: readonly AssignmentSubjectOption[];
   labels: ReadonlyMap<string, string>;
   isFetching: boolean;
+  /** The first read has not settled; a background refresh keeps the settled options. */
+  loading: boolean;
   error: unknown;
   truncated: boolean;
   refetch: () => unknown;
@@ -82,6 +84,8 @@ export function useAssignmentSubjects(
     options,
     labels,
     isFetching: query.isFetching,
+    /** The first read has not settled; a background refresh keeps the settled options. */
+    loading: query.isLoading,
     error: query.error,
     truncated: userCount > limit || groupCount > limit,
     refetch: query.refetch,

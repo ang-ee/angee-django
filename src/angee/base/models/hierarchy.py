@@ -16,6 +16,7 @@ from django.db.models.functions import Cast, Replace
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.models.persistence import PersistenceMixin
+from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import _AngeeQuerySetMixin, query_batch_size
 
 if TYPE_CHECKING:
@@ -25,26 +26,22 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 _HierarchyModelT = TypeVar("_HierarchyModelT", bound="HierarchyMixin")
 
 
-class _AncestorPrefetcher:
-    """Adapt the path relation to Django's native instance-prefetch protocol."""
+class _Ancestors(InstancePrefetch):
+    """Each node's ancestors along its path, read once for the listed nodes.
 
-    def get_prefetch_querysets(
-        self,
-        instances: list[HierarchyMixin],
-        querysets: list[HierarchyQuerySet[HierarchyMixin]] | None = None,
-    ) -> tuple[
-        list[HierarchyMixin], Callable[[HierarchyMixin], object], Callable[[HierarchyMixin], object], bool, str, bool,
-    ]:
-        """Fetch once, then associate each ancestor with every requesting node.
+    A shared ancestor needs one model copy per source key, like rows repeated by
+    a native many-to-many join. Django assigns the resulting lists to the caller's
+    ``to_attr``; no request cache or model metadata is changed.
+    """
 
-        A shared ancestor needs one model copy per source key, like rows repeated
-        by a native many-to-many join. Django assigns the resulting lists to the
-        caller's ``to_attr``; no request cache or model metadata is changed.
-        """
+    single = False
 
-        if querysets is None or len(querysets) != 1:
-            raise ValueError("Ancestor prefetch requires one explicit queryset and to_attr.")
-        rows = querysets[0].ancestors_of(instances).annotate(_hierarchy_ancestor_path=F("path"))
+    def related(
+        self, instances: list[Any], queryset: models.QuerySet[Any],
+    ) -> tuple[list[HierarchyMixin], Callable[[HierarchyMixin], object], Callable[[HierarchyMixin], object]]:
+        rows = cast("HierarchyQuerySet[HierarchyMixin]", queryset).ancestors_of(instances).annotate(
+            _hierarchy_ancestor_path=F("path"),
+        )
         ancestors = {getattr(row, "_hierarchy_ancestor_path"): row for row in rows}
         related: list[HierarchyMixin] = []
         sources: dict[int, object] = {}
@@ -59,7 +56,7 @@ class _AncestorPrefetcher:
                     bound._state.fields_cache = ancestor._state.fields_cache.copy()
                     related.append(bound)
                     sources[id(bound)] = instance.pk
-        return related, lambda row: sources[id(row)], lambda row: row.pk, False, "_hierarchy_ancestors", False
+        return related, lambda row: sources[id(row)], lambda row: row.pk
 
 
 class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
@@ -264,7 +261,7 @@ class HierarchyMixin(PersistenceMixin):
         # The abstract self-FK has no PK type until its concrete model exists.
         parent_id: object
 
-    _hierarchy_ancestors = _AncestorPrefetcher()
+    _hierarchy_ancestors = _Ancestors()
 
     @classmethod
     def ancestors_prefetch(cls, queryset: HierarchyQuerySet[Self], *, to_attr: str) -> models.Prefetch:

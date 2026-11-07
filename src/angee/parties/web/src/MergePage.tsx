@@ -275,7 +275,7 @@ export function MergePage(): React.ReactElement {
       <Page>
         <PageHeader title={t("merge.title")} description={t("merge.description")} />
         <PageBody>
-          <LoadingPanel message={t("merge.loading")} />
+          <LoadingPanel loadingLabel={t("merge.loading")} />
         </PageBody>
       </Page>
     );

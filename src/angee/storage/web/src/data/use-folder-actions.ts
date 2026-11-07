@@ -11,6 +11,7 @@ import {
   useResourceInvalidates,
 } from "@angee/metadata";
 
+
 export interface FolderActions {
   busy: boolean;
   /** Create a folder in a drive, optionally nested under a parent folder. */
@@ -21,14 +22,15 @@ export interface FolderActions {
   }) => Promise<void>;
   /** Rename a folder. */
   rename: (id: string, name: string) => Promise<void>;
-  /** Delete a folder; its files fall back to the drive root. */
-  remove: (id: string) => Promise<void>;
+  /** Delete a folder, its files falling back to the drive root; resolves whether it was deleted, settling failures once. */
+  remove: (id: string) => Promise<boolean>;
 }
 
 /**
  * Folder write verbs over the Hasura resource mutations; folder creation is
- * backed by the storage manager factory server-side. `onChanged` fires after
- * each so the navigator can refetch its tree.
+ * backed by the storage manager factory server-side. `remove` settles its
+ * failures through `useBusyRun`'s `settle`, the verbs' one error surface.
+ * `onChanged` fires after each so the navigator can refetch its tree.
  */
 export function useFolderActions(
   options: { onChanged?: () => void } = {},
@@ -54,7 +56,7 @@ export function useFolderActions(
   });
   const deleteWithPreview = useDeleteWithPreview(resource);
   const invalidate = useInvalidate();
-  const { busy, run } = useBusyRun(onChanged);
+  const { busy, run, settle } = useBusyRun(onChanged);
   const invalidateFiles = async () => {
     if (!fileResource) {
       throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
@@ -76,11 +78,12 @@ export function useFolderActions(
         await invalidateFiles();
       }),
     remove: (id) =>
-      run(async () => {
+      settle(async () => {
         requireFolderResource(resource);
-        await deleteWithPreview.remove(id);
+        if (!(await deleteWithPreview.remove(id, { errorNotification: false }))) return false;
         await invalidateFiles();
-      }),
+        return true;
+      }, false),
   };
 }
 

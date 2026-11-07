@@ -232,7 +232,7 @@ export function CollectionTreeView<TRow extends Row>(
               <span className="min-w-0 flex-1 truncate">
                 {props.renderRow?.(row) ?? String(row[props.label])}
               </span>
-              {branch?.fetching ? <SkeletonStatus label={t("list.loading")} className="shrink-0"><Skeleton className="size-3.5 rounded-full" /></SkeletonStatus> : null}
+              {branch?.fetching ? <SkeletonStatus loadingLabel={t("list.loading")} className="shrink-0"><Skeleton className="size-3.5 rounded-full" /></SkeletonStatus> : null}
               {branch?.error ? (
                 <Button
                   size="sm"

@@ -116,6 +116,18 @@ export function idsFromRowSelectionState(
   return ids;
 }
 
+/**
+ * The record rows of a rendered row list (`table.getRowModel().rows`, flattened: a
+ * group's records follow it only while it is open), so these are the records on the
+ * page as shown.
+ */
+export function recordTableRows<TRow extends Row>(
+  rows: readonly TableRowModel<TRow>[],
+): readonly TableRowModel<TRow>[] {
+  return rows.filter((row) => !row.getIsGrouped());
+}
+
+/** Every record row under a group tree, open or not. */
 export function leafTableRows<TRow extends Row>(
   rows: readonly TableRowModel<TRow>[],
 ): readonly TableRowModel<TRow>[] {

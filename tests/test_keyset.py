@@ -5,10 +5,12 @@ from uuid import uuid4
 
 import pytest
 from django.core import signing
+from django.core.exceptions import BadRequest
 from django.db import models
 from rebac import SubjectRef
 
-from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
+from angee.base.exceptions import classify_error
+from angee.base.pagination import MAX_PAGE_SIZE, InvalidKeysetCursor, KeysetOrder, clamp_page_size, valid_page_size
 from tests.test_system_queryset import SystemQueryThing, system_query_tables  # noqa: F401
 
 
@@ -65,3 +67,45 @@ def test_malformed_signed_cuts_have_one_error_contract(value: object, pk_field: 
     signer = signing.Signer(salt="keyset-test")
     with pytest.raises(InvalidKeysetCursor):
         KeysetOrder("created_at").unsign(signer.sign_object(value), signer, pk_field)
+
+
+def test_a_declared_key_field_ends_the_cut_and_the_position() -> None:
+    """A composed relation without the model's primary key names its own key column."""
+
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+    native, composed = KeysetOrder("created_at"), KeysetOrder("_at", tie_breakers=("_kind",), key_field="_key")
+    assert str(native.before((at, 7))) == str(models.Q(pk__in=[]) | models.Q(created_at__lt=at)
+                                              | models.Q(created_at=at, pk__lt=7))
+    assert str(composed.before((at, "a", 7))) == str(
+        models.Q(_key__in=[]) | models.Q(_at__lt=at) | models.Q(_at=at, _kind__gt="a")
+        | models.Q(_at=at, _kind="a", _key__lt=7)
+    )
+
+    class Row:
+        _at, _kind, _key = at, "a", 7
+
+    assert composed.position(Row()) == (at, "a", 7)
+
+
+def test_one_declaration_orders_newest_or_oldest_first() -> None:
+    """Every stage reads its direction from the declared ordering, tie breakers included."""
+
+    composed = KeysetOrder("_at", tie_breakers=("_kind",), key_field="_key")
+    assert composed.ordering() == ("-_at", "_kind", "-_key")
+    assert composed.ordering(oldest_first=True) == ("_at", "-_kind", "_key")
+    assert KeysetOrder("created_at").ordering("u_", oldest_first=True) == ("u_created_at", "u_pk")
+
+
+def test_one_page_bound_clamps_first_pages_and_refuses_explicit_sizes() -> None:
+    """A first page clamps into the bound; an explicit size outside it is the client's error."""
+
+    assert [clamp_page_size(size) for size in (-3, 0, 1, MAX_PAGE_SIZE, MAX_PAGE_SIZE + 1)] == [
+        1, 1, 1, MAX_PAGE_SIZE, MAX_PAGE_SIZE,
+    ]
+    assert valid_page_size(1) == 1 and valid_page_size(MAX_PAGE_SIZE) == MAX_PAGE_SIZE
+    for size in (0, MAX_PAGE_SIZE + 1):
+        with pytest.raises(BadRequest) as refused:
+            valid_page_size(size)
+        refusal = classify_error(refused.value)
+        assert refusal.code == "BAD_USER_INPUT"
+        assert refusal.message == f"Page size must be between 1 and {MAX_PAGE_SIZE}."

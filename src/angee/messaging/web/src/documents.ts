@@ -432,13 +432,10 @@ export const RecordThreadDocument = graphql(`
       }
       unread_count
       needaction_count
-      message_has_error
-      message_has_error_counter
       attachment_count
       notifications {
         id
         notification_type
-        notification_status
         message {
           id
           preview
@@ -500,8 +497,6 @@ export const PostRecordMessageDocument = graphql(`
       is_following
       unread_count
       needaction_count
-      message_has_error
-      message_has_error_counter
       attachment_count
       message {
         ...RecordMessageFields
@@ -534,8 +529,6 @@ export const UpdateRecordMessageDocument = graphql(`
       is_following
       unread_count
       needaction_count
-      message_has_error
-      message_has_error_counter
       attachment_count
       message {
         ...RecordMessageFields
@@ -632,8 +625,6 @@ export const DeleteRecordMessageDocument = graphql(`
       is_following
       unread_count
       needaction_count
-      message_has_error
-      message_has_error_counter
       attachment_count
       thread {
         ...RecordThreadSummaryFields

@@ -38,7 +38,8 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.node import AngeeNode
-from tests.conftest import create_user, execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import create_user
 from tests.scopedemo.models import Scope, ScopedDoc
 
 

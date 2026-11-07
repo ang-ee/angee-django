@@ -10,7 +10,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import RequestFactory, TransactionTestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from fastmcp.exceptions import ToolError
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import backend
@@ -18,6 +18,7 @@ from rebac.evaluator import evaluator_scope
 from rebac.roles import grant
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import graphql_request
 from angee.mcp.server import mcp_server
 from angee.resources.entries import ResourceEntry, ResourceGroup
 
@@ -41,8 +42,7 @@ class WorkCampaignTests(TransactionTestCase):
             return self.Task.objects.create(title="Work item", queue=self.queue, stage=stage, estimate=estimate)
 
     def execute(self, schema, query, variables, actor):
-        request = RequestFactory().post("/graphql/public/")
-        request.user = actor
+        request = graphql_request(actor)
         with actor_context(actor):
             result = schema.execute_sync(
                 query, variable_values=variables, context_value=SimpleNamespace(request=request),
@@ -202,8 +202,7 @@ class WorkCampaignTests(TransactionTestCase):
         schema = GraphQLSchemas.from_discovery().build("public")
         with system_context(reason="test.work.reserved_stage"):
             stage = self.Stage.objects.create(queue=self.queue, name="Reserved", category="started", rule_owned=True)
-        request = RequestFactory().post("/graphql/public/")
-        request.user = self.actor
+        request = graphql_request(self.actor)
         for direction in ("enter", "leave"):
             with self.subTest(direction=direction):
                 task = self.task()

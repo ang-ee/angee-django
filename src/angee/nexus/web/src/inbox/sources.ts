@@ -13,6 +13,8 @@ import {
   InboxResults,
   type InboxConnectionRow,
   type InboxNavigatorRow,
+  type InboxPageMessage,
+  type InboxResultPageRow,
   type InboxResultRow,
 } from "./documents";
 import {
@@ -29,6 +31,22 @@ import { FADING_NAVIGATOR_MODELS, INBOX_MODELS, type InboxNavigation } from "./s
 import type { useNexusT } from "../i18n";
 
 type Translate = ReturnType<typeof useNexusT>;
+
+/** Rows name their messages by id; the page carries each message once. */
+function pageMessages(messages: readonly InboxPageMessage[]) {
+  const byId = new Map(messages.map((message) => [message.id, message]));
+  const required = (id: string): InboxPageMessage => {
+    const message = byId.get(id);
+    if (!message) throw new Error("A page row names a message the page does not carry.");
+    return message;
+  };
+  return { required, optional: (id: string | null | undefined) => (id ? required(id) : null) };
+}
+
+/** A result row as the panes read it: joined to the message its page carries. */
+function resultRow(messages: ReturnType<typeof pageMessages>) {
+  return ({ message_id, ...row }: InboxResultPageRow): InboxResultRow => ({ ...row, message: messages.required(message_id) });
+}
 
 export function navigatorSource({
   coverage,
@@ -90,6 +108,7 @@ export function navigatorSource({
       variables: (request: CollectionGroupRequest) => ({
         ...options(request),
         axis: request.group.field.slice(3),
+        leaf_size: request.leafPageSize ?? 0,
       }),
       select: (data) => ({
         count: data.inbox_navigator_groups.rows.reduce(
@@ -100,6 +119,7 @@ export function navigatorSource({
         buckets: data.inbox_navigator_groups.rows.map((row) => ({
           key: { [groupField]: row.value, label: row.label },
           count: row.count,
+          rows: row.rows,
         })),
         summary: summary(data.inbox_navigator_groups.record_count, data.inbox_navigator_groups.message_count),
       }),
@@ -154,11 +174,14 @@ export function resultSource({
         ...options(request),
         scope: new InboxFilter(request.filter).scope(),
       }),
-      select: (data) => ({
-        rows: data.inbox_results.rows,
-        total: data.inbox_results.count,
-        summary: summary(data.inbox_results.count, data.inbox_results.message_count),
-      }),
+      select: (data) => {
+        const messages = pageMessages(data.inbox_results.messages);
+        return {
+          rows: data.inbox_results.rows.map(resultRow(messages)),
+          total: data.inbox_results.count,
+          summary: summary(data.inbox_results.count, data.inbox_results.message_count),
+        };
+      },
     }),
     groups: collectionQuery({
       document: InboxResultGroups,
@@ -166,21 +189,26 @@ export function resultSource({
       variables: (request: CollectionGroupRequest) => ({
         ...options(request),
         axis: request.group.field.slice(3),
+        leaf_size: request.leafPageSize ?? 0,
       }),
-      select: (data) => ({
-        count: data.inbox_result_groups.rows.reduce(
-          (sum, row) => sum + row.count,
-          0,
-        ),
-        totalCount: data.inbox_result_groups.count,
-        buckets: data.inbox_result_groups.rows.map((row) => ({
-          key: { [groupField]: row.value, label: row.label, platform: row.platform, account: row.account, modality: row.modality },
-          count: row.count,
-          max: { latest: row.latest },
-        })),
-        summary: summary(lens === "conversations" ? data.inbox_result_groups.count : data.inbox_result_groups.record_count,
-          data.inbox_result_groups.message_count),
-      }),
+      select: (data) => {
+        const messages = pageMessages(data.inbox_result_groups.messages);
+        return {
+          count: data.inbox_result_groups.rows.reduce(
+            (sum, row) => sum + row.count,
+            0,
+          ),
+          totalCount: data.inbox_result_groups.count,
+          buckets: data.inbox_result_groups.rows.map((row) => ({
+            key: { [groupField]: row.value, label: row.label, platform: row.platform, account: row.account, modality: row.modality },
+            count: row.count,
+            max: { latest: row.latest },
+            rows: row.rows.map(resultRow(messages)),
+          })),
+          summary: summary(lens === "conversations" ? data.inbox_result_groups.count : data.inbox_result_groups.record_count,
+            data.inbox_result_groups.message_count),
+        };
+      },
     }),
   };
 }
@@ -203,15 +231,23 @@ export function relatedSource(
         page: request.page,
         size: request.pageSize,
       }),
-      select: (data) => ({
-        rows: data.inbox_connections.rows,
-        total: data.inbox_connections.count,
-        summary: t("inbox.connectionSummary", {
-          count: data.inbox_connections.count,
-          total: data.inbox_connections.message_count,
-          unit,
-        }),
-      }),
+      select: (data) => {
+        const messages = pageMessages(data.inbox_connections.messages);
+        return {
+          rows: data.inbox_connections.rows.map(({ message_id, src_id, dst_id, ...row }): InboxConnectionRow => ({
+            ...row,
+            message: messages.optional(message_id),
+            src: messages.optional(src_id),
+            dst: messages.optional(dst_id),
+          })),
+          total: data.inbox_connections.count,
+          summary: t("inbox.connectionSummary", {
+            count: data.inbox_connections.count,
+            total: data.inbox_connections.message_count,
+            unit,
+          }),
+        };
+      },
     }),
   };
 }

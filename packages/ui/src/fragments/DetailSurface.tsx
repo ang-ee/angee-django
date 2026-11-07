@@ -2,7 +2,6 @@ import * as React from "react";
 
 import { useBreadcrumbLeafLabel } from "../chrome/Breadcrumb";
 import { tv } from "../lib/variants";
-import { useUiT } from "../i18n";
 import {
   Card,
   CardContent,
@@ -15,7 +14,7 @@ import { MetaGrid, type MetaGridProps } from "./MetaGrid";
 import { MetricStrip, type MetricTileValue } from "./MetricStrip";
 import { RecordHeader, type RecordHeaderProps } from "./RecordHeader";
 import { CommandBand, type CommandBandProps } from "../views/resource/CommandBand";
-import { Skeleton, SkeletonStatus, SkeletonText } from "../ui/skeleton";
+import { Skeleton, SkeletonText } from "../ui/skeleton";
 
 export type DetailSurfaceEmptyState = Pick<
   EmptyStateProps,
@@ -36,7 +35,7 @@ export type DetailSurfaceProps = Omit<
     className?: string;
     empty?: DetailSurfaceEmptyState | null | false;
     loading?: boolean;
-    loadingMessage?: string;
+    loadingLabel?: string;
     metrics?: readonly MetricTileValue[];
     /** Publish this routed record's title into the current breadcrumb. */
     publishBreadcrumbLabel?: boolean;
@@ -84,7 +83,7 @@ export const DetailSurface = React.forwardRef<HTMLElement, DetailSurfaceProps>(
       icon,
       lead,
       loading = false,
-      loadingMessage,
+      loadingLabel,
       meta,
       metrics,
       publishBreadcrumbLabel = false,
@@ -102,7 +101,7 @@ export const DetailSurface = React.forwardRef<HTMLElement, DetailSurfaceProps>(
     );
 
     if (loading) {
-      return <DetailSurfaceSkeleton className={className} message={loadingMessage} />;
+      return <DetailSurfaceSkeleton className={className} density={density} loadingLabel={loadingLabel} />;
     }
     if (empty) {
       return <EmptyState fill {...empty} />;
@@ -136,26 +135,25 @@ DetailSurface.displayName = "DetailSurface";
 
 function DetailSurfaceSkeleton({
   className,
-  message,
+  density,
+  loadingLabel,
 }: {
   className?: string;
-  message?: string;
+  density?: RecordHeaderProps["density"];
+  loadingLabel?: string;
 }): React.ReactElement {
-  const t = useUiT();
   const styles = detailSurfaceVariants();
+  // The record header owns the pending title and the surface's one status; the rest is hidden geometry.
   return (
-    <SkeletonStatus
-      label={message ?? t("loading.default")}
-      className={styles.root({ className })}
-    >
-      <div aria-hidden="true" className="flex items-start gap-4 py-1">
-        <Skeleton shape="avatar" className="size-10 shrink-0" />
-        <div className="min-w-0 flex-1 space-y-3">
-          <Skeleton shape="text" size="lg" className="w-56 max-w-2/3" />
-          <SkeletonText lines={2} className="max-w-2xl" />
-        </div>
-        <Skeleton className="h-btn-sm w-20 shrink-0" />
-      </div>
+    <section className={styles.root({ className })}>
+      <RecordHeader
+        density={density}
+        loading
+        loadingLabel={loadingLabel}
+        title={null}
+        extra={<SkeletonText lines={2} className="max-w-2xl" />}
+        actions={<Skeleton className="h-btn-sm w-20" />}
+      />
       <MetricStrip loading />
       {Array.from({ length: 2 }, (_, sectionIndex) => (
         <Card key={sectionIndex} aria-hidden="true" className="shadow-none">
@@ -172,7 +170,7 @@ function DetailSurfaceSkeleton({
           </CardContent>
         </Card>
       ))}
-    </SkeletonStatus>
+    </section>
   );
 }
 

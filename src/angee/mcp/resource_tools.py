@@ -19,9 +19,10 @@ from django.db.models.fields.reverse_related import ForeignObjectRel
 from fastmcp import FastMCP
 from fastmcp.tools import Tool
 from graphql import GraphQLInputObjectType, get_named_type
-from rebac.field_visibility import gated_read_fields
 from strawberry.utils.str_converters import to_snake_case
 
+from angee.base.permissions import declared_rebac_definition
+from angee.graphql.access import is_gated_read_axis
 from angee.graphql.data.contracts import DataResourceFieldMetadata, DataResourceMetadata
 from angee.graphql.schema import GraphQLSchemas
 from angee.mcp.graphql import GraphQLTool, register_graphql_tools
@@ -181,8 +182,7 @@ def _resource_projections(
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Return summary, detail, and search projections from resource-owned metadata."""
 
-    gated = gated_read_fields(resource.model) if resource.model is not None else frozenset()
-    readable = tuple(field for field in resource.fields if _is_safe_scalar(resource, field, gated))
+    readable = tuple(field for field in resource.fields if _is_safe_scalar(resource, field))
     if not readable:
         raise ImproperlyConfigured(f"Resource {resource.model_label!r} exposes no safe scalar fields.")
 
@@ -203,12 +203,13 @@ def _resource_projections(
     return summary, detail, search
 
 
-def _is_safe_scalar(
-    resource: DataResourceMetadata,
-    field: DataResourceFieldMetadata,
-    gated: frozenset[str],
-) -> bool:
-    """Return whether a metadata field can be projected without a nested selection."""
+def _is_safe_scalar(resource: DataResourceMetadata, field: DataResourceFieldMetadata) -> bool:
+    """Return whether a metadata field can be projected without a nested selection.
+
+    A non-null field the model's declared policy gates with ``read__<field>`` is
+    left out: redaction would null it and fail the projection. The tool shape is
+    static, so it reads the composed declaration, never the database-synced policy.
+    """
 
     if not field.readable or field.kind not in {"scalar", "enum"} or field.scalar == "JSON":
         return False
@@ -218,7 +219,7 @@ def _is_safe_scalar(
     model_field = _model_field(model, field.name)
     if model_field is None:
         return True
-    return not (model_field.name in gated and not model_field.null)
+    return model_field.null or not is_gated_read_axis(model, model_field.name, definition_for=declared_rebac_definition)
 
 
 def _is_summary_field(resource: DataResourceMetadata, field: DataResourceFieldMetadata) -> bool:

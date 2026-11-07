@@ -23,7 +23,7 @@ retains processed evidence or a source hold. `infer_evidence` consumes that
 snapshot, using a pinned revision and explicit identity correspondence when
 structure changes. Retention serializes revision allocation on the lineage head
 and checks exact request reuse.
-Inference preserves source-grounded facts, correction authority and retained
+Inference preserves source-grounded facts and retained
 carriers. Revisions reference the same digest-bound part files instead of copying
 the full carrier value into each part row. It rechecks source access before model work; explicit correspondence
 finalizes the held candidate without another inference call.
@@ -52,7 +52,6 @@ while its siblings' evidence is retained.
 
 `ExtractionProfile` owns its registry setting,
 `ANGEE_EXTRACTION_PROFILE_CLASSES`; the domain manifest
-owns native parser dependencies. Decision-backed corrections require the expected chosen alternative and a
-caller-owned `CorrectionBinding` with exact authority and parent revisions; [`ExtractionManager`](managers.py) owns revision and reviewed
+owns native parser dependencies. [`ExtractionManager`](managers.py) owns revision and
 authority validation. [`schema.py`](schema.py) exposes read-only evidence through
 the framework resource owner and actor-scoped relations.

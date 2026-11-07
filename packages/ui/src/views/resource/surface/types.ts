@@ -17,6 +17,15 @@ export type ResourceFilterInput = Record<string, unknown>;
 
 export type StringIdRow = Row & { id: string };
 
+/**
+ * The records behind pages that are not records (a grouped client list pages its
+ * root groups): their total and how many precede the current page.
+ */
+export interface ListRecordFacts {
+  total: number;
+  before: number;
+}
+
 export interface ResourceListSnapshot<TRow extends Row = Row> {
   rows: readonly TRow[];
   total: number | undefined;
@@ -25,6 +34,8 @@ export interface ResourceListSnapshot<TRow extends Row = Row> {
   pageCount: number | undefined;
   hasNext: boolean;
   hasPrev: boolean;
+  /** Present only when pages are not records. */
+  records?: ListRecordFacts;
   fetching: boolean;
   error?: Error | null;
   navigationScope?: ListViewNavigationScope;
@@ -77,6 +88,13 @@ export interface ResourceListResult {
   pageInfo: undefined;
   hasNext: boolean;
   hasPrev: boolean;
+  /**
+   * What one page counts: records, or root groups (a server grouped surface, or a
+   * grouping client table). The surface that pages decides it; views read it.
+   */
+  pageUnit: "records" | "groups";
+  /** Present only when pages are not records. */
+  records?: ListRecordFacts;
   setPage: (page: number) => void;
   firstPage: () => void;
   nextPage: () => void;
@@ -180,6 +198,7 @@ export interface ResourceRowsSnapshotSource {
   pageCount: number | undefined;
   hasNext: boolean;
   hasPrev: boolean;
+  records?: ListRecordFacts;
   fetching: boolean;
   error: Error | null;
 }

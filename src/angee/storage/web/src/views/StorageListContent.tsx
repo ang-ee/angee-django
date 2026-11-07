@@ -21,6 +21,10 @@ export function StorageListContent({ controller, fileResource, navigationScope, 
 }): ReactElement {
   const t = useStorageT();
   const routeHref = useRouteHref();
+  // The bulk verbs settle their own failures; a refusal keeps the selection.
+  const bulkAction = useCallback(async (ids: ReadonlySet<string>, clear: () => void, restore: boolean) => {
+    if (await (restore ? fileActions.restoreMany(ids) : fileActions.trashMany(ids))) clear();
+  }, [fileActions]);
   const driveId = controller.rootId;
   const effectiveScope = controller.selectedId ?? ALL_SCOPE;
   const baseFilter = useMemo(
@@ -63,7 +67,7 @@ export function StorageListContent({ controller, fileResource, navigationScope, 
         <SelectionBarAction
           surface="brand"
           pending={fileActions.busy}
-          onClick={() => void fileActions.restoreMany(ids).then(clear)}
+          onClick={() => void bulkAction(ids, clear, true)}
         >
           <Glyph name="restore" />
           {t("bulk.restore")}
@@ -72,13 +76,13 @@ export function StorageListContent({ controller, fileResource, navigationScope, 
         <SelectionBarAction
           surface="brand"
           pending={fileActions.busy}
-          onClick={() => void fileActions.trashMany(ids).then(clear)}
+          onClick={() => void bulkAction(ids, clear, false)}
         >
           <Glyph name="trash" />
           {t("bulk.trash")}
         </SelectionBarAction>
       ),
-    [effectiveScope, fileActions, t],
+    [bulkAction, effectiveScope, fileActions, t],
   );
   return <FileBrowserContent baseFilter={baseFilter} rowHref={rowHref} bulkActions={renderBulkActions}
     onListStateChange={onListStateChange} uploads={uploads} uploadTarget={controller.uploadTarget} />;

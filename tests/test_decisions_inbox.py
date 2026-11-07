@@ -1,12 +1,15 @@
 """Public inbox reads, filters, and the one verdict mutation."""
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
 
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import addon_schema, create_user, vault_for
 
 
 @pytest.fixture
@@ -67,6 +70,37 @@ def test_public_mutation_records_only_chosen_keys_and_audit(inbox):
     )
     row = result["decisions"][0]
     assert row["is_open"] is False and row["verdict"] == ["accept"] and row["answered_at"]
+
+
+def test_decide_returns_one_optimized_reader_projection(inbox):
+    requester, reviewer, _, subject, first = inbox
+    second = Decision.objects.ask(DecisionRequest(
+        kind="review_note", records=(subject,), assignees=(reviewer,), requester=requester,
+        proposal=DecisionProposal.model_validate(first.proposal),
+    ), actor=requester)
+    schema = addon_schema(decision_schema.schemas, "console")
+    brief = "id revision"
+    full = """id kind kind_label revision created_at is_open context proposal
+      verdict verdict_values verdict_label answered_at"""
+
+    def answer(question, fields):
+        query = f"""mutation($id: ID!, $revision: Int!) {{
+          decide(id: $id, revision: $revision, chosen: ["accept"]) {{
+            ok decision {{ {fields} }}
+          }}
+        }}"""
+        with CaptureQueriesContext(connection) as statements:
+            result = result_data(execute_schema(schema, query, {
+                "id": question.sqid, "revision": question.revision,
+            }, user=reviewer))["decide"]
+        assert result["ok"] and result["decision"]["revision"] == question.revision + 1
+        return len(statements), result["decision"]
+
+    brief_count, _ = answer(first, brief)
+    full_count, answered = answer(second, full)
+    assert answered["id"] == second.sqid and answered["verdict"] == ["accept"]
+    # The selected scalar fields share the actor-scoped decision read.
+    assert full_count <= brief_count + 1, (brief_count, full_count)
 
 
 def test_record_answer_history_returns_only_answered_decisions_for_the_readable_record(inbox):

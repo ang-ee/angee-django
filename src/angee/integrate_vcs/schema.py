@@ -227,7 +227,7 @@ _SOURCE_RESOURCE = hasura_model_resource(
     SourceType,
     model=Source,
     name="sources",
-    filterable=["id", "repository", "kind", "ref", "updated_at"],
+    filterable=["id", "repository", "kind", "ref", "last_synced_at", "updated_at"],
     sortable=["repository", "kind", "ref", "path", "last_synced_at", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["repository", "repository__name", "kind", "last_synced_at"],

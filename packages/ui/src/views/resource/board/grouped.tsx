@@ -91,7 +91,7 @@ export function GroupedBoardBody<TRow extends Row>({
             dragEnabled={false} sortable={false} laneId="" />);
           break;
         case "skeleton":
-          children.push(<SkeletonStatus key={item.itemKey} label={t("list.loading")} className="grid gap-2">
+          children.push(<SkeletonStatus key={item.itemKey} loadingLabel={t("list.loading")} className="grid gap-2">
             {Array.from({ length: item.rowCount }, (_, row) => <Skeleton key={row} className="h-24 rounded-8" />)}
           </SkeletonStatus>);
           break;

@@ -208,23 +208,30 @@ def disconnect_publishers(model: type[models.Model]) -> bool:
 def change_channel_layer() -> Any:
     """Return the configured channel layer after validating deployment safety."""
 
-    _check_channel_layer()
+    validate_channel_layer()
     return get_channel_layer()
 
 
-def _check_channel_layer() -> None:
-    """Fail loudly when the dev-only in-memory layer is used outside dev/test."""
+def validate_channel_layer() -> None:
+    """Refuse process-local delivery when a broker lets writers run in another process.
+
+    ``enqueue_task`` sends through ``send_task``, which Celery never runs eagerly,
+    so a configured ``CELERY_BROKER_URL`` means a worker process broadcasts.
+    """
 
     layer_config = getattr(settings, "CHANNEL_LAYERS", {}).get("default", {})
     backend = layer_config.get("BACKEND", "")
     if backend != _INMEMORY_CHANNEL_LAYER:
         return
-    if getattr(settings, "DEBUG", False):
+    if getattr(settings, "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER", False) is True:
         return
-    if getattr(settings, "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER", False):
+    if getattr(settings, "DEBUG", False) is True and not getattr(settings, "CELERY_BROKER_URL", None):
         return
     raise ImproperlyConfigured(
-        "channels.layers.InMemoryChannelLayer is dev-only for GraphQL changes; configure a shared channel layer."
+        "channels.layers.InMemoryChannelLayer cannot deliver GraphQL changes across processes. "
+        "Configure a shared CHANNEL_LAYERS backend such as channels_redis.core.RedisChannelLayer "
+        "when a Celery broker is configured. In-memory delivery requires DEBUG=True and no "
+        "CELERY_BROKER_URL; use ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER only for isolated tests."
     )
 
 

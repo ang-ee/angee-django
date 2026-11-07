@@ -12,14 +12,11 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 
 from angee.base.identity import public_subject_ref
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.messaging.testing import models as messaging_models
-from tests.conftest import (
-    SchemaAddon,
-    assert_private_hasura_insert_access,
-    execute_schema,
-)
+from tests.conftest import SchemaAddon, assert_private_hasura_insert_access
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 
 Address = messaging_models.Address
 Circle = messaging_models.Circle
@@ -584,6 +581,55 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
         {"model": "parties.Party", "id": party.public_id, "pointer": "/display_name"},
         {"model": "parties.Party", "id": private.public_id, "pointer": ""},
     ]
+
+
+def test_a_statement_read_under_system_context_answers_as_its_reader_and_remembers_nothing(
+    composed_tables: None,
+) -> None:
+    """Under system_context the statement read returns the same evidence as for a reader, and the memo stays empty."""
+
+    from angee.provenance.statements import SourceKind
+
+    admin = _platform_admin("statement-sudo-admin")
+    reader = User.objects.create_user(username="statement-sudo-reader")
+    with system_context(reason="test.parties.statement_sudo.seed"):
+        party = messaging_models.Party.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        private = messaging_models.Party.objects.create(display_name="Private", created_by_id=admin.pk)
+        _grant_reader(party, reader)
+        handle = Handle.objects.create(platform="email", value="sudo@example.com", created_by_id=admin.pk)
+        _grant_reader(handle, reader)
+        statement_model = messaging_models.Party.statements.model
+        statement = statement_model._base_manager.create(
+            subject=party,
+            handle=handle,
+            aspect="handle",
+            asserted_by=str(to_subject_ref(reader)),
+            source_kind=SourceKind.PERSON,
+            evidence=[
+                {"model": "parties.Party", "id": party.public_id, "pointer": "/display_name"},
+                {"model": "parties.Party", "id": private.public_id},
+            ],
+        )
+
+    def answers(row: Any) -> tuple[Any, ...]:
+        return (
+            [(ref.model, ref.id, ref.pointer) for ref in row.readable_evidence(reader)],
+            [(ref.model, ref.id, record.pk) for ref, record in row.readable_evidence_records(reader)],
+            row.readable_asserting_source(reader),
+        )
+
+    [read] = statement_model.objects.for_reader(reader).filter(pk=statement.pk)
+    expected = answers(read)
+    assert expected == (
+        [("parties.Party", party.public_id, "/display_name")],
+        [("parties.Party", party.public_id, party.pk)],
+        to_subject_ref(reader),
+    )
+    with system_context(reason="test.parties.statement_sudo.read"):
+        [elevated] = statement_model.objects.for_reader(reader).filter(pk=statement.pk)
+        assert "_provenance_readable_statement" not in vars(elevated)
+        assert answers(elevated) == expected
+        assert "_provenance_readable_statement" not in vars(elevated)
 
 
 @pytest.mark.parametrize("row_count", [2, 8])

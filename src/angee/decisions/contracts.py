@@ -9,7 +9,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Vali
 from django.db import models
 from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, TypeAdapter, ValidationInfo, model_validator
 from pydantic.experimental.missing_sentinel import MISSING
-from rebac import RebacMixin, current_actor
+from rebac import RebacMixin
 from rebac.schema.walker import field_gated_actions
 
 from angee.base.fields.state import StateField
@@ -163,10 +163,9 @@ class RecordActions(BaseModel):
                     if related_model is None:
                         raise ValueError(f"The related record model for {name} is unavailable.")
                     try:
-                        queryset = require_rebac_queryset(related_model)
+                        queryset = require_rebac_queryset(related_model, actor=context["actor"])
                     except ImproperlyConfigured as error:
                         raise ValueError(f"The related record for {name} does not support actor scoping.") from error
-                    queryset = queryset.with_actor(context.get("actor", current_actor()))
                     related = []
                     for identity in identities:
                         instance = instance_from_public_id(related_model, identity, queryset=queryset)

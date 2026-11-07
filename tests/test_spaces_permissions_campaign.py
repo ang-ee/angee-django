@@ -8,8 +8,8 @@ from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 from rebac.models import SchemaPermission
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.spaces.testing.models import Group, Membership
-from tests.conftest import execute_schema, result_data
 from tests.spaces_campaign_helpers import MANAGERS, READERS, ROLES, SEATS, target_party
 from tests.spaces_campaign_helpers import roster as roster
 from tests.spaces_campaign_helpers import spaces_console as spaces_console

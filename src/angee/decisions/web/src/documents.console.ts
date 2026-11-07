@@ -23,7 +23,9 @@ export type Decision = DocumentType<typeof DecisionFields>;
 
 export const DecideDocument = graphql(`
   mutation Decide($id: ID!, $revision: Int!, $chosen: [String!]!, $values: JSON) {
-    decide(id: $id, revision: $revision, chosen: $chosen, values: $values) { ok message id code validation_errors }
+    decide(id: $id, revision: $revision, chosen: $chosen, values: $values) {
+      ok message id code validation_errors decision { ...DecisionCardFields }
+    }
   }
 `);
 

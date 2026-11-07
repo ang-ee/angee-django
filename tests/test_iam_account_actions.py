@@ -23,9 +23,10 @@ from rebac import (
 )
 
 from angee.base.models.locks import StaleRevisionError
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.iam.signals import DJANGO_LAST_LOGIN_UID, stamp_last_login
 from angee.spaces.testing.models import Group, Membership
-from tests.conftest import create_platform_admin, execute_schema, graphql_request, result_data
+from tests.conftest import create_platform_admin
 from tests.iam_campaign import Person
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.test_iam_graphql import _schema

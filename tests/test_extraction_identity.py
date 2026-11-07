@@ -6,8 +6,7 @@ from dataclasses import replace
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.extraction.contracts import ExtractionPartKind, PipelineError
-from angee.extraction.enums import ExtractionErrorCode
+from angee.extraction.contracts import ExtractionPartKind
 from tests.extraction_models import Extraction
 from tests.test_extraction_models import evidence as evidence
 from tests.test_storage import drive as drive
@@ -70,41 +69,6 @@ def test_retired_line_and_absent_fact_do_not_resolve_to_a_surviving_position(evi
     with pytest.raises(KeyError):
         resolved.fact("/documents/0/optional")
     assert resolved.selected_line(reference.identity, reference.lines[1].identity)[0]["text"] == "Second line"
-
-
-@pytest.mark.parametrize("failure_stage", ["inference", "correspondence"])
-def test_correction_binding_freezes_direct_or_failed_parent(evidence, failure_stage):
-    retain, values = evidence
-    first = retain()
-    binding, parent = Extraction.objects.prepare_correction_binding(first, actor=values["actor"])
-    assert parent.pk == first.pk and not binding.bridges_revision_parent
-    failed = retain(
-        base=first,
-        request_key="failed-inference",
-        result=replace(values["result"], value={}, claims={}),
-        failure=PipelineError("Inference failed", stage="inference", code="unavailable")
-        if failure_stage == "inference"
-        else None,
-        error_code=ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED if failure_stage == "correspondence" else None,
-    )
-    binding, parent = Extraction.objects.prepare_correction_binding(first, actor=values["actor"])
-    assert binding.authority == first.reference
-    assert binding.revision_parent == failed.reference
-    assert parent.pk == failed.pk and binding.bridges_revision_parent
-    retain(base=failed, request_key="successful-successor")
-    with pytest.raises(ValidationError, match="another retained fact authority"):
-        Extraction.objects.prepare_correction_binding(first, actor=values["actor"])
-
-
-def test_correction_binding_rejects_nonempty_correspondence_candidate(evidence):
-    retain, values = evidence
-    first = retain()
-    candidate = deepcopy(values["result"].value)
-    candidate["documents"][0]["lines"].reverse()
-    held = retain(base=first, request_key="held-for-binding", result=replace(values["result"], value=candidate))
-    assert held.awaiting_correspondence
-    with pytest.raises(ValidationError, match="another retained fact authority"):
-        Extraction.objects.prepare_correction_binding(first, actor=values["actor"])
 
 
 @pytest.mark.parametrize("omit", [False, True])

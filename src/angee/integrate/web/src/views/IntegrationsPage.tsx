@@ -44,7 +44,7 @@ export function IntegrationRecordRedirect(): React.ReactElement {
   }, [href, navigate]);
 
   if (query.error) return <ErrorBanner description={errorMessage(query.error, t("integrations.record.unavailable"))} />;
-  if (query.isFetching || href) return <LoadingPanel message={t("integrations.record.loading")} />;
+  if (query.isFetching || href) return <LoadingPanel loadingLabel={t("integrations.record.loading")} />;
   return <EmptyState icon="integration" title={t("integrations.record.unavailable")} />;
 }
 

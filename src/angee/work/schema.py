@@ -15,6 +15,7 @@ from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
 from angee.base.identity import public_subject_ref
+from angee.base.pagination import clamp_page_size
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -281,9 +282,9 @@ def restore_task(info: strawberry.Info, task: PublicID, expected_revision: int) 
 class ProjectManagerPersonType:
     """One account holding the project's team moderator seat."""
 
-    subject: str
+    subject: str | None
     label: str
-    seat_id: PublicID
+    seat_id: PublicID | None
     removable: bool
 
 
@@ -333,7 +334,7 @@ class WorkRemovedTaskQuery:
             if owner is None:
                 return []
             scope[name] = owner
-        rows = list(Task.removed_for(user, **scope)[: max(1, min(limit, 100))])
+        rows = list(Task.removed_for(user, **scope)[: clamp_page_size(limit)])
         labels = user_display_labels(
             (row.trashed_by_id for row in rows),
             request=get_request(info),
@@ -366,11 +367,12 @@ class WorkPeopleQuery:
         offered = target.has_access("share") and (
             Membership.MembershipRole.MODERATOR in Membership.objects.available_roles(group=target.team)
         )
+        seats = list(
+            Membership.objects.system_context(reason="work.project.manager_roster").confirmed()
+            .filter(group_id=target.team_id, role=Membership.MembershipRole.MODERATOR)
+            .with_can_read().order_by("pk")[:100]
+        )
         with system_context(reason="work.project.manager_roster"):
-            seats = list(Membership._base_manager.filter(
-                group_id=target.team_id, role=Membership.MembershipRole.MODERATOR,
-                is_confirmed=True, is_dismissed=False,
-            ).order_by("pk")[:100])
             people = {
                 person.pk: person.user for person in Person._base_manager.filter(
                     pk__in=[seat.party_id for seat in seats], user__kind="person",
@@ -378,8 +380,10 @@ class WorkPeopleQuery:
             }
         return ProjectManagerRosterType(offered=offered, people=[
             ProjectManagerPersonType(
-                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))),
-                label=user_label(people[seat.party_id]), seat_id=seat.sqid, removable=offered,
+                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))) if seat.can_read else None,
+                label=user_label(people[seat.party_id]),
+                seat_id=seat.sqid if seat.can_read else None,
+                removable=offered and seat.can_read,
             )
             for seat in seats if seat.party_id in people
         ])

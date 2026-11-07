@@ -26,7 +26,7 @@ const context: ChatterViewContext = {
 };
 const files: RelatedGroupContent = {
   label: "Files",
-  useCount: () => 2,
+  usePaneCount: () => 2,
   useVerb: () => true,
   render: (_context, label) => (
     <>
@@ -38,7 +38,7 @@ const files: RelatedGroupContent = {
 };
 const pages: RelatedGroupContent = {
   label: "Pages",
-  useCount: () => 1,
+  usePaneCount: () => 1,
   useVerb: () => true,
   render: (_context, label) => (
     <>
@@ -49,7 +49,7 @@ const pages: RelatedGroupContent = {
 };
 const sources: RelatedGroupContent = {
   label: "Sources",
-  useCount: () => 0,
+  usePaneCount: () => 0,
   useVerb: () => false,
   render: () => null,
 };

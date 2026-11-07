@@ -7,6 +7,7 @@ import { useInAppLink } from "../lib/in-app-link";
 import { Chip } from "../ui/chip";
 import { Avatar, type AvatarProps } from "../ui/avatar";
 import { Popover, type PopoverRootProps } from "../ui/popover";
+import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { StatusIcon, type StatusIconTone } from "../ui/status-icon";
 
 /**
@@ -52,8 +53,10 @@ export interface PaneRowProps {
   className?: string;
 }
 
+// The row's box, shared by the row and its loading skeleton so both keep one geometry.
+const ROW_LAYOUT = "flex w-full items-start gap-2 rounded-6 px-2 py-2";
 // The row's own control carries `aria-current`; the wrapper reads it for the selected fill.
-const ROW_CLASS = "group/row flex w-full items-start gap-2 rounded-6 px-2 py-2 text-left hover:bg-canvas/70 has-[[aria-current=true]]:selected";
+const ROW_CLASS = `group/row ${ROW_LAYOUT} text-left hover:bg-canvas/70 has-[[aria-current=true]]:selected`;
 const TARGET_CLASS = "flex min-w-0 flex-1 gap-2 rounded-4 text-left outline-none focus-visible:focus-ring";
 
 /**
@@ -106,6 +109,37 @@ export function PaneRow({
  */
 export function PaneRows({ children, className, ...rest }: React.HTMLAttributes<HTMLUListElement>): React.ReactElement {
   return <ul className={cn("flex flex-col", className)} {...rest}>{children}</ul>;
+}
+
+const SKELETON_TITLE_WIDTHS = ["w-2/3", "w-1/2", "w-3/4", "w-3/5"] as const;
+
+export interface PaneRowsSkeletonProps {
+  /** Announced while the rows load; no loading copy is visible. */
+  loadingLabel: React.ReactNode;
+  rowCount?: number;
+  className?: string;
+}
+
+/**
+ * Rows of a pane list whose first page is loading: each keeps the row's box,
+ * its leading glyph and its title and second lines, under one status that
+ * announces `loadingLabel`. A pane composes it instead of drawing its own row blocks.
+ * @owner PaneRow
+ */
+export function PaneRowsSkeleton({ loadingLabel, rowCount = 4, className }: PaneRowsSkeletonProps): React.ReactElement {
+  return (
+    <SkeletonStatus loadingLabel={loadingLabel} className={cn("flex flex-col", className)}>
+      {Array.from({ length: Math.max(1, rowCount) }, (_, index) => (
+        <div key={index} aria-hidden="true" className={ROW_LAYOUT}>
+          <Skeleton shape="avatar" className="mt-0.5 size-4 shrink-0" />
+          <div className="min-w-0 flex-1 space-y-2 py-0.5">
+            <Skeleton shape="text" size="sm" className={SKELETON_TITLE_WIDTHS[index % SKELETON_TITLE_WIDTHS.length]} />
+            <Skeleton shape="text" size="sm" className="w-1/3" />
+          </div>
+        </div>
+      ))}
+    </SkeletonStatus>
+  );
 }
 
 export interface PaneLabelProps {

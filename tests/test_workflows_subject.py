@@ -17,13 +17,14 @@ from rebac import (
 )
 
 from angee.base.querysets import row_lock_paths
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepRecord, StepRun, Workflow, WorkflowRun
-from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import addon_schema, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.workflow_steps import Echo, document
 

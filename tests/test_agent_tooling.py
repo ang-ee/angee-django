@@ -493,7 +493,6 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
     from tests.test_mcp_resource_tools import _FakeSchemas, _resource
 
     schemas = _FakeSchemas((_resource("probes"),))
-    monkeypatch.setattr("angee.mcp.resource_tools.gated_read_fields", lambda model: frozenset())
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     registry = FastMCP(name="production-reader-path")
     register_resource_tools(registry)

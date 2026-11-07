@@ -257,14 +257,6 @@ def require_changeset(*, record: bool = False) -> ChangesetLike:
     return context
 
 
-def mark_changeset_failed() -> None:
-    """Record a handled failure on the open boundary; its changesets close as failed."""
-
-    boundary = _open_boundary()
-    if boundary is not None:
-        boundary.mark_failed()
-
-
 def discard_changeset_claim(instance: ChangesetLike) -> None:
     """Remove the current boundary row after a rolled-back claim insert."""
 
@@ -362,8 +354,9 @@ def changeset(
     Asynchronous entrypoints use ``async with``. ``process=True`` is for an
     entrypoint that owns the whole process (a management command, a test): threads
     it starts without copying the context write under this boundary too. An explicit
-    ``using`` binds fresh attribution rows to the selected database; omitted values
-    retain Django router behavior. Nested scopes restore the previous boundary.
+    ``using`` passes a Django-supplied alias (a command's ``--database``) through to
+    fresh attribution rows; omitted, Django's router places them. Nested scopes
+    restore the previous boundary.
     """
 
     facts: dict[str, object] = {

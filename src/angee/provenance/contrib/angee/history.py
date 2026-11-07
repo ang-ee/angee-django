@@ -16,7 +16,6 @@ from rebac import (
     PermissionDenied,
     RebacMixin,
     RebacTrackedMixin,
-    database_context,
     system_context,
 )
 from rebac.actors import is_sudo
@@ -278,7 +277,7 @@ class ModelHistory(CaptureHistory):
     def revert_order(self, first: Any, last: Any, previous: Any) -> tuple[Any, ...]:
         """Restore parents first; remove creations after reference replay, children first."""
 
-        model = type(first.instance)
+        model = first.instance_type
         removal = previous is None or previous.history_type == "-"
         depth = len(model._meta.get_parent_list())
         return (2 if removal else 0, -depth if removal else depth, model._meta.label_lower, first.pk)
@@ -294,9 +293,9 @@ class ModelHistory(CaptureHistory):
         recorded its own version of the same write restores the same values.
         """
 
-        model = type(first.instance)
+        model = first.instance_type
         using = first._state.db
-        row = model._base_manager.using(using).filter(pk=first.instance.pk).first()
+        row = model._base_manager.using(using).filter(pk=getattr(first, model._meta.pk.attname)).first()
         if previous is None or previous.history_type == "-":
             if row is not None:
                 row.revert_removal(reason=f"Revert changeset {first.changeset_id}")
@@ -334,24 +333,19 @@ class ModelHistory(CaptureHistory):
         return row.revert_subjects()
 
     def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:
-        """Keep global attribution storage resolvable in isolated model registries."""
+        """Rebuild snapshots with excluded columns as system bookkeeping."""
 
         extra = super().get_extra_fields(model, fields)
-        native_instance = extra["get_instance"]
+        native_instance = extra["instance"].fget
 
-        def get_instance(record: Any, *, using: str | None = None) -> Any:
+        def get_instance(record: Any) -> Any:
             # Native construction fills excluded columns (counters) from the stored
             # row through the default manager. That read rebuilds a snapshot for
             # replay, not a projection to the caller: a gated counter would refuse it.
-            alias = using if using is not None else record._state.db
-            with (
-                database_context(alias) if alias is not None else nullcontext(),
-                system_context(reason="angee.history.instance") if record._history_excluded_fields else nullcontext(),
-            ):
-                return native_instance(record, using=alias)
+            with system_context(reason="angee.history.instance") if record._history_excluded_fields else nullcontext():
+                return native_instance(record)
 
         extra["instance"] = property(get_instance)
-        extra["get_instance"] = get_instance
         return extra
 
 
@@ -514,11 +508,6 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
                     refused.add(changeset_id)
         admitted.update(pk for pk in candidates if pk in touched and pk not in refused)
         return frozenset(admitted)
-
-    def admits_revert(self, changeset: Any) -> bool:
-        """Return whether one successful changeset belongs wholly to this document."""
-
-        return changeset.pk in self.admitted_reverts((changeset,))
 
     def revertable_changesets(self, changesets: Iterable[Any], *, actor: Any = None) -> frozenset[Any]:
         """Return admitted page keys when the reader may replay this record."""

@@ -30,7 +30,7 @@ export function KnowledgePageView({ pageId, navigation }: KnowledgePageViewProps
   /> : null;
   const detail = query.data?.pages_by_pk;
   if (!detail) {
-    if (query.isPending) return <SkeletonStatus label={t("page.loading")} className="space-y-3 p-4">
+    if (query.isPending) return <SkeletonStatus loadingLabel={t("page.loading")} className="space-y-3 p-4">
       <Skeleton size="lg" className="w-2/3" /><SkeletonText lines={2} />
     </SkeletonStatus>;
     if (readError) return readError;

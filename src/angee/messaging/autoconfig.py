@@ -15,6 +15,7 @@ _Settings = TypedDict(
         "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS:append": list[str],
         "ANGEE_PARTIES_SIGNING_PROVIDERS:append": list[str],
         "ANGEE_TIMELINE_KINDS:append": list[str],
+        "ANGEE_GRAPHQL_RELATED_COUNTS:append": list[str],
         "ANGEE_CHANNEL_BACKEND_CLASSES": dict[str, str],
         "ANGEE_WEBFORM_MAX_BODY_BYTES": int,
         "ANGEE_WEBFORM_RATE_LIMIT_BURST": int,
@@ -33,6 +34,7 @@ SETTINGS: _Settings = {
     "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS:append": ["angee.messaging.evidence.shared_senders"],
     "ANGEE_PARTIES_SIGNING_PROVIDERS:append": ["angee.messaging.evidence.signings"],
     "ANGEE_TIMELINE_KINDS:append": ["angee.messaging.timeline.timeline_kinds"],
+    "ANGEE_GRAPHQL_RELATED_COUNTS:append": ["angee.messaging.schema.related_counts"],
     # Channel backends a ``messaging.Channel`` row may select. ``manual`` is the
     # neutral null-object (no source; ``ImplClassField`` requires a non-empty
     # registry). Source addons add their own with a yamlconf dotted key, e.g.

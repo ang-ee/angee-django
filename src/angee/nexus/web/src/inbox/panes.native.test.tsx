@@ -23,41 +23,53 @@ const message = {
   sender: { display_name: "Ada", value: "ada@example.com", party: null }, thread: { id: "thread-one", title: { text: "A conversation" } },
 };
 
-function fixture(pane: "navigator" | "results" | "related", initialSearch = "", status = false) {
+/** `pending` documents never resolve, so a pane stays in its loading shape. */
+function fixture(pane: "navigator" | "results" | "related", initialSearch = "", status = false, pending: readonly unknown[] = []) {
   const rowMessage = status ? { ...message, platform: "WHATSAPP", channel: { display_name: "Alexis" },
     thread: { ...message.thread, modality: "STATUS" } } : message;
   let view: ResourceViewContextValue;
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     const variables = meta?.gqlVariables ?? {};
     const document = meta?.gqlQuery;
+    if (pending.includes(document)) return new Promise<never>(() => undefined);
     if (document === InboxAccounts) return { data: { inbox_accounts: [], inbox_platforms: ["email"], inbox_relation_kinds: [] } };
     if (document === InboxSelection) return { data: { inbox_selection: { id: "party:ada", label: "Ada" } } };
-    if (document === InboxNavigator) return { data: { inbox_navigator: { count: 60, message_count: 60, rows: [{
+    const navigatorRow = {
       id: variables.parent ? "circle:child" : "party:ada", label: variables.parent ? "Child circle" : "Ada", count: 60,
       latest: rowMessage.sent_at, first: rowMessage.sent_at, preview: "A preview", handle: null, party: null,
       thread: variables.options?.lens === "groups" ? rowMessage.thread : null,
       circle: variables.options?.lens === "circles" ? { id: variables.parent ? "child" : "root", name: "Circle" } : null,
       parent_id: variables.parent ? "party:ada" : null, has_children: !variables.parent,
-    }] } } };
-    if (document === InboxNavigatorGroups || document === InboxResultGroups) {
-      return { data: { [document === InboxNavigatorGroups ? "inbox_navigator_groups" : "inbox_result_groups"]: {
-        count: 30, record_count: 60, message_count: 60,
-        rows: [{ value: "thread:thread-one", label: status ? "Status updates" : `Conversation ${variables.page}`, modality: status ? "status" : "direct", count: 60, message_count: 60 }],
-      } } };
-    }
+    };
     const content = variables.options?.lens === "attachments" || variables.options?.lens === "text";
-    if (document === InboxResults) return { data: { inbox_results: { count: 60, message_count: 60, rows: [{
+    // A leaf read pages one group; the groups read carries each group's page 1.
+    const resultPage = variables.leaf_size ? 1 : variables.page;
+    const resultRow = {
       id: content ? "file:attachment" : "result-one", latest: rowMessage.sent_at, count: 2, part_count: content ? 2 : 0,
-      message: { ...rowMessage, title: `Message page ${variables.page}` },
+      message_id: rowMessage.id,
       part: content ? { id: "part-one", name: "Report.pdf", role: "BODY" } : null,
       file: content ? { id: "attachment", filename: "Report.pdf", url: "/report.pdf", mime_type: { mime_type: "application/pdf" }, size_bytes: "20" } : null,
       fragment: null,
-    }] } } };
+    };
+    const resultMessages = [{ ...rowMessage, title: `Message page ${resultPage}` }];
+    if (document === InboxNavigator) return { data: { inbox_navigator: { count: 60, message_count: 60, rows: [navigatorRow] } } };
+    if (document === InboxNavigatorGroups || document === InboxResultGroups) {
+      const results = document === InboxResultGroups;
+      return { data: { [results ? "inbox_result_groups" : "inbox_navigator_groups"]: {
+        count: 30, record_count: 60, message_count: 60,
+        rows: [{ value: "thread:thread-one", label: status ? "Status updates" : `Conversation ${variables.page}`, modality: status ? "status" : "direct", count: 60, message_count: 60,
+          rows: results ? [resultRow] : [navigatorRow] }],
+        ...(results ? { messages: resultMessages } : {}),
+      } } };
+    }
+    if (document === InboxResults) return { data: { inbox_results: { count: 60, message_count: 60, rows: [resultRow], messages: resultMessages } } };
     if (document === InboxRelatedTarget) return { data: { inbox_related_target: {
       id: "file:one", label: "Pinned file", count: 60, unit: "messages", source: null, part: null, file: null, fragment: null,
     } } };
     if (document === InboxConnections) return { data: { inbox_connections: {
-      count: 60, message_count: 60, rows: [{ id: "connection-one", message: rowMessage, part: null, handle: null, src: null, dst: null }],
+      count: 60, message_count: 60,
+      rows: [{ id: "connection-one", message_id: rowMessage.id, part: null, handle: null, src_id: null, dst_id: null }],
+      messages: [rowMessage],
     } } };
     throw new Error("Unexpected inbox operation");
   }) } satisfies RefineTestDataProvider;
@@ -110,6 +122,10 @@ test("result pane labels expand native groups and page members independently", a
   fireEvent.click(screen.getByRole("button", { name: "Message details" }));
   await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
   const pager = screen.getByRole("navigation", { name: /Conversation 1/ });
+  // Page 1 came with the groups read; only a later page reads the group's rows.
+  expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResults)).toBe(false);
+  expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResultGroups
+    && request.meta.gqlVariables?.leaf_size === 3)).toBe(true);
   fireEvent.click(within(pager).getByRole("button", { name: /Next/ }));
   await screen.findByRole("button", { name: /Message page 2/ });
   expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResults
@@ -172,7 +188,8 @@ test("result lenses retain filters, selection and pinned content while resetting
     expect(f.view.state.pagination.pageIndex).toBe(0);
     expect(f.view.state.groupStack).toEqual(field ? [{ field }] : []);
     expect(f.view.state.filter).toEqual(filter);
-    await waitFor(() => expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResults
+    // A grouped lens reads its first pages through the groups document; a flat lens through rows.
+    await waitFor(() => expect(f.custom.mock.calls.some(([request]) => (field ? InboxResultGroups : InboxResults) === request.meta?.gqlQuery
       && request.meta.gqlVariables?.options?.lens === lens && request.meta.gqlVariables?.sender === "party:ada"
       && request.meta.gqlVariables?.search?.text === "renewal")).toBe(true));
   }
@@ -214,4 +231,23 @@ test("status rows name their author and account and open an update instead of th
   await waitFor(() => expect(f.router.state.location.search).toMatchObject({ lens: "timeline", sender: "party:ada" }));
   expect(f.view.state.filter).toMatchObject({ account: { exact: "acc_one" }, kind: { exact: "updates" } });
   expect(f.router.state.location.search).not.toHaveProperty("message");
+});
+
+/** The skeleton rows a pending status draws; loading copy lives only in its screen-reader label. */
+const skeletonRows = (status: HTMLElement) => [...status.children].filter((child) => child.getAttribute("aria-hidden") === "true");
+
+test("a pending selection and results read load as a title skeleton and pane-row skeletons, never loading copy", async () => {
+  fixture("results", "?sender=party:ada", false, [InboxSelection, InboxResults, InboxResultGroups]);
+  await waitFor(() => expect(screen.getAllByRole("status").some((status) =>
+    status.textContent === "Loading…" && skeletonRows(status).length > 0)).toBe(true));
+  expect(screen.getAllByRole("status").some((status) => status.textContent === "Loading inbox…")).toBe(true);
+  expect(screen.queryAllByText(/Loading/, { ignore: ".sr-only, script, style" })).toEqual([]);
+});
+
+test("a pending Links target keeps its label slot as a skeleton while its uses list", async () => {
+  fixture("related", "?related=file:one&sender=party:ada", false, [InboxRelatedTarget]);
+  await screen.findByRole("button", { name: /A message/ });
+  expect(screen.getAllByRole("status").some((status) => status.textContent === "Loading inbox…")).toBe(true);
+  expect(screen.queryByText("Pinned file")).toBeNull();
+  expect(screen.queryAllByText(/Loading/, { ignore: ".sr-only, script, style" })).toEqual([]);
 });

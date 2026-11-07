@@ -15,12 +15,13 @@ from rebac import actor_context
 from angee.base.models.identity import public_id_of
 from angee.base.pagination import KeysetOrder, keyset_signer
 from angee.graphql.publishing import mute_changes
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.timeline import CommentKind
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from angee.timeline.kinds import timeline_kinds
 from angee.timeline.reading import Timeline
-from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data, vault_for
+from tests.conftest import addon_schema, create_platform_admin, vault_for
 
 KINDS = [
     "angee.provenance.timeline.timeline_kinds",
@@ -51,13 +52,18 @@ def read_timeline(record, actor, **variables):
 
 def test_cursor_round_trips_and_orders_the_page_totally() -> None:
     at = datetime(2026, 10, 19, 9, 41, tzinfo=UTC)
-    order = KeysetOrder("_timeline_at", tie_breakers=("_timeline_kind",))
+    order = KeysetOrder("at", tie_breakers=("kind",), key_field="pk")
     signer = keyset_signer(["record", "all-kinds"], salt="angee.timeline")
     token = order.sign_position((at, "provenance.change", 7), signer)
     cursor = order.unsign(token, signer, models.BigIntegerField())
     assert cursor == (at, "provenance.change", 7)
-    predicate = str(order.before(cursor))
-    assert predicate.count("at__lt") == 1 and predicate.count("kind__gt") == 1 and predicate.count("pk__lt") == 1
+    predicate = str(order.before(cursor, prefix="_timeline_"))
+    assert predicate.count("_timeline_at__lt") == 1 and predicate.count("_timeline_kind__gt") == 1
+    assert predicate.count("_timeline_pk__lt") == 1 and "'pk__" not in predicate
+    # One declaration orders the page and the union's renamed result columns alike.
+    assert order.ordering(prefix="_timeline_") == ("-_timeline_at", "_timeline_kind", "-_timeline_pk")
+    assert order.ordering(prefix="_result_") == ("-_result_at", "_result_kind", "-_result_pk")
+    assert KeysetOrder("created_at").ordering() == ("-created_at", "-pk")
     with pytest.raises(ValueError):
         order.unsign("nonsense", signer, models.BigIntegerField())
     with pytest.raises(ValueError):
@@ -107,8 +113,12 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
 
     with CaptureQueriesContext(connection) as queries:
         data = read_timeline(vault, owner)
-    page_queries = [query["sql"] for query in queries if "UNION ALL" in query["sql"] and "LIMIT 26" in query["sql"]]
-    assert len(page_queries) == 1
+    # The page, every kind's totals (read again by timeline_attention) and the
+    # page's children share one statement over the kinds with readable rows.
+    statements = [query["sql"] for query in queries if '"timeline_source"' in query["sql"]]
+    assert len(statements) == 1
+    assert "UNION ALL" in statements[0] and "LIMIT 26" in statements[0]
+    assert f'"{apps.get_model("workflows", "WorkflowRun")._meta.db_table}"' not in statements[0]
     page = data["timeline"]
     assert [kind["id"] for kind in page["kinds"]] == [
         "workflows.run", "decisions.decision", "provenance.change", "projects.task", "messaging.conversation",
@@ -126,6 +136,9 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     assert [one["entries"][0], *rest["entries"]] == page["entries"]
     assert one["kinds"] == rest["kinds"] == page["kinds"]
     assert read_timeline(vault, owner, kinds=["workflows.run"])["timeline"]["entries"] == []
+    with CaptureQueriesContext(connection) as queries:
+        assert Timeline(vault, owner).attention() == 1
+    assert sum('"timeline_source"' in query["sql"] for query in queries) == 1
 
 
 def timeline_entries(record, actor=None, *, kind=None):

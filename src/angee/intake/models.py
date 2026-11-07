@@ -1041,24 +1041,17 @@ class ProjectIntakeSetup(Composable, extends="projects.Project"):
 
 
 class ChannelIntake(Composable, extends="messaging.Channel"):
-    """Same-row intake fields and capture behavior for ``messaging.Channel``."""
+    """Same-row intake fields and capture behavior for ``messaging.Channel``.
 
-
-    class IntakeTrigger(models.TextChoices):
-        """Declared capture triggers; only all-messages is implemented in v1."""
-
-        ALL_MESSAGES = "all_messages", "All messages"
-        REACTION = "reaction", "Reaction"
-        MENTION = "mention", "Mention"
-        COMMAND = "command", "Command"
+    A channel with an ``intake_queue`` captures every ingested message as a Need.
+    """
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "intake_queue",
-        "intake_trigger",
         "intake_field_map",
         "intake_requester_domains",
     )
-    hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("intake_queue", "intake_trigger")
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("intake_queue",)
     hasura_sortable_fields: ClassVar[tuple[str, ...]] = hasura_filterable_fields
     hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ()
     hasura_groupable_fields: ClassVar[tuple[str, ...]] = hasura_filterable_fields
@@ -1070,10 +1063,6 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="intake_channels",
-    )
-    intake_trigger = StateField(
-        choices_enum=IntakeTrigger,
-        default=IntakeTrigger.ALL_MESSAGES,
     )
     intake_field_map = models.JSONField(default=dict, blank=True)
     intake_requester_domains = models.JSONField(default=list, blank=True)
@@ -1177,25 +1166,11 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
                 logger.warning("Invalid intake value for %s on message %s; using its default.", target, message.pk)
         return values
 
-    def should_capture_message(self, message: Message) -> bool:
-        """Return whether this channel's configured v1 trigger accepts ``message``."""
-
-        if self.intake_queue_id is None:
-            return False
-        match str(self.intake_trigger):
-            case self.IntakeTrigger.ALL_MESSAGES:
-                return True
-            case self.IntakeTrigger.REACTION | self.IntakeTrigger.MENTION | self.IntakeTrigger.COMMAND:
-                return False
-            case _:
-                raise ValidationError({"intake_trigger": "Unknown intake trigger."})
-
     def capture_ingested_message(self, message: Message) -> Need | None:
-        """Dispatch an accepted ingested message to the Need write owner."""
+        """Dispatch an ingested message to the Need write owner when the channel has an intake queue."""
 
-        if not self.should_capture_message(message):
-            return None
         queue = self.intake_queue
-        assert queue is not None  # should_capture_message required the configured queue.
+        if queue is None:
+            return None
         need_model = apps.get_model("intake", "Need")
         return need_model.objects.capture_from_message(message, queue=queue)

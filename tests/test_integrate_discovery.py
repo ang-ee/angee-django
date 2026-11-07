@@ -22,6 +22,7 @@ from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate import scheduler, tasks
 from angee.integrate.connect import complete_account_connect, complete_external_account_link
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK
@@ -39,7 +40,7 @@ from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.signals import discovery_finished
 from angee.integrate.streams import BridgeSyncError
 from angee.jobs.celery import app as celery_app
-from tests.conftest import Credential, create_platform_admin, execute_schema, make_addon, make_integration, result_data
+from tests.conftest import Credential, create_platform_admin, make_addon, make_integration
 from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionBridge, LiveConnectionAdapter
 
 pytestmark = pytest.mark.usefixtures("composed_tables")

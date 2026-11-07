@@ -11,10 +11,12 @@ from django.db import connection, models, transaction
 from django.db.models import OuterRef
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from rebac import SubjectRef, system_context
 from rebac.managers import TrackedQuerySet
 
 from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.base import AngeeModel
+from angee.base.permissions import require_rebac_queryset
 from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
 from tests.conftest import Drive, File, Integration
 from tests.tables import model_tables
@@ -254,3 +256,17 @@ def test_readable_count_subquery_without_actor_is_zero(system_query_tables: None
         visible_count=SystemQueryThing.objects.filter(pk=OuterRef("pk")).readable_count_subquery(),
     ).get(pk=row.pk)
     assert projected.visible_count == 0
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+def test_an_explicit_none_reader_fails_closed_where_an_omitted_one_reads_ambient() -> None:
+    """``require_rebac_queryset``: no actor argument defers to REBAC's ambient scope, ``actor=None`` reads nothing."""
+
+    actor = SubjectRef.of("auth/user", "1")
+    SystemQueryThing.system_queryset().create(name="row")
+    with system_context(reason="test.require_rebac_queryset"):
+        assert require_rebac_queryset(SystemQueryThing).count() == 1
+        assert require_rebac_queryset(SystemQueryThing, actor=None).count() == 0
+    assert require_rebac_queryset(SystemQueryThing).actor() is None
+    assert require_rebac_queryset(SystemQueryThing, actor=actor).actor() == actor

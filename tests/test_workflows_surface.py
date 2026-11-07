@@ -36,10 +36,9 @@ EXPECTED_MODELS = {
 
 EXPECTED_VERBS = {
     "extraction.Extraction.manager": (
-        "authorized_document_sources identity_preserving_pipeline_successor inference_authority_base "
+        "authorized_document_sources inference_authority_base "
         "inference_candidate_selectors inference_current_head latest_succeeded_identity_authority "
-        "prepare_correction_binding prepare_pages retain_result reused_inference "
-        "reviewed_correction_authority revise_from_decision"
+        "prepare_pages retain_result reused_inference"
     ),
     "extraction.Extraction.queryset": "validate_insert",
     "extraction.ExtractionLineage.queryset": "validate_insert",
@@ -51,7 +50,7 @@ EXPECTED_VERBS = {
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
         "answered_decisions cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
-        "extend_deadline fenced for_map item_counts nodes settle terminal_runs to_ready to_running "
+        "extend_deadline fenced for_map graph_rows item_counts nodes settle terminal_runs to_ready to_running "
         "to_waiting undispatched"
     ),
     "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
@@ -95,8 +94,8 @@ EXPECTED_SETTINGS = {
 }
 
 EXPECTED_TEST_DRIVERS = (
-    "RunFactory", "capture_tasks", "decide", "load_workflow", "observe", "publish_draft", "register_steps",
-    "run_until", "start_run",
+    "RunFactory", "capture_tasks", "decide", "deliver_decision_wakes", "load_workflow", "observe",
+    "publish_draft", "register_steps", "run_until", "start_run",
 )
 
 
@@ -245,7 +244,7 @@ def test_evidence_owner_surface() -> None:
     decision = apps.get_model("decisions", "Decision")
     assert issubclass(run_evidence, RecordRefMixin)
     assert issubclass(extraction_source, DerivedFrom)
-    assert callable(extraction.fact_correction) and callable(extraction.fact_authority)
+    assert callable(extraction.fact_authority)
     assert issubclass(DecisionFact, EvidenceFact)
     assert issubclass(DecisionRecordReference, EvidenceReference)
     assert issubclass(DecisionRequest, BaseModel)

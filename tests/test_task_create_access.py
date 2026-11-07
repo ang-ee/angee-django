@@ -28,14 +28,9 @@ from rebac.testing import install_schema
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.projects.models import Task as AbstractTask
-from tests.conftest import (
-    create_platform_admin,
-    create_user,
-    execute_schema,
-    result_data,
-    standalone_relation,
-)
+from tests.conftest import create_platform_admin, create_user, standalone_relation
 from tests.scopedemo.models import Scope
 
 

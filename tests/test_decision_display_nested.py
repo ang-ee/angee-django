@@ -7,10 +7,11 @@ from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relati
 
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
-from tests.conftest import create_user, execute_schema, result_data, vault_for
+from tests.conftest import create_user, vault_for
 from tests.test_workflows_review_graphql import schema as schema
 
 

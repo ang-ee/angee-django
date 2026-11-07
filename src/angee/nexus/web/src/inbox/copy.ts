@@ -132,7 +132,6 @@ export const inboxMessages = {
   "inbox.unavailable": "Message unavailable",
   "inbox.unavailableHint": "The message is outside your access or no longer exists.",
   "inbox.scopeInvalid": "These filters cannot be read",
-  "inbox.selectionUnavailable": "Selection unavailable",
   "inbox.standalone": "Standalone message",
   "inbox.loading": "Loading inbox…",
   "inbox.retry": "Retry",

@@ -1,8 +1,7 @@
 import * as React from "react";
 import type { Row } from "@angee/metadata";
-import { PaneLabel, PaneRows } from "../../../communication/pane-list";
+import { PaneLabel, PaneRows, PaneRowsSkeleton } from "../../../communication/pane-list";
 import { ListStatusMessage } from "../../../fragments/ListStatusMessage";
-import { LoadingPanel } from "../../../fragments/LoadingPanel";
 import { useUiT } from "../../../i18n";
 import { ResourcePaneFooter, type ResourceToolbarProps } from "../../../toolbars/ResourceToolbar";
 import { GroupedScopePager } from "../GroupedScopePager";
@@ -11,7 +10,8 @@ import type { ResourceViewGroup } from "../resource-view-model";
 import type { GroupedResourceViewSurface, ResourceViewSurface } from "../resource-view-surface";
 import type { ListEmptyContent, ListViewProps } from "../resource-view-types";
 
-/** Pane anatomy over the collection owner's row stream; no query or expansion state. */
+/** Pane anatomy over the collection owner's row stream; no query or expansion state. A first page
+ * and a group's pending rows load as pane-row skeletons; rows already shown stay during a refetch. */
 export function PaneListBody<TRow extends Row>({ surface, renderRow, renderGroupLabel, groupStack, emptyContent, toolbar }: {
   surface: (Pick<ResourceViewSurface<TRow>, "kind" | "rowModels"> & { list: { fetching: boolean } }) | GroupedResourceViewSurface<TRow>;
   renderRow: (row: TRow) => React.ReactNode;
@@ -25,7 +25,7 @@ export function PaneListBody<TRow extends Row>({ surface, renderRow, renderGroup
   return (
     <>
     <div className="min-h-0 flex-1 overflow-auto px-2 py-1">
-      {empty ? surface.list.fetching ? <LoadingPanel /> : <ListEmpty className="p-4">{emptyContent}</ListEmpty> : (
+      {empty ? surface.list.fetching ? <PaneRowsSkeleton loadingLabel={t("list.loading")} /> : <ListEmpty className="p-4">{emptyContent}</ListEmpty> : (
       <PaneRows>
         {surface.kind === "flat" ? surface.rowModels.map((row) => {
           if (!row.getIsGrouped()) return <li key={row.id}>{renderRow(row.original)}</li>;
@@ -49,7 +49,7 @@ export function PaneListBody<TRow extends Row>({ surface, renderRow, renderGroup
                   onPageChange={surface.setScopePage} onPageSizeChange={surface.setScopePageSize} t={t} /></li> : null}
                 {!item.expandable ? <li className="px-1 text-12 text-fg-muted">{item.unavailableMessage}</li> : null}
               </React.Fragment>;
-              case "skeleton": return <li key={item.itemKey}><LoadingPanel density="inline" /></li>;
+              case "skeleton": return <li key={item.itemKey}><PaneRowsSkeleton loadingLabel={t("list.loading")} rowCount={item.rowCount} /></li>;
               case "status": return <li key={item.itemKey}><ListStatusMessage tone={item.tone}>{item.message}</ListStatusMessage></li>;
               default: return assertNever(item);
             }

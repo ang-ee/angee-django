@@ -40,7 +40,7 @@ const context: ChatterViewContext = {
 };
 const files: RelatedGroupContent = {
   label: "Files",
-  useCount: () => 2,
+  usePaneCount: () => 2,
   useVerb: () => true,
   render: (_context, label) => (
     <>

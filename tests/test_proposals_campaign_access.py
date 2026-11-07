@@ -17,7 +17,7 @@ from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, Task
-from tests.conftest import Drive, File, FileAttachment
+from tests.conftest import Drive, File, FileAttachment, create_platform_admin
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
@@ -698,19 +698,19 @@ def test_round_team_and_project_team_do_not_copy_each_others_seats(campaign: Pro
     assert not as_actor(round, inactive).has_access("manage")
 
 
-def test_view_as_reaches_only_current_responders_of_managed_rounds(campaign: ProposalCampaign) -> None:
+def test_round_managers_cannot_preview_responder_accounts(campaign: ProposalCampaign) -> None:
     c = campaign
     round = c.round()
     c.admit(round, "responder")
     c.admit(round, "peer")
     manager = c.person("facilitator")
-    for seat in ("responder", "peer"):
-        assert as_actor(c.person(seat), manager).has_access("view_as")
-    assert not as_actor(c.person("outsider"), manager).has_access("view_as")
-    assert not as_actor(manager, manager).has_access("view_as")
-    with actor_context(manager):
-        as_actor(round, manager).remove_responder(c.person("peer"))
-    assert not as_actor(c.person("peer"), manager).has_access("view_as")
+    admin = create_platform_admin(f"{c.prefix}-admin")
+    assert as_actor(round, manager).has_access("manage")
+    for seat in ("responder", "peer", "outsider", "facilitator"):
+        person = c.person(seat)
+        assert not as_actor(person, manager).has_access("view_as")
+        assert type(person).objects.admit_view_as(manager, str(person.sqid)) is None
+        assert as_actor(person, admin).has_access("view_as")
 
 
 def test_subscription_gate_drops_sealed_answer_events_and_redacts_disclosed_offer_fields(

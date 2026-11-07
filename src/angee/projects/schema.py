@@ -11,6 +11,7 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db.models import Prefetch
 from graphql import GraphQLError
 from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
@@ -21,6 +22,7 @@ from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
 from strawberry_django.utils.gql_compat import get_field_arguments
 
+from angee.base.prefetch import prefetched
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data.hasura import (
@@ -352,42 +354,14 @@ _TASK_ACTION_ANNOTATIONS = {
 
 
 
-def _subject_label(reference: Any) -> str:
-    """Return one subject's display label through the reader's own scope.
-
-    A subject the reader cannot read keeps its public id as its label.
-    """
-
-    actor = current_actor()
-    if actor is None:
-        return ""
-    model = apps.get_model(reference.model_label)
-    row = model.objects.with_actor(actor).filter(pk=reference.object_id).first()
-    return str(row) if row is not None else ""
+_SUBJECT = "_projects_subject"
 
 
-def _prime_subject_labels(tasks: list[Any]) -> None:
-    """Batch task subject labels once per content type onto their pointer owners."""
+def _subject_targets(info: strawberry.Info) -> Prefetch:
+    """Read the listed tasks' subjects once per subject type, through the reader's own scope."""
 
-    references = [(task, task.record_ref) for task in tasks]
-    by_model: dict[str, set[Any]] = {}
-    for _task, reference in references:
-        if reference.public_id:
-            by_model.setdefault(reference.model_label, set()).add(reference.object_id)
-    labels: dict[tuple[str, Any], str] = {}
-    actor = current_actor()
-    if actor is None:
-        for task, _reference in references:
-            task._projects_subject_label = ""
-        return
-    for model_label, object_ids in by_model.items():
-        model = apps.get_model(model_label)
-        labels.update(
-            ((model_label, row.pk), str(row))
-            for row in model.objects.with_actor(actor).filter(pk__in=object_ids)
-        )
-    for task, reference in references:
-        task._projects_subject_label = labels.get((reference.model_label, reference.object_id), "")
+    del info
+    return Task.record_targets_prefetch(current_actor(), to_attr=_SUBJECT)
 
 def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
     """The row's verb annotations: optimized on reads, read once for a mutation payload."""
@@ -408,18 +382,22 @@ class TaskProjectionMixin:
 
         return cast(Any, self).activity_type_id
 
-    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
+    @strawberry_django.field(
+        only=["subject_content_type_id", "subject_object_id"], prefetch_related=[_subject_targets],
+    )
     def subject(self, info: strawberry.Info) -> RecordPointerType | None:
-        """Project the task's direct subject, labelled as its reader sees it."""
+        """Project the task's direct subject, labelled as its reader sees it.
 
-        reference = cast(Any, self).record_ref
+        A subject the reader cannot read keeps its public id as its label. A row
+        loaded outside an optimized list reads its own subject the same way.
+        """
+
+        row = cast(Any, self)
+        reference = row.record_ref
         if not reference.public_id:
             return None
-        label = cast(Any, self).__dict__.get("_projects_subject_label")
-        return RecordPointerType.from_reference(
-            reference,
-            label=label if label is not None else _subject_label(reference),
-        )
+        target = prefetched(row, _SUBJECT, lambda: _subject_targets(info))
+        return RecordPointerType.from_reference(reference, label=str(target) if target is not None else "")
 
     @strawberry_django.field(only=Task.visibility_audience_fields())
     def audience_label(self) -> str:
@@ -657,9 +635,7 @@ def _record_tasks(info: strawberry.Info, model_label: str, record_id: strawberry
     record = instance_for_id(model, str(record_id), queryset=model._default_manager.all())
     if record is None:
         return []
-    tasks = list(optimize(Task.objects.for_record(record, include_done=include_done), info))
-    _prime_subject_labels(tasks)
-    return tasks
+    return list(optimize(Task.objects.for_record(record, include_done=include_done), info))
 
 
 @strawberry.type

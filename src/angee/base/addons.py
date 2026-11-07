@@ -8,7 +8,7 @@ from __future__ import annotations
 import importlib
 import json
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from importlib import metadata
 from pathlib import Path
 from types import ModuleType
@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import module_has_submodule
@@ -100,3 +100,35 @@ def optional_addon_module(
         return importlib.import_module(module_path)
     except ImportError as error:
         raise ImproperlyConfigured(f"{module_path} failed to import") from error
+
+
+def addon_modules(module_name: str) -> Iterator[tuple[AppConfig, ModuleType]]:
+    """Yield enabled addons' conventional ``module_name`` modules in installed app order.
+
+    One native component index serves the pass. Django's app registry must be
+    populated; serving composition reads it once after setup.
+    """
+
+    index = installed_components("angee.addons")
+    for config in apps.get_app_configs():
+        module = optional_addon_module(config, module_name, index=index)
+        if module is not None:
+            yield config, module
+
+
+def addon_contribution(module: ModuleType, name: str, *, allow_callable: bool = True) -> list[Any]:
+    """Read ``module.<name>`` as one ordered contribution.
+
+    An unbound name contributes nothing; a callable is called when the convention
+    allows one. The result must be an ordered iterable: strings, bytes, mappings
+    and sets raise ``ImproperlyConfigured``.
+    """
+
+    if not hasattr(module, name):
+        return []
+    contribution = getattr(module, name)
+    value = contribution() if allow_callable and callable(contribution) else contribution
+    if not isinstance(value, Iterable) or isinstance(value, str | bytes | Mapping | set | frozenset):
+        suffix = "iterable or callable" if allow_callable else "iterable"
+        raise ImproperlyConfigured(f"{module.__name__}.{name} must be {suffix}")
+    return list(value)

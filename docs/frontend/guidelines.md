@@ -734,7 +734,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `where`/`order_by`/`limit` + the `_groups` aggregate). Grouping is a
   client-side row model by default (it needs the whole set); the server
   `_groups` surface is the escalation only when the data is too large to hold in
-  memory. A computed/non-model source is exposed **once** as a Hasura resource
+  memory. Either way a grouped list pages its **root groups**: the server surface
+  by its root `_groups` read, the client row model by TanStack's top-level rows
+  (`paginateExpandedRows: false`), so the pager counts groups and a page holds its
+  open groups' records; an ungrouped list pages records. A surface clamps its page
+  only once its read settles (`useSettledPageClamp`). A computed/non-model source is exposed **once** as a Hasura resource
   (`hasura_pydantic_resource`) for the uniform fetch + metadata + MCP surface.
   A small one processes client-side over the fetched set; a large one keeps the
   server row model and declares `groupable` columns for the same `_groups`
@@ -753,6 +757,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   contract when the server projects rows from a changing record scope. The
   authored document owns variables, results and count units; the shared list
   owns filtering, grouping, virtualized rendering and independent group pages.
+  A grouped page is one request: at the leaf level the `groups` document
+  receives `leafPageSize`, clamped to refine's `MAX_PAGE_SIZE` (100, the
+  server's bound on one page), and returns each group's first page in `bucket.rows`;
+  `rows` serves only a later or resized page of one group. A server-grouped
+  first page the groups read did not carry is an error, never a per-group fetch.
   `CollectionTreeView` composes the same transport with native tree expansion
   and child paging. Do not register a fictional model, infer available choices
   from one server page, or filter/group that page in the browser. Bounded
@@ -768,7 +777,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   See the [manifest contract](../../packages/app/README.md#app-vocabulary-and-shipped-views).
 - **Card presentation does not change the query boundary.** An ordinary grouped
   board over a server resource uses the same server groups, exact counts and
-  per-group record pages as the grouped list. Deriving its lanes from a flat
+  per-group record pages as the grouped list: the leaf `_groups` read carries each
+  group's first page (`<res>_group.rows(limit, order_by)`, sized by the declared
+  `leafPageSize`), and only later or resized pages are separate reads. Deriving its lanes from a flat
   record page hides groups that have no records on that page. The shared grouped
   surface owns discovery and paging; board components render its results.
   Explicit `laneSource` boards retain their relation-catalogue contract for empty
@@ -819,15 +830,17 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - State surfaces are shared fragments — never hand-roll an empty/loading/error
   block. The titled surfaces (`EmptyState`, `ErrorBanner`) take the one
   `{title, description, icon?, actions?}` vocabulary; the single-line ones keep
-  their own slot (`InlineEmpty` `label`, `LoadingPanel` `message`). For a
+  their own slot (`InlineEmpty` `label`, `LoadingPanel` `loadingLabel`). For a
   full-height empty panel pass `EmptyState fill` (it centers an intrinsic-size
   card) instead of wrapping it in a `grid place-content-center` div. Use the
   unboxed `LoadingPanel` only when the final geometry is unknowable; the router's
   code-split boundary knows only that a console page comes next and takes its
-  neutral `shape="page"`. A renderer that knows its final geometry owns a
-  shape-preserving skeleton built from `Skeleton` and one `SkeletonStatus`; retain
-  settled content during background refresh. The renderer owns loading/error so
-  callers describe only the happy path (cf. `preview/builtins.tsx` `FileText`).
+  neutral `shape="page"`. `LoadingPanel` renders a skeleton in every shape (its
+  `loadingLabel` is the accessible label, as on every loading owner); visible "Loading…" text is never a loading
+  state. A renderer that knows its final geometry owns a shape-preserving
+  skeleton built from `Skeleton` and one `SkeletonStatus`; retain settled content
+  during background refresh. The renderer owns loading/error so callers describe
+  only the happy path (cf. `preview/builtins.tsx` `FileText`). `RecordHeader` owns a record's pending and unavailable title (`loading`, `loadingLabel`, `unavailable`): a page passes its read's state, never a title skeleton or a failed-read title of its own, and a failed read ends the skeleton beside the page's error surface. A control owns its pending state: `Select loading` and `Combobox.Status loading` while options load, `Button loading` for a pending verb; never loading copy in a placeholder or a reason. A pane list's pending rows are `PaneRowsSkeleton`, never hand-drawn row blocks.
 - Forms are declarative even when they branch: a `<Field showWhen={(values) => …}>`
   predicate (mirroring `Action.visibleWhen`) drives a discriminated form — a `kind`
   select that swaps the body — and a hidden field is never submitted. Reach for a
@@ -1706,7 +1719,17 @@ with neither rows nor a verb is absent, not empty.
 Mount count hooks in independent keyed readers. Route and permission changes
 can change the eligible groups while the aside stays mounted; aggregating hooks
 in a loop changes their order. The [Related count owner](../../packages/ui/src/communication/RelatedPane.tsx)
-sums the results published by each group reader.
+sums the results once every eligible group has published a count. A group
+counts through `relatedCount`: its container id names the server group its addon
+declares beside the row read it counts (a [`RelatedCount`](../../src/angee/graphql/related_counts.py)
+appended to `ANGEE_GRAPHQL_RELATED_COUNTS`), and `models` are the models whose
+changes recount it.
+One `related_counts` read counts every eligible group in one statement, for the
+badge and the pane labels alike; no rows load for a count. A group without a
+related count, or one whose rows partition another group's, counts its rows
+with `usePaneCount` while the Links panel is mounted, and a badge beside such a
+group waits until then. A collapsed aside mounts no probes and no panels until
+first expanded, then retains visited panels.
 
 Each `related#groups` child (or `<model>#groups` for one model's pages) is one
 group of the framework's Links tab, declared by the addon that owns the edge.
@@ -1721,7 +1744,8 @@ interface RelatedGroupContent {
   when?: (context: ChatterViewContext) => boolean;
   edge?: { model: string };
   label: ReactNode;
-  useCount?: (context: ChatterViewContext) => number | undefined;
+  relatedCount?: { models: readonly string[] };
+  usePaneCount?: (context: ChatterViewContext) => number | undefined;
   useVerb?: (context: ChatterViewContext) => boolean;
   render: (context: ChatterViewContext, label: (action?: ReactNode) => ReactNode) => ReactNode;
 }

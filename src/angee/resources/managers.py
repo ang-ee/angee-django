@@ -14,7 +14,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, models, transaction
 from django_compose.components import installed_components
 from import_export.exceptions import ImportError as ResourceImportError
-from rebac import database_context, system_context
+from rebac import system_context
 
 from angee.base.fields.identity import SqidField
 from angee.base.fields.text import ModelLabelField
@@ -63,12 +63,6 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
                 row["source_addon"]: row["count"]
                 for row in self.values("source_addon").annotate(count=models.Count("id"))
             }
-
-    def ledger_page(self, *, limit: int) -> list[LedgerT]:
-        """Return up to ``limit`` ledger rows in the queryset's declared order."""
-
-        with system_context(reason="resources.ledger_page"):
-            return list(self.all()[:limit])
 
     def seeding(self, record: models.Model) -> Self:
         """Return the ledger rows whose target is ``record``, by its model label and public id."""
@@ -184,7 +178,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
 
         if instance.pk is None:
             raise ResourceLoadError("Installation identities require a saved target.")
-        with database_context(self.db), transaction.atomic(using=self.db):
+        with transaction.atomic(using=self.db):
             resource = build_resource(
                 type(instance), ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source),
                 ledger_model=self.model, addon_aliases=self._addon_aliases(apps.get_app_configs()), using=self.db,
@@ -289,7 +283,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                     group.dataset.subset(rows=[index]),
                     [group.source_rows[index]],
                 )
-                with database_context(self.db), transaction.atomic(using=self.db):
+                with transaction.atomic(using=self.db):
                     resource = build_resource(
                         model, group.entry, ledger_model=self.model, addon_aliases=aliases, using=self.db,
                     )
@@ -364,7 +358,6 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         try:
             reason = "resources.validate" if dry_run else "resources.load"
             with (
-                database_context(self.db),
                 system_context(reason=reason),
                 ExitStack() as contexts,
                 transaction.atomic(using=self.db),

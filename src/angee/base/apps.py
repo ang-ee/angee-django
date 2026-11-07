@@ -28,8 +28,15 @@ class BaseConfig(AppConfig):
     label = "base"
 
     def compose_provision(self, context: ProvisionContext) -> None:
-        """Synchronize the selected database after its native migrations complete."""
+        """Synchronize the selected database after its native migrations complete.
 
+        Every security-tagged system check (``angee.iam.E001`` among them) gates the
+        sync: a refused permission schema is never written. Django's ``check`` refuses
+        an unregistered tag, so a composition without one syncs directly.
+        """
+
+        if checks.tag_exists(checks.Tags.security):
+            context.call('check', tags=[checks.Tags.security])
         context.call('rebac', 'sync', database=context.database, prune_stale=True, yes=True,
                      force_overwrite=conf.settings.ANGEE_REBAC_FORCE_OVERWRITE, skip_checks=True)
 

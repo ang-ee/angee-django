@@ -29,18 +29,21 @@ class InboxRelatedTarget:
 
 @dataclass(frozen=True)
 class InboxConnection:
-    """One distinct use, participant, confirmed handle or readable relation endpoint pair."""
+    """One distinct use, participant, confirmed handle or readable relation endpoint pair.
+
+    Message endpoints are public IDs of messages the page carries.
+    """
 
     id: str
     label: str
     role: str = ""
     provenance: str = ""
     confidence: float | None = None
-    message: Any | None = None
+    message_id: str | None = None
     part: Any | None = None
     handle: Any | None = None
-    src: Any | None = None
-    dst: Any | None = None
+    src_id: str | None = None
+    dst_id: str | None = None
 
 
 class InboxRelated:
@@ -171,21 +174,19 @@ class InboxRelated:
                 by_message.setdefault(part.message_id, part)
             return InboxPage(
                 [
-                    InboxConnection(str(message.sqid), message.preview, message=message, part=by_message[message.pk])
+                    InboxConnection(
+                        str(message.sqid), message.preview, message_id=str(message.sqid), part=by_message[message.pk]
+                    )
                     for message in uses.rows
                 ],
                 uses.count,
                 uses.message_count,
+                self.inbox.page_messages([message.pk for message in uses.rows]),
             )
         if self.kind == "relations":
             relations = self.relations(text)
             selected = list(relations.order_by("_at" if oldest else "-_at", "_key")[window])
-            messages = {
-                message.pk: message
-                for message in self.inbox.messages.filter(
-                    pk__in=[pk for edge in selected for pk in (edge["_src"], edge["_dst"])]
-                )
-            }
+            message_model = self.inbox.messages.model
             return InboxPage(
                 [
                     InboxConnection(
@@ -195,13 +196,14 @@ class InboxRelated:
                         edge["_kind"],
                         provenance="Reply pointer" if edge["_kind"] == "reply" else "Produced message edge",
                         confidence=edge["_confidence"],
-                        src=messages[edge["_src"]],
-                        dst=messages[edge["_dst"]],
+                        src_id=message_model.public_id_from_pk(edge["_src"]),
+                        dst_id=message_model.public_id_from_pk(edge["_dst"]),
                     )
                     for edge in selected
                 ],
                 relations.count(),
                 self.relations().count(),
+                self.inbox.page_messages([pk for edge in selected for pk in (edge["_src"], edge["_dst"])]),
             )
         if self.kind == "handles":
             handles = self.handles()
@@ -214,6 +216,7 @@ class InboxRelated:
                 ],
                 handles.count(),
                 self.handles().count(),
+                self.inbox.messages.none(),
             )
         participants = self.participants()
         handles = self.inbox.handles
@@ -238,4 +241,5 @@ class InboxRelated:
             ],
             participants.count(),
             self.participants().count(),
+            self.inbox.messages.none(),
         )

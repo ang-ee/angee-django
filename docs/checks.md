@@ -89,7 +89,10 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
 knowledge, messaging, proposals, sequences, spaces, storage, the system
 queryset, work and task ordering locks, integrate streams and workflow
-integrate steps, and the composed
+integrate steps, the [grouped rows](../tests/test_group_rows.py) partitions, the
+messaging inbox's [explorer](../tests/test_inbox_explorer.py),
+[thread and message reads](../tests/test_messaging_inbox_read.py) and
+[part reads](../tests/test_inbox_part_reads.py), and the composed
 [intake access decision](../tests/test_intake_access_decision.py). It also runs
 [task ordering](../tests/test_task_rank_allocation.py),
 [record tasks](../tests/test_projects_record_tasks.py), and the
@@ -155,6 +158,28 @@ through their native app lifecycle. Decisions-only suites use
 test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
 
+### GraphQL Document Budgets
+
+[`angee.graphql.testing.documents`](../src/angee/graphql/testing/documents.py) executes
+one document as one actor, as served requests do, and records the SQL Django captured
+on every configured database. The same helpers run an addon schema in the bare source
+host under pytest and the composed console schema under Django's test runner:
+
+```python
+read = measure_graphql_document(schema, document, variables, actor=member)
+assert read.data["projects_aggregate"]["aggregate"]["count"] == 3
+read.assert_ceiling(statements=89, sql_kb=538)
+```
+
+A ceiling is the measured cost: statements exact, SQL text rounded up to the next KB
+of 1,024 bytes. A change that lowers a cost lowers its ceiling in the same change; a
+rise is a regression to fix, never a reason to raise the ceiling. Assert the rows a
+read returns beside its ceiling, so a read that loses rows cannot pass. The
+[console document ceilings](../tests/native_graphql_document_budgets.py) pin the
+console app's inbox, transcript, person, projects and current-user reads for a
+platform admin and a member, each after one warm execution, in the
+[composed query-budget host](../tests/test_composed_query_budgets.py) on SQLite.
+
 ### Owner Search
 
 Before adding a backend abstraction, search for the native owner first. Run the
@@ -200,10 +225,13 @@ git diff --check
 
 These tests exercise documentation links/commands, template input agreement,
 adapter parity, and mocked helper behavior without starting the application.
-`tests/test_owner_index.py` validates the owner index citations: every cited
-`path:line` in `.agents/skills/angee-design/references/owners.md` declares the
-named symbol, and every public class a foundation models or fields module
-declares, and every source distribution (including libraries), has a row.
+`tests/test_owner_index.py` validates the owner index citations: every
+`` `Symbol` path `` in `.agents/skills/angee-design/references/owners.md` names a
+file that declares the symbol, and every public class a foundation models or fields
+module declares, and every source distribution (including libraries), has a row. It
+also refuses any `path:line` or `path:line-line` in the skills, capability guides
+and their references, a guide line in shorthand (`guidelines:120`) and a line
+cited in prose (`line 120`); only `docs/` references keep a line.
 Disabling pytest-django, application configuration, and conftest intentionally
 isolates these tests; use normal pytest for application or template behavior.
 If template source changes too, run its contract tests and the Python suite above. A prose-only
@@ -243,6 +271,11 @@ Run only lifecycle steps needed for the change and within the user's authorized
 scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
+
+The optional Redis channel-layer cross-process test uses
+`ANGEE_TEST_CHANNEL_REDIS_URL` to select a disposable Redis database. It skips
+when the variable is unset or Redis is unreachable. Use a database separate
+from the running stack's channel layer and Celery broker.
 
 After a model change, run native compose and author
 required native history before provision. Compose emits GraphQL SDL through its

@@ -1,6 +1,6 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, useRouteHref,
+  AbsoluteTime, ErrorBanner, PaneRow, PaneRows, PaneRowsSkeleton, RecordReferenceRow, useRouteHref,
   type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
@@ -27,10 +27,7 @@ export const decisionConcernsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: enDecisionsMessages["related.concerns"]!,
-    useCount: (context) => {
-      const query = useDecisionRead(recordId(context));
-      return query.data ? query.data.decisions_by_pk?.records.filter((record) => record.record_model && record.record_id).length ?? 0 : undefined;
-    },
+    relatedCount: { models: DECISION_MODELS },
     render: (context, label) => <DecisionConcernsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -46,7 +43,7 @@ function DecisionConcernsGroup({ context, label }: { context: ChatterViewContext
     : []) ?? [];
   return <>{label()}<li>
     {query.error ? <ErrorBanner description={query.error.message} />
-      : !query.data ? <SkeletonStatus label={t("related.loading")} className="space-y-2 p-2"><Skeleton className="h-8" /></SkeletonStatus>
+      : !query.data ? <PaneRowsSkeleton loadingLabel={t("related.loading")} rowCount={1} />
         : <PaneRows>{records.map((record) => <li key={`${record.model}:${record.id}`}>
           <RecordReferenceRow model={record.model} id={record.id} references={records} icon="link" detail={record.label} />
         </li>)}</PaneRows>}
@@ -81,10 +78,7 @@ export const recordDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enDecisionsMessages["related.decisions"]!,
     when: concernsRecords,
-    useCount: (context) => {
-      const query = useRecordDecisions(context);
-      return query.data ? recordDecisions(query.data).length : undefined;
-    },
+    relatedCount: { models: DECISION_MODELS },
     render: (context, label) => <RecordDecisionsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -96,7 +90,7 @@ function RecordDecisionsGroup({ context, label }: { context: ChatterViewContext;
   const decisions = recordDecisions(query.data);
   return <>{label()}<li>
     {query.error ? <ErrorBanner description={query.error.message} />
-      : !query.data ? <SkeletonStatus label={t("related.loading")} className="space-y-2 p-2"><Skeleton className="h-8" /></SkeletonStatus>
+      : !query.data ? <PaneRowsSkeleton loadingLabel={t("related.loading")} rowCount={1} />
         : <PaneRows>{decisions.map((decision) => <li key={decision.id}>
           <PaneRow icon="check" tone={decision.is_open ? "warning" : "success"} needsMe={decision.is_open}
             title={decision.kind_label}

@@ -198,7 +198,7 @@ describe("MetricStrip", () => {
   });
 
   test("a loading strip renders skeleton tiles under one status", () => {
-    render(<MetricStrip loading loadingCount={3} loadingMessage="Loading metrics" />);
+    render(<MetricStrip loading loadingCount={3} loadingLabel="Loading metrics" />);
     expect(screen.getByRole("status")).toBeTruthy();
     expect(screen.getByText("Loading metrics")).toBeTruthy();
     expect(document.querySelectorAll("[data-slot='metric-skeleton']")).toHaveLength(3);

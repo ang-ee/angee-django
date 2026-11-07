@@ -10,6 +10,7 @@ from django.apps import apps
 from django.db import models
 from rebac import GenericTarget, generic_target, system_context
 
+from angee.base.pagination import clamp_page_size
 from angee.graphql.relations import with_record_reference_access
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
@@ -43,7 +44,7 @@ def run_records(run: Any) -> list[RecordIdentity]:
 
     if run.subject_content_type_id and run.subject_object_id:
         add(run.subject_content_type_id, run.subject_object_id)
-    evidence = run.records.all()
+    evidence = apps.get_model("workflows", "StepRecord").objects.filter(run_id=run.pk)
     for content_type_id, object_id in evidence.order_by().values_list("content_type_id", "object_id").distinct():
         add(content_type_id, object_id)
     if run.parent_step_id:
@@ -108,26 +109,31 @@ class RunKind(TimelineKind):
         return result
 
 
+RECORD_RUN_LIMIT = 20
+"""The newest runs a record's timeline lists, and so the most its Runs group counts."""
+
+
 class TimelineSelection:
     """Read and group a record selection's runs, open decisions and attention."""
 
-    def __init__(self, records: Sequence[models.Model], actor: Any, *, run_limit: int = 20) -> None:
+    def __init__(self, records: Sequence[models.Model], actor: Any, *, run_limit: int = RECORD_RUN_LIMIT) -> None:
         self.records = records
         self.actor = actor
-        self.run_limit = max(1, min(run_limit, 100))
+        self.run_limit = clamp_page_size(run_limit)
         self.targets = tuple(dict.fromkeys(generic_target(record) for record in records))
 
     @cached_property
     def runs(self) -> models.QuerySet:
-        """The shared run-owner selection, ready for a schema-specific optimizer."""
+        """The run-owner selection, read only for what :meth:`entries` groups by.
+
+        Ancestry groups by the parent run's id, so no parent step row is loaded; a
+        schema reads the grouped runs' own fields through its optimizer.
+        """
 
         runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(self.actor)
-        events = apps.get_model("workflows", "TriggerEvent").objects.with_actor(self.actor)
-        return runs.about(self.records, limit=self.run_limit).order_by("-created_at", "-pk").select_related(
-            "parent_step",
-        ).prefetch_related("records", models.Prefetch(
-            "trigger_event", queryset=with_record_reference_access(events),
-        ))
+        return runs.about(self.records, limit=self.run_limit).order_by("-created_at", "-pk").only(
+            "subject_content_type_id", "subject_object_id",
+        ).annotate(_parent_run_id=models.F("parent_step__run_id")).prefetch_related("records")
 
     @cached_property
     def open_decision_count(self) -> int:
@@ -153,8 +159,8 @@ class TimelineSelection:
                 or any((link.content_type_id, link.object_id) == identity for link in run.records.all()))}
             for run_id in tuple(selected):
                 run = by_run[run_id]
-                while run.parent_step_id and run.parent_step.run_id in by_run:
-                    run = by_run[run.parent_step.run_id]
+                while run._parent_run_id in by_run:
+                    run = by_run[run._parent_run_id]
                     if run.pk in selected:
                         break
                     selected.add(run.pk)

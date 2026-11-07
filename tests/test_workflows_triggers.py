@@ -20,6 +20,7 @@ from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge import schema as knowledge_schema
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
@@ -33,7 +34,7 @@ from angee.workflows.testing.models import (
     TriggerEvent,
     WorkflowRun,
 )
-from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
+from tests.conftest import Page, Vault, addon_schema, create_user, make_addon, vault_for
 from tests.mtidemo.models import MtiParent, TypedCaptureChild, UntypedCaptureParent
 from tests.test_workflows_watches import Watch, record_deliveries, start_watcher
 from tests.workflow_steps import Value, document

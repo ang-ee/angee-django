@@ -16,7 +16,6 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.signals import pre_delete
@@ -49,21 +48,13 @@ from angee.agents.testing.models import (
 from angee.base.exceptions import TransitionNotAllowed
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.integrate.credentials import CredentialKind
 from angee.jobs.locks import task_lock
 from angee.operator.daemon import OperatorDaemonConflict, OperatorDaemonNotFound, OperatorInstanceKind, WorkspaceStatus
-from tests.conftest import (
-    Credential,
-    ExternalAccount,
-    Integration,
-    OAuthClient,
-    SchemaAddon,
-    Vendor,
-    execute_schema,
-    make_integration,
-)
+from tests.conftest import Credential, ExternalAccount, Integration, OAuthClient, SchemaAddon, Vendor, make_integration
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 from tests.test_agents import _provider
 from tests.test_integrate_vcs import REPOS, Repository, Source, Template, _vcs_bridge
 
@@ -111,7 +102,7 @@ def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) ->
     console = _schema()
 
     created = _data(
-        _execute(
+        execute_schema(
             console,
             """
             mutation CreateAgent {
@@ -126,7 +117,7 @@ def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) ->
             }
             """,
             {},
-            user=admin,
+            user=admin
         )
     )["insert_agents_one"]
     assert created["runtime_class"] == "PYDANTIC"
@@ -180,7 +171,7 @@ def test_agent_hasura_reader_policy_reconciles_membership_with_the_write(compose
         }
     """
     for enabled in (False, True):
-        result = _data(_execute(console, query, {"id": str(agent.sqid), "enabled": enabled}, user=admin))
+        result = _data(execute_schema(console, query, {"id": str(agent.sqid), "enabled": enabled}, user=admin))
         assert result["update_agents_by_pk"]["resource_reader"] is enabled
         with system_context(reason="agent reader policy assertion"):
             agent.refresh_from_db()
@@ -189,7 +180,7 @@ def test_agent_hasura_reader_policy_reconciles_membership_with_the_write(compose
 
     with pytest.raises(RuntimeError, match="Roll back policy"):
         with transaction.atomic():
-            _data(_execute(console, query, {"id": str(agent.sqid), "enabled": False}, user=admin))
+            _data(execute_schema(console, query, {"id": str(agent.sqid), "enabled": False}, user=admin))
             with system_context(reason="reader policy transaction assertion"):
                 assert RESOURCE_READER_ROLE not in set(containers_of(agent.user))
             raise RuntimeError("Roll back policy")
@@ -237,14 +228,14 @@ def test_only_admin_can_change_resource_reader_policy(composed_tables: None, rel
     }"""
     console = _schema()
     for enabled in (True, False):
-        _data(_execute(console, query, {"id": str(agent.sqid), "enabled": not enabled}, user=admin))
-        result = _execute(console, query, {"id": str(agent.sqid), "enabled": enabled}, user=actor)
+        _data(execute_schema(console, query, {"id": str(agent.sqid), "enabled": not enabled}, user=admin))
+        result = execute_schema(console, query, {"id": str(agent.sqid), "enabled": enabled}, user=actor)
         assert result.errors
         with system_context(reason="refused reader policy"):
             agent.refresh_from_db()
             assert agent.resource_reader is not enabled
             assert (RESOURCE_READER_ROLE in set(containers_of(agent.user))) is not enabled
-    assert _data(_execute(console, query, {"id": str(agent.sqid), "enabled": True}, user=admin))[
+    assert _data(execute_schema(console, query, {"id": str(agent.sqid), "enabled": True}, user=admin))[
         "update_agents_by_pk"
     ]["resource_reader"] is True
 
@@ -273,7 +264,7 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
     console = _schema()
 
     created = _data(
-        _execute(
+        execute_schema(
             console,
             """
             mutation CreateAgent {
@@ -292,7 +283,7 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
             }
             """,
             {},
-            user=admin,
+            user=admin
         )
     )["insert_agents_one"]
     # The insert takes the acting user as owner; ownership changes only by transfer.
@@ -309,7 +300,7 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
         "owner": {"username": "agt-hasura-admin"},
     }
 
-    rejected_insert = _execute(
+    rejected_insert = execute_schema(
         console,
         """
         mutation SeedState {
@@ -317,12 +308,12 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
         }
         """,
         {},
-        user=admin,
+        user=admin
     )
     assert rejected_insert.errors
     assert "lifecycle" in rejected_insert.errors[0].message
 
-    rejected = _execute(
+    rejected = execute_schema(
         console,
         """
         mutation ResetState($id: String!) {
@@ -330,7 +321,7 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
         }
         """,
         {"id": created["id"]},
-        user=admin,
+        user=admin
     )
     assert rejected.errors
     assert "lifecycle" in rejected.errors[0].message
@@ -340,7 +331,7 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
         agent.mark_deprovisioned()
 
     updated = _data(
-        _execute(
+        execute_schema(
             console,
             """
             mutation Rename($id: String!) {
@@ -354,7 +345,7 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
             }
             """,
             {"id": created["id"]},
-            user=admin,
+            user=admin
         )
     )["update_agents_by_pk"]
     assert updated == {
@@ -366,7 +357,7 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
     }
 
     deleted = _data(
-        _execute(
+        execute_schema(
             console,
             """
             mutation Delete($id: String!) {
@@ -374,7 +365,7 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
             }
             """,
             {"id": created["id"]},
-            user=admin,
+            user=admin
         )
     )["delete_agents_by_pk"]
     assert deleted == {"id": created["id"], "name": "Renamed"}
@@ -414,7 +405,7 @@ def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(compose
             status="completed",
         )
     console = _schema()
-    preview = _data(_execute(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner))["delete_agent"]
+    preview = _data(execute_schema(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner))["delete_agent"]
     assert preview["has_blockers"] is False
     assert preview["blocked"] == []
     assert preview["refusals"] == []
@@ -439,11 +430,11 @@ def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(compose
         assert AgentSession.objects.filter(agent=agent).count() == 2
         assert AgentTurn.objects.filter(session__agent=agent).count() == 2
     confirmed = _data(
-        _execute(
+        execute_schema(
             console,
             _DELETE_AGENT_PREVIEW,
             {"id": str(agent.sqid), "confirm": True},
-            user=owner,
+            user=owner
         )
     )["delete_agent"]
     assert confirmed == preview
@@ -461,11 +452,11 @@ def test_agent_delete_preview_reports_provisioned_blocker(composed_tables: None,
     with system_context(reason="test.agents.provisioned_preview.seed"):
         agent = Agent.objects.create(name="Provisioned", owner=owner, lifecycle="ready", service="svc-agent")
     preview = _data(
-        _execute(
+        execute_schema(
             _schema(),
             _DELETE_AGENT_PREVIEW,
             {"id": str(agent.sqid), "confirm": confirm},
-            user=owner,
+            user=owner
         )
     )["delete_agent"]
     assert preview["has_blockers"] is True
@@ -491,11 +482,11 @@ def test_agent_delete_preview_reports_hidden_active_turn_blockers(
         session = AgentSession.objects.create(agent=agent, user=other, title="Secret conversation")
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Secret prompt", status=status)
     preview = _data(
-        _execute(
+        execute_schema(
             _schema(),
             _DELETE_AGENT_PREVIEW,
             {"id": str(agent.sqid), "confirm": confirm},
-            user=owner,
+            user=owner
         )
     )["delete_agent"]
     assert preview["has_blockers"] is True
@@ -528,11 +519,11 @@ def test_agent_delete_preview_has_constant_query_count_across_sessions(composed_
                 session = AgentSession.objects.create(agent=agent, user=other)
                 AgentTurn.objects.create(session=session, index=1, prompt="Private question", status="running")
     console = _schema()
-    _data(_execute(console, _DELETE_AGENT_PREVIEW, {"id": str(agents[0].sqid)}, user=owner))
+    _data(execute_schema(console, _DELETE_AGENT_PREVIEW, {"id": str(agents[0].sqid)}, user=owner))
     counts = []
     for agent in agents:
         with CaptureQueriesContext(connection) as captured:
-            result = _execute(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner)
+            result = execute_schema(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner)
             preview = _data(result)["delete_agent"]
         assert preview["blocked"] == []
         assert preview["refusals"] == [
@@ -569,10 +560,10 @@ def test_graphql_delete_receivers_refuse_after_preview_race(
         _DELETE_AGENT_PREVIEW if surface == "agent"
         else "mutation Delete($id: String!) { delete_users_by_pk(id: $id) { id } }"
     )
-    result = _execute(
+    result = execute_schema(
         _schema(), mutation,
         {"id": str(agent.sqid), "confirm": True} if surface == "agent" else {"id": str(owner.sqid)},
-        user=admin,
+        user=admin
     )
     message = "An agent turn is still running or awaiting approval; stop it first."
     if surface == "agent":
@@ -613,11 +604,11 @@ def test_agent_delete_capability_has_constant_query_count(composed_tables: None)
         }
     """
     console = _schema()
-    _data(_execute(console, query, {"limit": 1}, user=owner))
+    _data(execute_schema(console, query, {"limit": 1}, user=owner))
     counts = []
     for size in (1, 4):
         with CaptureQueriesContext(connection) as captured:
-            rows = _data(_execute(console, query, {"limit": size}, user=owner))["agents"]
+            rows = _data(execute_schema(console, query, {"limit": size}, user=owner))["agents"]
         assert [row["can_delete"] for row in rows] == [True, False, False, False][:size]
         counts.append(len(captured))
     assert counts[0] == counts[1], counts
@@ -633,7 +624,7 @@ def test_a_shared_agents_owner_shows_their_name_without_restricted_fields(compos
     write_relationships([RelationshipTuple(to_object_ref(agent), "reader", to_subject_ref(reader))])
 
     query = "{ agents { name owner { display_name username email is_active } } }"
-    rows = _data(_execute(_schema(), query, user=reader))
+    rows = _data(execute_schema(_schema(), query, user=reader))
 
     assert rows["agents"] == [{
         "name": "Shared agent",
@@ -655,7 +646,7 @@ def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> No
         )
     agent_id = _public_id(agent.sqid)
 
-    result = _execute(
+    result = execute_schema(
         _schema(),
         """
         mutation Delete($id: String!) {
@@ -663,7 +654,7 @@ def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> No
         }
         """,
         {"id": agent_id},
-        user=admin,
+        user=admin
     )
 
     assert result.errors is not None
@@ -697,21 +688,21 @@ def test_owner_deletes_agent_with_idle_sessions_from_several_users(composed_tabl
         assert not AgentTurn.objects.filter(session_id__in=[session.pk for session in sessions[1:]]).exists()
         assert AgentSession.objects.get(pk=sessions[0].pk).has_access("delete")
     console = _schema()
-    before = _data(_execute(
+    before = _data(execute_schema(
         console,
         "{ agents { can_delete } agent_sessions { id title } agent_turns { id prompt } }",
-        user=owner,
+        user=owner
     ))
     assert before["agents"] == [{"can_delete": True}]
     assert before["agent_sessions"] == [{"id": str(sessions[0].sqid), "title": f"Private {owner.username}"}]
     assert {row["id"] for row in before["agent_turns"]} == {
         str(turn.sqid) for turn in turns if turn.session_id == sessions[0].pk
     }
-    deleted = _data(_execute(
+    deleted = _data(execute_schema(
         console,
         "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id name } }",
         {"id": str(agent.sqid)},
-        user=owner,
+        user=owner
     ))["delete_agents_by_pk"]
     assert deleted == {"id": str(agent.sqid), "name": "Assistant"}
     with system_context(reason="test.agents.cascade.verify"):
@@ -774,8 +765,8 @@ def test_agent_owner_or_admin_deletes_a_session_directly(composed_tables: None, 
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Question", status="completed")
     console = _schema()
     delete_session = "mutation Delete($id: String!) { delete_agent_sessions_by_pk(id: $id) { id } }"
-    deleted = _data(_execute(
-        console, delete_session, {"id": str(session.sqid)}, user=owner if actor == "owner" else admin,
+    deleted = _data(execute_schema(
+        console, delete_session, {"id": str(session.sqid)}, user=owner if actor == "owner" else admin
     ))["delete_agent_sessions_by_pk"]
     assert deleted == {"id": str(session.sqid)}
     with system_context(reason="test.agents.direct_session_delete.verify"):
@@ -800,10 +791,10 @@ def test_session_user_without_agent_ownership_cannot_delete_transcripts(composed
             assert not target.has_access("delete")
             with pytest.raises(PermissionDenied):
                 target.delete()
-    refused = _execute(
+    refused = execute_schema(
         _schema(),
         "mutation Delete($id: String!) { delete_agent_sessions_by_pk(id: $id) { id } }",
-        {"id": str(session.sqid)}, user=other,
+        {"id": str(session.sqid)}, user=other
     )
     assert refused.errors is not None
     assert refused.errors[0].extensions == {"code": "PERMISSION_DENIED"}
@@ -833,11 +824,11 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
         assert not target.is_sudo()
     console = _schema()
     query = "{ agents { can_delete } agent_sessions { id title } agent_turns { id prompt } }"
-    assert _data(_execute(console, query, user=owner)) == {
+    assert _data(execute_schema(console, query, user=owner)) == {
         "agents": [{"can_delete": False}], "agent_sessions": [], "agent_turns": [],
     }
     mutation = "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }"
-    refused = _execute(console, mutation, {"id": str(agent.sqid)}, user=owner)
+    refused = execute_schema(console, mutation, {"id": str(agent.sqid)}, user=owner)
     assert refused.errors is not None
     assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
     assert "Stop all active turns before deleting this agent." in refused.errors[0].message
@@ -849,10 +840,10 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
         turn.mark_canceled()
     with actor_context(owner):
         assert Agent.objects.get(pk=agent.pk).can_delete
-    assert _data(_execute(console, query, user=owner)) == {
+    assert _data(execute_schema(console, query, user=owner)) == {
         "agents": [{"can_delete": True}], "agent_sessions": [], "agent_turns": [],
     }
-    assert _data(_execute(console, mutation, {"id": str(agent.sqid)}, user=owner))["delete_agents_by_pk"] == {
+    assert _data(execute_schema(console, mutation, {"id": str(agent.sqid)}, user=owner))["delete_agents_by_pk"] == {
         "id": str(agent.sqid),
     }
     with system_context(reason="test.agents.active_agent_delete.verify_deleted"):
@@ -910,11 +901,11 @@ def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
 
     monkeypatch.setattr(models.QuerySet, "select_for_update", record_lock)
     monkeypatch.setattr(DeletePreview, "from_instance", record_preview)
-    result = _execute(
+    result = execute_schema(
         _schema(),
         operation,
         {"id": str(agent.sqid)},
-        user=reader,
+        user=reader
     )
     assert result.errors is not None
     assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
@@ -933,11 +924,11 @@ def test_agent_session_delete_refuses_an_active_turn(composed_tables: None, stat
         agent = Agent.objects.create(name="Assistant", owner=owner)
         session = AgentSession.objects.create(agent=agent, user=owner, status=status)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Question", status=status)
-    result = _execute(
+    result = execute_schema(
         _schema(),
         "mutation Delete($id: String!) { delete_agent_sessions_by_pk(id: $id) { id } }",
         {"id": str(session.sqid)},
-        user=admin,
+        user=admin
     )
     assert result.errors is not None
     assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
@@ -1061,7 +1052,7 @@ def test_user_delete_refuses_active_turn_cascades(
         session = AgentSession.objects.create(agent=agent, user=other)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status=status)
         principal = agent.user
-    result = _execute(_schema(), mutation, {"id": str(other.sqid)}, user=admin)
+    result = execute_schema(_schema(), mutation, {"id": str(other.sqid)}, user=admin)
     turn_message = "An agent turn is still running or awaiting approval; stop it first."
     if is_preview:
         preview = _data(result)["delete_user"]
@@ -1230,9 +1221,9 @@ def test_user_delete_leaves_their_agents_ownerless_with_running_work(composed_ta
         session = AgentSession.objects.create(agent=agent, user=other)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status="running")
         principal = agent.user
-    result = _execute(
+    result = execute_schema(
         _schema(), "mutation Delete($id: String!) { delete_users_by_pk(id: $id) { id } }",
-        {"id": str(owner.sqid)}, user=admin,
+        {"id": str(owner.sqid)}, user=admin
     )
     assert result.errors is None
     with system_context(reason="test.agents.user_agent_owner.verify"):
@@ -1250,7 +1241,7 @@ def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> 
     console = _schema()
 
     result = _data(
-        _execute(
+        execute_schema(
             console,
             """
             mutation Attach($id: String!, $skills: [ID!]) {
@@ -1263,7 +1254,7 @@ def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> 
                 "id": _public_id(agent.sqid),
                 "skills": [_public_id(skill_a.sqid), _public_id(skill_b.sqid)],
             },
-            user=admin,
+            user=admin
         )
     )["update_agents_by_pk"]
     assert sorted(node["name"] for node in result["skills"]) == ["Alpha", "Beta"]
@@ -1272,7 +1263,7 @@ def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> 
         assert sorted(agent.skills.values_list("name", flat=True)) == ["Alpha", "Beta"]
 
     _data(
-        _execute(
+        execute_schema(
             console,
             """
             mutation Clear($id: String!) {
@@ -1282,7 +1273,7 @@ def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> 
             }
             """,
             {"id": _public_id(agent.sqid)},
-            user=admin,
+            user=admin
         )
     )
     with system_context(reason="test.agents.m2m.verify_cleared"):
@@ -1303,8 +1294,8 @@ def test_agent_update_is_platform_admin_gated(composed_tables: None) -> None:
     """
     agent_id = _public_id(agent.sqid)
 
-    assert _execute(console := _schema(), update, {"id": agent_id}, user=plain).errors is not None
-    renamed = _data(_execute(console, update, {"id": agent_id}, user=admin))["update_agents_by_pk"]
+    assert execute_schema(console := _schema(), update, {"id": agent_id}, user=plain).errors is not None
+    renamed = _data(execute_schema(console, update, {"id": agent_id}, user=admin))["update_agents_by_pk"]
     assert renamed == {"name": "Renamed"}
 
 
@@ -1317,8 +1308,8 @@ def test_refresh_provider_models_is_admin_gated(composed_tables: None) -> None:
     provider_id = _public_id(provider.sqid)
     query = "mutation($id: ID!){ refresh_provider_models(id: $id){ ok message } }"
 
-    assert _execute(console := _schema(), query, {"id": provider_id}, user=plain).errors is not None
-    result = _data(_execute(console, query, {"id": provider_id}, user=admin))["refresh_provider_models"]
+    assert execute_schema(console := _schema(), query, {"id": provider_id}, user=plain).errors is not None
+    result = _data(execute_schema(console, query, {"id": provider_id}, user=admin))["refresh_provider_models"]
     assert result["ok"] is True
 
 
@@ -1334,7 +1325,7 @@ def test_inference_models_query_accepts_provider_sqid_filter(composed_tables: No
         InferenceModel.objects.create(provider=provider_b, name="manual-model")
 
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             """
             query ModelsForProvider($provider: String!) {
@@ -1345,7 +1336,7 @@ def test_inference_models_query_accepts_provider_sqid_filter(composed_tables: No
             }
             """,
             {"provider": _public_id(provider_a.sqid)},
-            user=admin,
+            user=admin
         )
     )["rows"]
 
@@ -1371,7 +1362,7 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
     group_by_type = resources["agents.InferenceModel"].type_names.group_by_spec
     assert group_by_type is not None
     grouped = _data(
-        _execute(
+        execute_schema(
             schema,
             """
             query InferenceModelGroups(
@@ -1392,7 +1383,7 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
                 "byUse": [{"field": "MODEL_USE"}],
                 "byProvider": [{"field": "PROVIDER"}, {"field": "PROVIDER__NAME"}],
             },
-            user=admin,
+            user=admin
         )
     )
 
@@ -1445,14 +1436,14 @@ def test_create_inference_provider_creates_child_row(composed_tables: None) -> N
     """
 
     created = _data(
-        _execute(
+        execute_schema(
             console,
             mutation,
             {
                 "vendor": _public_id(seed.vendor.sqid),
                 "owner": str(seed.owner.sqid),
             },
-            user=admin,
+            user=admin
         )
     )["insert_inference_providers_one"]
     assert created == {
@@ -1484,13 +1475,13 @@ def test_native_provider_create_applies_defaults_before_validation(composed_tabl
     admin = _platform_admin("agt-provider-native-default-admin")
     seed = make_integration("agt-provider-native-default")
     created = _data(
-        _execute(
+        execute_schema(
             _schema(),
             """mutation($vendor: ID!) {
           insert_inference_providers_one(object: {vendor: $vendor}) { id name backend_class owner { id } }
         }""",
             {"vendor": str(seed.vendor.sqid)},
-            user=admin,
+            user=admin
         )
     )["insert_inference_providers_one"]
     assert created["name"] == "Manual"
@@ -1506,7 +1497,7 @@ def test_native_provider_mutation_results_prepare_selected_annotations(composed_
     console = _schema()
 
     def execute(query: str, variables: dict[str, Any]) -> Any:
-        return _execute(console, query, variables, user=admin)
+        return execute_schema(console, query, variables, user=admin)
 
     create = """mutation($vendor: ID!) {
       insert_inference_providers_one(
@@ -1543,24 +1534,24 @@ def test_native_provider_writes_remain_admin_only_for_owner(composed_tables: Non
     with system_context(reason="test.agents.provider.owner"):
         owner = provider.owner
     assert (
-        _execute(
+        execute_schema(
             console,
             """mutation($id: String!) {
           update_inference_providers_by_pk(pk_columns: {id: $id}, _set: {name: "Denied"}) { name }
         }""",
             {"id": str(provider.sqid)},
-            user=owner,
+            user=owner
         ).errors
         is not None
     )
     assert (
-        _execute(
+        execute_schema(
             console,
             """mutation($vendor: ID!) {
           insert_inference_providers_one(object: {vendor: $vendor}) { id }
         }""",
             {"vendor": str(provider.vendor.sqid)},
-            user=owner,
+            user=owner
         ).errors
         is not None
     )
@@ -1578,7 +1569,7 @@ def test_update_inference_provider_merges_config_and_removes_null_keys(composed_
         config={"endpoint": "https://example.test", "retries": 1, "obsolete": True},
     )
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             """
             mutation UpdateConfig($id: String!) {
@@ -1588,7 +1579,7 @@ def test_update_inference_provider_merges_config_and_removes_null_keys(composed_
             }
             """,
             {"id": _public_id(provider.sqid)},
-            user=_platform_admin("agt-provider-config-patch-admin"),
+            user=_platform_admin("agt-provider-config-patch-admin")
         )
     )["update_inference_providers_by_pk"]
 
@@ -1636,11 +1627,11 @@ def test_update_inference_provider_backend_is_create_only(composed_tables: None)
         }
     """
 
-    result = _execute(
+    result = execute_schema(
         _schema(),
         mutation,
         {"id": _public_id(provider.sqid), "account": _public_id(account.sqid)},
-        user=admin,
+        user=admin
     )
     assert result.errors is not None
     assert result.errors[0].extensions == {
@@ -1688,7 +1679,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
         }
     """
 
-    result = _data(_execute(_schema(), mutation, {"id": provider_id}, user=provider.owner))[
+    result = _data(execute_schema(_schema(), mutation, {"id": provider_id}, user=provider.owner))[
         "connect_inference_provider"
     ]
 
@@ -1711,7 +1702,7 @@ def test_inference_provider_projects_shared_connection_readiness(composed_tables
             slug="anthropic-personal", display_name="Personal", client_id="application",
             authorize_endpoint="https://provider.example/auth", token_endpoint="https://provider.example/token",
         )
-    row = _data(_execute(_schema(), """
+    row = _data(execute_schema(_schema(), """
         query($id: String!) {
           inference_providers_by_pk(id: $id) {
             credential_status is_reconnect_required is_oauth_connectable
@@ -1738,7 +1729,7 @@ def test_connect_inference_provider_uses_shared_oauth_client_error_code(
         }
     """
 
-    result = _data(_execute(_schema(), mutation, {"id": _public_id(provider.sqid)}, user=provider.owner))[
+    result = _data(execute_schema(_schema(), mutation, {"id": _public_id(provider.sqid)}, user=provider.owner))[
         "connect_inference_provider"
     ]
 
@@ -1759,10 +1750,10 @@ def test_create_mcp_server_keeps_defaults_for_omitted_optionals(composed_tables:
 
     admin = _platform_admin("agt-mcp-create-admin")
     created = _data(
-        _execute(
+        execute_schema(
             _schema(),
             'mutation { insert_mcp_servers_one(object: {name: "Local MCP"}) { name placement config } }',
-            user=admin,
+            user=admin
         )
     )["insert_mcp_servers_one"]
     assert created == {"name": "Local MCP", "placement": "EXTERNAL", "config": {}}
@@ -1849,8 +1840,8 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(composed_tables: 
     monkeypatch.setattr(Agent, "mark_provisioned", mark_provisioned_with_recorded_service)
 
     provision = "mutation($id: ID!){ provision_agent(id: $id){ ok message } }"
-    assert _execute(console := _schema(), provision, {"id": agent_id}, user=plain).errors is not None
-    result = _data(_execute(console, provision, {"id": agent_id}, user=admin))["provision_agent"]
+    assert execute_schema(console := _schema(), provision, {"id": agent_id}, user=plain).errors is not None
+    result = _data(execute_schema(console, provision, {"id": agent_id}, user=admin))["provision_agent"]
     assert result == {"ok": True, "message": "Provisioned “svc-bot”."}
     with system_context(reason="test.agents.render.verify_rendered"):
         agent.refresh_from_db()
@@ -1880,8 +1871,8 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(composed_tables: 
 
     # Deprovision tears down the workspace via the daemon and clears the record.
     deprovision = "mutation($id: ID!){ deprovision_agent(id: $id){ ok message } }"
-    assert _execute(console, deprovision, {"id": agent_id}, user=plain).errors is not None
-    result = _data(_execute(console, deprovision, {"id": agent_id}, user=admin))["deprovision_agent"]
+    assert execute_schema(console, deprovision, {"id": agent_id}, user=plain).errors is not None
+    result = _data(execute_schema(console, deprovision, {"id": agent_id}, user=admin))["deprovision_agent"]
     assert result == {"ok": True, "message": "Deprovisioned."}
     with system_context(reason="test.agents.render.verify_deprovisioned"):
         agent.refresh_from_db()
@@ -1967,11 +1958,11 @@ def test_provision_agent_reports_racing_deprovision_without_clobbering_state(
     monkeypatch.setattr(agents_provisioning, "_render_agent", render_after_racing_deprovision)
 
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
             {"id": agent_id},
-            user=admin,
+            user=admin
         )
     )["provision_agent"]
 
@@ -2041,11 +2032,11 @@ def test_provision_agent_failure_tears_down_service_then_workspace_and_records_e
     monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FailingDaemon)
 
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
             {"id": agent_id},
-            user=admin,
+            user=admin
         )
     )["provision_agent"]
     assert result["ok"] is False and "image build failed" in result["message"]
@@ -2122,11 +2113,11 @@ def test_provision_agent_records_error_when_plan_resolution_fails(composed_table
     monkeypatch.setattr(agents_provisioning, "_render_plan", _boom)
 
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
             {"id": agent_id},
-            user=admin,
+            user=admin
         )
     )["provision_agent"]
 
@@ -2185,8 +2176,8 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(composed_ta
     monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
 
     reprovision = "mutation($id: ID!){ reprovision_agent(id: $id){ ok message } }"
-    assert _execute(console := _schema(), reprovision, {"id": agent_id}, user=plain).errors is not None
-    result = _data(_execute(console, reprovision, {"id": agent_id}, user=admin))["reprovision_agent"]
+    assert execute_schema(console := _schema(), reprovision, {"id": agent_id}, user=plain).errors is not None
+    result = _data(execute_schema(console, reprovision, {"id": agent_id}, user=admin))["reprovision_agent"]
 
     assert result == {"ok": True, "message": "Recreated service “svc-new”."}
     # The old service is torn down before the recreate over the preserved workspace.
@@ -2247,11 +2238,11 @@ def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
     monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FailingDaemon)
 
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             "mutation($id: ID!){ reprovision_agent(id: $id){ ok message } }",
             {"id": agent_id},
-            user=admin,
+            user=admin
         )
     )["reprovision_agent"]
 
@@ -2367,17 +2358,17 @@ query($id: String!) {
 def _agent_state(agent: Any, admin: Any) -> dict[str, Any]:
     """Read an agent's lifecycle facts and verb eligibility through the console schema."""
 
-    return dict(_data(_execute(_schema(), _AGENT_STATE_QUERY, {"id": agent.sqid}, user=admin))["agents_by_pk"])
+    return dict(_data(execute_schema(_schema(), _AGENT_STATE_QUERY, {"id": agent.sqid}, user=admin))["agents_by_pk"])
 
 
 def _run_action(field_name: str, agent: Any, user: Any) -> Any:
     """Run one agent action mutation and return its execution result."""
 
-    return _execute(
+    return execute_schema(
         _schema(),
         f"mutation($id: ID!){{ {field_name}(id: $id){{ ok message code }} }}",
         {"id": _public_id(agent.sqid)},
-        user=user,
+        user=user
     )
 
 
@@ -2490,7 +2481,7 @@ def test_renaming_an_agent_clears_its_conflicting_workspace(composed_tables: Non
     agent, _ = _conflicted_agent(admin, monkeypatch, slug="agt-rename-tpl")
 
     renamed = _data(
-        _execute(
+        execute_schema(
             _schema(),
             """
             mutation($id: String!) {
@@ -2500,7 +2491,7 @@ def test_renaming_an_agent_clears_its_conflicting_workspace(composed_tables: Non
             }
             """,
             {"id": agent.sqid},
-            user=admin,
+            user=admin
         )
     )["update_agents_by_pk"]
 
@@ -3136,7 +3127,7 @@ def test_agent_verb_eligibility_selects_without_per_row_queries(composed_tables:
                 if index % 3 == 0:
                     AgentSession.objects.create(agent=agent, user=admin)
         with CaptureQueriesContext(connection) as captured:
-            rows = _data(_execute(_schema(), query, user=admin))["agents"]
+            rows = _data(execute_schema(_schema(), query, user=admin))["agents"]
         assert len(rows) == count
         return len(captured.captured_queries)
 
@@ -3266,8 +3257,8 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(composed_table
           agent_chat_endpoint(id: $id) { url token expires_at mcp_servers model_handle protocol_version }
         }
     """
-    assert _execute(console := _schema(), query, {"id": agent_id}, user=plain).errors is not None
-    endpoint = _data(_execute(console, query, {"id": agent_id}, user=admin))["agent_chat_endpoint"]
+    assert execute_schema(console := _schema(), query, {"id": agent_id}, user=plain).errors is not None
+    endpoint = _data(execute_schema(console, query, {"id": agent_id}, user=admin))["agent_chat_endpoint"]
 
     assert endpoint["url"] == "wss://svc-chat.example.test/"
     assert endpoint["token"] == "jwt-route"
@@ -3312,21 +3303,21 @@ def test_in_process_chat_endpoint_uses_cookie_origin_and_call_permission(
         "mcp_servers": {},
         "model_handle": "",
     }
-    assert _execute(console, query, {"id": str(agent.sqid)}, user=stranger).errors
+    assert execute_schema(console, query, {"id": str(agent.sqid)}, user=stranger).errors
     with system_context(reason="test.agents.unavailable_endpoint"):
         Agent.objects.filter(pk=agent.pk).update(runtime_status="stopped")
-    assert _execute(console, query, {"id": str(agent.sqid)}, user=owner).errors
+    assert execute_schema(console, query, {"id": str(agent.sqid)}, user=owner).errors
 
 
 def test_container_chat_endpoint_still_requires_platform_admin_for_its_owner(composed_tables: None) -> None:
     owner = User.objects.create_user(username="agt-container-owner")
     with system_context(reason="test.agents.container_endpoint"):
         agent = Agent.objects.create(name="Container", owner=owner, runtime_class="claude_code", service="svc")
-    result = _execute(
+    result = execute_schema(
         _schema(),
         "mutation($id: ID!) { agent_chat_endpoint(id: $id) { url } }",
         {"id": str(agent.sqid)},
-        user=owner,
+        user=owner
     )
     assert result.errors
     assert "Platform admin" in result.errors[0].message
@@ -3338,11 +3329,11 @@ def test_agent_chat_endpoint_errors_when_agent_not_running(composed_tables: None
     admin = _platform_admin("agt-chat-stopped-admin")
     with system_context(reason="test.agents.chat.stopped.seed"):
         agent = Agent.objects.create(name="Idle", owner=admin)
-    result = _execute(
+    result = execute_schema(
         _schema(),
         "mutation($id: ID!){ agent_chat_endpoint(id: $id){ url } }",
         {"id": _public_id(agent.sqid)},
-        user=admin,
+        user=admin
     )
     assert result.errors is not None
     assert "not running" in str(result.errors[0])
@@ -3386,7 +3377,7 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
         }
     """
     view = {"kind": "record", "type": "notes/note", "sqid": "nte_x"}
-    session = _data(_execute(console := _schema(), query, {"view": view}, user=admin))["resolve_session_for_view"]
+    session = _data(execute_schema(console := _schema(), query, {"view": view}, user=admin))["resolve_session_for_view"]
 
     assert session["agent_name"] == "Sidekick"
     assert session["status"] == "running"
@@ -3395,14 +3386,44 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
 
     # A platform admin with no running agent gets null, not an error.
     other = _platform_admin("agt-session-none")
-    none_session = _data(_execute(console, query, {"view": view}, user=other))["resolve_session_for_view"]
+    none_session = _data(execute_schema(console, query, {"view": view}, user=other))["resolve_session_for_view"]
     assert none_session is None
 
     # The side chatter is actor-scoped, not admin-scoped: a normal user with no
     # running agent also gets null instead of a permission error.
     viewer = User.objects.create_user(username="agt-session-viewer", email="viewer@example.com")
-    viewer_session = _data(_execute(console, query, {"view": view}, user=viewer))["resolve_session_for_view"]
+    viewer_session = _data(execute_schema(console, query, {"view": view}, user=viewer))["resolve_session_for_view"]
     assert viewer_session is None
+
+
+def test_chat_surfaces_hide_a_model_handle_the_actor_cannot_read(composed_tables: None, settings: Any) -> None:
+    """Agent ownership selects chat; the model's own read decides whether its handle is shown."""
+
+    settings.ALLOWED_HOSTS = ["localhost"]
+    owner = User.objects.create_user(username="agt-private-model-owner")
+    provider = _provider("agt-private-model-provider")
+    with system_context(reason="test.agents.private_model.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="private-runtime-model")
+        agent = Agent.objects.create(
+            name="Private model", owner=owner, model=model, runtime_class="pydantic", runtime_status="running",
+        )
+    assert Agent.objects.with_actor(owner).filter(pk=agent.pk).exists()
+    assert not InferenceModel.objects.with_actor(owner).filter(pk=model.pk).exists()
+
+    console = _schema()
+    selected = _data(execute_schema(
+        console, "{ resolve_session_for_view(view: {}) { agent_id model_handle } }", user=owner,
+    ))
+    assert selected["resolve_session_for_view"] == {"agent_id": str(agent.sqid), "model_handle": ""}
+    request = RequestFactory().post("/graphql/console/", HTTP_HOST="localhost:5173")
+    request.user = owner
+    endpoint = _data(execute_schema(
+        console, "mutation($id: ID!) { agent_chat_endpoint(id: $id) { model_handle } }",
+        {"id": str(agent.sqid)}, request=request,
+    ))["agent_chat_endpoint"]
+    assert endpoint == {"model_handle": ""}
+    assert agent.readable_model_handle(owner) == ""
+    assert agent.readable_model_handle(_platform_admin("agt-private-model-admin")) == "private-runtime-model"
 
 
 def test_chat_selection_breaks_timestamp_ties_and_keeps_actor_sessions(composed_tables: None) -> None:
@@ -3429,10 +3450,10 @@ def test_chat_selection_breaks_timestamp_ties_and_keeps_actor_sessions(composed_
         AgentSession.objects.filter(pk__in=[older.pk, current.pk, closed.pk, foreign.pk]).update(
             updated_at=older.updated_at,
         )
-    result = _data(_execute(
+    result = _data(execute_schema(
         _schema(),
         "{ resolve_session_for_view(view: {}) { agent_id session_id } }",
-        user=owner,
+        user=owner
     ))["resolve_session_for_view"]
     assert result == {"agent_id": str(selected.sqid), "session_id": str(current.sqid)}
     assert Agent.objects.chat_for_actor() is None
@@ -3457,10 +3478,10 @@ def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_
         turn = session.post("Private question", context={"kind": "record"})
     console = _schema()
     target = _data(
-        _execute(
+        execute_schema(
             console,
             "{ resolve_session_for_view(view: {}) { runs_in_process session_id } }",
-            user=owner,
+            user=owner
         )
     )["resolve_session_for_view"]
     assert target == {"runs_in_process": True, "session_id": str(session.sqid)}
@@ -3471,15 +3492,15 @@ def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_
           agent_turns_by_pk(id: $id) { id prompt context }
         }
     """
-    mine = _data(_execute(console, query, {"id": str(turn.sqid)}, user=owner))
+    mine = _data(execute_schema(console, query, {"id": str(turn.sqid)}, user=owner))
     assert mine == {
         "agent_sessions": [{"id": str(session.sqid), "context": {"kind": "list"}, "agent": {"permissions": ["call"]}}],
         "agent_turns": [{"id": str(turn.sqid), "prompt": "Private question", "context": {"kind": "record"}}],
         "agent_turns_by_pk": {"id": str(turn.sqid), "prompt": "Private question", "context": {"kind": "record"}},
     }
-    hidden = _data(_execute(console, query, {"id": str(turn.sqid)}, user=reader))
+    hidden = _data(execute_schema(console, query, {"id": str(turn.sqid)}, user=reader))
     assert hidden == {"agent_sessions": [], "agent_turns": [], "agent_turns_by_pk": None}
-    mutation_fields = _data(_execute(console, "{ __schema { mutationType { fields { name } } } }", user=owner))
+    mutation_fields = _data(execute_schema(console, "{ __schema { mutationType { fields { name } } } }", user=owner))
     assert not any("agent_turns" in field["name"] for field in mutation_fields["__schema"]["mutationType"]["fields"])
 
 
@@ -3499,11 +3520,11 @@ def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None
             session = AgentSession.objects.create(agent=agent, user=admin, status=status)
             AgentTurn.objects.create(session=session, index=1, prompt="Message", status=status)
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             "mutation Deprovision($id: ID!) { deprovision_agent(id: $id) { ok message } }",
             {"id": str(agent.sqid)},
-            user=admin,
+            user=admin
         )
     )["deprovision_agent"]
     assert result == {"ok": True, "message": "Deprovisioned."}
@@ -3550,8 +3571,9 @@ def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
     """
     view = {"kind": "record", "type": "agents/mcp_server", "sqid": str(server.sqid)}
 
-    assert _execute(console := _schema(), mutation, {"id": agent_id, "view": view}, user=plain).errors is not None
-    rendered = _data(_execute(console, mutation, {"id": agent_id, "view": view}, user=admin))["render_agent_prompt"]
+    assert execute_schema(console := _schema(), mutation, {"id": agent_id, "view": view}, user=plain).errors is not None
+    variables = {"id": agent_id, "view": view}
+    rendered = _data(execute_schema(console, mutation, variables, user=admin))["render_agent_prompt"]
 
     assert rendered.startswith("<system_context>") and rendered.endswith("</system_context>")
     assert "record of agents/mcp_server" in rendered
@@ -3559,7 +3581,7 @@ def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
     assert "MCP tool" in rendered
 
     # An empty envelope adds nothing.
-    empty = _data(_execute(console, mutation, {"id": agent_id, "view": {}}, user=admin))["render_agent_prompt"]
+    empty = _data(execute_schema(console, mutation, {"id": agent_id, "view": {}}, user=admin))["render_agent_prompt"]
     assert empty == ""
 
 
@@ -3914,20 +3936,6 @@ def _schema() -> Any:
         for module in (iam_schema, integrate_schema, agents_schema)
     ]
     return GraphQLSchemas(addons).build("console")
-
-
-def _execute(schema: Any, query: str, variables: dict[str, Any] | None = None, *, user: Any | None = None) -> Any:
-    """Execute one GraphQL operation against the merged console schema."""
-
-    return execute_schema(schema, query, variables, request=_request(user or AnonymousUser()))
-
-
-def _request(user: Any) -> Any:
-    """Return a console-shaped POST request bound to ``user``."""
-
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user
-    return request
 
 
 def _public_id(sqid: str) -> str:

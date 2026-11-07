@@ -29,14 +29,8 @@ from rebac import (
 from rebac.backends.local import mark_relationships_changed
 from rebac.models import active_relationship_model
 
-from tests.conftest import (
-    Page,
-    addon_schema,
-    create_platform_admin,
-    execute_schema,
-    result_data,
-    vault_for,
-)
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import Page, addon_schema, create_platform_admin, vault_for
 from tests.test_iam_account_actions import _manager
 from tests.test_iam_graphql import _schema
 from tests.test_messaging import ThreadedTicket

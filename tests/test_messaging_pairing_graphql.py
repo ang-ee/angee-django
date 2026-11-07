@@ -9,18 +9,18 @@ from django.contrib.auth import get_user_model
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.integrate import live as live_module
 from angee.integrate import tasks as tasks_module
 from angee.integrate.constants import RUN_SESSION_TASK
 from angee.integrate.live import session_store_path
 from angee.integrate.models import IntegrationRuntimeStatus
-from tests.conftest import SchemaAddon, execute_schema, make_integration
-from tests.conftest import result_data as _data
+from tests.conftest import SchemaAddon, make_integration
 from tests.pairing_backend import FakePairingBackend
 from tests.test_messaging_graphql import (
     Channel,
     _platform_admin,
-    _request,
     iam_schema,
     integrate_schema,
     messaging_schema,
@@ -75,7 +75,7 @@ def test_channel_pairing_projects_neutral_identity(pairing_graphql: list[dict[st
             _schema(),
             _PAIRING_QUERY,
             {"id": channel.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["channel_pairing"]
 
@@ -111,7 +111,7 @@ def test_channel_pairing_bounds_arbitrary_backend_value_error(
         _schema(),
         _PAIRING_QUERY,
         {"id": channel.sqid},
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors is not None
@@ -237,7 +237,7 @@ def test_reset_channel_pairing_refuses_without_a_cross_process_lock(
         _schema(),
         _RESET_MUTATION,
         {"id": channel.sqid},
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors is not None
@@ -397,7 +397,7 @@ def test_submit_channel_password_refuses_channel_without_credential(
         _schema(),
         _SUBMIT_PASSWORD_MUTATION,
         {"id": channel.sqid, "password": "must-not-escape"},
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors is not None
@@ -475,7 +475,7 @@ def test_skip_channel_password_marks_only_an_optional_armed_round(
         _schema(),
         _SKIP_PASSWORD_MUTATION,
         {"id": required.sqid},
-        request=_request(admin),
+        user=admin,
     )
     assert result.errors is not None
     assert result.errors[0].message == "This channel password cannot be skipped."
@@ -495,7 +495,7 @@ def test_submit_channel_password_refuses_an_unarmed_channel(
         _schema(),
         _SUBMIT_PASSWORD_MUTATION,
         {"id": channel.sqid, "password": password},
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors is not None
@@ -534,7 +534,7 @@ def test_pairing_verbs_reject_poll_only_channels(pairing_graphql: list[dict[str,
                 "id": channel.sqid,
                 **({"password": "not-stored"} if operation == _SUBMIT_PASSWORD_MUTATION else {}),
             },
-            request=_request(admin),
+            user=admin,
         )
         assert result.errors
         assert "live channel" in str(result.errors[0])
@@ -588,7 +588,7 @@ def test_pairing_verbs_deny_non_admin_before_elevated_lookup(
             "id": channel.sqid,
             **({"password": "not-stored"} if operation_name == "submit_channel_password" else {}),
         },
-        request=_request(reader),
+        user=reader,
     )
 
     assert result.errors is not None
@@ -635,7 +635,7 @@ def _schema() -> Any:
 def _execute(admin: Any, operation: str, variables: dict[str, Any]) -> dict[str, Any]:
     """Execute one pairing operation and return its successful payload."""
 
-    return _data(execute_schema(_schema(), operation, variables, request=_request(admin)))
+    return _data(execute_schema(_schema(), operation, variables, user=admin))
 
 
 def _live_channel(slug: str, *, display_name: str = "") -> Any:

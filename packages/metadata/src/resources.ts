@@ -1,7 +1,6 @@
 import type {
   AngeeSchemaMetadata,
   DataResourceMetadata,
-  SchemaFieldMetadata,
 } from "./artifact";
 import type { ResourceProps } from "@refinedev/core";
 import type { ReactNode } from "react";
@@ -34,13 +33,6 @@ export interface RefineResourceMetadata {
   status?: string;
   tone?: string;
   badge?: number;
-}
-
-export function refineResourcesFromSchemaMetadata(
-  metadata: SchemaFieldMetadata,
-  options: RefineResourceOptions = {},
-): readonly AngeeRefineResource[] {
-  return refineResourcesFromDataResources(metadata.resources, options);
 }
 
 export function refineResourcesFromAngeeSchemaMetadata(

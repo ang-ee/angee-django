@@ -103,6 +103,43 @@ describe("ChatterProvider", () => {
     }));
     expect(expand).toHaveBeenCalledOnce();
   });
+
+  test("keeps the local collapsed default until a controller is ready", () => {
+    let bridge: ReturnType<typeof useChatter> | null = null;
+    function State() {
+      return <span data-testid="collapsed">{useChatter().collapsed ? "collapsed" : "open"}</span>;
+    }
+    render(<ChatterProvider defaultCollapsed>
+      <CaptureBridge onRender={(value) => { bridge = value; }} />
+      <State />
+    </ChatterProvider>);
+    act(() => bridge!.registerSecondaryController({
+      collapsed: false, ready: false, collapse: vi.fn(), expand: vi.fn(), toggle: vi.fn(),
+    }));
+    expect(screen.getByTestId("collapsed").textContent).toBe("collapsed");
+    act(() => bridge!.registerSecondaryController({
+      collapsed: true, ready: true, collapse: vi.fn(), expand: vi.fn(), toggle: vi.fn(),
+    }));
+    expect(screen.getByTestId("collapsed").textContent).toBe("collapsed");
+  });
+
+  test("a restored collapsed pane stays collapsed when its provider remounts", () => {
+    const expand = vi.fn();
+    function RestoredPane() {
+      const { collapsed, registerSecondaryController } = useChatter();
+      useEffect(() => {
+        registerSecondaryController({ collapsed: true, ready: true, collapse: vi.fn(), expand, toggle: vi.fn() });
+        return () => registerSecondaryController(null);
+      }, [registerSecondaryController]);
+      return <span data-testid="restored">{collapsed ? "collapsed" : "open"}</span>;
+    }
+    const first = render(<ChatterProvider defaultCollapsed><RestoredPane /></ChatterProvider>);
+    expect(screen.getByTestId("restored").textContent).toBe("collapsed");
+    first.unmount();
+    render(<ChatterProvider defaultCollapsed><RestoredPane /></ChatterProvider>);
+    expect(screen.getByTestId("restored").textContent).toBe("collapsed");
+    expect(expand).not.toHaveBeenCalled();
+  });
 });
 
 function Publisher({

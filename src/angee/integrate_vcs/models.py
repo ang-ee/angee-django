@@ -21,7 +21,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
-from angee.integrate_vcs.backend import Checkout, VCSBackend, source_path, tree_entries
+from angee.integrate_vcs.backend import Checkout, VCSBackend
 from angee.integrate_vcs.templates import parse_template_meta
 
 
@@ -348,14 +348,6 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
             repository, ref=self.ref or repository.default_branch, checkout=checkout,
         ) as source:
             yield source
-
-    def marker_paths(self, root: Path, *, marker: str) -> tuple[Path, ...]:
-        """Return deterministic marker paths within this materialized source subtree."""
-
-        return tuple(
-            source_path(root, entry.path) for entry in tree_entries(root, path=self.path, recursive=True)
-            if entry.type == "blob" and entry.name == marker
-        )
 
     def materialize_spec(self) -> dict[str, str]:
         """Return the operator handoff coordinates to clone and check out this source."""

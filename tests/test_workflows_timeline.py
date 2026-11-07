@@ -10,16 +10,18 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows.decision_steps import AskDecision, DecisionStep
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Trigger, WorkflowRun
-from tests.conftest import execute_schema, result_data, vault_for
+from tests.conftest import vault_for
 from tests.test_workflows_children import child_graph as child_graph
 from tests.test_workflows_review import questions, start_review
 from tests.test_workflows_review import review as review
 from tests.test_workflows_review_graphql import schema as schema
+from tests.test_workflows_run_graph import graph_nodes
 from tests.test_workflows_triggers import capture
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.test_workflows_triggers import trigger_setup as trigger_setup
@@ -30,11 +32,92 @@ pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("
 def timeline(schema, actor, records):
     return result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!) {
       record_timeline(records:$records) { open_decision_count records { record_id
-        decisions { id } runs { id parent_step { id run { id } } graph { nodes { key plan step_run {
-          id hold notes { tone message } records { operation record_id } child_runs { id } } } } } } }
+        decisions { id } runs { id parent_step { id run { id } } graph { nodes { key plan step_run_id } }
+          graph_step_runs { id hold notes { tone message } records { operation record_id } child_runs { id } } } } }
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
         "record_timeline"
     ]
+
+
+RUN_GRAPHS = """query($records:[TimelineRecordInput!]!, $limit:Int!) {
+  record_timeline(records: $records, run_limit: $limit) { records { runs {
+    id can_cancel
+    graph {
+      edges { source outcome target taken }
+      nodes { key plan item_counts { status count } item_attempts step_run_id }
+    }
+    graph_step_runs {
+      id status hold outcome_label failure_reason wait_reason attempt page_index map_total map_settled
+      can_retry requires_duplicate_acknowledgement
+      awaited_run { id display_name status } child_runs { id display_name status }
+      records { id label operation record_model record_id } decision { id kind_label }
+      map_steps { id can_retry requires_duplicate_acknowledgement records { id } decision { id } }
+    }
+  } } }
+}"""
+
+
+def test_record_timeline_run_graphs_cost_the_same_for_one_or_five_runs(schema, review):
+    """A run list reads its graphs, selected step details and cancel facts once, not once per run."""
+    actor, reviewers, _, question = review
+    subject = question.review_subject
+    workflow = load_workflow({"nodes": {"review": {"step": "question"}}}, actor=actor)
+    runs = []
+    for _ in range(5):
+        run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
+        run_until(run)
+        runs.append(run)
+
+    def measure(query, *, cancelable):
+        counts = []
+        for limit in (1, 5):
+            with CaptureQueriesContext(connection) as queries:
+                rows = result_data(execute_schema(schema, query, {"records": [{
+                    "model": subject._meta.label, "id": subject.sqid,
+                }], "limit": limit}, user=actor))["record_timeline"]["records"][0]["runs"]
+            counts.append(len(queries))
+            assert len(rows) == limit and [row["can_cancel"] for row in rows] == [cancelable] * limit
+            assert all(node["step_run"]["decision"] for row in rows for node in graph_nodes(row))
+        assert counts[0] == counts[1], counts
+
+    for query in (RUN_GRAPHS, RUN_GRAPHS.replace(" can_retry", "")):
+        measure(query, cancelable=True)
+    for run in runs:
+        step = StepRun.system_queryset().get(run=run, node_key="review")
+        decide(step.decision, actor=reviewers[0], chosen=["reject"])
+        runner.wake_decisions(step.decision_id)
+        run_until(run)
+    for query in (RUN_GRAPHS, RUN_GRAPHS.replace(" can_retry", "")):
+        measure(query, cancelable=False)
+
+
+def test_record_timeline_reads_its_runs_once_for_one_or_five_records(schema, review):
+    """Every record of a selection shares one run read, not one per record."""
+    actor = review[0]
+    workflow = load_workflow({"nodes": {"review": {"step": "question"}}}, actor=actor)
+    records = [vault_for(actor, name=f"Timeline record {index}") for index in range(5)]
+    for record in records:
+        run_until(WorkflowRun.objects.start(workflow, actor=actor, subject=record))
+    with_runs = """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records: $records) { records { record_id runs { id graph_step_runs { id } } } }
+    }"""
+    without_runs = """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records: $records) { records { record_id } }
+    }"""
+
+    def statements(document, selected):
+        variables = {"records": [{"model": record._meta.label, "id": record.sqid} for record in selected]}
+        execute_schema(schema, document, variables, user=actor)
+        with CaptureQueriesContext(connection) as queries:
+            data = result_data(execute_schema(schema, document, variables, user=actor))
+        return len(queries), data["record_timeline"]["records"]
+
+    costs = []
+    for selected in (records[:1], records):
+        read, rows = statements(with_runs, selected)
+        assert [len(row["runs"]) for row in rows] == [1] * len(selected)
+        costs.append(read - statements(without_runs, selected)[0])
+    assert costs[0] == costs[1], costs
 
 
 @pytest.mark.parametrize("operation,canceled", [("read", False), ("created", True), ("changed", True)])
@@ -198,8 +281,9 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     query = """query($records: [TimelineRecordInput!]!) {
       record_timeline(records: $records) { records { decisions { id } runs {
         id subject_model subject_id trigger_event { record_model record_id trigger { display_name } }
-        graph { nodes { key rank step_run { hold records { record_model record_id }
-          decision { id is_open records { record_model record_id } } } } }
+        graph { nodes { key rank step_run_id } }
+        graph_step_runs { id hold records { record_model record_id }
+          decision { id is_open records { record_model record_id } } }
       } } }
     }"""
     data = result_data(execute_schema(schema, query, {"records": [
@@ -210,7 +294,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     assert (result["trigger_event"]["record_model"], result["trigger_event"]["record_id"]) == (
         record._meta.label, record.sqid,
     )
-    step = result["graph"]["nodes"][0]["step_run"]
+    step = graph_nodes(result)[0]["step_run"]
     assert step["hold"] == "decision" and step["decision"]["is_open"]
     assert step["records"][0]["record_id"] == record.sqid
     assert step["decision"]["records"][0]["record_id"] == record.sqid
@@ -226,7 +310,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
 
 
 def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(review, register_step, schema):
-    actor, people, _, question = review
+    actor, people, sent, question = review
     register_step(AskDecision)
     target = question.review_subject
     workflow = load_workflow({"nodes": {"ask": {"step": "ask_decision", "config": {
@@ -241,6 +325,7 @@ def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(revi
     decision = step.decision
     assert target.sqid in decision.proposal["alternatives"][0]["actions"]
     decision.decide(actor=people[0], chosen=["rename"])
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     target.refresh_from_db()
     assert target.name == "Chosen" and run.status == "succeeded" and run.outcome == "renamed"
@@ -285,7 +370,7 @@ def test_a_routed_failure_is_done_and_does_not_hold_the_next_question(review, sc
     assert run.status == "waiting" and failed.hold is None
     data = timeline(schema, actor, [question.review_subject])["records"][0]["runs"][0]
     assert {node["key"]: node["plan"] for node in data["graph"]["nodes"]} == {"failure": "done", "review": "current"}
-    assert data["graph"]["nodes"][0]["step_run"]["hold"] is None
+    assert graph_nodes(data)[0]["step_run"]["hold"] is None
     filtered = result_data(execute_schema(schema, '{ steprun(where:{hold:{_eq:"error"}}) { id hold } }', user=actor))
     assert filtered["steprun"] == []
 

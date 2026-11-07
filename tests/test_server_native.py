@@ -57,7 +57,7 @@ verifier.resolve_actor = lambda token: SubjectRef.of('tests/actor', '1') if toke
 sys.modules[verifier.__name__] = verifier
 settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee.base', 'angee.mcp'],
-    SECRET_KEY='native-mcp-mount', ANGEE_MERGE_GUARDS=[],
+    SECRET_KEY='native-mcp-mount', ANGEE_MERGE_GUARDS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
     ALLOWED_HOSTS=['localhost'], CSRF_TRUSTED_ORIGINS=['http://localhost'],
     ANGEE_MCP_ACTOR_VERIFIER='native_mcp_verifier.resolve_actor',
 )
@@ -75,7 +75,7 @@ def register_probe(mcp):
 
 # The real capability owns registration, app creation and its native lifespan.
 with patch.object(server, '_registrars', return_value=(register_probe,)):
-    from django_compose.asgi import application
+    from angee.server.asgi import application
     with TestClient(application, base_url='http://localhost') as client:
         headers = {'Authorization': 'Bearer native-route-token', 'Accept': 'application/json, text/event-stream'}
         request = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
@@ -91,8 +91,12 @@ with patch.object(server, '_registrars', return_value=(register_probe,)):
 
 
 def test_native_compose_owns_ready_web_and_graphql_artifacts():
+    """A composed project serves its URLconf, ASGI app and launcher from angee.server."""
+
     _run(r'''
 import json
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from angee.base.testing.packages import write_addon_distribution
@@ -127,6 +131,22 @@ schemas = {"public": {"query": Query}}
             'schemas/public.metadata.json', 'schemas/publishers.json'} <= set(receipt.OWNED_FILES)
     assert apps.is_installed('django_compose')
     assert 'django_compose' not in settings.COMPOSE_SNAPSHOT.dependencies
+    assert settings.ROOT_URLCONF == 'angee.server.urls'
+    assert settings.ASGI_APPLICATION == 'angee.server.application'
+    from django.core.handlers.asgi import ASGIHandler
+    from django.urls import get_resolver, resolve
+    from angee.server.asgi import _Application, application
+    assert get_resolver().urlconf_module.__name__ == 'angee.server.urls'
+    assert isinstance(application, _Application)
+    assert isinstance(application.http, ASGIHandler)
+    assert 'websocket' in application.protocols
+    assert resolve('/health/ready').url_name == 'angee-server-readiness'
+    assert resolve('/graphql/public/').route == 'graphql/<str:schema_name>/'
+    launcher = root / 'manage.py'
+    launcher.write_text('from angee.server.management import execute\nexecute()\n')
+    checked = subprocess.run([sys.executable, str(launcher), 'check'], cwd=root,
+        capture_output=True, text=True)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
     manifest = json.loads(artifact_path('web/manifest.json').read_text())
     assert any(package['app'] == 'ready_probe' for package in manifest['addonPackages'])
     assert 'ready_probe' in artifact_path('schemas/public.graphql').read_text()

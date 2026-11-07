@@ -105,17 +105,21 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
   // actions through a ref and stay referentially stable across renders.
   const fileActionsRef = useLatestRef(fileActions);
   const folderActionsRef = useLatestRef(folderActions);
+  // The folder and file verbs settle their own failures and resolve whether
+  // they completed, so these handlers only act on success.
+  const deleteFolder = useCallback(async (id: string, name: string, onDeleted: () => void) => {
+    const accepted = await confirm({
+      title: t("folder.deleteTitle", { name }), body: t("folder.deleteBody"),
+      confirm: t("folder.deleteConfirm"), danger: true,
+    });
+    if (accepted && await folderActionsRef.current.remove(id)) onDeleted();
+  }, [confirm, folderActionsRef, t]);
   // Dropping a file on a navigator node moves it: the Trash node trashes, All
   // files moves to the drive root, any folder node moves into that folder.
-  const handleFileDrop = useCallback(
-    (nodeId: string, file: FileDragData) => {
-      const actions = fileActionsRef.current;
-      if (nodeId === TRASH_SCOPE) void actions.trash(file.id);
-      else if (nodeId === ALL_SCOPE) void actions.move(file.id, null);
-      else void actions.move(file.id, nodeId);
-    },
-    [],
-  );
+  const handleFileDrop = useCallback((nodeId: string, file: FileDragData) => {
+    const actions = fileActionsRef.current;
+    void (nodeId === TRASH_SCOPE ? actions.trash(file.id) : actions.move(file.id, nodeId === ALL_SCOPE ? null : nodeId));
+  }, [fileActionsRef]);
   const driveRootPicker = useMemo(
     () => ({
       "aria-label": t("drive.label"),
@@ -150,19 +154,6 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
           ? controller.selectedRow
           : undefined;
       uploadTargetRef.current = controller.uploadTarget;
-      const deleteFolder = async (): Promise<void> => {
-        if (!selectedFolder) return;
-        const ok = await confirm({
-          title: t("folder.deleteTitle", { name: selectedFolder.name }),
-          body: t("folder.deleteBody"),
-          confirm: t("folder.deleteConfirm"),
-          danger: true,
-        });
-        if (!ok) return;
-        void folderActionsRef.current
-          .remove(effectiveScope)
-          .then(() => controller.setSelectedId(ALL_SCOPE));
-      };
       const busy = folderActions.busy || !controller.rootId
         || (effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE && !selectedFolder);
       const submit = async (name: string): Promise<void> => {
@@ -208,7 +199,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
             <StorageFolders drive={controller.rootId} selectedId={openFileId ?? controller.selectedId}
               pane={{ selector, overflowItems: selectedFolder ? [
                 { icon: "pencil", label: t("folder.rename"), disabled: folderActions.busy, onClick: () => setFolderEdit("rename") },
-                { icon: "trash", label: t("folder.delete"), tone: "danger", disabled: folderActions.busy, onClick: () => void deleteFolder() },
+                { icon: "trash", label: t("folder.delete"), tone: "danger", disabled: folderActions.busy, onClick: () => { if (selectedFolder) void deleteFolder(effectiveScope, selectedFolder.name, () => controller.setSelectedId(ALL_SCOPE)); } },
               ] : [] }}
               toolbarActions={<PaneToolbarMenu icon="plus" label={t("new.menu")} text disabled={busy} items={[
                 { icon: "folder", label: t("new.folder"), onClick: () => setFolderEdit("create") },
@@ -225,7 +216,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
         </>
       );
     },
-    [canUpload, confirm, folderRead.error, folderActions.busy, folderActionsRef, folderEdit, handleFileDrop, openFileId, openFileRoute, picker.input, picker.open, t],
+    [canUpload, deleteFolder, folderRead.error, folderActions.busy, folderActionsRef, folderEdit, handleFileDrop, openFileId, openFileRoute, picker.input, picker.open, t],
   );
   return (
     <ScopedExplorerPane<StorageDrive, StorageTreeRow>
@@ -238,7 +229,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
       renderTree={renderTree}
       renderContentWithoutRoots={openFileId !== null || Boolean(requestedFolder)}
       loading={initialDrives.list.fetching && drives.length === 0}
-      loadingContent={<LoadingPanel message={t("loading")} />}
+      loadingContent={<LoadingPanel loadingLabel={t("loading")} />}
       emptyContent={
         <EmptyState
           fill

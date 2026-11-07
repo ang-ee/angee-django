@@ -10,7 +10,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db.models import F, Prefetch, prefetch_related_objects
+from django.db.models import F, Prefetch
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
@@ -21,6 +21,7 @@ from strawberry_django.utils.requests import get_request
 from angee.base.fields.identity import SqidField
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.locks import StaleRevisionError
+from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, session_user
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata
@@ -40,6 +41,7 @@ from angee.graphql.ids import (
     to_public_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.related_counts import RelatedCount
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
@@ -165,13 +167,17 @@ class WikilinkType:
     page: strawberry.ID | None
 
 
+_ANCESTORS = "_knowledge_ancestors"
+_WIKILINKS = "_knowledge_wikilinks"
+
+
 def _ancestors_prefetch(info: strawberry.Info) -> Prefetch:
     """Optimize readable ancestors using the nested Page selection's native hints."""
 
     # The native optimizer clones the supplied queryset but declares its return
     # as QuerySet; retain Page's hierarchy API at that upstream type boundary.
     rows = cast("PageQuerySet[PageModel]", optimize(Page.objects.untrashed(), info))
-    return rows.model.ancestors_prefetch(rows, to_attr="_knowledge_ancestors")
+    return rows.model.ancestors_prefetch(rows, to_attr=_ANCESTORS)
 
 
 def _wikilinks_prefetch(_info: strawberry.Info) -> Prefetch:
@@ -182,7 +188,7 @@ def _wikilinks_prefetch(_info: strawberry.Info) -> Prefetch:
         queryset=Link.objects.only("source_page_id", "target_text", "target_page_id").prefetch_related(Prefetch(
             "target_page", queryset=Page.objects.untrashed().only("id"),
         )),
-        to_attr="_knowledge_wikilinks",
+        to_attr=_WIKILINKS,
     )
 
 
@@ -211,22 +217,19 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     def ancestors(self, info: strawberry.Info) -> list[PageType]:
         """Readable ancestors in path order; hidden containers contribute no label."""
 
-        if not hasattr(self, "_knowledge_ancestors"):
-            prefetch_related_objects([cast("PageModel", self)], _ancestors_prefetch(info))
-        return cast("list[PageType]", cast(Any, self)._knowledge_ancestors)
+        ancestors = prefetched(cast("PageModel", self), _ANCESTORS, lambda: _ancestors_prefetch(info))
+        return cast("list[PageType]", ancestors)
 
     @strawberry_django.field(only=["id"], prefetch_related=[_wikilinks_prefetch])
     def wikilinks(self, info: strawberry.Info) -> list[WikilinkType]:
         """Project the index owner's resolution under the current target read scope."""
 
-        if not hasattr(self, "_knowledge_wikilinks"):
-            prefetch_related_objects([cast("PageModel", self)], _wikilinks_prefetch(info))
         return [
             WikilinkType(
                 title=link.target_text,
                 page=require_public_id(Page, link.target_page.pk) if link.target_page is not None else None,
             )
-            for link in cast(Any, self)._knowledge_wikilinks
+            for link in prefetched(cast("PageModel", self), _WIKILINKS, lambda: _wikilinks_prefetch(info))
         ]
 
     @strawberry_django.field(only=["id", "markdown__kind"], prefetch_related=["markdown"])
@@ -270,12 +273,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         """
 
         rows = (
-            Link._default_manager.filter(
-                target_page_id=cast(Any, self).pk,
-                is_resolved=True,
-                source_page__is_trashed=False,
-            )
-            .scoped()
+            Link._default_manager.backlinks_to(self)
             .annotate(source_title=F("source_page__title"))
             .order_by("source_title", "sqid")
         )
@@ -838,6 +836,16 @@ _KNOWLEDGE_SCHEMA_BUCKET = {
         *_PAGE_RESOURCE.types,
     ],
 }
+
+
+def related_counts() -> tuple[RelatedCount, ...]:
+    """A record's bound pages, and a page's bound records and backlinks, as their groups list them."""
+
+    return (
+        RelatedCount("knowledge.pages", RecordBinding._default_manager.pages_for_record),
+        RelatedCount("knowledge.bound-to", RecordBinding._default_manager.for_knowledge, target="knowledge.Page"),
+        RelatedCount("knowledge.backlinks", Link._default_manager.backlinks_to, target="knowledge.Page"),
+    )
 
 
 schemas = {

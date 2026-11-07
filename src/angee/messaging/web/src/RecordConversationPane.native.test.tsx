@@ -6,9 +6,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, test, vi } from "vitest";
 
 import { RecordConversationPane } from "./RecordConversationPane";
-import { useRecordConversationsCount } from "./RecordConversationsGroup";
 import { RecordSourceThreadsDocument, type RecordSourceThreadRow } from "./documents";
 import type { ThreadTranscriptProps } from "./ThreadTranscript";
+import { useRecordSourceThreads } from "./useRecordSourceThreads";
 
 vi.mock("./ThreadTranscript", () => ({
   ThreadTranscript: ({ threadId, order }: ThreadTranscriptProps) => <div data-testid="transcript">{threadId}:{order}</div>,
@@ -31,7 +31,7 @@ test("opens the selected readable attachment's transcript and closes it when unb
   const custom = vi.fn(async () => ({ data: { record_source_threads: edges } }));
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   function Read() {
-    const count = useRecordConversationsCount(context);
+    const count = useRecordSourceThreads(context).data?.record_source_threads.length;
     const invalidate = useInvalidateAuthoredModels();
     return <>
       <button onClick={() => invalidate(["messaging.ThreadAttachment"])}>{count} conversations</button>

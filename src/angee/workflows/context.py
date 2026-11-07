@@ -97,7 +97,7 @@ class StepContext:
             self._require_mode(StepMode.DATABASE)
         if not model_resource_type(model):
             raise PermissionDenied(f"{model._meta.label} has no actor-scoped read contract.")
-        queryset = require_rebac_queryset(model).with_actor(self.actor).with_action(permission)
+        queryset = require_rebac_queryset(model, actor=self.actor).with_action(permission)
         if lock:
             queryset = queryset.select_for_update(no_key=True, of=row_lock_paths(model))
         instance = instance_from_public_id(model, public_id, queryset=queryset)

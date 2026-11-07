@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import { print } from "graphql";
 import { createAngeeHasuraDataProvider } from "./provider";
-import { listQueryMeta } from "./list-query";
+import { groupRowsDocument, listQueryMeta } from "./list-query";
+import { extractGroupBy, groupByVariables } from "./operations";
 import { refineFieldsFromPaths } from "./selections";
 
 test("selects nested paths without losing relation identity or display leaves", () => {
@@ -62,3 +63,29 @@ test("native list selections bind context arguments without changing response fi
   expect(request?.query).toContain("verification_state(company_id: $selection_0_0)");
   expect(request?.query).toContain("$selection_0_0: ID!");
 });
+
+test("a groups document carries each group's first page of the list's fields", () => {
+  const document = groupRowsDocument(
+    "query NoteGroups($group_by: [NoteGroupBySpec!]!) { notes_groups(group_by: $group_by) { key { status } aggregate { count } } totalCount: notes_groups_count(group_by: $group_by) }",
+    { root: "notes_groups", orderType: "NoteOrderBy" },
+    ["id", "owner.id", "owner.display_name"],
+  );
+  const text = print(document);
+  expect(text).toContain("$with_rows: Boolean = false, $rows_limit: Int = 1, $rows_order_by: [NoteOrderBy!]");
+  expect(text).toContain("rows(limit: $rows_limit, order_by: $rows_order_by) @include(if: $with_rows) {");
+  expect(text).toContain("owner {\n        id\n        display_name\n      }");
+  // The count companion selects no rows.
+  expect(text.match(/rows\(/g)).toHaveLength(1);
+  expect(() => groupRowsDocument("query X { other { id } }", { root: "notes_groups", orderType: "NoteOrderBy" }, ["id"]))
+    .toThrow("does not select notes_groups");
+
+  expect(groupByVariables({ dimensions: [{ input: "STATUS" }], rows: { limit: 3, orderBy: { title: "asc" } } }))
+    .toMatchObject({ with_rows: true, rows_limit: 3, rows_order_by: { title: "asc" } });
+  expect(groupByVariables({ dimensions: [{ input: "STATUS" }] })).not.toHaveProperty("with_rows");
+  const result = extractGroupBy({
+    notes_groups: [{ key: { status: "open" }, aggregate: { count: 2 }, rows: [{ id: "n1" }, { id: "n2" }] }],
+    totalCount: 1,
+  }, "notes_groups");
+  expect(result.buckets[0]?.rows).toEqual([{ id: "n1" }, { id: "n2" }]);
+});
+

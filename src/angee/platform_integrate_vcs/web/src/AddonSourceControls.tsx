@@ -208,7 +208,7 @@ function ScanSourceList({
 }): React.ReactElement {
   const t = usePlatformIntegrateVcsT();
   if (fetching && sources.length === 0) {
-    return <LoadingPanel density="inline" message={t("apps.scan.loading")} />;
+    return <LoadingPanel density="inline" loadingLabel={t("apps.scan.loading")} />;
   }
   if (sources.length === 0) {
     return <InlineEmpty label={t("apps.scan.empty")} />;

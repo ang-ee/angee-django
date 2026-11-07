@@ -9,7 +9,7 @@ const GroupRosterTab = React.lazy(() => import("./SpacesPage").then((module) => 
 const GroupThreadsTab = React.lazy(() => import("./SpacesPage").then((module) => ({ default: module.GroupThreadsTab })));
 
 function Deferred({ label, children }: { label: string; children: React.ReactNode }): React.ReactElement {
-  return <LazyBoundary pending={<SkeletonStatus label={label} className="py-4"><SkeletonText lines={3} size="lg" /></SkeletonStatus>}>
+  return <LazyBoundary pending={<SkeletonStatus loadingLabel={label} className="py-4"><SkeletonText lines={3} size="lg" /></SkeletonStatus>}>
     {children}
   </LazyBoundary>;
 }

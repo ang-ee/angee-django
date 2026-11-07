@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -42,24 +43,14 @@ from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQue
 from angee.base.permissions import DirectRecordAccess
 from angee.graphql import records
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.graphql.views import graphql_endpoint
 from angee.storage import exceptions
 from angee.storage import models as storage_models
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
-from tests.conftest import (
-    Backend,
-    Drive,
-    File,
-    FileAttachment,
-    Folder,
-    MimeType,
-    addon_schema,
-    create_platform_admin,
-    execute_schema,
-    result_data,
-)
+from tests.conftest import Backend, Drive, File, FileAttachment, Folder, MimeType, addon_schema, create_platform_admin
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.tables import model_tables
 
@@ -376,7 +367,12 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
 
 @pytest.mark.django_db(transaction=True)
 def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> None:
-    """The generic target lock does not require an Angee queryset or model base."""
+    """The generic target lock does not require an Angee queryset or model base.
+
+    The probe joins the installed storage registry, where the lock resolves its
+    content type, and leaves it afterwards: a left-over ``storage/file`` model
+    without the owner column would fail every later all-models ownership check.
+    """
 
     del composed_tables
     class NativeTarget(RebacMixin):
@@ -385,10 +381,14 @@ def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> N
             db_table = "test_storage_native_attachment_target"
             rebac_resource_type = "storage/file"
 
-    with model_tables((NativeTarget,)), system_context(reason="test native attachment target"):
-        target = NativeTarget.objects.create()
-        with transaction.atomic():
-            FileAttachment.objects._lock_target(generic_target(target))
+    try:
+        with model_tables((NativeTarget,)), system_context(reason="test native attachment target"):
+            target = NativeTarget.objects.create()
+            with transaction.atomic():
+                FileAttachment.objects._lock_target(generic_target(target))
+    finally:
+        del apps.all_models["storage"][NativeTarget._meta.model_name]
+        apps.clear_cache()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1142,6 +1142,57 @@ def test_create_folder_factory_gates_on_drive_write(drive: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("kind", ["file", "folder"])
+def test_checked_storage_factories_preserve_field_validation(drive: Any, kind: str) -> None:
+    before = File._base_manager.count(), Folder._base_manager.count()
+    with actor_context(drive.alice), pytest.raises(exceptions.UploadError, match=f"invalid {kind} request") as refused:
+        if kind == "file":
+            File.objects.draft(filename="x" * 513, drive_id=str(drive.sqid))
+        else:
+            Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="x" * 513)
+    assert isinstance(refused.value.__cause__, ValidationError)
+    assert (File._base_manager.count(), Folder._base_manager.count()) == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_factory_preserves_foreign_key_validation(drive: Any) -> None:
+    missing_owner_id = drive.alice.pk + 1_000_000
+    assert not get_user_model()._base_manager.filter(pk=missing_owner_id).exists()
+    with actor_context(drive.alice), pytest.raises(exceptions.UploadError, match="invalid file request") as refused:
+        File.objects.draft(filename="owner.txt", drive_id=str(drive.sqid), owner_id=missing_owner_id)
+    assert isinstance(refused.value.__cause__, ValidationError)
+    assert "owner" in refused.value.__cause__.message_dict
+    assert not File._base_manager.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_factory_validates_hidden_constraint_rows_before_insert(drive: Any) -> None:
+    """An admitted factory checks integrity against rows outside its caller's read scope."""
+
+    digest = "c" * 64
+    hidden_owner = get_user_model().objects.create_user(username="storage-hidden-reservation-owner")
+    with system_context(reason="test.storage.hidden_reservation"):
+        hidden = File.objects.create(
+            drive=drive,
+            owner=hidden_owner,
+            filename="hidden.txt",
+            content_hash=digest,
+            storage_path="hidden/reservation",
+            visibility=storage_models.FileVisibility.RECORD,
+        )
+    assert not hidden.with_actor(drive.alice).has_access("read")
+    with actor_context(drive.alice), patch("angee.storage.models.secrets.token_hex", return_value=digest):
+        with pytest.raises(exceptions.UploadError, match="invalid file request") as raised:
+            File.objects.draft(filename="new.txt", drive_id=str(drive.sqid))
+    assert isinstance(raised.value.__cause__, ValidationError)
+    assert not hidden.has_access("read")
+    with system_context(reason="test.storage.hidden_reservation.inspect"):
+        assert list(File.objects.values_list("pk", flat=True)) == [hidden.pk]
+        hidden.refresh_from_db()
+    assert hidden.filename == "hidden.txt" and hidden.content_hash == digest
+
+
+@pytest.mark.django_db(transaction=True)
 def test_file_draft_rebinds_returned_row_to_actor(drive: Any) -> None:
     """The draft factory returns an actor-bound row after the sudo insert."""
 
@@ -1151,6 +1202,7 @@ def test_file_draft_rebinds_returned_row_to_actor(drive: Any) -> None:
     assert row.pk is not None
     assert not row.is_sudo()
     assert row.actor() == to_subject_ref(drive.alice)
+    assert row.created_by_id == drive.alice.pk
 
 
 @pytest.mark.django_db(transaction=True)

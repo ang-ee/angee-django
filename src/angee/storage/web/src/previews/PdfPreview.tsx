@@ -45,7 +45,7 @@ export default function PdfPreview({ file, page: sourcePage }: PreviewProviderPr
         <Document
           file={file.url}
           onLoadSuccess={({ numPages }) => setPageCount(numPages)}
-          loading={<LoadingPanel message={t("preview.loading")} />}
+          loading={<LoadingPanel loadingLabel={t("preview.loading")} />}
           error={<ErrorBanner title={file.name} description={t("preview.loadError")} />}
           className="grid place-content-center"
         >

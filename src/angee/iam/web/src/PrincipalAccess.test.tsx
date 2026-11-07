@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { render, renderHook } from "@testing-library/react";
+import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listProps: [] as Record<string, unknown>[],
@@ -96,6 +96,7 @@ describe("principal access tab", () => {
     mocks.queryVariables = undefined;
     mocks.record = { assignment_subject: "auth/user:usr_alice" };
   });
+  afterEach(cleanup);
 
   test("offers the shared record tab", () => {
     expect(renderHook(() => usePrincipalAccessRecordTab()).result.current?.id).toBe("access");
@@ -130,10 +131,13 @@ describe("principal access tab", () => {
     expect(rendered.getByText("This record has no authorization principal.")).toBeTruthy();
   });
 
-  test("shows loading while the enclosing record is unresolved", () => {
+  test("keeps its sections loading, with no copy, while the enclosing record is unresolved", () => {
     mocks.record = null;
-    const rendered = render(<PrincipalAccessTab />);
+    render(<PrincipalAccessTab />);
     expect(mocks.queryOptions?.enabled).toBe(false);
-    expect(rendered.getByText("Loading access…")).toBeTruthy();
+    // Each list draws its own skeleton rows; nothing claims the record has no principal.
+    expect(mocks.listProps).toHaveLength(3);
+    expect(mocks.listProps.every((props) => props.fetching === true)).toBe(true);
+    expect(screen.queryByText("This record has no authorization principal.")).toBeNull();
   });
 });

@@ -94,7 +94,7 @@ class SpaceThreadType(AngeeNode):
 
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name,
-        only=["title__text", "modality"],
+        only=Thread.display_title_fields(),
         select_related=["title"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )

@@ -5,9 +5,11 @@ from types import SimpleNamespace
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.test import RequestFactory, TransactionTestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.roles import grant
+
+from angee.graphql.testing.documents import graphql_request
 
 
 class WorkCase(TransactionTestCase):
@@ -113,8 +115,7 @@ class WorkCase(TransactionTestCase):
         from angee.graphql.schema import GraphQLSchemas
 
         user = user or self.owner
-        request = RequestFactory().post("/graphql/")
-        request.user = user
+        request = graphql_request(user)
         with actor_context(user):
             result = (
                 GraphQLSchemas.from_discovery()

@@ -9,7 +9,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import FieldDoesNotExist
 from django.core.management import call_command
-from django.test import RequestFactory, TransactionTestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
@@ -22,6 +22,7 @@ from rebac import (
 )
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import graphql_request
 from tests.composed_host import run_composed_tests
 
 
@@ -77,8 +78,7 @@ class ClarificationCase(TransactionTestCase):
             return self.as_user(self.round, self.asker).ask("Question", "Question details", **kwargs)
 
     def execute(self, document, variables, user):
-        request = RequestFactory().post("/graphql/")
-        request.user = user
+        request = graphql_request(user)
         with actor_context(user):
             return GraphQLSchemas.from_discovery().build("console").execute_sync(
                 document, variable_values=variables, context_value=SimpleNamespace(request=request)

@@ -76,7 +76,7 @@ def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any)
         scopes.setdefault((container, field.name), []).append((index, field.to_python(policy["value"])))
     allowed = [False] * len(policies)
     for (model, key), entries in scopes.items():
-        rows = require_rebac_queryset(model).with_actor(actor) if actor is not None else model._base_manager.none()
+        rows = require_rebac_queryset(model, actor=actor) if actor is not None else model._base_manager.none()
         readable = set(rows.filter(**{f"{key}__in": [value for _, value in entries]}).values_list(key, flat=True))
         for index, value in entries:
             allowed[index] = value in readable

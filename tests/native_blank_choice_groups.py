@@ -4,11 +4,12 @@ from types import SimpleNamespace
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.test import RequestFactory, TransactionTestCase
+from django.test import TransactionTestCase
 from rebac import actor_context, system_context
 from strawberry_django_aggregates import AggregateBuilder, ChoicesValueNotInEnumError
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import graphql_request
 
 Party = apps.get_model("parties", "Party")
 Address = apps.get_model("parties", "Address")
@@ -27,8 +28,7 @@ class BlankCountryGroupsTests(TransactionTestCase):
 
         schema = GraphQLSchemas.from_discovery().build("blank_choices")
         resources = {item.model_label: item for item in schema.angee_resources}
-        request = RequestFactory().post("/graphql/blank_choices/")
-        request.user = reader
+        request = graphql_request(reader)
         for model, name, field in (
             (Party, "billing_parties", "tax_country"),
             (Address, "country_addresses", "country"),

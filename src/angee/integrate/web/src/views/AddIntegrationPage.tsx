@@ -39,7 +39,7 @@ export function AddIntegrationPage(): React.ReactElement {
   const selected = capabilities.find((capability) => capability.resource === selectedResource) ?? null;
   const connectRoute = useResourceRoute(selected?.resource ?? "");
 
-  if (query.isLoading) return <LoadingPanel message={t("integrations.add.loading")} />;
+  if (query.isLoading) return <LoadingPanel loadingLabel={t("integrations.add.loading")} />;
   if (query.error) return <ErrorBanner title={t("integrations.add.loadError")} description={errorMessage(query.error, t("integrations.add.loadError"))} />;
   const selectCapability = (resource?: string): void => {
     const base = routeHref("integrate.add");

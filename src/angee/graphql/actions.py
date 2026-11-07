@@ -10,7 +10,7 @@ import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, ParamSpec, TypeVar, cast
+from typing import Any, ParamSpec, Self, TypeVar, cast
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
@@ -83,7 +83,7 @@ class ActionResult:
         return cast(JSON, field_errors) if field_errors else None
 
     @classmethod
-    def from_error(cls, error: Exception, summary: str, *, camel_case_keys: bool = True) -> ActionResult:
+    def from_error(cls, error: Exception, summary: str, *, camel_case_keys: bool = True) -> Self:
         """Return a failed result from a caught exception.
 
         A Django ``ValidationError`` carrying per-field messages (``error_dict``)
@@ -197,6 +197,7 @@ def action_guard(
     *,
     errors: tuple[type[Exception], ...] = (),
     camel_case_keys: bool = True,
+    result_type: type[ActionResult] = ActionResult,
 ) -> Callable[[Callable[_P, ActionResult]], Callable[_P, ActionResult]]:
     """Decorate an action resolver so domain errors return an in-band ``ActionResult``.
 
@@ -214,6 +215,7 @@ def action_guard(
     expected refusal is returned without logging its traceback or submitted values;
     unexpected exceptions admitted by an addon's broad catch are logged at ERROR.
     ``camel_case_keys=False`` preserves authored field names for JSON form payloads.
+    A typed result subclass keeps its own nullable fields on guarded refusals.
     """
 
     caught = BASELINE_ACTION_ERRORS + tuple(errors)
@@ -224,13 +226,13 @@ def action_guard(
             try:
                 return resolver(*args, **kwargs)
             except ValidationError as error:
-                return ActionResult.from_error(error, summary, camel_case_keys=camel_case_keys)
+                return result_type.from_error(error, summary, camel_case_keys=camel_case_keys)
             except DomainError:
                 raise
             except caught as error:
                 if not isinstance(error, (*BASELINE_ACTION_ERRORS, PermissionDenied)):
                     logger.exception("GraphQL action %s failed", resolver.__name__)
-                return ActionResult.from_error(error, summary, camel_case_keys=camel_case_keys)
+                return result_type.from_error(error, summary, camel_case_keys=camel_case_keys)
 
         return guarded
 
@@ -303,7 +305,7 @@ def authorized_permission_target(
     """
 
     user = session_user(info)
-    scoped: models.QuerySet[_ActionTarget] = require_rebac_queryset(model).with_actor(user).with_action(permission)
+    scoped: models.QuerySet[_ActionTarget] = require_rebac_queryset(model, actor=user).with_action(permission)
     if narrow is not None:
         scoped = narrow(scoped)
     instance = instance_for_id(model, id, queryset=scoped)

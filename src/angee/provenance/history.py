@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -14,14 +14,10 @@ from django.db import models, router, transaction
 from django.db.models.base import ModelBase
 from django.utils import timezone
 from django.utils.functional import classproperty
-from simple_history.manager import HistoryManager
-from simple_history.models import HistoricalChanges, HistoricalRecords
+from simple_history.manager import HistoricalQuerySet, HistoryManager
+from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
-from simple_history.utils import (
-    get_change_reason_from_object,
-    get_history_manager_for_model,
-    get_history_model_metadata,
-)
+from simple_history.utils import get_change_reason_from_object, get_history_manager_for_model
 
 from angee.provenance.context import changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
@@ -52,8 +48,34 @@ class _ChangesetHistory(models.Model):
         abstract = True
 
 
-class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
-    """Native bulk construction extended to accept deletion snapshots."""
+class ModelHistoricalQuerySet[T: models.Model](HistoricalQuerySet[T]):
+    """Stock historical rows under the Angee-declared row type variable.
+
+    Stock ``HistoricalQuerySet`` declares no type parameters: django-stubs reads
+    the untyped class as implicitly generic and Django's ``__class_getitem__``
+    returns it unchanged. ``ModelHistory`` installs this base, and a typed
+    ``historical_queryset`` subclasses it, so the provenance mypy plugin binds
+    the concrete historical row to ``T``.
+    """
+
+
+class _GeneratedHistory(Protocol):
+    """Class attributes simple-history's history-model factory sets; stock 3.13 declares none."""
+
+    instance_type: type[models.Model]
+    tracked_fields: list[models.Field[Any, Any]]
+
+    def get_default_history_user(self, instance: models.Model) -> models.Model | None: ...
+
+
+class ModelHistoryManager[T: models.Model](HistoryManager[T]):
+    """Native bulk construction extended to accept deletion snapshots.
+
+    ``self.model`` is the regular historical class; like the native manager, this
+    reads its ``instance_type``, ``tracked_fields`` and ``get_default_history_user``
+    class attributes. ``T`` is the Angee-declared row type the provenance mypy
+    plugin binds, as for ``ModelHistoricalQuerySet``.
+    """
 
     def bulk_history_create(
         self,
@@ -74,18 +96,19 @@ class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
             return []
         if any(obj.pk is None for obj in objects):
             raise ValueError("History capture requires a primary key for every stored row.")
-        history = model_history(self.model.instance_type)
+        tracked = cast(_GeneratedHistory, self.model).instance_type
+        history = model_history(tracked)
         if history is None:
             raise ImproperlyConfigured(f"{self.model._meta.label}: no native history capture owner.")
         by_database: dict[str, list[models.Model]] = {}
         for obj in objects:
-            alias = obj._state.db or router.db_for_write(self.model.instance_type, instance=obj)
+            alias = obj._state.db or router.db_for_write(tracked, instance=obj)
             by_database.setdefault(alias, []).append(obj)
         captured = []
         for alias, sources in by_database.items():
             captured.extend(
                 history.bulk_history_create(
-                    self.model.instance_type,
+                    tracked,
                     [obj.pk for obj in sources],
                     history_type or ("~" if update else "+"),
                     using=alias,
@@ -116,14 +139,14 @@ class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
 
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
             return []
-        metadata = get_history_model_metadata(self.model)
+        generated = cast(_GeneratedHistory, self.model)
         rows = []
         for instance in objs:
-            attrs = {field.attname: getattr(instance, field.attname) for field in metadata.tracked_fields}
+            attrs = {field.attname: getattr(instance, field.attname) for field in generated.tracked_fields}
             row = self.model(
                 history_date=getattr(instance, "_history_date", default_date or timezone.now()),
                 history_user=getattr(
-                    instance, "_history_user", default_user or metadata.get_default_history_user(instance)
+                    instance, "_history_user", default_user or generated.get_default_history_user(instance)
                 ),
                 history_change_reason=get_change_reason_from_object(instance) or default_change_reason,
                 history_type=history_type or ("~" if update else "+"),
@@ -147,6 +170,7 @@ class ModelHistory(HistoricalRecords):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("history_manager", ModelHistoryManager)
+        kwargs.setdefault("historical_queryset", ModelHistoricalQuerySet)
         kwargs.setdefault("bases", (_ChangesetHistory,))
         super().__init__(*args, **kwargs)
 

@@ -8,6 +8,112 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — one page bound, reader batches and loading labels
+
+Consumer-facing renames and removals, each with its replacement.
+
+- GraphQL: `WorkflowRunType.graph_steps` is `graph_step_runs`; clients select
+  the new field.
+- `require_rebac_queryset(model, actor=None)` reads nothing, whatever the
+  ambient actor or system context. Omit `actor` for REBAC's ambient scope; pass
+  an actor to pin it.
+- `ThreadedModelMixin.thread_attachment_role` is deleted; read
+  `ThreadAttachment.AttachmentRole.CHATTER`.
+- A related container declares `relatedCount: { models }` (was `count: { id,
+  models }`); its container id is the server related count id.
+- Loading owners take `loadingLabel`: `RecordHeader`, `Combobox.Status`,
+  `PaneRowsSkeleton` and `SkeletonStatus` (was `label`), `DetailSurface` and
+  `MetricStrip` (was `loadingMessage`), and `LoadingPanel` (was `message`).
+- `useStorageActionRun` is deleted; storage verbs settle through
+  `useBusyRun().settle(action, fallback, failureTitle?)`.
+- `GROUP_ROWS_MAX_LIMIT` is deleted; `angee.base.pagination.MAX_PAGE_SIZE` is the
+  one page bound. An explicit page size outside it (group rows' `limit`, inbox
+  pages, provenance history) is refused as `BAD_USER_INPUT` through
+  `valid_page_size`; first-N reads (timeline, removed tasks, people search,
+  answered decisions, record runs) clamp to it.
+- `angee.graphql.E003` (the in-memory channel layer beside a Celery broker) runs
+  only for the serving commands (`serve`, `runserver`, plain `check`) through
+  `SERVING_TAG`; build and data commands no longer meet it.
+
+## Unreleased — the inbox reads conversations without record chatter
+
+- `messaging/thread` has two read extension points. `read_granted` takes grants
+  that hold for any conversation (channel, owner, shares, identity rule, admins,
+  bound projects, selected groups); `chatter_read` takes a record's read of its
+  own chatter thread (projects' `record_project` and `record_task`, knowledge's
+  `record_page`). `read` unions both; the new `read_inbox` is `read_granted` alone.
+  `messaging/message#read_inbox` withholds and keeps exactly as `read` does over
+  the thread's `read_inbox`; message `read_granted` now holds only the message's
+  own channel and share grants.
+- `ThreadQuerySet.inbox()` and `MessageQuerySet.inbox()` select `read_inbox`, so
+  every inbox read (results, groups, counts, search, navigator, transcript, feed
+  and revalidation, the generic `threads` and `messages` lists) stops compiling the
+  chatter arms. The inbox excludes record chatter, so its answers are unchanged.
+  A verb that needs another action selects it after `inbox()`.
+- A fragment that unions an arm straight into a thread or message `read` or
+  `read_inbox` is refused by the security check `messaging.E003`. Consumers move a
+  chatter-filtered thread arm from `read_granted` to `chatter_read`; grants for any
+  conversation stay on `read_granted`.
+- Operators re-sync the permission schema (`rebac sync`, which provision runs):
+  messaging revision 23 (it also adds `messaging/part#read_inbox`, through which
+  the inbox lists a part of a readable message), the projects fragment 9 and the
+  knowledge fragment 3; a source host also syncs the `tests.extcontrib` fragment 9.
+  Move every stored REBAC override on a thread or message `read` or `read_inbox`
+  to that definition's `read_granted`, which both reads take. While one remains,
+  or the store is not yet synced, the inbox reads threads, messages and their
+  parts under `read` (`purpose_read_holds`): correct, without the narrower
+  statement.
+
+## Unreleased — dead subsystems removed with their schema
+
+Each removal below changes composed models. A project removes the storage in its
+own native migration history. No framework addon or consumer reads these facts.
+
+- **Extraction correction.** The decision-backed correction writer and
+  everything only it fed are removed: `ExtractionManager.prepare_correction_binding`,
+  `revise_from_decision` and `reviewed_correction_authority`, `CorrectionBinding`,
+  `CorrectionRef`, the outcome's `corrections` list with its readers
+  (`Extraction.corrections`, `fact_correction`, `retained_corrections`,
+  `reviewed_facts`), the helpers only the correction path read
+  (`Extraction.reference` with its `ExtractionRef` value, `failed_at_inference`
+  and `pointers.fact_pointers`), and the `Extraction.correction_decision`
+  foreign key.
+  Nothing called the writer, so no revision holds a correction; retained
+  outcomes may still carry an empty `corrections` list that nothing reads.
+  `Extraction.fact_authority` reports `source` or `unverified`. A project
+  composing `angee.extraction` removes the column with
+  `RemoveField(model_name="extraction", name="correction_decision")` in its
+  `extraction` history; the drop guard admits the autodetected removal while
+  the column is null on every row.
+- **Notification delivery states.** No worker ever advanced or failed a
+  notification, so its delivery lifecycle and diagnostics are removed:
+  `ThreadNotification.NotificationStatus`, `notification_status`,
+  `failure_type`, `failure_reason`, the `ix_thread_notification_pending` and
+  `ix_thread_notification_failed` partial indexes,
+  `ThreadNotificationManager.mark_failed`, `mark_failed_for_message` and
+  `error_count_for_record`, and the queryset's `delivery_errors` with its
+  `DELIVERY_ERROR_STATUSES`. GraphQL drops the three fields from both
+  notification types and the `notification_status` filter field on
+  `thread_notifications`, and the record chatter state drops `message_has_error`
+  and `message_has_error_counter`; clients stop selecting them. A project composing
+  `angee.messaging` removes the two indexes and three columns (`RemoveIndex` and
+  `RemoveField` on `messaging.threadnotification`); the drop guard admits the
+  autodetected removal while every row holds `ready` and empty failure text.
+- **Intake channel triggers.** Channel intake offered `reaction`, `mention`
+  and `command` beside `all_messages`; none of the three ever captured a
+  message. They go with `ChannelIntake.IntakeTrigger` and the `intake_trigger`
+  field, since its one remaining value carries no fact: a channel with an
+  `intake_queue` captures every ingested message. GraphQL drops
+  `ChannelType.intake_trigger` with its update input and its filter, sort and
+  group axes, and the demo channel row drops the key. A project composing
+  `angee.intake` first clears `intake_queue` on channels whose stored trigger
+  is `reaction`, `mention` or `command`, so they keep capturing nothing, and
+  flushes deferred foreign-key checks (`connection.check_constraints()`); then,
+  in the same `messaging` migration (the field folds into the channel table), it
+  removes the column with `RemoveField(model_name="channel", name="intake_trigger")`.
+  The drop guard refuses the autodetected removal while any row holds a retired
+  value.
+
 ## Unreleased — jj workspace slots in the templates
 
 - The `src` workspace template takes `slot_mode` (`worktree`, the default, or

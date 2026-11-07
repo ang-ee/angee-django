@@ -13,21 +13,13 @@ from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.db import connection
 from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import execute_schema
 from angee.integrate.http import HttpClient
 from angee.integrate.states import SyncFailureKind
 from angee.integrate.streams import advance_stream, open_stream, sync_bridge
 from angee.knowledge_integrate_notion.backend import NotionBackend, NotionResponseError
 from angee.knowledge_integrate_notion.schema import schemas
-from tests.conftest import (
-    Link,
-    MarkdownPage,
-    NotionConnection,
-    Page,
-    addon_schema,
-    create_user,
-    execute_schema,
-    make_integration,
-)
+from tests.conftest import Link, MarkdownPage, NotionConnection, Page, addon_schema, create_user, make_integration
 
 
 def node(number, title, *, parent=None, source=False):

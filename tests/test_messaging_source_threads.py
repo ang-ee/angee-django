@@ -3,6 +3,8 @@
 from typing import Any
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -14,10 +16,11 @@ from rebac import (
     write_relationships,
 )
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Thread, ThreadAttachment
 from angee.projects.testing.models import Project, Task
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
-from tests.conftest import create_user, execute_schema, result_data, vault_for
+from tests.conftest import create_user, vault_for
 from tests.test_messaging_graphql import _schema
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -143,3 +146,22 @@ def test_test_contributor_declares_the_chatter_demo_record(sourced: dict[str, An
             ThreadAttachment.objects.unbind_source_thread(doc, thread)
     with actor_context(writer):
         assert ThreadAttachment.objects.unbind_source_thread(doc, thread) == 1
+
+
+def test_a_record_remembers_its_readable_edge_per_actor_until_its_edges_change(sourced: dict[str, Any]) -> None:
+    owner, reader, task, thread = sourced["owner"], sourced["reader"], sourced["task"], sourced["thread"]
+    stranger = create_user("source-stranger")
+    with actor_context(owner):
+        edge = ThreadAttachment.objects.bind_source_thread(task, thread, label="Original request")
+    with actor_context(reader):
+        assert ThreadAttachment.objects.readable_for_record(task, role="source").pk == edge.pk
+        with CaptureQueriesContext(connection) as again:
+            assert ThreadAttachment.objects.readable_for_record(task, role="source").pk == edge.pk
+        assert len(again) == 0
+    # Another actor resolves its own answer: the thread stays unreadable to a stranger.
+    with actor_context(stranger), pytest.raises(PermissionDenied):
+        ThreadAttachment.objects.readable_for_record(task, role="source")
+    with actor_context(owner):
+        ThreadAttachment.objects.unbind_source_thread(task, thread)
+    with actor_context(reader):
+        assert ThreadAttachment.objects.readable_for_record(task, role="source") is None

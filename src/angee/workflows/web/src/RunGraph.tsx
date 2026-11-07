@@ -4,7 +4,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import { Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, RailPanel, StatusBadge, errorMessage, formatDateTime, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent, useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode } from "@angee/ui";
 import { RUN_MODEL, STEP_RUN_MODEL, WorkflowRunGraphDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
-import { projectRunGraph, RUN_GRAPH_EDGE_STYLES, type RunGraphNode } from "./run-graph";
+import { joinStepRuns, projectRunGraph, RUN_GRAPH_EDGE_STYLES, type RunGraphNode } from "./run-graph";
 import { StepRuns } from "./StepRuns";
 import { formatStepPage } from "./step-page";
 
@@ -28,7 +28,8 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
     enabled: active,
   });
   const run = read.data?.workflowrun_by_pk;
-  const graph = run?.id === runId ? run.graph : undefined;
+  const graph = useMemo(() => run?.id === runId && run.graph
+    ? { ...run.graph, nodes: joinStepRuns(run.graph.nodes, run.graph_step_runs) } : undefined, [run, runId]);
   const projected = useMemo(() => graph ? projectRunGraph(graph, selectedKey, { t, statusOptions, waitOptions, resolveTone, locale }) : null,
     [graph, selectedKey, t, statusOptions, waitOptions, resolveTone, locale]);
   const selected = graph?.nodes.find((node) => node.key === selectedKey);
@@ -55,7 +56,7 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
   const errorPanel = read.error ? <ErrorBanner description={errorMessage(read.error, t("run.graphLoadFailed"))}
     actions={<Button onClick={() => void read.refetch()}>{t("run.graphReload")}</Button>} /> : null;
   if (!graph || !projected) return errorPanel ?? (read.data && !run
-    ? <InlineEmpty label={t("run.graphUnavailable")} /> : <LoadingPanel message={t("run.graphLoading")} />);
+    ? <InlineEmpty label={t("run.graphUnavailable")} /> : <LoadingPanel loadingLabel={t("run.graphLoading")} />);
   return <div data-testid="run-graph-canvas" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     {errorPanel}
     <GraphView nodes={projected.nodes} edges={projected.edges} nodeStyles={projected.nodeStyles}

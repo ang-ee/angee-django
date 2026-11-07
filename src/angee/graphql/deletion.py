@@ -493,7 +493,7 @@ class _PreviewRows:
             )
         if actor is None:
             return cls(total_count=len(collected))
-        scoped = require_rebac_queryset(model).with_actor(actor).with_action("read")
+        scoped = require_rebac_queryset(model, actor=actor).with_action("read")
         return cls._from_scoped_collected(collected, scoped)
 
     @classmethod
@@ -537,7 +537,7 @@ class _PreviewRows:
             )
         if actor is None:
             return cls(total_count=total_count)
-        scoped = require_rebac_queryset(queryset.model).with_actor(actor).with_action("read")
+        scoped = require_rebac_queryset(queryset.model, actor=actor).with_action("read")
         visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
         visible_count = visible_queryset.count()
         return cls(

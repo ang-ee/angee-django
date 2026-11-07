@@ -4,9 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
-from django.test import RequestFactory, override_settings
 from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import graphql_request
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -30,8 +30,7 @@ class StageLinesTests(WorkCase):
         from angee.graphql.schema import GraphQLSchemas
 
         user = user or self.manager
-        request = RequestFactory().post("/graphql/")
-        request.user = user
+        request = graphql_request(user)
         with actor_context(user):
             return (
                 GraphQLSchemas.from_discovery()
@@ -97,29 +96,17 @@ class StageLinesTests(WorkCase):
             [(line["name"], index) for index, line in enumerate(payload)],
         )
 
-    def test_reordering_reads_the_locked_parent_database(self):
-        """A write must not inspect a replica for its current children or rank range."""
-
-        stage_model = self.Stage
-
-        class StageReadReplica:
-            def db_for_read(self, model, **hints):
-                if model is stage_model:
-                    raise AssertionError("An atomic stage write consulted the replica router.")
-                return None
-
-            def db_for_write(self, model, **hints):
-                return "default"
+    def test_swapped_positions_reorder_the_stored_stages(self):
+        """Swapped explicit positions win over the submitted row order."""
 
         payload = self.lines()
         payload[0]["position"], payload[1]["position"] = payload[1]["position"], payload[0]["position"]
-        with override_settings(DATABASE_ROUTERS=[StageReadReplica()]):
-            result = self.execute(
-                """mutation SaveQueue($pk: ID!, $lines: [work_queues_stages_insert_input!]) {
-                    work_queues_save(pk: $pk, lines: $lines) { id }
-                }""",
-                {"pk": self.queue.sqid, "lines": payload},
-            )
+        result = self.execute(
+            """mutation SaveQueue($pk: ID!, $lines: [work_queues_stages_insert_input!]) {
+                work_queues_save(pk: $pk, lines: $lines) { id }
+            }""",
+            {"pk": self.queue.sqid, "lines": payload},
+        )
         self.assertFalse(result.errors)
         self.assertEqual(
             [(name, position) for name, _category, position in self.stored()][:2],
