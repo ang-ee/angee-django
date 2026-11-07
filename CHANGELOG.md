@@ -8,6 +8,26 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — the inbox reads conversations without record chatter
+
+- `messaging/thread` has two read extension points. `read_granted` takes grants
+  that hold for any conversation (channel, owner, shares, identity rule, admins,
+  bound projects, selected groups); `chatter_read` takes a record's read of its
+  own chatter thread (projects' `record_project` and `record_task`, knowledge's
+  `record_page`). `read` unions both; the new `read_inbox` is `read_granted` alone.
+  `messaging/message#read_inbox` withholds and keeps exactly as `read` does over
+  the thread's `read_inbox`; message `read_granted` now holds only the message's
+  own channel and share grants.
+- `ThreadQuerySet.inbox()` and `MessageQuerySet.inbox()` select `read_inbox`, so
+  every inbox read (results, groups, counts, search, navigator, transcript, feed
+  and revalidation, the generic `threads` and `messages` lists) stops compiling the
+  chatter arms. The inbox excludes record chatter, so its answers are unchanged.
+  A verb that needs another action selects it after `inbox()`.
+- A fragment that unions an arm straight into a thread or message `read` or
+  `read_inbox` is refused by the security check `messaging.E003`. Consumers move a
+  chatter-filtered thread arm from `read_granted` to `chatter_read`; grants for any
+  conversation stay on `read_granted`.
+
 ## Unreleased — jj workspace slots in the templates
 
 - The `src` workspace template takes `slot_mode` (`worktree`, the default, or
