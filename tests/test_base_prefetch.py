@@ -25,7 +25,9 @@ def test_a_reader_memo_answers_only_the_reader_it_remembered() -> None:
     assert memo.get(row, "write", ALICE) is None
 
 
+@pytest.mark.django_db
 def test_a_reader_memo_never_remembers_without_an_actor_under_sudo_or_none() -> None:
+    # Entering sudo writes REBAC's mandatory bypass audit row.
     memo, row = ReaderMemo("_test_answers"), SimpleNamespace()
     memo.remember(row, "write", None, True)
     memo.remember(row, "read", ALICE, None)
