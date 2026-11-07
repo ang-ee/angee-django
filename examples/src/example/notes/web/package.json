@@ -10,14 +10,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@angee/agents": "workspace:*",
     "@angee/app": "workspace:*",
     "@angee/metadata": "workspace:*",
     "@refinedev/core": "^5.0.12",
     "@angee/provenance": "workspace:*",
-    "@angee/ui": "workspace:*",
-    "date-fns": "^4.1.0",
-    "lucide-react": "^1.21.0"
+    "@angee/ui": "workspace:*"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

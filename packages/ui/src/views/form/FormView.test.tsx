@@ -3391,7 +3391,8 @@ describe("FormView", () => {
     const tabs = await screen.findAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual(["Runs", "Editor"]);
     expect(screen.getByRole("tab", { name: "Editor" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("button", { name: "Editor action" })).toBeTruthy();
+    // The tab strip mounts before the asynchronous record read permits pane content.
+    expect(await screen.findByRole("button", { name: "Editor action" })).toBeTruthy();
     expect(screen.getByTestId("retained-panel-active").textContent).toBe("true");
     expect(await screen.findByText("Active")).toBeTruthy();
     expect(screen.queryByText("ACTIVE")).toBeNull();
@@ -3432,7 +3433,7 @@ describe("FormView", () => {
         { id: "activity", label: "Activity", render: () => <p>Activity content</p> },
       ]} />);
     const editor = await screen.findByRole("tabpanel", { name: "Editor" });
-    const draft = within(editor).getByRole("textbox", { name: "Editor draft" });
+    const draft = await within(editor).findByRole("textbox", { name: "Editor draft" });
     fireEvent.change(draft, { target: { value: "Unsaved draft" } });
     expect(editor.className).toContain("flex-1");
     expect(editor.className).toContain("overflow-hidden");
@@ -3539,7 +3540,7 @@ describe("FormView", () => {
     );
 
     expect((await screen.findAllByRole("tab")).map((tab) => tab.textContent)).toEqual(["Notes", "Activity"]);
-    expect(screen.getByText("Activity panel")).toBeTruthy();
+    expect(await screen.findByText("Activity panel")).toBeTruthy();
     expect(screen.getByLabelText("Reminder")).toBeTruthy();
     // The pane follows the form: the record fills the content area as one sheet, so a short
     // header never stretches over the pane and pushes it below the fold.
