@@ -738,8 +738,10 @@ def test_cancel_close_and_live_updates_reach_every_attached_connection(
 
 @pytest.mark.parametrize("version", [1, 2])
 def test_model_config_and_list_are_agent_scoped(chat: Any, version: int) -> None:
+    """The agent's model is the one session option, offered to a reader of that model."""
     agent, owner, application, _ = chat
-    provider = _provider("acp-model")
+    # Agent ownership does not read the model; the provider's integration owner does.
+    provider = _provider("acp-model", owner=owner)
     with system_context(reason="test ACP selected model"):
         model = InferenceModel.objects.create(provider=provider, name="selected-model")
         Agent.objects.filter(pk=agent.pk).update(model=model)
