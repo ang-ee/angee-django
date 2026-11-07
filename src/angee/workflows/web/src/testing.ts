@@ -221,12 +221,20 @@ export function runGraphFixture(step: StepRun = stepRunFixture()): RunGraphData 
   return { nodes: [
     { key: "inspect", label: "Inspect source", step_label: "Inspect", rank: 0, body_key: null,
       outcomes: [{ outcome: "done", label: "Done" }, { outcome: "error", label: "Needs attention" }],
-      item_counts: [], item_attempts: 0,
+      item_counts: [], item_attempts: 0, step_run_id: id,
       step_run: { id, status, waiting_kind, wait_reason, outcome, outcome_label, failure_reason, attempt,
         page_index, map_total, map_settled, created_at, updated_at, deadline_at, wake_at } },
     { key: "finish", label: "Finish review", step_label: "Finish", rank: 1, body_key: null,
-      outcomes: [], item_counts: [], item_attempts: 0, step_run: null },
+      outcomes: [], item_counts: [], item_attempts: 0, step_run_id: null, step_run: null },
   ], edges: [{ source: "inspect", outcome: "done", target: "finish", taken: false }] };
+}
+
+/** The authored read a joined graph fixture answers: a topology naming its steps by id, and the run's step rows. */
+export function runGraphReadFixture(graph: RunGraphData) {
+  return {
+    graph: { nodes: graph.nodes.map(({ step_run, ...node }) => ({ ...node, step_run_id: step_run?.id ?? null })), edges: graph.edges },
+    graph_steps: graph.nodes.flatMap(({ step_run }) => step_run ? [step_run] : []),
+  };
 }
 
 export function mappedRunGraphFixture(): RunGraphData {

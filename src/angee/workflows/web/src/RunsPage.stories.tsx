@@ -8,7 +8,7 @@ import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
 import { decisionFixture, decisionResourceFixture } from "@angee/decisions/testing";
 import { RunsPage } from "./RunsPage";
 import type { Run, StepRun } from "./testing/documents.console";
-import { runFixture, runGraphFixture, runResourceFixture, recordResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
+import { runFixture, runGraphFixture, runGraphReadFixture, runResourceFixture, recordResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
 import type { RunGraphData } from "./run-graph";
 import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
@@ -107,7 +107,7 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
       if (query.includes("workflowrun_by_pk")) return queryError
         ? jsonResponse({ errors: [{ message: "The run could not be loaded." }] })
         : jsonResponse({ data: { workflowrun_by_pk: unavailable ? null : { ...current, id: variables.id,
-          ...(query.includes("WorkflowRunGraph") ? { graph: graph ?? runGraphFixture(currentSteps[0]) } : {}) } } });
+          ...(query.includes("WorkflowRunGraph") ? runGraphReadFixture(graph ?? runGraphFixture(currentSteps[0])) : {}) } } });
       if (query.includes("workflow_by_pk")) return jsonResponse({ data: { workflow_by_pk: current.version?.workflow } });
       if (query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: current.run_as } });
       if (query.includes("triggerevent_by_pk")) return jsonResponse({ data: { triggerevent_by_pk: { id: "wte_review", display_name: "Review event" } } });
