@@ -23,11 +23,12 @@ from rebac import actor_context, system_context
 
 import tests.test_storage  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Organization, Party
 from angee.storage import schema as storage_schema
 from angee.tags.schema import TaggedNode
 from angee.tags.testing.models import Tag, TagAssignment
-from tests.conftest import File, SchemaAddon, create_user, execute_schema, result_data
+from tests.conftest import File, SchemaAddon, create_user
 from tests.test_storage import drive as drive
 
 # Import after the concrete test models are registered; the source schema resolves

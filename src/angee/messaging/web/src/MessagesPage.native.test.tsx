@@ -54,7 +54,7 @@ function checked(element: HTMLElement): boolean {
   return element.getAttribute("aria-checked") === "true";
 }
 
-function dataProvider({ count = 2, fail = false, transportFailure = false, limitFailure = false } = {}) {
+function dataProvider({ count = 2, limit = 100, fail = false, transportFailure = false, limitFailure = false, limitPending = false } = {}) {
   const rows: MessageListRow[] = Array.from({ length: count }, (_, index) => ({
     id: String(index + 1), title: `Message ${index + 1}`, preview: "A held reply",
     created_at: "2026-10-01T00:00:00Z", channel: { id: "channel", display_name: "Discussion" },
@@ -62,8 +62,9 @@ function dataProvider({ count = 2, fail = false, transportFailure = false, limit
   }));
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     if (meta?.gqlQuery === ActionSelectionLimit) {
+      if (limitPending) return new Promise<never>(() => undefined);
       if (limitFailure) throw new Error("Limit unavailable");
-      return { data: { action_selection_limit: 100 } };
+      return { data: { action_selection_limit: limit } };
     }
     if (meta?.gqlMutation) {
       if (transportFailure) throw new Error("Publish unavailable");
@@ -76,10 +77,15 @@ function dataProvider({ count = 2, fail = false, transportFailure = false, limit
       }
       return { data: { send_held_drafts: results, discard_held_drafts: results } };
     }
-    return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, aggregate: { count } }], totalCount: 1 } };
+    // The leaf groups read carries the group's first page.
+    const variables = meta?.gqlVariables as { with_rows?: boolean; rows_limit?: number } | undefined;
+    return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, aggregate: { count },
+      ...(variables?.with_rows ? { rows: rows.slice(0, variables.rows_limit ?? 0) } : {}) }], totalCount: 1 } };
   });
   const getList = vi.fn(async () => ({ data: [...rows], total: count }));
-  return { rows, custom, getList, mutations: () => custom.mock.calls.filter(([request]) => request.meta?.gqlMutation) };
+  const groupReads = () => custom.mock.calls.filter(([request]) =>
+    !request.meta?.gqlMutation && request.meta?.gqlQuery !== ActionSelectionLimit).length;
+  return { rows, custom, getList, groupReads, mutations: () => custom.mock.calls.filter(([request]) => request.meta?.gqlMutation) };
 }
 
 /** Mount a component as the /messages route renders it: no ambient view above it. */
@@ -159,6 +165,7 @@ test.each([false, true])("a grouped held action discarding=%s sends selected rev
   fireEvent.click(action);
   const dialog = await screen.findByRole("alertdialog");
   expect(f.mutations()).toHaveLength(0);
+  const readsBefore = f.groupReads();
   fireEvent.click(within(dialog).getByRole("button", { name: discarding ? "Discard" : "Send now" }));
   await waitFor(() => expect(f.mutations()).toHaveLength(1));
   expect(f.mutations()[0]![0].meta?.gqlVariables).toEqual({ selection: [
@@ -166,8 +173,8 @@ test.each([false, true])("a grouped held action discarding=%s sends selected rev
   ] });
   await waitFor(() => expect(checked(rowCheckbox("Message 1")) || checked(rowCheckbox("Message 2"))).toBe(false));
   expect(await screen.findByText(`${discarding ? "Discarded one held draft." : "Queued one held draft."}; Revision changed`, { selector: "h2" })).toBeTruthy();
-  // Publishing invalidates the loaded rows. Reselecting captures the on-screen revision.
-  await waitFor(() => expect(f.getList.mock.calls.length).toBeGreaterThan(1));
+  // Publishing invalidates the loaded rows (carried by the groups read). Reselecting captures the on-screen revision.
+  await waitFor(() => expect(f.groupReads()).toBeGreaterThan(readsBefore));
   fireEvent.click(rowCheckbox("Message 2"));
   const retry = await screen.findByRole("button", { name: discarding ? "Discard" : "Send now" });
   await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
@@ -192,15 +199,18 @@ test("a transport refusal keeps selection and permits another attempt", async ()
 });
 
 test("both held verbs disable above the server's selection bound", async () => {
-  const f = await fixture({ held: true, count: 101 });
+  // Only the group's carried first page (20 rows) is loaded and selectable, so the server's bound sits below it.
+  const f = await fixture({ held: true, count: 3, limit: 2 });
   const all = screen.getByRole("checkbox", { name: "Select all loaded rows" });
   fireEvent.click(all);
   expect(checked(all)).toBe(true);
-  expect((await screen.findByRole("button", { name: "Send now" })).hasAttribute("disabled")).toBe(true);
-  expect(screen.getByRole("button", { name: "Discard" }).hasAttribute("disabled")).toBe(true);
-  const reason = await screen.findByText("Select at most 100 held drafts.");
-  expect(screen.getByRole("button", { name: "Send now" }).getAttribute("aria-describedby")).toBe(reason.id);
-  expect(screen.getByRole("button", { name: "Discard" }).getAttribute("aria-describedby")).toBe(reason.id);
+  const reason = await screen.findByText("Select at most 2 held drafts.");
+  for (const name of ["Send now", "Discard"]) {
+    const button = screen.getByRole("button", { name });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(button.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(button.getAttribute("aria-busy")).toBeNull();
+  }
   expect(f.mutations()).toHaveLength(0);
 });
 
@@ -227,7 +237,19 @@ test("an action limit read error explains both disabled verbs instead of loading
     const button = screen.getByRole("button", { name });
     expect(button.hasAttribute("disabled")).toBe(true);
     expect(button.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(button.getAttribute("aria-busy")).toBeNull();
   }
-  expect(screen.queryByText("Loading the action selection limit.")).toBeNull();
+  expect(f.mutations()).toHaveLength(0);
+});
+
+test("while the action limit loads both verbs are busy, with no reason copy", async () => {
+  const f = await fixture({ held: true, limitPending: true });
+  fireEvent.click(rowCheckbox("Message 1"));
+  for (const name of ["Send now", "Discard"]) {
+    const button = await screen.findByRole("button", { name });
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(button.getAttribute("aria-describedby")).toBeNull();
+  }
   expect(f.mutations()).toHaveLength(0);
 });

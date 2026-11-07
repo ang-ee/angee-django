@@ -1,12 +1,13 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { LoadingPanel } from "@angee/ui";
 
+// Every shape is a skeleton; `loadingLabel` is the accessible label, never visible copy.
 const meta = {
   title: "Fragments/LoadingPanel",
   component: LoadingPanel,
-  parameters: { layout: "centered" },
+  parameters: { layout: "padded" },
   args: {
-    message: "Loading workspace",
+    loadingLabel: "Loading workspace",
   },
 } satisfies Meta<typeof LoadingPanel>;
 
@@ -21,7 +22,15 @@ export const State: Story = {
 export const Inline: Story = {
   args: {
     density: "inline",
-    message: "Loading folder",
+    loadingLabel: "Loading folder",
+  },
+  render: (args) => <LoadingPanel {...args} />,
+};
+
+export const Page: Story = {
+  args: {
+    shape: "page",
+    loadingLabel: "Loading page",
   },
   render: (args) => <LoadingPanel {...args} />,
 };

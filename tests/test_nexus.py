@@ -20,6 +20,8 @@ from rebac import (
 )
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.messaging.testing.models import (
     Handle,
     Message,
@@ -36,12 +38,7 @@ from angee.nexus.models import Cadence as AbstractCadence
 from angee.nexus.models import Tie as AbstractTie
 from angee.nexus.testing.models import Cadence, Tie
 from tests import test_messaging_graphql
-from tests.conftest import (
-    SchemaAddon,
-    assert_private_hasura_insert_access,
-    execute_schema,
-)
-from tests.conftest import result_data as _data
+from tests.conftest import SchemaAddon, assert_private_hasura_insert_access
 from tests.test_messaging import ThreadedTicket
 from tests.test_project_access import project_access_schema as project_access_schema
 

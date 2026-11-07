@@ -38,7 +38,7 @@ Commands live in [Composition and schema](../../../../docs/checks.md#composition
   rerun native compose and the schema check from
   [Composition and schema](../../../../docs/checks.md#composition-and-schema). A
   missing `runtime/schemas/*.graphql` makes Vite ENOENT and the SPA silently
-  fails to mount (every e2e fails at list load) while `:5173` still returns 200;
+  fails to mount (every e2e fails at list load) while `localhost:5173` still returns 200;
   check `runtime/schemas/` before chasing app/test regressions.
 - **Data migrations access REBAC-scoped models through `_base_manager`, and
   backfills need a rows-present proof.**

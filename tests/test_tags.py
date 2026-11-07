@@ -36,21 +36,13 @@ from rebac.models import active_relationship_model
 from rebac.roles import grant as grant_role
 
 from angee.base.models.identity import public_id_for
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
 from angee.tags import schema as tags_schema
 from angee.tags.models import TaggedModel
 from angee.tags.testing.models import Tag, TagAssignment
-from tests.conftest import (
-    File,
-    Page,
-    addon_schema,
-    create_platform_admin,
-    create_user,
-    execute_schema,
-    result_data,
-    vault_for,
-)
+from tests.conftest import File, Page, addon_schema, create_platform_admin, create_user, vault_for
 from tests.mtidemo.models import MtiParent
 
 

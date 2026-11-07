@@ -20,7 +20,6 @@ export const EMPTY_SCHEMA_FIELD_METADATA: SchemaFieldMetadata = {
 };
 
 const ModelMetadataContext = createContext<SchemaFieldMetadata | null>(null);
-const ActiveGraphQLSchemaContext = createContext<string | null>(null);
 
 export function ModelMetadataProvider({
   metadata = EMPTY_SCHEMA_FIELD_METADATA,
@@ -75,21 +74,4 @@ export function useModelRootFields(
     }
     return model.resource.roots;
   }, [metadata, modelLabel, options.required]);
-}
-
-export function ActiveGraphQLSchemaProvider({
-  schema,
-  children,
-}: {
-  schema: string;
-  children: ReactNode;
-}): ReactNode {
-  return createElement(ActiveGraphQLSchemaContext.Provider, {
-    value: schema,
-    children,
-  });
-}
-
-export function useActiveGraphQLSchemaName(): string | null {
-  return useContext(ActiveGraphQLSchemaContext);
 }

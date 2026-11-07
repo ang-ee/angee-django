@@ -7,7 +7,7 @@ const sdk = vi.hoisted(() => ({ query: vi.fn(), navigate: vi.fn() }));
 vi.mock("@angee/refine", async (original) => ({
   ...(await original<typeof import("@angee/refine")>()), useAuthoredQuery: sdk.query,
 }));
-import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedPane, containersFromChildren, createRouteHref, type ChatterViewContext } from "@angee/ui";
+import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedCountProbe, RelatedPane, containersFromChildren, createRouteHref, type ChatterViewContext } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { StorageFileAttachments } from "./data/documents";
@@ -36,11 +36,18 @@ function Group() {
   </AppRuntimeProvider></InAppLinkProvider></Provider>;
 }
 
-test("reverse attachments count only readable targets and use their shared reference labels and hrefs", async () => {
-  sdk.query.mockReturnValue({ data: { file_attachments: [
+/** The related count and the redacted rows answer their own reads. */
+function reads(count: number, attachments: readonly object[]) {
+  sdk.query.mockImplementation((_document: unknown, variables?: { groups?: string[] }) => variables?.groups
+    ? { data: { related_counts: [{ group: "storage.attached-to", count }] } }
+    : { data: { file_attachments: attachments } });
+}
+
+test("the Attached to label counts its readable edges and rows use their shared reference labels and hrefs", async () => {
+  reads(1, [
     { id: "fat_1", model_label: "example.Record", record_id: "rec_1" },
     { id: "fat_hidden", model_label: null, record_id: null },
-  ] } });
+  ]);
   const view = render(<Group />);
   expect(sdk.query).toHaveBeenCalledWith(StorageFileAttachments, { file: "fil_1" }, { enabled: true, models: ["storage.FileAttachment"] });
   expect(screen.getByText("Attached to").closest("li")?.textContent).toBe("Attached to· 1");
@@ -48,7 +55,7 @@ test("reverse attachments count only readable targets and use their shared refer
   expect(row.getAttribute("href")).toBe("/records/rec_1");
   fireEvent.click(row);
   expect(sdk.navigate).toHaveBeenCalledWith("/records/rec_1");
-  sdk.query.mockReturnValue({ data: { file_attachments: [] } });
+  reads(0, []);
   view.rerender(<Group />);
   expect(screen.queryByText("Attached to")).toBeNull();
   expect(screen.queryByRole("link")).toBeNull();
@@ -61,4 +68,16 @@ test("the reverse read shows loading and errors while its count is unknown", () 
   sdk.query.mockReturnValue({ data: undefined, error: new Error("Read failed") });
   view.rerender(<Group />);
   expect(screen.getByRole("alert").textContent).toContain("Read failed");
+});
+
+test("the Attached to badge counts its declared related count without the attachment read", () => {
+  sdk.query.mockReset();
+  reads(2, []);
+  const onCount = vi.fn();
+  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
+    "storage.File#groups": { "storage.attached-to": fileAttachedToGroup },
+  }) }}><RelatedCountProbe id="related" context={context} onCount={onCount} /></AppRuntimeProvider>);
+  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "storage.File", id: "fil_1", groups: ["storage.attached-to"] }, expect.anything());
+  expect(sdk.query).not.toHaveBeenCalledWith(StorageFileAttachments, expect.anything(), expect.anything());
+  expect(onCount).toHaveBeenLastCalledWith("related", 2);
 });

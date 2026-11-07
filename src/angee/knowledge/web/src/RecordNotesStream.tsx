@@ -56,7 +56,7 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, { invalidateModels: BINDING_MODELS });
   const pendingNote = useRef<{ fingerprint: string; key: string } | null>(null);
 
-  if (bindings.isPending && !bindings.data) return <SkeletonStatus label={t("notes.loading")} className="space-y-3 p-4">
+  if (bindings.isPending && !bindings.data) return <SkeletonStatus loadingLabel={t("notes.loading")} className="space-y-3 p-4">
     <Skeleton size="lg" /><SkeletonText lines={2} size="lg" /><SkeletonText lines={2} size="lg" />
   </SkeletonStatus>;
   if (bindings.error && !bindings.data) return <ErrorBanner description={errorMessage(bindings.error, t("notes.loadError"))} />;

@@ -19,15 +19,6 @@
   },
   {
     "package": "@angee/app",
-    "name": "IDENTITY_STALE_TIME",
-    "source": "packages/app/src/providers/auth.tsx",
-    "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/app",
     "name": "LOGIN_CONTAINERS",
     "source": "packages/app/src/auth/LoginPage.tsx",
     "kind": "contribution",
@@ -283,15 +274,6 @@
   {
     "package": "@angee/app",
     "name": "useRuntimeAuthState",
-    "source": "packages/app/src/providers/auth.tsx",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/app",
-    "name": "useUpdatePreferences",
     "source": "packages/app/src/providers/auth.tsx",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
@@ -893,15 +875,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "COLOR_SCHEME_STORAGE_KEY",
-    "source": "packages/ui/src/lib/color-scheme.ts",
-    "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "Calendar",
     "source": "packages/ui/src/ui/calendar.tsx",
     "kind": "primitive",
@@ -1309,6 +1282,15 @@
   {
     "package": "@angee/ui",
     "name": "ComboboxSearch",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxStatus",
     "source": "packages/ui/src/ui/combobox.tsx",
     "kind": "primitive",
     "owner": "@angee/ui:Combobox",
@@ -1801,15 +1783,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "DashboardRefreshSchema",
-    "source": "packages/ui/src/dashboard/headless.ts",
-    "kind": null,
-    "reason": "Schema infrastructure: validates serialized runtime contracts.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "DashboardSnapshotSchema",
     "source": "packages/ui/src/dashboard/headless.ts",
     "kind": null,
@@ -1824,15 +1797,6 @@
     "kind": "surface",
     "status": "stable",
     "storyId": "views-dashboardsurface--overview"
-  },
-  {
-    "package": "@angee/ui",
-    "name": "DashboardTargetSchema",
-    "source": "packages/ui/src/dashboard/headless.ts",
-    "kind": null,
-    "reason": "Schema infrastructure: validates serialized runtime contracts.",
-    "status": "stable",
-    "storyId": null
   },
   {
     "package": "@angee/ui",
@@ -3257,6 +3221,15 @@
   {
     "package": "@angee/ui",
     "name": "PaneRows",
+    "source": "packages/ui/src/communication/pane-list.tsx",
+    "kind": "fragment",
+    "owner": "@angee/ui:PaneRow",
+    "status": "stable",
+    "storyId": "communication-panerow--default"
+  },
+  {
+    "package": "@angee/ui",
+    "name": "PaneRowsSkeleton",
     "source": "packages/ui/src/communication/pane-list.tsx",
     "kind": "fragment",
     "owner": "@angee/ui:PaneRow",
@@ -5279,33 +5252,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "WidgetDataSpecSchema",
-    "source": "packages/ui/src/dashboard/headless.ts",
-    "kind": null,
-    "reason": "Schema infrastructure: validates serialized runtime contracts.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "WidgetMeasureSchema",
-    "source": "packages/ui/src/dashboard/headless.ts",
-    "kind": null,
-    "reason": "Schema infrastructure: validates serialized runtime contracts.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "WidgetSourceSchema",
-    "source": "packages/ui/src/dashboard/headless.ts",
-    "kind": null,
-    "reason": "Schema infrastructure: validates serialized runtime contracts.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "WidgetSpecSchema",
     "source": "packages/ui/src/dashboard/headless.ts",
     "kind": null,
@@ -5427,15 +5373,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "applyColorSchemePreference",
-    "source": "packages/ui/src/lib/color-scheme.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "applyDeveloperModeSearch",
     "source": "packages/ui/src/runtime/developer-mode.ts",
     "kind": null,
@@ -5534,15 +5471,6 @@
     "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
     "reason": "Headless first-paint lifecycle bundled by app composition.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "buildMenuTree",
-    "source": "packages/ui/src/chrome/menu-tree.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },
@@ -7058,15 +6986,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "readAppearancePreferences",
-    "source": "packages/ui/src/theme/appearance.tsx",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "readDndPayload",
     "source": "packages/ui/src/lib/dnd.ts",
     "kind": null,
@@ -7182,15 +7101,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "relationOptionsFromRows",
-    "source": "packages/ui/src/views/relation/relation-options.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "relationSelectedOption",
     "source": "packages/ui/src/views/relation/relation-options.ts",
     "kind": null,
@@ -7220,15 +7130,6 @@
     "package": "@angee/ui",
     "name": "resizeDashboardRect",
     "source": "packages/ui/src/dashboard/layout.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "resolveColorSchemePreference",
-    "source": "packages/ui/src/lib/color-scheme.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
@@ -7636,15 +7537,6 @@
     "name": "switchVariants",
     "source": "packages/ui/src/ui/switch.tsx",
     "kind": "token",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "systemColorScheme",
-    "source": "packages/ui/src/lib/color-scheme.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },
@@ -8944,15 +8836,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "validateDashboardLayout",
-    "source": "packages/ui/src/dashboard/headless.ts",
-    "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "validateResourceViewPreset",
     "source": "packages/ui/src/views/resource/model/favorites.ts",
     "kind": null,
@@ -9027,15 +8910,6 @@
     "package": "@angee/ui",
     "name": "withResourceViewScope",
     "source": "packages/ui/src/views/resource/resource-view-context.tsx",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "writeAppearancePreferences",
-    "source": "packages/ui/src/theme/appearance.tsx",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",

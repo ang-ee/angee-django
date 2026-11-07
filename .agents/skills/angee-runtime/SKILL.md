@@ -13,7 +13,7 @@ an owner. Normal application data changes belong to their addon.
 
 | Concern | Owner |
 |---|---|
-| Build/serving mode and reloader parent | `django_compose.management.execute` |
+| Build/serving mode and reloader parent | `django_compose.management.execute`, entered through `angee.server.management.execute` |
 | Composition snapshot and app closure | `django_compose.conf`, `snapshot`, `components` |
 | Models and structural integrations | `django_compose.models`, `model_composition`, `declarations` |
 | Artifact publication and serving verification | `django_compose.build`, `artifacts`, `serving` |

@@ -621,6 +621,17 @@ describe("ConsoleLayout", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Activity 2" }));
     expect(screen.getByText("Revision one")).toBeTruthy();
   });
+
+  test("a compact chatter drawer stays closed on first registration", async () => {
+    largeViewport = false;
+    renderInRouter(<ConsoleLayout>
+      <ChatterPublisher />
+      <section aria-label="Page body">Compact body</section>
+    </ConsoleLayout>);
+    await screen.findByText("Compact body");
+    expect(await screen.findByRole("button", { name: "Open chatter" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Context" })).toBeNull();
+  });
 });
 
 function ChatterPublisher(): null {

@@ -2,13 +2,14 @@
 
 import pytest
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, WorkflowRun
-from tests.conftest import addon_schema, create_user, execute_schema, result_data
+from tests.conftest import addon_schema, create_user
 from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")

@@ -102,10 +102,12 @@ export function useTrashRecord(resource: DataResourceMetadata | null | undefined
     : {};
   const [trashRecord, trashState] = useAuthoredResourceMutation(TrashRecord, {
     ...options,
+    errorNotification: false,
     shouldInvalidate: (data) => data?.trash_record.ok === true,
   });
   const [restoreRecord, restoreState] = useAuthoredResourceMutation(RestoreRecord, {
     ...options,
+    errorNotification: false,
     shouldInvalidate: (data) => data?.restore_record.ok === true,
   });
   const trash = React.useCallback(async (id: string, name?: string): Promise<boolean> => {

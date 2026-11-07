@@ -30,7 +30,7 @@ export function BoardSkeleton({
 }): React.ReactElement {
   return (
     <SkeletonStatus
-      label={loadingLabel}
+      loadingLabel={loadingLabel}
       className={BOARD_SCROLL_SURFACE_CLASS}
     >
       {Array.from({ length: Math.max(1, laneCount) }, (_, laneIndex) => (

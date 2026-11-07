@@ -84,6 +84,14 @@ test.each(["loading", "empty", "error"] as const)("item collections retain the s
   expect(screen.queryByRole("listitem")).toBeNull();
 });
 
+test("a pending first page loads as pane-row skeletons instead of loading copy", async () => {
+  fixture({ mode: "loading" });
+  const status = await screen.findByRole("status");
+  expect(status.textContent).toBe("Loading…");
+  expect([...status.children].filter((child) => child.getAttribute("aria-hidden") === "true")).toHaveLength(4);
+  expect(screen.queryAllByText("Loading…", { ignore: ".sr-only, script, style" })).toEqual([]);
+});
+
 test.each([
   { view: "board" as const },
 ])("unsupported item view state blocks reads and resets through the resource owner", async (state) => {

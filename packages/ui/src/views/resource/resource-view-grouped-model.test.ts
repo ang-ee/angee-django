@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import type { UseAngeeGroupByResult } from "@angee/refine";
+import { MAX_PAGE_SIZE, type UseAngeeGroupByResult } from "@angee/refine";
 import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { enUiMessages } from "../../i18n";
@@ -108,8 +108,12 @@ describe("buildGroupedRenderModel", () => {
       { label: "No value", count: 3 }, { label: "Blank", count: 2 },
     ]);
     expect(new Set(headers.map(({ bucketKey }) => bucketKey)).size).toBe(2);
+    // Page 2 is requested through each bucket's drill; page 1 rides on the groups read.
     const expanded = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, {
-      ...input, expandedKeys: new Set(headers.map(({ bucketKey }) => bucketKey)),
+      ...input,
+      leafPageSize: 1,
+      expandedKeys: new Set(headers.map(({ bucketKey }) => bucketKey)),
+      paginationByScope: Object.fromEntries(headers.map(({ bucketKey }) => [bucketKey, { pageIndex: 1, pageSize: 1 }])),
     });
     expect(expanded.leafScopes.map(({ filter }) => filter)).toEqual([
       { status: { isNull: true } }, { status: { exact: "" } },
@@ -201,7 +205,11 @@ describe("buildGroupedRenderModel", () => {
         }),
       }]]),
       EMPTY_ROWS,
-      { ...leafParams, expandedKeys: new Set([header.bucketKey]) },
+      {
+        ...leafParams,
+        expandedKeys: new Set([header.bucketKey]),
+        paginationByScope: { [header.bucketKey]: { pageIndex: 1, pageSize: 20 } },
+      },
     );
     expect(failed.items).toContainEqual(expect.objectContaining({
       kind: "status", message: "Request failed.", tone: "danger",
@@ -355,4 +363,59 @@ test("leaf page size is shared by its query and header pager", () => {
   expect(expanded.items.find((item) => item.kind === "groupHeader")?.pager).toMatchObject({
     pageKey: header.bucketKey, page: 2, pageSize: 50, unit: "records",
   });
+});
+
+
+test("the leaf groups read carries each group's first page; only later pages are requested", () => {
+  const leafParams = params({ groupStack: [{ field: "status" }], leafPageSize: 3 });
+  const initial = buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS, leafParams);
+  expect(initial.groupScopes[0]).toMatchObject({ leafPageSize: 3, query: { rows: { limit: 3 } } });
+  const rootKey = initial.groupScopes[0]!.key;
+  const rows = [{ id: "r1" }, { id: "r2" }, { id: "r3" }];
+  const results = new Map([[rootKey, result([{ key: { status: "ACTIVE" }, count: 5, rows }])]]);
+  const collapsed = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, leafParams);
+  const header = collapsed.items.find((item) => item.kind === "groupHeader")!;
+  const expanded = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, {
+    ...leafParams, expandedKeys: new Set([header.bucketKey]),
+  });
+  expect(expanded.leafScopes).toEqual([]);
+  expect(expanded.leafKeys).toEqual([header.bucketKey]);
+  expect(expanded.carriedLeaves.get(header.bucketKey)).toMatchObject({ rows, total: 5, error: null });
+
+  const second = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, {
+    ...leafParams,
+    expandedKeys: new Set([header.bucketKey]),
+    paginationByScope: { [header.bucketKey]: { pageIndex: 1, pageSize: 3 } },
+  });
+  expect(second.carriedLeaves.size).toBe(0);
+  expect(second.leafScopes).toMatchObject([{ key: header.bucketKey, page: 2, pageSize: 3 }]);
+});
+
+test("a declared leaf page size larger than the server's page bound is clamped to it", () => {
+  const leafParams = params({ groupStack: [{ field: "status" }], leafPageSize: MAX_PAGE_SIZE + 400 });
+  const initial = buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS, leafParams);
+  expect(initial.groupScopes[0]).toMatchObject({ leafPageSize: MAX_PAGE_SIZE, query: { rows: { limit: MAX_PAGE_SIZE } } });
+});
+
+test("a first page the groups read did not carry is an error, not a per-group request", () => {
+  const leafParams = params({ groupStack: [{ field: "status" }] });
+  const initial = buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS, leafParams);
+  const results = new Map([[initial.groupScopes[0]!.key, result([{ key: { status: "ACTIVE" }, count: 2 }])]]);
+  const collapsed = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, leafParams);
+  const header = collapsed.items.find((item) => item.kind === "groupHeader")!;
+  const expanded = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, {
+    ...leafParams, expandedKeys: new Set([header.bucketKey]),
+  });
+  expect(expanded.leafScopes).toEqual([]);
+  expect(expanded.items).toContainEqual(expect.objectContaining({ kind: "status", tone: "danger" }));
+});
+
+test("only the leaf group level asks the groups read to carry rows", () => {
+  const { rootKey, rootResult, bucketKey } = rootFixture();
+  const expanded = buildGroupedRenderModel<Row>(
+    new Map([[rootKey, rootResult]]), EMPTY_LEAVES, EMPTY_ROWS, params({ expandedKeys: new Set([bucketKey]) }),
+  );
+  expect(expanded.groupScopes[0]!.query.rows).toBeUndefined();
+  expect(expanded.groupScopes[0]!.leafPageSize).toBeUndefined();
+  expect(expanded.groupScopes[1]).toMatchObject({ leafPageSize: 20, query: { rows: { limit: 20 } } });
 });

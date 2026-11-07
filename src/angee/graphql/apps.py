@@ -9,8 +9,9 @@ from django.core import checks
 from sentry_sdk.integrations.logging import ignore_logger
 
 from angee.base.hooks import check_hooks
+from angee.server.checks import SERVING_TAG
 
-check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS",))
+check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS", "ANGEE_GRAPHQL_RELATED_COUNTS"))
 
 
 class GraphQLConfig(AppConfig):
@@ -18,17 +19,7 @@ class GraphQLConfig(AppConfig):
 
     default = True
     name = "angee.graphql"
-    compose_urls = "angee.graphql.urls"
     requires_apps = ('channels', 'django.contrib.auth', 'django.contrib.sessions')
-
-    def compose_asgi(self):
-        """Contribute the single Channels protocol owner after app population."""
-
-        from django_compose.asgi import AsgiContribution
-
-        from angee.graphql.asgi import websocket_application
-
-        return AsgiContribution(protocols={"websocket": websocket_application()})
 
     def ready(self) -> None:
         """Register schema checks and connect model-change hooks."""
@@ -46,12 +37,14 @@ class GraphQLConfig(AppConfig):
         from django_compose.serving import mode
 
         from angee.graphql import field_types  # noqa: F401
-        from angee.graphql.checks import check_graphql_schemas
+        from angee.graphql.checks import check_graphql_channel_layer, check_graphql_schemas
         from angee.graphql.publishing import connect_change_publishers
+        from angee.graphql.related_counts import check_related_counts
 
         checks.register(check_settings, checks.Tags.models)
-
+        checks.register(check_related_counts, checks.Tags.models)
         checks.register(check_graphql_schemas)
+        checks.register(check_graphql_channel_layer, SERVING_TAG, deploy=True)
         if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None and mode() is None:
             connect_change_publishers()
         # Compose connects in SchemaIntegration after all ready callbacks. Bare

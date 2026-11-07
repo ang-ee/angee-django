@@ -8,11 +8,12 @@ from rebac import to_subject_ref
 from angee.base.identity import public_subject_ref
 from angee.graphql import records
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun
-from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
+from tests.conftest import SchemaAddon, create_user
 from tests.test_workflows_cancel import cancellations
 from tests.workflow_steps import Echo, document
 

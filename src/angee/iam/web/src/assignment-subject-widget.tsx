@@ -42,9 +42,10 @@ export function subjectsWidget({ kinds }: { kinds: readonly AssignmentSubjectKin
           {...field?.controlProps}
           value=""
           options={available}
+          loading={subjects.loading}
           disabled={subjects.isFetching || subjects.error != null}
           aria-label={label}
-          placeholder={subjects.isFetching ? t("assignmentSubjects.loading") : t("assignmentSubjects.add")}
+          placeholder={t("assignmentSubjects.add")}
           onValueChange={(subject) => {
             if (!subject || selected.includes(subject)) return;
             update([...selected, subject]);

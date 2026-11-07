@@ -23,8 +23,10 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.models.base import record_display_label
 from angee.base.models.refs import RecordRefMixin
 from angee.base.permissions import require_rebac_queryset
+from angee.base.prefetch import prefetched
 from angee.base.refs import RecordRef
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
@@ -50,6 +52,22 @@ class RecordPointerType:
         )
 
 _UNCACHED = object()
+_REFERENCE_TARGET = "_angee_reference_target"
+
+
+def relation_read_queryset[M: models.Model](model: type[M], source: models.QuerySet[Any]) -> RebacQuerySet[M]:
+    """``model``'s ``read`` queryset for the rows ``source`` relates to, read as ``source`` reads.
+
+    The reader is REBAC's ``relation_actor(source)``: the source's pinned actor, else
+    the ambient one. With neither, REBAC's ambient scope answers, as it does for
+    ``source`` itself: system context reads unscoped and an actorless read fails
+    closed. Relation guards, reference access and relation-id decoding read their
+    targets through it, never through an explicit ``None`` reader, which reads nothing.
+    """
+
+    actor = relation_actor(source)
+    related = require_rebac_queryset(model) if actor is None else require_rebac_queryset(model, actor=actor)
+    return related.with_action("read")
 
 
 class _ActorScopedSubquery(models.Expression):
@@ -96,14 +114,16 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
     content_types = ContentType.objects.filter(pk__in=reference_rows.order_by().values_list(
         reference.ct_field, flat=True,
     )).order_by("app_label", "model")
-    actor = relation_actor(queryset)
     readable = models.Q(pk__in=[])
     for content_type in content_types:
         model = content_type.model_class()
         if model is None:
             continue
-        targets = require_rebac_queryset(model).with_actor(actor).with_action("read")
-        keys = targets.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
+        keys = (
+            relation_read_queryset(model, queryset)
+            .order_by()
+            .annotate(_angee_reference_key=Cast("pk", output_field=key_field))
+        )
         readable |= models.Q(**{
             reference.ct_field_attname: content_type.pk,
             f"{reference.fk_field}__in": _ActorScopedSubquery(keys, "_angee_reference_key"),
@@ -111,6 +131,12 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
     return queryset.annotate(_angee_record_readable=models.ExpressionWrapper(
         readable, output_field=models.BooleanField(),
     ))
+
+
+def readable_record_references(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    """Keep only the generic references whose targets the actor currently reads."""
+
+    return with_record_reference_access(queryset).filter(_angee_record_readable=True)
 
 
 @strawberry.type
@@ -133,6 +159,31 @@ class RecordReferenceNode(AngeeNode):
     def reference_id(self) -> PublicID | None:
         row = cast(Any, self)
         return optional_public_id(row.record_public_id or None) if _record_readable(row) else None
+
+    def reference_label(self, info: Info) -> str | None:
+        """Return the readable target's own label, read under the reader's scope.
+
+        The batched annotation gates the label exactly as it gates the identity
+        fields, so a hidden target is never loaded. Declare
+        :func:`record_reference_targets` as the field's prefetch hint: a list then
+        reads each referenced type's targets once, and a row loaded another way
+        reads its own target through the same prefetch.
+        """
+
+        row = cast(Any, self)
+        if current_actor() is None or not _record_readable(row):
+            return None
+        target = prefetched(row, _REFERENCE_TARGET, lambda: record_reference_targets(info))
+        return record_display_label(target) if target is not None else None
+
+
+def record_reference_targets(info: Info) -> models.Prefetch:
+    """Prefetch a reference list's readable targets, one read per referenced type, for its labels."""
+
+    field = cast(StrawberryDjangoField, info._field)
+    assert field.origin_django_type is not None
+    model = cast(type[RecordRefMixin], field.origin_django_type.model)
+    return model.record_targets_prefetch(current_actor(), to_attr=_REFERENCE_TARGET)
 
 
 def _record_readable(row: Any) -> bool:
@@ -163,6 +214,9 @@ def actor_scoped_relation_expression(
     becomes SQL ``NULL``. Direct relation keys use the same guard, merging every
     unreadable target into one null bucket without losing source rows. Paths
     with no protected target need no override and return ``None``.
+    Relation guards use REBAC's projection scope: a bound actor (pinned or
+    ambient) scopes the related read, ambient system scope bypasses when no
+    actor is bound, and a missing actor fails closed.
     ``value`` substitutes a model-owned expression for the path's scalar value;
     sort aliases compose the same guard around each referenced path.
     """
@@ -184,7 +238,6 @@ def actor_scoped_relation_expression(
             f"{queryset.model._meta.label}.{field_path} must traverse to-one relations to a scalar field"
         )
 
-    actor = relation_actor(queryset)
     guards: list[models.Q] = []
     traversed: list[str] = []
     parts = field_path.split("__")
@@ -194,7 +247,7 @@ def actor_scoped_relation_expression(
         if not model_resource_type(related_model):
             traversed.append(part)
             continue
-        related_queryset = require_rebac_queryset(related_model).with_actor(actor).with_action("read")
+        related_queryset = relation_read_queryset(related_model, queryset)
 
         if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
             lookup = "__".join((*traversed, relation.attname))
@@ -316,13 +369,9 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
         if related_model is None:
             # A public-ID scalar has no nested model projection to optimize.
             return models.Prefetch(field_name)
-        actor = current_actor()
-        manager = require_rebac_queryset(related_model)
-        queryset: models.QuerySet[models.Model] = (
-            manager.none()
-            if actor is None
-            else manager.with_actor(actor).with_action("read")
-        )
+        queryset: models.QuerySet[models.Model] = require_rebac_queryset(
+            related_model, actor=current_actor(),
+        ).with_action("read")
         queryset = run_type_get_queryset(queryset, field.django_type, info)
         assert field.origin_django_type is not None
         relation = field.origin_django_type.model._meta.get_field(field_name)

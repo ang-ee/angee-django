@@ -25,5 +25,5 @@ def end_unreadable_follows(*, instance: ThreadedModelMixin, using: str, **_kwarg
     """End record follows synchronously after the access owner revokes a grant."""
 
     apps.get_model("messaging", "ThreadFollower").objects.db_manager(using).end_unreadable_for_record(
-        instance, role=instance.thread_attachment_role,
+        instance, role=apps.get_model("messaging", "ThreadAttachment").AttachmentRole.CHATTER,
     )

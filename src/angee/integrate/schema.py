@@ -25,7 +25,7 @@ from django.db.models import Count, Prefetch
 from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
-from rebac import PermissionDenied, check_new, system_context, to_subject_ref
+from rebac import PermissionDenied, check_new, generic_target, system_context, to_subject_ref
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -35,6 +35,7 @@ from strawberry_django.utils.requests import get_request
 
 from angee.base.exceptions import exception_text
 from angee.base.models.identity import public_id_of
+from angee.base.pagination import MAX_PAGE_SIZE
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -55,6 +56,7 @@ from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
+from angee.graphql.related_counts import RelatedCount
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
@@ -1333,7 +1335,7 @@ _VENDOR_RESOURCE = hasura_model_resource(
     VendorType,
     model=Vendor,
     name="vendors",
-    filterable=["id", "slug", "display_name", "updated_at"],
+    filterable=["id", "slug", "display_name", "created_at", "updated_at"],
     sortable=["slug", "display_name", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["created_at"],
@@ -1936,6 +1938,18 @@ _CONSOLE_TYPES: list[object] = [
     *_EXTERNAL_ACCOUNT_RESOURCE.types,
     *_CREDENTIAL_RESOURCE.types,
 ]
+
+
+def related_counts() -> tuple[RelatedCount, ...]:
+    """A record's retained sources: the record_links rows the Sources group lists, by exact pointer.
+
+    The group lists one page of the bound every page shares, so its count stops there too.
+    """
+
+    return (RelatedCount("integrate.sources", lambda record: RecordLink._default_manager.filter(
+        **generic_target(record).lookups(RecordLink, "target"),
+    ), limit=MAX_PAGE_SIZE),)
+
 
 schemas = {
     "public": {

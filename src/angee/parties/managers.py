@@ -19,7 +19,6 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
-from enum import StrEnum
 from itertools import chain, combinations, groupby, islice
 from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
 
@@ -34,7 +33,6 @@ from rebac import (
     PermissionDenied,
     actor_context,
     current_actor,
-    database_context,
     system_context,
 )
 from rebac.actors import is_sudo, to_subject_ref
@@ -43,6 +41,7 @@ from angee.base.hooks import resolve_hooks
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.trash import ArchiveQuerySet
+from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
@@ -95,25 +94,6 @@ class DisplayAvatarPrefetches(NamedTuple):
     """Each party's own avatar, when the actor can read it."""
     handles: Prefetch
     """Each party's ranked handles with an avatar the actor can read, avatar loaded."""
-
-
-class HandleAssociationStatus(StrEnum):
-    """Nondisclosing assessment of one claimed Handle for a candidate Party."""
-
-    SAME_CONFIRMED = "same_confirmed"
-    SAME_DISMISSED = "same_dismissed"
-    CONFIRMED_OTHER = "confirmed_other"
-    WEAK_SAME = "weak_same"
-    UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True, slots=True)
-class HandleAssociationAssessment:
-    """Closed risk status plus association rows already readable by the actor."""
-
-    status: HandleAssociationStatus
-    readable_statements: tuple[Any, ...]
-    conflict_evidence_readable: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,7 +504,6 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         using = handles_owner.db
         link_owner = apps.get_model("parties", "Party").objects.db_manager(using)
         with (
-            database_context(using),
             system_context(reason="parties.handle.claim_control"),
             transaction.atomic(using=using),
         ):
@@ -1020,7 +999,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Assert normal handle facts from native supporting records, preserving person decisions."""
         owner = self.db_manager(self._db or party._state.db, hints={"instance": party})
         using = owner.db
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             source = to_subject_ref(asserted_by)
             subject = apps.get_model("parties", "Party")._base_manager.using(using).get(pk=party.pk)
             refs = [EvidenceReference.of(row) for row in evidence]
@@ -1147,83 +1126,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             if existing is not None:
                 return existing.with_actor(actor)
             return self.assert_handle(locked_party, handle, asserted_by=actor, confidence=0.4).with_actor(actor)
-
-    def has_confirmed_association(self, handle: Any, *, actor: Any) -> bool:
-        """Return whether this readable Handle has any confirmed owner, without disclosing it."""
-
-        if actor is None:
-            raise PermissionDenied("an actor is required to assess a party-handle association")
-        handle.require_access("read", actor)
-        with system_context(reason="parties.statement.has_confirmed_association"):
-            return (
-                self.handle_statements()
-                .members()
-                .filter(
-                    handle_id=handle.pk,
-                    rank=self.handle_statements().model.StatementRank.PREFERRED,
-                    snak=self.handle_statements().model.StatementSnak.VALUE,
-                    status=self.handle_statements().model.StatementStatus.ASSERTED,
-                )
-                .exists()
-            )
-
-    def assess_claimed_handle(self, party: Any, handle: Any, *, actor: Any) -> HandleAssociationAssessment:
-        """Assess a claimed Handle without disclosing inaccessible Party associations."""
-
-        if actor is None:
-            raise PermissionDenied("an actor is required to assess a party-handle association")
-        party.require_access("read", actor)
-        handle.require_access("read", actor)
-        visible = self.handle_statements().for_reader(actor).members()
-        readable = tuple(visible.filter(handle_id=handle.pk).select_related("subject").order_by("pk"))
-        return self._assess_claimed_handle_authorized(party=party, handle=handle, readable_statements=readable)
-
-    def _assess_claimed_handle_authorized(
-        self,
-        *,
-        party: Any,
-        handle: Any,
-        readable_statements: tuple[Any, ...],
-    ) -> HandleAssociationAssessment:
-        """Assess one exact Handle after its caller authorized Party and evidence reads."""
-
-        if any(statement.handle_id != handle.pk for statement in readable_statements):
-            raise ValidationError({"handle": "Retained association evidence has the wrong Handle."})
-        with system_context(reason="parties.statement.assess_claimed_handle"):
-            complete = tuple(
-                self.handle_statements()
-                .filter(handle_id=handle.pk, status=self.handle_statements().model.StatementStatus.ASSERTED)
-                .members()
-                .order_by("pk")
-            )
-        same = tuple(statement for statement in complete if statement.subject_id == party.pk)
-        if any(statement.is_dismissed for statement in same):
-            status = HandleAssociationStatus.SAME_DISMISSED
-        elif any(
-            statement.is_confirmed and not statement.is_dismissed and statement.subject_id != party.pk
-            for statement in complete
-        ):
-            status = HandleAssociationStatus.CONFIRMED_OTHER
-        elif any(statement.is_confirmed and not statement.is_dismissed for statement in same):
-            status = HandleAssociationStatus.SAME_CONFIRMED
-        elif any(not statement.is_dismissed for statement in same):
-            status = HandleAssociationStatus.WEAK_SAME
-        else:
-            status = HandleAssociationStatus.UNKNOWN
-        readable_ids = {statement.pk for statement in readable_statements}
-        conflict_ids = {
-            statement.pk
-            for statement in complete
-            if (
-                (statement.subject_id == party.pk and statement.is_dismissed)
-                or (statement.subject_id != party.pk and statement.is_confirmed and not statement.is_dismissed)
-            )
-        }
-        return HandleAssociationAssessment(
-            status=status,
-            readable_statements=readable_statements,
-            conflict_evidence_readable=conflict_ids.issubset(readable_ids),
-        )
 
     def propose_claimed_handle_as_system(
         self,
@@ -1867,7 +1769,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def search_display_name(self, query: str, *, limit: int = 20) -> list[Any]:
         """Return a bounded actor-visible people list filtered by display name."""
 
-        bounded = max(1, min(int(limit), 100))
+        bounded = clamp_page_size(limit)
         return list(
             self.canonical()
             .with_circle_names()

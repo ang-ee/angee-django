@@ -406,7 +406,6 @@ export {
   useRelationOptions,
   useRelationPickerOptions,
   useRelationSelectedOption,
-  relationOptionsFromRows,
   relationSelectedOption,
   type RelationOptionsConfig,
   type RelationOptionsList,

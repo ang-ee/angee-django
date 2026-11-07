@@ -20,7 +20,7 @@ export function GanttSkeleton({
 }) {
   return (
     <SkeletonStatus
-      label={label}
+      loadingLabel={label}
       data-slot="gantt-loading"
       className="bg-sheet absolute inset-0 z-50 flex flex-col overflow-hidden"
     >

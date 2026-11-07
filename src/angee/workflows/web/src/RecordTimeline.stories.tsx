@@ -43,7 +43,7 @@ export function TimelineStory({ appearance, state = "decision", collapsed = fals
 }) {
   const schemas = useMemo(() => {
     let current = data ?? timelineFixture(state);
-    if (duplicateRisk) current.records[0]!.runs[0]!.graph.nodes[7]!.step_run!.requires_duplicate_acknowledgement = true;
+    if (duplicateRisk) current.records[0]!.runs[0]!.graph_step_runs.find((step) => step.id === "wsr_review")!.requires_duplicate_acknowledgement = true;
     const fixture = storySchema(async (_input, init) => {
       const request = v.parse(Request, JSON.parse(String(init?.body ?? "{}"))); onRequest?.(request);
       if (request.query.includes("decide(")) { current = timelineFixture("clean"); return jsonResponse({ data: { decide: { ok: true, id: "dcn_review", message: "Answer recorded.", validation_errors: {} } } }); }

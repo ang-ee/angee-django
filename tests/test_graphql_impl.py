@@ -3,17 +3,11 @@
 import pytest
 from rebac import system_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.schema import ConsoleImplChoicesQuery
 from angee.integrate_github.backend import GitHubBackend
 from angee.messaging.testing.models import Channel  # noqa: F401 -- register the channel metadata owner
-from tests.conftest import (
-    Vendor,
-    addon_schema,
-    create_platform_admin,
-    create_user,
-    execute_schema,
-    result_data,
-)
+from tests.conftest import Vendor, addon_schema, create_platform_admin, create_user
 from tests.test_agents import InferenceProvider  # noqa: F401 -- register the provider metadata owner
 
 

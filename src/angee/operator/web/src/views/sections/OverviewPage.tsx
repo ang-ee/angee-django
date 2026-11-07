@@ -42,7 +42,7 @@ export function OverviewPage(): ReactNode {
         <RecordHeader density="compact" title={t("section.operator.overview.title")} meta={stack?.name} />
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-3">
           {error ? <ErrorBanner title={t("overview.error")} description={error.message} /> : null}
-          {loading ? <MetricStrip loading loadingMessage={t("overview.loading")} density="prominent" className="grid-cols-2 sm:grid-cols-4" /> : (
+          {loading ? <MetricStrip loading loadingLabel={t("overview.loading")} density="prominent" className="grid-cols-2 sm:grid-cols-4" /> : (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <DetailSection

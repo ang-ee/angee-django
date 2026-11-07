@@ -19,7 +19,7 @@ export function SourceDetail(): ReactElement {
     <DaemonRecord
       record={source}
       loading={result.fetching && !snapshot}
-      loadingMessage={t("sources.loading")}
+      loadingLabel={t("sources.loading")}
       notFound={{ icon: "share", title: t("sources.detail.notFound"), description: name }}
       eyebrow={t("sources.record")}
       title={source?.name}

@@ -193,14 +193,11 @@ export function FormViewRecordHeader({
     return () => observer.disconnect();
   }, [awaiting, compact, currentStatusField]);
   if (awaiting) {
+    // The header owns the pending title; the statusbar and facts line keep their places as plain geometry.
     return (
-      <RecordHeader density={density} className="border-b-0 px-0" title={
-        <SkeletonStatus label={t("form.loading")} className={cn("grid", compact ? "gap-1" : "gap-3")}>
-          {statusField && !compact ? <Skeleton className="h-6 w-72" /> : null}
-          <Skeleton shape="text" className={compact ? "h-5 w-1/2" : "h-7 w-2/3"} />
-          {!compact ? <Skeleton shape="text" className="h-3 w-64" /> : null}
-        </SkeletonStatus>
-      } />
+      <RecordHeader density={density} className="border-b-0 px-0" loading loadingLabel={t("form.loading")} title={null}
+        lead={statusField && !compact ? <Skeleton className="h-6 w-72" /> : undefined}
+        meta={!compact ? <Skeleton shape="text" className="h-3 w-64" /> : undefined} />
     );
   }
   const statusMark = currentStatusField ? <RecordFieldMarkControl field={currentStatusField.name} label={currentStatusField.label}
@@ -347,7 +344,7 @@ export interface FormViewLineProps {
 }
 
 /** The form's editable lines bound to its draft: in a declared `lines` section or their trailing pane. */
-export function FormViewLines({
+function FormViewLines({
   surface,
   linePrimaryFields,
   lineFields,
@@ -642,7 +639,7 @@ function RecordFactsLine({
       {loading ? (
         <>
           {parts.length > 0 ? <span aria-hidden="true">·</span> : null}
-          <SkeletonStatus label={loadingLabel} className="inline-flex min-w-20 items-center">
+          <SkeletonStatus loadingLabel={loadingLabel} className="inline-flex min-w-20 items-center">
             <Skeleton className="h-3 w-20" shape="text" />
           </SkeletonStatus>
         </>

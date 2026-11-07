@@ -24,6 +24,8 @@ from rebac.testing import install_schema
 from angee.base.identity import public_subject_ref
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import public_id_of
+from angee.base.pagination import MAX_PAGE_SIZE
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.knowledge import schema as knowledge_schema
@@ -36,16 +38,7 @@ from angee.provenance.statements import (
     SourceKind,
     StatementLinkMixin,
 )
-from tests.conftest import (
-    Page,
-    addon_schema,
-    create_user,
-    current_stream,
-    execute_schema,
-    make_integration,
-    result_data,
-    vault_for,
-)
+from tests.conftest import Page, addon_schema, create_user, current_stream, make_integration, vault_for
 from tests.core_persistence import OwnedRow
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -167,10 +160,11 @@ def test_history_pages_by_changeset_and_refuses_an_unbounded_page() -> None:
     refused = execute_schema(
         schema,
         HISTORY,
-        {"model": "knowledge.Page", "id": public_id_of(page), "limit": provenance_schema.HISTORY_LIMIT_MAX + 1},
+        {"model": "knowledge.Page", "id": public_id_of(page), "limit": MAX_PAGE_SIZE + 1},
         user=owner,
     )
-    assert refused.errors and "limit" in refused.errors[0].message
+    assert refused.errors and f"Page size must be between 1 and {MAX_PAGE_SIZE}" in refused.errors[0].message
+    assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
 
 
 def test_history_locates_an_older_selected_changeset_within_the_records_own_pages() -> None:
@@ -535,7 +529,8 @@ def test_generic_statement_source_uses_its_link_owner_without_an_integrate_strea
             return self.name
 
     link = LocalLink(pk=7, name="Local source")
-    reference = provenance_schema._statement_source_reference(SimpleNamespace(_readable_statement_link=link))
+    # A readable retained link names the source before any principal is read for the reader.
+    reference = provenance_schema._statement_source_reference(SimpleNamespace(_readable_statement_link=link), None)
     assert reference is not None
     assert (reference.model, str(reference.id), reference.label) == ("base.LocalLink", link.public_id, "Local source")
     assert LocalLink.presentation_related == ()

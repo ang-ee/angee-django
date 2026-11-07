@@ -294,6 +294,28 @@ def test_graphql_uses_channels_redis_when_redis_url_is_set(
     }
 
 
+@pytest.mark.parametrize(
+    ("broker_url", "expected_backend"),
+    [
+        ("redis://127.0.0.1:6379/1", "channels_redis.core.RedisChannelLayer"),
+        ("rediss://redis.example.test/1", "channels_redis.core.RedisChannelLayer"),
+        ("memory://", "channels.layers.InMemoryChannelLayer"),
+    ],
+)
+def test_graphql_uses_redis_broker_when_no_channel_url_is_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, broker_url: str, expected_backend: str,
+) -> None:
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("CHANNEL_REDIS_URL", raising=False)
+    monkeypatch.setenv("CELERY_BROKER_URL", broker_url)
+
+    settings = _compose(tmp_path)
+
+    layer = settings["CHANNEL_LAYERS"]["default"]
+    assert layer["BACKEND"] == expected_backend
+    if expected_backend == "channels_redis.core.RedisChannelLayer":
+        assert layer["CONFIG"]["hosts"] == [broker_url]
+
 
 def test_jobs_use_celery_broker_url_from_environment(
     monkeypatch: pytest.MonkeyPatch,
@@ -423,6 +445,48 @@ def test_server_statement_timeout_preserves_project_and_environment_policy(
         namespace["ANGEE_WEB_STATEMENT_TIMEOUT"] = project
     _configure(namespace, tmp_path)
     assert float(namespace["ANGEE_WEB_STATEMENT_TIMEOUT"]) == expected
+
+
+SILK_MIDDLEWARE = "silk.middleware.SilkyMiddleware"
+
+
+def test_profiling_is_absent_until_the_project_roots_silk(tmp_path: Path) -> None:
+    """The installed profiling extra alone adds no silk app, middleware, templates or silk settings."""
+
+    namespace: dict[str, Any] = {"INSTALLED_APPS": ["angee.server"]}
+    _configure(namespace, tmp_path)
+
+    assert "silk" not in namespace["INSTALLED_APPS"]
+    assert SILK_MIDDLEWARE not in namespace["MIDDLEWARE"]
+    assert "TEMPLATES" not in namespace
+    assert [name for name in namespace if name.startswith("SILKY_")] == []
+    assert namespace["ANGEE_PROFILING_ALLOW_PRODUCTION"] is False
+
+
+def test_rooting_silk_profiles_requests_for_platform_admins(tmp_path: Path) -> None:
+    """Silk's middleware leads, silk's UI requires login and IAM's platform-admin predicate; authored values win."""
+
+    from angee.server.profiling import profiling_permitted
+
+    namespace: dict[str, Any] = {"INSTALLED_APPS": ["angee.iam", "silk"], "SILKY_MAX_RECORDED_REQUESTS": 50}
+    _configure(namespace, tmp_path)
+    middleware = namespace["MIDDLEWARE"]
+
+    assert "silk" in namespace["INSTALLED_APPS"]
+    assert middleware[:2] == [SILK_MIDDLEWARE, "django.middleware.security.SecurityMiddleware"]
+    assert middleware.count(SILK_MIDDLEWARE) == 1
+    assert "rebac.middleware.ActorMiddleware" in middleware
+    [engine] = namespace["TEMPLATES"]
+    assert engine["BACKEND"] == "django.template.backends.django.DjangoTemplates"
+    assert engine["APP_DIRS"] is True
+    assert "django.template.context_processors.request" in engine["OPTIONS"]["context_processors"]
+    assert namespace["SILKY_AUTHENTICATION"] is True
+    assert namespace["SILKY_AUTHORISATION"] is True
+    assert namespace["SILKY_PERMISSIONS"] is profiling_permitted
+    assert namespace["ANGEE_PROFILING_PERMISSION"] == "angee.iam.permissions.is_platform_admin"
+    assert namespace["SILKY_IGNORE_PATHS"] == ["/health/ready"]
+    assert namespace["SILKY_META"] is True
+    assert namespace["SILKY_MAX_RECORDED_REQUESTS"] == 50
 
 
 def test_data_directory_belongs_to_base_defaults(tmp_path: Path) -> None:

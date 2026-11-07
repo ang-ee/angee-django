@@ -1,11 +1,13 @@
 """An owning addon derives decision access through retained concern links."""
 
 import pytest
+from django.apps import apps
 from django.core.exceptions import PermissionDenied
 from rebac import (
     RelationshipTuple,
     actor_context,
     delete_relationship,
+    system_context,
     to_object_ref,
     to_subject_ref,
     write_relationships,
@@ -15,8 +17,10 @@ from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision, DecisionRecord
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
+from angee.projects.testing.models import Task
 from angee.workflows import schema as workflow_schema
-from tests.conftest import SchemaAddon, create_platform_admin, create_user, execute_schema, result_data
+from tests.conftest import SchemaAddon, create_platform_admin, create_user
 from tests.extcontrib.models import Record
 
 
@@ -73,6 +77,27 @@ def test_read_and_can_act_follow_the_typed_concern(schema, concerned_question, v
         }""", {"id": question.sqid, "revision": question.revision}, user=actor))
         question.refresh_from_db()
         assert question.verdict == ["confirm"] and question.answered_by_id == actor.pk
+
+
+def test_decide_does_not_return_an_answer_to_an_actor_without_decision_read(schema, composed_permissions):
+    actor = create_user("share-without-question-read")
+    Need = apps.get_model("intake", "Need")
+    with actor_context(actor):
+        task = Task.objects.create(title="Access request")
+        need = Need.objects.capture(target=task, body="Please review access")
+    question = Decision.system_queryset().get(pk=need.access_decision_id)
+    with system_context(reason="test.decisions.act_without_read"):
+        question.assignees.clear()
+    assert question.with_actor(actor).has_access("act")
+    assert not question.with_actor(actor).has_access("read")
+    result = result_data(execute_schema(schema, """mutation($id: ID!, $revision: Int!) {
+      decide(id: $id, revision: $revision, chosen: ["intake.deny"]) {
+        ok message code validation_errors decision { id context proposal verdict }
+      }
+    }""", {"id": question.sqid, "revision": question.revision}, user=actor))["decide"]
+    assert result["ok"], result
+    assert result["decision"] is None
+    assert Decision.system_queryset().get(pk=question.pk).verdict == ["intake.deny"]
 
 
 @pytest.mark.parametrize("viewer", [1, 2])

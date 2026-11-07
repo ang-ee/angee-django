@@ -106,22 +106,23 @@ export function PrincipalAccessTab(): React.ReactElement {
     { field: "caveat_name", header: t("principalAccess.condition") },
   ], [scope, t]);
 
-  if (!chrome.record) return <InlineEmpty label={t("principalAccess.loading")} />;
-  if (!subject) return <InlineEmpty label={t("principalAccess.missingSubject")} />;
+  if (chrome.record && !subject) return <InlineEmpty label={t("principalAccess.missingSubject")} />;
 
-  const list = { fetching: query.isFetching, error: query.error, selectable: false, scope: "local" } as const;
+  // Until the enclosing record and then its access resolve, the lists draw their own skeleton rows and
+  // the sections claim no count.
+  const list = { fetching: !chrome.record || query.isFetching, error: query.error, selectable: false, scope: "local" } as const;
   return (
     <div className="grid gap-6">
       <section className="grid gap-2">
-        <SectionHeading label={t("principalAccess.roles")} count={roles.length} />
+        <SectionHeading label={t("principalAccess.roles")} count={access ? roles.length : undefined} />
         <RowsListView rows={roles} columns={roleColumns} {...list} emptyContent={t("principalAccess.noRoles")} />
       </section>
       <section className="grid gap-2">
-        <SectionHeading label={t("principalAccess.grants")} count={grants.length} />
+        <SectionHeading label={t("principalAccess.grants")} count={access ? grants.length : undefined} />
         <RowsListView rows={grants} columns={grantColumns} {...list} emptyContent={t("principalAccess.noGrants")} />
       </section>
       <section className="grid gap-2">
-        <SectionHeading label={t("principalAccess.permissions")} count={permissions.length} summary={t("principalAccess.permissionsDescription")} />
+        <SectionHeading label={t("principalAccess.permissions")} count={access ? permissions.length : undefined} summary={t("principalAccess.permissionsDescription")} />
         <RowsListView rows={permissions} columns={permissionColumns} {...list} emptyContent={t("principalAccess.noPermissions")} />
       </section>
     </div>

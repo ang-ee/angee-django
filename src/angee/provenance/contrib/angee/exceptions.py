@@ -18,16 +18,14 @@ class CreationKeyConflict(DomainError):
         Exception.__init__(self, *args or (self.code,))
 
 
-MANAGEMENT_ENTRYPOINT = "django_compose.management.execute"
-
-
 class ChangesetRequired(ContextRequired, MissingActorError):
     """Preserve native actor catchability and Angee's management-entrypoint remedy."""
 
     def __init__(self, message: str) -> None:
         if sys.argv and Path(sys.argv[0]).name == "manage.py":
             message += (
-                f" This management command runs without a boundary: manage.py must call {MANAGEMENT_ENTRYPOINT}();"
-                " update it to the native project launcher."
+                " This management command runs without a boundary: manage.py must run commands through"
+                " the project's command wrapper, which enters the configured command contexts;"
+                " re-render an obsolete manage.py."
             )
         super().__init__(message)

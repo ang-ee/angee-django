@@ -9,7 +9,9 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import strawberry
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.backends.postgresql.base import DatabaseWrapper
 from graphql import (
@@ -89,7 +91,14 @@ def _projection(**kwargs: object) -> ResourceQueryProjection:
 
 
 def test_query_separates_row_selections_from_bucket_keys() -> None:
-    query = _projection(
+    schema = build_schema(
+        _SCHEMA.replace(
+            "input EntryFilter {",
+            "input JSON_comparison_exp { _eq: JSON, _contains: JSON }\n"
+            "input EntryFilter { payload: JSON_comparison_exp,",
+        )
+    )
+    projection = _projection(
         axes=(
             DataQueryAxis(
                 field="channel",
@@ -102,11 +111,15 @@ def test_query_separates_row_selections_from_bucket_keys() -> None:
                 server=DataQueryServerAxis("CHANNEL__DISPLAY_NAME", "channel__display_name"),
             ),
             DataQueryAxis(
-                field="payload.mailbox", kind="json", server=DataQueryServerAxis("PAYLOAD__MAILBOX", "payload__mailbox")
+                field="payload.mailbox",
+                kind="json",
+                server=DataQueryServerAxis("PAYLOAD__MAILBOX", "payload__mailbox"),
+                drill=DataQueryDrill("json", "payload", "payload__mailbox", json_path="mailbox", null_mode="value"),
             ),
         ),
         label_axes={"channel": "channel__display_name"},
-    ).build()
+    )
+    query = replace(projection, schema=schema, filter_fields=(*projection.filter_fields, "payload")).build()
     assert set(query.axes) == {"channel", "payload.mailbox"}
     channel = query.axes["channel"]
     assert channel.identity_path == "channel.id"
@@ -118,7 +131,7 @@ def test_query_separates_row_selections_from_bucket_keys() -> None:
     mailbox = query.axes["payload.mailbox"]
     assert mailbox.identity_path == "payload.mailbox"
     assert mailbox.paths == ("payload",)
-    assert mailbox.drill is None
+    assert (mailbox.drill.kind, mailbox.drill.field, mailbox.drill.json_path) == ("json", "payload", "mailbox")
     assert query.fields["payload.mailbox"].row.path == "payload.mailbox"
     assert query.fields["payload.mailbox"].row.paths == ("payload",)
     assert query.fields["channel"].row.path == "channel.id"
@@ -180,6 +193,7 @@ def test_query_has_explicit_client_grouping_and_optional_extraction_drill() -> N
                 field="created",
                 kind="date",
                 server=DataQueryServerAxis("CREATED", "created"),
+                drill=DataQueryDrill("value", "created", "created"),
                 extractions=(month, day_of_week),
             ),
         ),
@@ -199,7 +213,11 @@ def test_query_axes_follow_composed_group_inputs_keys_and_range_fields() -> None
     )
     projection = _projection(
         axes=(
-            DataQueryAxis(field="channel", server=DataQueryServerAxis("CHANNEL", "channel_id")),
+            DataQueryAxis(
+                field="channel",
+                server=DataQueryServerAxis("CHANNEL", "channel_id"),
+                drill=DataQueryDrill("identity", "channel", "channel_id"),
+            ),
             DataQueryAxis(
                 field="channel__display_name",
                 server=DataQueryServerAxis("CHANNEL__DISPLAY_NAME", "channel__display_name"),
@@ -208,6 +226,7 @@ def test_query_axes_follow_composed_group_inputs_keys_and_range_fields() -> None
                 field="created",
                 kind="date",
                 server=DataQueryServerAxis("CREATED", "created"),
+                drill=DataQueryDrill("value", "created", "created"),
                 extractions=tuple(
                     DataQueryExtraction(
                         name,
@@ -229,6 +248,29 @@ def test_query_axes_follow_composed_group_inputs_keys_and_range_fields() -> None
     ]
     without_field = build_schema(_SCHEMA.replace("PAYLOAD__MAILBOX CREATED", "PAYLOAD__MAILBOX"))
     assert "created" not in replace(projection, schema=without_field).build().axes
+
+
+@pytest.mark.parametrize(
+    ("axis", "message"),
+    [
+        (
+            DataQueryAxis(field="created", kind="date", server=DataQueryServerAxis("CREATED", "created")),
+            "declares group axis 'created' without a drill",
+        ),
+        (
+            DataQueryAxis(
+                field="payload.mailbox",
+                kind="json",
+                server=DataQueryServerAxis("PAYLOAD__MAILBOX", "payload__mailbox"),
+                drill=DataQueryDrill("json", "payload", "payload__mailbox", json_path="mailbox", null_mode="value"),
+            ),
+            "group axis 'payload.mailbox' drills through filter 'payload'",
+        ),
+    ],
+)
+def test_query_group_axis_without_an_executable_drill_fails_the_build(axis: DataQueryAxis, message: str) -> None:
+    with pytest.raises(ImproperlyConfigured, match=f"Entry {message}"):
+        _projection(axes=(axis,)).build()
 
 
 def test_query_resolves_nested_final_aliases_without_rewriting_filter_keys() -> None:

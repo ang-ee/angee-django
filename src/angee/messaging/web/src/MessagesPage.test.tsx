@@ -47,7 +47,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     return <div>{props.children as React.ReactNode}</div>;
   },
   ErrorBanner: ({ description }: { description: React.ReactNode }) => <div>{description}</div>,
-  LoadingPanel: ({ message }: { message: React.ReactNode }) => <div>{message}</div>,
+  LoadingPanel: ({ loadingLabel }: { loadingLabel: React.ReactNode }) => <div>{loadingLabel}</div>,
   MessagePartsView: ({ parts, onPreviewFile }: {
     parts: Array<{ id: string; fragment?: { text?: string }; file?: { filename?: string } }>;
     onPreviewFile?: (part: unknown) => void;

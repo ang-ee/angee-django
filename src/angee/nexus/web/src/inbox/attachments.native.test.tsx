@@ -2,7 +2,7 @@
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { ResourceViewProvider, ToastProvider, createRouteHref, type ChatterViewContext } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
@@ -17,7 +17,7 @@ import { InboxConversation } from "./Conversation";
 import { InboxConnections, InboxMessage, InboxRelatedTarget, InboxTranscriptMatches } from "./documents";
 import { InboxMessageReader } from "./MessageReader";
 import { InboxRelatedPane } from "./Related";
-import { FileMessages, useFileMessageCount } from "./FileMessages";
+import { FileMessages } from "./FileMessages";
 import type { InboxNavigation, InboxScope } from "./state";
 
 const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://inbox-files", providerNames: [] });
@@ -76,7 +76,10 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
       } } };
     }
     if (meta?.gqlQuery === InboxConnections) {
-      return { data: { inbox_connections: { rows: fileUses ? [{ id: "use-1", message: source, part: pdf(2) }] : [], count: fileUses ? 1 : 0, message_count: fileUses ? 1 : 0 } } };
+      return { data: { inbox_connections: {
+        rows: fileUses ? [{ id: "use-1", message_id: source.id, part: pdf(2), handle: null, src_id: null, dst_id: null }] : [],
+        messages: fileUses ? [source] : [], count: fileUses ? 1 : 0, message_count: fileUses ? 1 : 0,
+      } } };
     }
     return { data: { thread_message_feed: {
       messages: [message], count: 1, older_cursor: null, has_older: false, has_more_in_window: false,
@@ -162,7 +165,7 @@ test("repeated parts of one target keep the server's distinct message count", as
   expect(inbox.navigation.connect).toHaveBeenCalledWith("file:file-2", "message-1");
 });
 
-test("Files backlinks count readable message uses and link to their exact part with the file pinned", async () => {
+test("Files backlinks link readable message uses to their exact part with the file pinned", async () => {
   const inbox = fixture([], true);
   const context: ChatterViewContext = {
     pathname: "/storage/file-2", params: { id: "file-2" },
@@ -170,15 +173,13 @@ test("Files backlinks count readable message uses and link to their exact part w
     view: { kind: "record", type: "storage/file", sqid: "file-2" },
   };
   function Messages() {
-    const count = useFileMessageCount(context);
-    return <><span>Related messages: {count}</span><FileMessages context={context} /></>;
+    return <FileMessages context={context} />;
   }
   const root = createRootRoute({ component: Messages });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(<ShellPageTestProviders runtime={{ routeHref: createRouteHref([{ name: "nexus.inbox", path: "/nexus/inbox" }]) }}>
     <ToastProvider><RouterProvider router={router} /></ToastProvider>
   </ShellPageTestProviders>, { wrapper: inbox.wrapper });
-  await screen.findByText("Related messages: 1");
   const link = await screen.findByRole("link", { name: /Renewal/ });
   const target = new URL(link.getAttribute("href")!, "https://example.test");
   expect(target.pathname).toBe("/nexus/inbox");
@@ -202,8 +203,13 @@ test("a status reader names the author and connected account without an unrelate
 test("status backlinks retain provenance and never offer to open the shared feed as a conversation", async () => {
   const inbox = fixture([], true, true);
   render(<ShellPageTestProviders><ToastProvider><InboxRelatedPane navigation={inbox.props.navigation} /></ToastProvider></ShellPageTestProviders>, { wrapper: inbox.wrapper });
-  const source = await screen.findByRole("button", { name: /Ada.*status update.*Original source/ });
+  // The pinned target names its source, and the file's uses list the same message as a backlink.
+  // One wait per read: whichever of the target and uses reads lands first, then both.
+  const sources = { name: /Ada.*status update.*Original source/ };
+  await screen.findAllByRole("button", sources);
+  await waitFor(() => expect(screen.getAllByRole("button", sources)).toHaveLength(2));
   expect(screen.queryByRole("button", { name: "Open conversation" })).toBeNull();
-  fireEvent.click(source);
+  const [, backlink] = screen.getAllByRole("button", sources);
+  fireEvent.click(backlink!);
   expect(inbox.navigation.read).toHaveBeenCalledWith("message-1", "part-2");
 });

@@ -4,8 +4,9 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge import schema as knowledge_schema
-from tests.conftest import Page, addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import Page, addon_schema, create_user, vault_for
 
 
 def test_page_display_name_fetches_its_title_with_the_rows(composed_tables: None) -> None:

@@ -17,6 +17,7 @@ from rebac.models import active_relationship_model
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.identity import public_subject_ref
 from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
 from angee.storage.models import FileAttachmentManager, FileVisibility
@@ -30,8 +31,6 @@ from tests.conftest import (
     addon_schema,
     create_platform_admin,
     create_user,
-    execute_schema,
-    result_data,
     vault_for,
 )
 from tests.mtidemo.models import MtiChild, MtiChildProxy, MtiParent

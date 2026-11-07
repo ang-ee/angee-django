@@ -57,10 +57,12 @@ export function HeldDraftActions({ ids, rows }: { ids: ReadonlySet<string>; rows
   const busyRef = React.useRef(false);
   const { limit, isError } = useActionSelectionLimit();
   const available = rows.length === ids.size && rows.every((row) => holdsPermission(row, "send_held") && typeof row.revision === "number");
-  const reason = isError ? t("messages.selectionError") : limit === undefined ? t("messages.selectionLoading") : ids.size > limit
+  // While the limit loads the verbs are pending (the Button's own busy state), not explained by copy.
+  const limitPending = limit === undefined && !isError;
+  const reason = isError ? t("messages.selectionError") : limit === undefined ? undefined : ids.size > limit
     ? t("messages.selectionLimit", { count: limit }) : !available ? t("messages.selectionUnavailable") : undefined;
   const reasonId = React.useId();
-  const disabled = busy || reason !== undefined;
+  const disabled = busy || limitPending || reason !== undefined;
   const run = async (discarding: boolean): Promise<void> => {
     if (disabled || busyRef.current) return;
     busyRef.current = true;
@@ -91,10 +93,10 @@ export function HeldDraftActions({ ids, rows }: { ids: ReadonlySet<string>; rows
     }
   };
   return <>
-    <SelectionBarAction surface="brand" pending={busy} disabled={disabled}
+    <SelectionBarAction surface="brand" pending={busy} loading={limitPending} disabled={disabled}
       aria-describedby={reason ? reasonId : undefined}
       onClick={() => void run(false)}>{t("messages.sendNow")}</SelectionBarAction>
-    <SelectionBarAction surface="brand" tone="danger" pending={busy} disabled={disabled}
+    <SelectionBarAction surface="brand" tone="danger" pending={busy} loading={limitPending} disabled={disabled}
       aria-describedby={reason ? reasonId : undefined}
       onClick={() => void run(true)}>{t("messages.discard")}</SelectionBarAction>
     {reason ? <span id={reasonId}>{reason}</span> : null}

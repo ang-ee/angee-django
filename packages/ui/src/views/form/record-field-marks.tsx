@@ -100,7 +100,7 @@ export function usePublishActiveRecordForm(form: ActiveRecordForm | null) {
   }, [setForm, form]);
 }
 
-export function useRecordFieldMarksForField(field: string) {
+function useRecordFieldMarksForField(field: string) {
   const bridge = useContext(State);
   const setRevealed = useContext(Dispatch)?.setRevealed;
   const record = useRecordChromeContextMaybe();

@@ -7,7 +7,6 @@ from typing import Any, cast
 
 from django.apps import AppConfig, apps
 from django.core.management.base import BaseCommand, CommandParser
-from rebac import database_context
 
 from angee.resources.models import Resource
 
@@ -45,13 +44,11 @@ class Command(BaseCommand):
 
         del args
         handler = cast(Callable[[dict[str, Any]], None], options["handler"])
-        with database_context(options["database"]):
-            handler(options)
+        handler(options)
 
     def _add_selection_arguments(self, parser: CommandParser) -> None:
         """Add tier selection arguments shared by all subcommands."""
 
-        parser.add_argument("--database", default="default")
         parser.add_argument(
             "tier",
             choices=Resource.Tier.values,
@@ -64,7 +61,7 @@ class Command(BaseCommand):
         """Validate selected resource files and print their counts."""
 
         tiers = self._selected_tiers(options)
-        result = self._resource_model().objects.db_manager(options["database"]).validate_addons(
+        result = self._resource_model().objects.validate_addons(
             self._addons(),
             tiers=tiers,
         )
@@ -79,7 +76,7 @@ class Command(BaseCommand):
 
         tiers = self._selected_tiers(options)
         dry_run = bool(options.get("dry_run"))
-        result = self._resource_model().objects.db_manager(options["database"]).load_addons(
+        result = self._resource_model().objects.load_addons(
             self._addons(),
             tiers=tiers,
             allow_non_dev=bool(options["allow_non_dev"]),
@@ -98,7 +95,7 @@ class Command(BaseCommand):
         """Print resource row counts for selected files."""
 
         tiers = self._selected_tiers(options)
-        counts = self._resource_model().objects.db_manager(options["database"]).diff_addons(
+        counts = self._resource_model().objects.diff_addons(
             self._addons(),
             tiers=tiers,
         )

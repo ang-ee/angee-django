@@ -1,7 +1,8 @@
 """MCP owns its HTTP mount and explicit native FastMCP lifespan contribution.
 
-Contributes neither when no installed addon declares MCP tools. The host enters
-FastMCP's public ``app.lifespan(app)`` context once per serving process.
+``angee.server.asgi`` reads both after Django setup. Contributes neither when no
+installed addon declares MCP tools. The server enters FastMCP's public
+``app.lifespan(app)`` context once per serving process.
 """
 
 from __future__ import annotations

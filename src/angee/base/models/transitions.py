@@ -71,7 +71,7 @@ from typing import Any, NoReturn, cast
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.fields.mixins import FieldCacheMixin
 
 from angee.base.exceptions import TransitionNotAllowed
@@ -297,7 +297,7 @@ class StateTransitions:
 
         source, target = self._allowed_values(instance, spec)
 
-        with transaction.atomic():
+        with transaction.atomic(using=instance._state.db or router.db_for_write(type(instance), instance=instance)):
             result = method(instance, *args, **kwargs)
             self._write_target(instance, target)
             if spec.on_success is not None:
@@ -638,7 +638,7 @@ def save_state(
         raise ImproperlyConfigured("save_state must run as a StateTransitions on_success hook.")
     fields = {field_name, *cast(set[str], getattr(instance, "_transition_fields", set()))}
     try:
-        with transaction.atomic():
+        with transaction.atomic(using=instance._state.db or router.db_for_write(type(instance), instance=instance)):
             _verify_uncontended_source(instance, field_name, source, target)
             instance.save(update_fields=fields)
     finally:

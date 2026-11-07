@@ -173,6 +173,7 @@ function TranscriptBody({
     count: messages.length,
     getItemKey: (index) => messages[index]!.id,
     anchorTo: conversation ? "end" : "start",
+    followOnAppend: conversation,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
     // Seed a viewport so rows window before the scroll element measures (also lets
@@ -216,7 +217,7 @@ function TranscriptBody({
   ) : null;
 
   if (transcript.isFetching && messages.length === 0) {
-    return <LoadingPanel message={t("transcript.loading")} />;
+    return <LoadingPanel loadingLabel={t("transcript.loading")} />;
   }
   if (transcript.error) {
     return <ErrorBanner title={t("transcript.error")} description={t("transcript.emptyHint")} />;

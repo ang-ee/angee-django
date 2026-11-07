@@ -22,7 +22,7 @@ const context: ChatterViewContext = {
 function Count() {
   const [count, setCount] = useState<number>();
   const publish = useCallback((_: string, next: number | undefined) => setCount(next), []);
-  return <><RelatedCountProbe id="related" context={context} onCount={publish} /><span>Related {count}</span></>;
+  return <><RelatedCountProbe id="related" context={context} onCount={publish} includePaneCounts /><span>Related {count}</span></>;
 }
 
 test("generic and role groups share one unfiltered request across counts, presence and rows", async () => {
@@ -37,7 +37,7 @@ test("generic and role groups share one unfiltered request across counts, presen
   render(<Provider dataProvider={{ custom }}><AppRuntimeProvider runtime={{
     routeHref: createRouteHref([{ name: "knowledge.page", path: "/knowledge/$id" }]),
     containers: containersFromChildren(CHATTER_CONTAINERS, {
-      "related#groups": { pages: recordPagesGroup() },
+      "related#groups": { "knowledge.pages": recordPagesGroup() },
       "example.Record#groups": { contract: recordPagesGroup({ label: "Contract", role: "contract" }) },
     }),
   }}><Count /><RelatedPane context={context} /></AppRuntimeProvider></Provider>);

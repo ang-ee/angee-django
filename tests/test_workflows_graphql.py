@@ -12,7 +12,9 @@ from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel, Field
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.models.base import record_display_label
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.definition import Definition
 from angee.workflows.runner import runner
@@ -20,7 +22,7 @@ from angee.workflows.states import AttemptResult, RunStatus, StepRunStatus
 from angee.workflows.steps import Step, StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
-from tests.conftest import SchemaAddon, create_user, execute_schema, result_data, vault_for
+from tests.conftest import SchemaAddon, create_user, vault_for
 from tests.workflow_steps import Value, document
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
@@ -221,6 +223,46 @@ def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schem
     }
 
 
+def test_run_subject_label_follows_the_record_reference_proof(schema, callers):
+    """A run reader who cannot read the subject sees no subject identity, its label included."""
+
+    admin, owner, reader = callers
+    workflow = load_workflow(document("entry"), key="subject_label", actor=admin, subject_model="knowledge.vault")
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    subject = vault_for(owner, name="Private subject")
+    run = start_run(workflow, actor=owner, subject=subject)
+    run.with_actor(owner).grant_record_access("reader", reader)
+    query = "{ workflowrun { subject_model subject_id subject_label } }"
+    assert result_data(execute_schema(schema, query, user=owner)) == {"workflowrun": [{
+        "subject_model": subject._meta.label, "subject_id": subject.sqid,
+        "subject_label": record_display_label(subject),
+    }]}
+    assert result_data(execute_schema(schema, query, user=reader)) == {"workflowrun": [{
+        "subject_model": None, "subject_id": None, "subject_label": None,
+    }]}
+
+
+def test_run_subject_labels_cost_the_same_for_one_or_twenty_five_rows(schema, callers):
+    """A run list reads its subjects' labels once per subject type, never once per row."""
+
+    admin, owner, _ = callers
+    workflow = load_workflow(document("entry"), key="subject_labels", actor=admin, subject_model="knowledge.vault")
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    subjects = [vault_for(owner, name=f"Labelled subject {index}") for index in range(25)]
+    for subject in subjects:
+        start_run(workflow, actor=owner, subject=subject)
+    labels = {record_display_label(subject) for subject in subjects}
+    query = "query($limit: Int!) { workflowrun(limit: $limit) { subject_label } }"
+    counts = []
+    for limit in (1, 25):
+        with CaptureQueriesContext(connection) as queries:
+            rows = result_data(execute_schema(schema, query, {"limit": limit}, user=owner))["workflowrun"]
+        counts.append(len(queries))
+        assert len(rows) == limit and {row["subject_label"] for row in rows} <= labels
+    assert {row["subject_label"] for row in rows} == labels
+    assert counts[0] == counts[1], counts
+
+
 def test_run_input_reads_declared_mti_sources_under_their_own_permission(schema, callers, register_step):
     """Canonical retained edges neither hide a readable child nor authorize it by its parent."""
     from tests.mtidemo.models import MtiChild, MtiParent
@@ -373,6 +415,14 @@ def test_duplicate_retry_action_records_requesting_operator(schema, callers, reg
             "step_runs": [{"can_retry": True, "requires_duplicate_acknowledgement": True}],
         }
     ]
+    steps = result_data(execute_schema(
+        schema,
+        """query($id: String!) { workflowrun_by_pk(id: $id) {
+          graph_step_runs { can_retry requires_duplicate_acknowledgement }
+        } }""",
+        {"id": run.sqid}, user=operator,
+    ))["workflowrun_by_pk"]["graph_step_runs"]
+    assert steps == [{"can_retry": True, "requires_duplicate_acknowledgement": True}]
     assert not result_data(action(schema, "retry_step", step, operator))["retry_step"]["ok"]
     acknowledged = result_data(action(schema, "retry_step_accepting_duplicate", step, operator))
     assert acknowledged["retry_step_accepting_duplicate"]["ok"]

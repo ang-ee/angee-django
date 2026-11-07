@@ -55,7 +55,7 @@ export function GraphPage(): ReactElement {
     <>
       <PrimaryPanePublisher node={navigator} />
       {graph.error ? <ErrorBanner className="m-3" description={graph.error.message} />
-        : !ready ? <LoadingPanel density="inline" message={t("detail.model.loading")} />
+        : !ready ? <LoadingPanel density="inline" loadingLabel={t("detail.model.loading")} />
           : !graph.model ? <InlineEmpty label={t("empty.models")} /> : (
             <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
               <RecordHeader density="compact" crumbs={t("col.graph")} title={graph.model.verbose_name}

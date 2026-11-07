@@ -10,25 +10,27 @@ import type {
   DataResourceMetadata,
 } from "@angee/metadata";
 
+
 export interface FileActions {
   busy: boolean;
-  /** Soft-delete a file into the Trash. */
-  trash: (id: string) => Promise<void>;
-  /** Pull a file back out of the Trash. */
-  restore: (id: string) => Promise<void>;
-  /** Move a file into a folder by public id, or `null` for the root. */
-  move: (id: string, folder: string | null) => Promise<void>;
-  /** Soft-delete many files in one pass, refetching once. */
-  trashMany: (ids: Iterable<string>) => Promise<void>;
-  /** Restore many files in one pass, refetching once. */
-  restoreMany: (ids: Iterable<string>) => Promise<void>;
+  /** Soft-delete a file into the Trash; resolves whether it was trashed. */
+  trash: (id: string) => Promise<boolean>;
+  /** Pull a file back out of the Trash; resolves whether it was restored. */
+  restore: (id: string) => Promise<boolean>;
+  /** Move a file into a folder by public id, or `null` for the root; resolves whether it moved. */
+  move: (id: string, folder: string | null) => Promise<boolean>;
+  /** Soft-delete many files in one pass, refetching once; stops at the first refusal and resolves whether all were trashed. */
+  trashMany: (ids: Iterable<string>) => Promise<boolean>;
+  /** Restore many files in one pass, refetching once; stops at the first refusal and resolves whether all were restored. */
+  restoreMany: (ids: Iterable<string>) => Promise<boolean>;
 }
 
 /**
- * The single-file lifecycle verbs (trash, restore) over the shared record
- * soft-delete verbs. Renames go through the record form's own update. Resource
- * caches invalidate in the owners; `onChanged` lets a caller refresh a separate
- * authored view.
+ * The single-file lifecycle verbs (trash, restore, move) over the shared record
+ * soft-delete verbs. Every verb resolves whether it completed and settles its
+ * failures through `useBusyRun`'s `settle`, the verbs' one error surface. Renames
+ * go through the record form's own update. Resource caches invalidate in the
+ * owners; `onChanged` lets a caller refresh a separate authored view.
  */
 export function useFileActions(
   options: { onChanged?: () => void } = {},
@@ -43,37 +45,42 @@ export function useFileActions(
     dataProviderName: resource?.schemaName,
     invalidates: ["list", "many", "detail"],
   });
-  const { busy, run } = useBusyRun(onChanged);
+  const { busy, settle } = useBusyRun(onChanged);
 
   return {
     busy,
     trash: (id) =>
-      run(async () => {
+      settle(async () => {
         requireFileResource(resource);
-        await deleteWithPreview.remove(id);
-      }),
+        return deleteWithPreview.remove(id, { errorNotification: false });
+      }, false),
     restore: (id) =>
-      run(async () => {
+      settle(async () => {
         requireFileResource(resource);
-        await trashRecord.restore(id);
-      }),
+        return trashRecord.restore(id);
+      }, false),
     move: (id, folder) =>
-      run(async () => {
+      settle(async () => {
         requireFileResource(resource);
-        await updateFile.mutateAsync({ id, values: { folder } });
-      }),
+        await updateFile.mutateAsync({ id, values: { folder }, errorNotification: false });
+        return true;
+      }, false),
     trashMany: (ids) =>
-      run(async () => {
+      settle(async () => {
         for (const id of ids) {
           requireFileResource(resource);
-          await deleteWithPreview.remove(id);
+          if (!(await deleteWithPreview.remove(id, { errorNotification: false }))) return false;
         }
-      }),
+        return true;
+      }, false),
     restoreMany: (ids) =>
-      run(async () => {
+      settle(async () => {
         requireFileResource(resource);
-        for (const id of ids) await trashRecord.restore(id);
-      }),
+        for (const id of ids) {
+          if (!(await trashRecord.restore(id))) return false;
+        }
+        return true;
+      }, false),
   };
 }
 

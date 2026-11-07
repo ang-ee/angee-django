@@ -8,7 +8,7 @@ from typing import Any, Self, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, ValidationError
 from django.db import connections, models
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, RowNumber
 from rebac import current_actor
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.watch import KEY_CHUNK
@@ -180,6 +180,36 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
 
         return cast(models.QuerySet[_ModelT], self.lock_if_supported()).get(*args, **kwargs)
 
+    def first_per_group(
+        self,
+        *partition_by: str | models.Expression | models.F,
+        order_by: Sequence[str | models.Expression | models.F],
+        limit: int,
+    ) -> Self:
+        """Keep the first ``limit`` rows of each group, ranked by one SQL window.
+
+        A group is one distinct value of ``partition_by`` (field paths, annotations
+        or expressions). ``order_by`` ranks the rows inside each group and should end
+        in a unique column so the kept rows are deterministic. The result keeps this
+        queryset's scope, annotations and selection but not its ordering, so an
+        inherited ``Meta.ordering`` never joins a grouped selection's ``GROUP BY``;
+        callers order the kept rows. Filters chained afterwards apply before the
+        ranking, as Django wraps a window filter in an outer query.
+
+        The rank is a selected annotation (``_group_rank``), so that outer query reads
+        the ranked rows whole. A masked rank makes Django re-select the rows by one
+        column per distinct select expression: an annotation equal to a selected
+        column (a partition key over the model's own field) collapses into it, and
+        every later value is read through the previous field's converter.
+        """
+
+        if not partition_by:
+            raise ValueError("first_per_group needs at least one partition.")
+        if limit < 1:
+            raise ValueError("first_per_group keeps at least one row per group.")
+        rank = models.Window(RowNumber(), partition_by=list(partition_by), order_by=list(order_by))
+        return cast(Self, self.order_by().annotate(_group_rank=rank).filter(_group_rank__lte=limit))
+
 
 class AngeeQuerySet(
     _AngeeQuerySetMixin[_ModelT],
@@ -194,15 +224,22 @@ class AngeeQuerySet(
         actor: Any = None,
         default: Any = None,
         output_field: models.Field | None = None,
+        aggregate: bool = False,
     ) -> models.Expression | models.Subquery:
         """Project one correlated readable value, including under an elevated parent.
 
         Add correlation predicates before calling. No actor yields no value;
         callers own domain fallbacks and may explicitly coalesce an absent value.
+        ``aggregate`` reads under REBAC's eager aggregate scope
+        (``scoped_for_aggregate``), the row authorization the aggregate roots
+        use, instead of the row scope.
         """
 
         actor = actor or self.actor() or current_actor()
-        readable = self.with_actor(actor).scoped() if actor is not None else self
+        readable = self
+        if actor is not None:
+            bound = self.with_actor(actor)
+            readable = bound.scoped_for_aggregate() if aggregate else bound.scoped()
         # The selected field owns the scalar type; only the outer fallback needs
         # a common output type (overriding Subquery changes empty-set compilation).
         scalar = models.Subquery(readable.values(field)[:1])
@@ -216,8 +253,14 @@ class AngeeQuerySet(
             output_field=output_field or scalar.output_field,
         )
 
-    def readable_count_subquery(self, *, actor: Any = None) -> models.Expression | models.Subquery:
-        """Count a correlated actor-scoped row set, returning zero when empty."""
+    def readable_count_subquery(
+        self, *, actor: Any = None, aggregate: bool = False,
+    ) -> models.Expression | models.Subquery:
+        """Count a correlated actor-scoped row set's distinct rows, returning zero when empty.
+
+        ``aggregate`` counts under the aggregate roots' eager row scope, as
+        :meth:`readable_scalar_subquery` reads.
+        """
 
         rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
         return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
@@ -225,6 +268,7 @@ class AngeeQuerySet(
             actor=actor,
             default=0,
             output_field=models.IntegerField(),
+            aggregate=aggregate,
         )
 
     def keyset_page(
@@ -272,12 +316,12 @@ class AngeeQuerySet(
         if around is not None and before_cursor is None and after_cursor is None:
             # Bound the first window around an already authorized record. The
             # domain resolves a message/date; this owner only handles tuple order.
-            newer = list(self.filter(order.after(order.position(around))).order_by(order.field, "pk")[: limit // 2])
+            oldest_first = order.ordering(oldest_first=True)
+            newer = list(self.filter(order.after(order.position(around))).order_by(*oldest_first)[: limit // 2])
             upper = order.position(newer[-1] if newer else around)
             window = window.exclude(order.after(upper))
         ascending = after_cursor is not None
-        ordering = (order.field, "pk") if ascending else (f"-{order.field}", "-pk")
-        selected = list(window.order_by(*ordering)[: limit + 1])
+        selected = list(window.order_by(*order.ordering(oldest_first=ascending))[: limit + 1])
         has_more = len(selected) > limit
         rows = selected[:limit]
         if ascending:
@@ -298,7 +342,7 @@ class AngeeQuerySet(
         # Re-fetch the bounded identities through the original queryset so callers
         # retain a composable queryset instead of inheriting this method's probe list.
         return KeysetPage(
-            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(f"-{order.field}", "-pk"),
+            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(*order.ordering()),
             count=count,
             older_cursor=order.sign(rows[-1], signer),
             newer_cursor=order.sign(rows[0], signer),

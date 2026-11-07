@@ -19,7 +19,7 @@ from typing import Any, cast
 
 import strawberry
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import BadRequest, ValidationError
 from django.db import models
 from rebac import SubjectRef, current_actor
 from rebac.field_visibility import redacted_fields
@@ -30,6 +30,7 @@ from strawberry.scalars import JSON
 from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
+from angee.base.pagination import valid_page_size
 from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
@@ -52,12 +53,12 @@ from angee.provenance.statements import (
     StatementsMixin,
     StatementSourceMixin,
     prime_readable_statement_records,
+    readable_statement_read,
 )
 
 Changeset = changeset_model()
 
 HISTORY_LIMIT_DEFAULT = 25
-HISTORY_LIMIT_MAX = 100
 
 # The nested choices keep their owner's names on the wire; a bare ``Action`` would collide.
 strawberry.enum(cast(Any, ChangesetContract.Action), name="ChangesetAction")
@@ -152,7 +153,7 @@ class HistoryMergeType:
 
 @strawberry.interface
 class HistoryAttribution:
-    """Changeset attribution shared by compact and detailed record history."""
+    """Changeset attribution carried by every record history entry."""
 
     id: PublicID
     actor: str | None
@@ -165,19 +166,6 @@ class HistoryAttribution:
     occurred_at: datetime
     recorded_at: datetime
     outcome: ChangesetContract.Outcome | None
-
-
-@strawberry.type
-class HistorySummaryType(HistoryAttribution):
-    """One compact changeset line, without field or revert projection work."""
-
-    @classmethod
-    def from_changesets(cls, changesets: Iterable[Any]) -> list[HistorySummaryType]:
-        """Project a page while resolving each distinct actor once."""
-
-        page = list(changesets)
-        actors = _actor_projections(page)
-        return [cls(**_attribution(row, *actors.get(row.actor_ref, (None, None)))) for row in page]
 
 
 @strawberry.type
@@ -225,10 +213,10 @@ def provenance_model(label: str) -> type[models.Model]:
     return model
 
 
-def _statement_origin(statement: Statement) -> str:
+def _statement_origin(statement: Statement, actor: Any) -> str:
     """Name a readable asserting principal, otherwise disclose only its kind."""
 
-    source = statement.readable_asserting_source
+    source = statement.readable_asserting_source(actor)
     if source is not None:
         return str(public_subject_ref(source))
     return str(SourceKind(statement.source_kind).label)
@@ -247,7 +235,7 @@ def field_provenance(record: StatementsMixin, actor: Any) -> list[FieldProvenanc
                 FieldProvenanceType(
                     field=name,
                     authority=cast(Any, row.fact_authority),
-                    origin=_statement_origin(row),
+                    origin=_statement_origin(row, actor),
                     statement_model=statement_model._meta.label,
                     statement_id=PublicID(public_id_of(row)),
                     changeset_id=PublicID(public_id_for(Changeset, row.changeset_id))
@@ -316,13 +304,13 @@ def _history_reference(record: models.Model, *, pointer: str = "", label: str | 
     )
 
 
-def _statement_source_reference(version: Any) -> HistoryReferenceType | None:
+def _statement_source_reference(version: Any, actor: Any) -> HistoryReferenceType | None:
     """Prefer a readable retained link; otherwise name the readable principal."""
 
     link = getattr(version, "_readable_statement_link", None)
     if link is not None:
         return _history_reference(link, label=link.statement_source_label)
-    source = getattr(version, "_readable_asserting_source", None)
+    source = readable_statement_read(version, actor)[1]
     return _history_reference(source) if source is not None else None
 
 
@@ -342,9 +330,9 @@ class RecordHistory:
                 self.statement_scopes[model] = scope
 
     def changesets(self) -> models.QuerySet[Any]:
-        """The record's changesets, newest first; ordering is the changeset owner's."""
+        """The record's closed changesets, newest first; ordering is the changeset owner's."""
 
-        return Changeset.objects.sudo(reason="provenance.record_history").touching(self.record)
+        return Changeset.objects.sudo(reason="provenance.record_history").closed_for_record(self.record)
 
     def entries(self, changesets: Iterable[Any]) -> list[HistoryEntryType]:
         """Project an already bounded window, also used by the combined Comments feed."""
@@ -470,7 +458,7 @@ class RecordHistory:
         readable_links: dict[tuple[type[models.Model], Any], models.Model] = {}
         for link_model, ids in links_by_model.items():
             assert issubclass(link_model, StatementLinkMixin)
-            rows = require_rebac_queryset(link_model).with_actor(self.actor).with_action("read").filter(pk__in=ids)
+            rows = require_rebac_queryset(link_model, actor=self.actor).with_action("read").filter(pk__in=ids)
             if link_model.presentation_related:
                 rows = rows.select_related(*link_model.presentation_related)
             readable_links.update({(link_model, row.pk): row for row in rows})
@@ -494,8 +482,7 @@ class RecordHistory:
         for model, items in snapshots.items():
             keys = {pk for pk, _changeset_id in items}
             readable = (
-                require_rebac_queryset(model)
-                .with_actor(self.actor)
+                require_rebac_queryset(model, actor=self.actor)
                 .with_action("read")
                 .using(self.using)
                 .filter(pk__in=keys)
@@ -591,10 +578,10 @@ class RecordHistory:
                     confidence=version.confidence,
                     history_type=cast(Any, HistoryType(version.history_type)),
                     values=cast(JSON, values),
-                    source=_statement_source_reference(version),
+                    source=_statement_source_reference(version, self.actor),
                     evidence=[
                         _history_reference(record, pointer=ref.pointer)
-                        for ref, record in getattr(version, "_readable_evidence_records", ())
+                        for ref, record in readable_statement_read(version, self.actor)[0]
                     ],
                 )
             )
@@ -667,8 +654,9 @@ class RecordHistory:
 
 
 def _validate_page(limit: int, offset: int) -> None:
-    if not 1 <= limit <= HISTORY_LIMIT_MAX or offset < 0:
-        raise ValidationError(f"History requires a limit from 1 to {HISTORY_LIMIT_MAX} and a nonnegative offset.")
+    valid_page_size(limit)
+    if offset < 0:
+        raise BadRequest("History requires a nonnegative offset.")
 
 
 @strawberry.type
@@ -680,7 +668,7 @@ class HistoryQuery:
         subject_model = provenance_model(model)
         actor = current_actor()
         queryset = (
-            require_rebac_queryset(subject_model).with_actor(actor).with_action("read")
+            require_rebac_queryset(subject_model, actor=actor).with_action("read")
             if actor is not None
             else subject_model._base_manager.none()
         )
@@ -704,7 +692,7 @@ class HistoryQuery:
         tracked = history_model(model)
         actor = current_actor()
         queryset = (
-            require_rebac_queryset(tracked).with_actor(actor).with_action("read")
+            require_rebac_queryset(tracked, actor=actor).with_action("read")
             if actor is not None
             else tracked._base_manager.none()
         )

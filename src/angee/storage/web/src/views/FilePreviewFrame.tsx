@@ -34,6 +34,15 @@ export function FilePreviewFrame({
 }): ReactElement {
   const t = useStorageT();
   const confirm = useConfirm();
+  // The file verbs settle their own failures; the pane closes only on a completed trash.
+  const lifecycle = async (id: string, restore: boolean, name: string) => {
+    if (restore) {
+      await fileActions.restore(id);
+      return;
+    }
+    if (!(await confirm({ title: t("file.trashTitle", { name }), body: t("file.trashBody"), confirm: t("file.trash"), danger: true }))) return;
+    if (await fileActions.trash(id)) closeDetail();
+  };
   const metadata = useModelMetadata(FILE_MODEL);
   const query = useAuthoredQuery(StorageFileById, { id }, { models: [FILE_MODEL] });
   const file = query.data?.files_by_pk ?? null;
@@ -72,21 +81,14 @@ export function FilePreviewFrame({
           )}
           {file?.is_trashed ? (
             <Button type="button" size="sm" variant="secondary" loading={fileActions.busy}
-              onClick={() => void fileActions.restore(file.id)}>
+              onClick={() => void lifecycle(file.id, true, file.title || file.filename)}>
               <Glyph name="restore" />
               {t("file.restore")}
             </Button>
           ) : (
             <Button type="button" size="sm" variant="danger" loading={fileActions.busy} disabled={!file}
-              onClick={async () => {
-                if (!file) return;
-                const ok = await confirm({
-                  title: t("file.trashTitle", { name: file.title || file.filename }),
-                  body: t("file.trashBody"),
-                  confirm: t("file.trash"),
-                  danger: true,
-                });
-                if (ok) void fileActions.trash(file.id).then(closeDetail);
+              onClick={() => {
+                if (file) void lifecycle(file.id, false, file.title || file.filename);
               }}>
               <Glyph name="trash" />
               {t("file.trash")}
@@ -100,11 +102,10 @@ export function FilePreviewFrame({
         <RecordHeader
           headingLevel={1}
           crumbs={crumbs}
-          title={file
-            ? file.title || file.filename
-            : fetching
-              ? t("loadingFile")
-              : error ? t("preview.loadError") : t("file.notFoundTitle")}
+          title={file ? file.title || file.filename : undefined}
+          loading={!file && fetching}
+          loadingLabel={t("loadingFile")}
+          unavailable={!file}
           meta={facts}
           status={file?.is_trashed ? { label: t("file.inTrash"), tone: "warning" } : undefined}
         />
@@ -113,7 +114,7 @@ export function FilePreviewFrame({
             {file ? (
               <FilePreview file={file} page={page} />
             ) : fetching ? (
-              <LoadingPanel message={t("loadingFile")} />
+              <LoadingPanel loadingLabel={t("loadingFile")} />
             ) : error ? (
               <ErrorBanner title={t("preview.loadError")} description={error.message} />
             ) : (

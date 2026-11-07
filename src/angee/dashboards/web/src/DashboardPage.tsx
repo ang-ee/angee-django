@@ -5,7 +5,6 @@ import {
   ActionTrigger,
   Button,
   DashboardSurface,
-  errorMessage,
   DropdownMenu,
   Glyph,
   HOME_PATH_PREFERENCE_KEY,
@@ -23,7 +22,7 @@ import {
   useRouteHref,
   useRuntimeUserPreferences,
   useTrashRecord,
-  useToast,
+  useBusyRun,
   type DescriptorField,
   type MutationDialogValues,
 } from "@angee/ui";
@@ -64,13 +63,13 @@ function StoredDashboardPage({ target, registry, store }: {
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const t = useDashboardsT();
-  const toast = useToast();
   const trashRecord = useTrashRecord(useModelMetadata("dashboards.Dashboard")?.resource);
   // Commands settle through the shared run; trash already owns its outcome.
   const settle = useActionResultRun({ noResultTitle: t("common.actionFailed") });
   const state = binding.state;
   useBreadcrumbLeafLabel(state.status === "ready" ? state.name : null);
-  const [pending, setPending] = React.useState(false);
+  const busy = useBusyRun();
+  const pending = busy.busy;
   const href = target.scope === "personal" ? routeHref("dashboards.detail", { id: target.id }) : null;
   const shortcutId = state.status === "ready" ? `dashboard:${state.persistedId}` : "";
   const pinned = shortcutId
@@ -79,12 +78,7 @@ function StoredDashboardPage({ target, registry, store }: {
   const isHome = href !== null && preferences.preferences[HOME_PATH_PREFERENCE_KEY] === href;
 
   const run = async (work: () => Promise<void>, message: string): Promise<void> => {
-    setPending(true);
-    try {
-      await settle(async () => { await work(); return { ok: true, message }; });
-    } finally {
-      setPending(false);
-    }
+    await busy.run(() => settle(async () => { await work(); return { ok: true, message }; }));
   };
 
   const duplicate = () => {
@@ -101,27 +95,20 @@ function StoredDashboardPage({ target, registry, store }: {
 
   const trash = () => {
     if (state.status !== "ready" || target.scope !== "personal") return;
-    setPending(true);
-    void (async () => {
+    void busy.settle(async () => {
+      // The shared verb confirms, moves the dashboard to the trash and settles the outcome.
+      if (!(await trashRecord.trash(target.id, state.name))) return;
       try {
-        // The shared verb confirms, moves the dashboard to the trash and settles the outcome.
-        if (!(await trashRecord.trash(target.id, state.name))) return;
-        try {
-          await preferences.patchPreferences((current) => ({
-            ...current,
-            [ROUTE_SHORTCUTS_PREFERENCE_KEY]: readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId),
-            ...(current[HOME_PATH_PREFERENCE_KEY] === href ? { [HOME_PATH_PREFERENCE_KEY]: null } : {}),
-          }));
-        } finally {
-          // The dashboard is gone even if its preference cleanup failed.
-          await navigate({ to: routeHref("dashboards.index") });
-        }
-      } catch (error) {
-        toast.danger({ title: errorMessage(error, t("common.actionFailed")) });
+        await preferences.patchPreferences((current) => ({
+          ...current,
+          [ROUTE_SHORTCUTS_PREFERENCE_KEY]: readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId),
+          ...(current[HOME_PATH_PREFERENCE_KEY] === href ? { [HOME_PATH_PREFERENCE_KEY]: null } : {}),
+        }));
       } finally {
-        setPending(false);
+        // The dashboard is gone even if its preference cleanup failed; a failure still toasts once.
+        await navigate({ to: routeHref("dashboards.index") });
       }
-    })();
+    }, undefined, t("common.actionFailed"));
   };
 
   const detailFields = React.useMemo<readonly DescriptorField[]>(() => [

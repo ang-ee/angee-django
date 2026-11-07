@@ -34,6 +34,7 @@ from angee.storage.models import File as AbstractFile
 from angee.workflows_extraction.steps import InferEvidenceInput, InferEvidenceStep
 from tests.conftest import Drive, File, create_platform_admin
 from tests.extraction_models import Extraction, ExtractionLineage, ExtractionPage, ExtractionPart, ExtractionSource
+from tests.mtidemo.models import MtiChild
 from tests.test_storage import drive as drive
 
 
@@ -152,7 +153,6 @@ def test_retention_preserves_sources_parts_pages_and_typed_missing_values(eviden
     assert line["text"] == "Second line" and line_reference == reference.lines[1]
     assert row.fact("/documents/0/optional") is None
     assert row.fact_authority("/documents/0/title") is FactAuthority.SOURCE
-    assert row.fact_correction("/documents/0/title") is None
     source = row.sources.get()
     assert isinstance(source, DerivedFrom)
     target = generic_target(values["target"])
@@ -226,6 +226,16 @@ def test_file_extraction_rejects_sources_outside_its_target(evidence):
     additional = Source(1, other.content_hash, "text/plain", b"Another note", file=other)
     with pytest.raises(ValidationError, match="belongs to the extraction target"):
         retain(sources=(original, additional))
+
+
+def test_extraction_rejects_targets_outside_file_and_message(evidence):
+    """Explicit target fields cannot reinterpret an unrelated row with the same PK."""
+    retain, values = evidence
+    with system_context(reason="tests extraction unsupported target"):
+        child = MtiChild.objects.create(pk=values["target"].pk, title="Unrelated target")
+    with pytest.raises(ValidationError, match="file or message"):
+        retain(target=child)
+    assert Extraction.objects.count() == 0
 
 
 @pytest.mark.parametrize(

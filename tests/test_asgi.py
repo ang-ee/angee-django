@@ -106,7 +106,7 @@ def test_shared_router_validates_graphql_websocket_origins(
     settings.DEBUG = debug
     route = path("graphql/test/", AngeeGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query)))
     monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: [SimpleNamespace(name="routes")])
-    monkeypatch.setattr(asgi, "optional_addon_module", lambda config, module, **options: SimpleNamespace(
+    monkeypatch.setattr("angee.base.addons.optional_addon_module", lambda config, module, **options: SimpleNamespace(
         __name__="routes.asgi", websocket_urlpatterns=lambda: [route],
     ))
     application = asgi.websocket_application()
@@ -157,7 +157,7 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
             return middleware
         return SimpleNamespace(__name__=f"{config.name}.asgi", websocket_middleware=[wrap])
 
-    monkeypatch.setattr(asgi, "optional_addon_module", contribution_module)
+    monkeypatch.setattr("angee.base.addons.optional_addon_module", contribution_module)
 
     async def endpoint(scope: Any, receive: Any, send: Any) -> None:
         assert scope["user"].is_anonymous
@@ -185,7 +185,7 @@ def websocket_addon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Expose one native addon to the websocket capability owner."""
 
     config = make_addon(path=tmp_path)
-    monkeypatch.setattr(asgi.apps, "get_app_configs", lambda: [config])
+    monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: [config])
     return config
 
 

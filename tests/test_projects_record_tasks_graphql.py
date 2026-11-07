@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 from django.apps import apps
 from django.db import connection
-from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import graphql_request
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -51,8 +51,7 @@ class RecordTaskGraphQLTests(WorkCase):
 
         from angee.graphql.schema import GraphQLSchemas
 
-        request = RequestFactory().post("/graphql/")
-        request.user = user
+        request = graphql_request(user)
         with actor_context(user):
             return GraphQLSchemas.from_discovery().build("console").execute_sync(
                 query, variable_values=variables, context_value=SimpleNamespace(request=request),

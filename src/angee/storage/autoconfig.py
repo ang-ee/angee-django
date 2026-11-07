@@ -16,6 +16,7 @@ _Settings = TypedDict(
         "ANGEE_STORAGE_DRAFT_TTL_HOURS": int,
         "ANGEE_STORAGE_TRASH_TTL_DAYS": int,
         "ANGEE_STORAGE_BACKEND_CLASSES": dict[str, str],
+        "ANGEE_GRAPHQL_RELATED_COUNTS:append": list[str],
     },
 )
 
@@ -56,5 +57,6 @@ SETTINGS: _Settings = {
     "ANGEE_STORAGE_BACKEND_CLASSES": {
         "local": "angee.storage.backends.LocalBackend",
     },
+    "ANGEE_GRAPHQL_RELATED_COUNTS:append": ["angee.storage.schema.related_counts"],
 }
 """Django settings contributed when the storage addon is installed."""

@@ -63,7 +63,7 @@ export function StatusbarSkeleton({ count = 4, fill = false, twoLine = false, la
   count?: number; fill?: boolean; twoLine?: boolean; label?: string;
 }): React.ReactElement {
   const t = useUiT();
-  return <SkeletonStatus label={label ?? t("statusbar.loading")} className={cn("isolate flex items-stretch", twoLine ? "h-12" : "h-8", fill ? "w-full" : "w-fit")}>
+  return <SkeletonStatus loadingLabel={label ?? t("statusbar.loading")} className={cn("isolate flex items-stretch", twoLine ? "h-12" : "h-8", fill ? "w-full" : "w-fit")}>
     {Array.from({ length: count }, (_, index) => <Skeleton key={index}
       className={cn("h-full w-24", fill && "min-w-0 flex-1", index > 0 && "-ml-2.5", index === 0 ? FIRST_CLIP : index === count - 1 ? LAST_CLIP : STEP_CLIP)} />)}
   </SkeletonStatus>;

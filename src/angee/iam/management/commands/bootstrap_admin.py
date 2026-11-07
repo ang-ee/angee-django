@@ -18,7 +18,6 @@ class Command(BaseCommand):
     def add_arguments(self, parser: CommandParser) -> None:
         """Declare CLI overrides for the env/settings-backed bootstrap values."""
 
-        parser.add_argument("--database", default="default")
         parser.add_argument("--username", default=None, help="Admin username. Defaults to settings/env or 'admin'.")
         parser.add_argument(
             "--email",
@@ -35,9 +34,10 @@ class Command(BaseCommand):
         username = options["username"] or configured["username"] or "admin"
         email = options["email"] or configured["email"] or f"{username}@example.com"
         password = options["password"] or configured["password"]
-        manager = get_user_model()._default_manager.db_manager(options["database"])
         try:
-            _, created = manager.ensure_bootstrap_admin(username, email=email, password=password)
+            _, created = get_user_model()._default_manager.ensure_bootstrap_admin(
+                username, email=email, password=password,
+            )
         except ValueError as exc:
             raise CommandError(str(exc)) from exc
 

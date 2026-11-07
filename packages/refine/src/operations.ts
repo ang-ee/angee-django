@@ -98,6 +98,8 @@ export type AggregateMeasureValues = Record<string, unknown>;
 export interface AggregateBucket {
   key: Record<string, unknown> | null;
   count: number;
+  /** The group's first leaf page, present when the groups read carried it. */
+  rows?: readonly Record<string, unknown>[];
   sum?: AggregateMeasureValues;
   avg?: AggregateMeasureValues;
   min?: AggregateMeasureValues;
@@ -137,12 +139,22 @@ export interface AggregateRequestOptions {
   where?: Record<string, unknown>;
 }
 
+/** Each group's first leaf page, carried by the groups read (`<res>_group.rows`). */
+export interface GroupRowsRequest {
+  /** The declared per-group page size. */
+  limit: number;
+  /** The leaf list's own `order_by` value. */
+  orderBy?: unknown;
+}
+
 export interface GroupByRequestOptions extends AggregateRequestOptions {
   dimensions: readonly GroupDimension[];
   having?: Record<string, unknown>;
   orderBy?: readonly GroupOrder[];
   page?: number;
   pageSize?: number;
+  /** Carry each group's first page; the document must select `rows` (`groupRowsDocument`). */
+  rows?: GroupRowsRequest;
 }
 
 export interface FacetRequestSpec extends GroupByRequestOptions {
@@ -356,6 +368,13 @@ export function groupByVariables(
       ? { order_by: options.orderBy.map(groupOrderVariable) }
       : {}),
     ...paginationVariables(options.page, options.pageSize),
+    ...(options.rows
+      ? {
+          with_rows: true,
+          rows_limit: options.rows.limit,
+          ...(options.rows.orderBy !== undefined ? { rows_order_by: options.rows.orderBy } : {}),
+        }
+      : {}),
   };
 }
 
@@ -553,6 +572,7 @@ function groupBucket(group: Record<string, unknown>): AggregateBucket {
     key: recordValue(group.key) ?? {},
     count: countOf(aggregate.count),
     ...extractMeasures(aggregate),
+    ...(Array.isArray(group.rows) ? { rows: group.rows.filter(isRecord) } : {}),
   };
 }
 

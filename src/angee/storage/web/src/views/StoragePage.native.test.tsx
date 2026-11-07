@@ -195,7 +195,9 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
         forms.get(id)!.reject(new Error("Metadata access denied"));
       }
     });
-    await waitFor(() => expect(header.textContent).toBe(missing ? "File not found" : "Could not load this preview."));
+    // The header names an unavailable record; the body's own surface says why.
+    await waitFor(() => expect(header.textContent).toBe("Record unavailable"));
+    expect(await screen.findByText(missing ? "File not found" : "Could not load this preview.")).toBeTruthy();
     if (!missing) expect(await screen.findByText("Preview access denied")).toBeTruthy();
     expect(screen.getAllByRole("tree")[0]).toBe(tree);
     expect(screen.getByRole("navigation", { name: "Record navigation" })).toBe(pager);

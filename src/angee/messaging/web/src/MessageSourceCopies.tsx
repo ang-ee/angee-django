@@ -49,7 +49,7 @@ function SourceCopiesPanel({ messageId, renderActions }: SourceCopiesProps): Rea
       setError(errorMessage(cause, t("copies.failed")));
     }
   };
-  if (copies.isFetching && copies.data === undefined) return <LoadingPanel message={t("copies.loading")} density="inline" />;
+  if (copies.isFetching && copies.data === undefined) return <LoadingPanel loadingLabel={t("copies.loading")} density="inline" />;
   return (
     <>
       <ErrorBanner description={error ?? copies.error?.message ?? null} />

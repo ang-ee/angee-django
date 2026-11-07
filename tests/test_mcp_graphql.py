@@ -475,7 +475,7 @@ def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
     try:
         resource = hasura_model_resource(
             McpDocType, model=ScopedDoc, name="mcp_docs",
-            filterable=["id"], sortable=["id"], aggregatable=["id"], groupable=["scope"],
+            filterable=["id", "scope"], sortable=["id"], aggregatable=["id"], groupable=["scope"],
             insert=False, update=False, delete=False,
         )
         schemas = GraphQLSchemas([

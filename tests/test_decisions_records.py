@@ -20,8 +20,9 @@ from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from angee.graphql.schema import SchemaParts
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows.decision_steps import apply_proposals
-from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
+from tests.conftest import addon_schema, create_platform_admin, create_user, vault_for
 from tests.linesdemo.models import Document, DocumentLine, Tag
 
 

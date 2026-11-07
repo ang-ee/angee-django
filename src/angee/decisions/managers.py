@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, Any
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models import BooleanField, Exists, ExpressionWrapper, F, OuterRef, Q
 from django.db.models.functions import Now
 from pydantic import JsonValue, TypeAdapter
-from rebac import actor_context, current_actor, generic_target, system_context, to_subject_ref
+from rebac import actor_context, check_permission, current_actor, generic_target, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
 from angee.base.managers import AngeeManager
@@ -99,7 +99,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         actor = actor if actor is not None else current_actor()
         withdrawing = _user(actor, active=False) if actor is not None else None
         pk = decision.pk if isinstance(decision, models.Model) else decision
-        with transaction.atomic(), system_context(reason="decisions.withdraw"):
+        with transaction.atomic(using=router.db_for_write(self.model)), system_context(reason="decisions.withdraw"):
             row = self.filter(pk=pk).lock_if_supported().get()
             if row.is_open:
                 self.filter(pk=pk).open().owner_update(
@@ -151,7 +151,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         )
         readable_records(references, participants)
         targets = {generic_target(record) for record in request.records}
-        with transaction.atomic(), system_context(reason="decisions.ask"):
+        with transaction.atomic(using=router.db_for_write(self.model)), system_context(reason="decisions.ask"):
             # Capture admission only after its immutable concern links exist.
             with mute_changes():
                 decision = self.create(
@@ -168,7 +168,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
                     for target in sorted(targets, key=lambda target: (target.content_type.pk, target.object_id))
                 ]
             )
-            if assignees and not any(decision.with_actor(person).has_access("act") for person in assignees):
+            if assignees and not any(check_permission("act", decision, actor=person).allowed for person in assignees):
                 raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})
             publish_change(decision, action="create", update_fields=None)
         return decision.with_actor(asking) if asking is not None else decision
@@ -185,7 +185,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         """Record one final verdict. Proposal actions belong to the asker."""
         answering = _user(actor)
         pk = decision.pk if isinstance(decision, models.Model) else decision
-        with transaction.atomic():
+        with transaction.atomic(using=router.db_for_write(self.model)):
             with system_context(reason="decisions.decide"):
                 row = self.filter(pk=pk).lock_if_supported().get()
                 row.require_access("act", answering)
@@ -219,8 +219,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
                             if reference is None:
                                 raise ValueError("The record for a chosen action is missing or inaccessible.")
                             record = (
-                                require_rebac_queryset(actions.target_model(reference))
-                                .with_actor(answering)
+                                require_rebac_queryset(actions.target_model(reference), actor=answering)
                                 .for_write()
                                 .get(
                                     pk=reference.pk,

@@ -29,7 +29,7 @@ export function ProposalStatements({ proposals, loading = false, labels }: Propo
     <FormView.SectionHeading label={labels?.heading ?? t("comparison.statementHeading")}
       hint={labels?.hint ?? t("comparison.statementHint")}
       audience={labels?.audience ?? t("comparison.statementAudience")} />
-    {loading && !proposals.length ? <LoadingPanel message={t("comparison.loading")} density="inline" /> : null}
+    {loading && !proposals.length ? <LoadingPanel loadingLabel={t("comparison.loading")} density="inline" /> : null}
     {!loading && !proposals.length ? <EmptyState title={t("comparison.empty.title")}
       description={t("comparison.empty.description")} /> : null}
     <div className="grid gap-3">

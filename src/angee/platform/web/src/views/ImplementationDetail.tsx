@@ -68,7 +68,7 @@ export function ImplementationDetail(): ReactElement {
     <DetailSurface
       publishBreadcrumbLabel
       loading={query.isPending}
-      loadingMessage={t("implementation.loading")}
+      loadingLabel={t("implementation.loading")}
       empty={!implementation ? { icon: "terminal", title: t("implementation.notFound"), description: id } : null}
       title={implementation?.label}
       description={implementation?.description}

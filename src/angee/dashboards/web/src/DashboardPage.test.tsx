@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
   patchPreferences: vi.fn<RuntimeUserPreferencesState["patchPreferences"]>(),
   trash: vi.fn<(id: string, name?: string) => Promise<boolean>>(),
   navigate: vi.fn<(options: { to: string }) => Promise<void>>(),
-  danger: vi.fn(),
   settle: vi.fn(),
 }));
 
@@ -40,10 +39,9 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   }),
   useTrashRecord: () => ({ available: true, busy: false, trash: mocks.trash }),
   useActionResultRun: () => mocks.settle,
-  useToast: () => ({ danger: mocks.danger }),
 }));
 
-import { HOME_PATH_PREFERENCE_KEY, ROUTE_SHORTCUTS_PREFERENCE_KEY } from "@angee/ui";
+import { HOME_PATH_PREFERENCE_KEY, ROUTE_SHORTCUTS_PREFERENCE_KEY, ToastProvider } from "@angee/ui";
 import { PersonalDashboardPage } from "./DashboardPage";
 
 let root: Root;
@@ -79,8 +77,21 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+/** The text of each danger toast the page raised: Base UI stamps the type on a toast's root
+ * (its alertdialog) and on each of its parts, so only the roots count. */
+function toasts(): string[] {
+  return Array.from(document.querySelectorAll('[role="alertdialog"][data-type="danger"]'), (toast) => toast.textContent ?? "");
+}
+
+function expectOneToast(title: string): void {
+  const raised = toasts();
+  expect(raised).toHaveLength(1);
+  expect(raised[0]).toContain(title);
+}
+
 async function trashDashboard(): Promise<HTMLButtonElement> {
-  await React.act(async () => root.render(<PersonalDashboardPage />));
+  // The page's busy run toasts through the real provider.
+  await React.act(async () => root.render(<ToastProvider><PersonalDashboardPage /></ToastProvider>));
   const menu = host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
   await React.act(async () => menu.click());
   const trash = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
@@ -101,16 +112,14 @@ describe("dashboard trash follow-ups", () => {
       [ROUTE_SHORTCUTS_PREFERENCE_KEY]: [{ id: "other", label: "Other dashboard", path: "/dashboards/other" }],
     });
     expect(mocks.settle).not.toHaveBeenCalled();
-    expect(mocks.danger).not.toHaveBeenCalled();
+    expect(toasts()).toEqual([]);
     expect(menu.disabled).toBe(false);
   });
 
   test("reports failed preference cleanup and still leaves the trashed dashboard", async () => {
     mocks.patchPreferences.mockRejectedValueOnce(new Error("Preferences could not be saved."));
     const menu = await trashDashboard();
-    await vi.waitFor(() => expect(mocks.danger).toHaveBeenCalledExactlyOnceWith({
-      title: "Preferences could not be saved.",
-    }));
+    await vi.waitFor(() => expectOneToast("Preferences could not be saved."));
     expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith({ to: "/dashboards" });
     expect(mocks.settle).not.toHaveBeenCalled();
     expect(menu.disabled).toBe(false);
@@ -123,7 +132,7 @@ describe("dashboard trash follow-ups", () => {
     expect(mocks.trash).toHaveBeenCalledOnce();
     expect(mocks.patchPreferences).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
-    expect(mocks.danger).not.toHaveBeenCalled();
+    expect(toasts()).toEqual([]);
     expect(mocks.settle).not.toHaveBeenCalled();
     expect(menu.disabled).toBe(false);
   });
@@ -131,7 +140,7 @@ describe("dashboard trash follow-ups", () => {
   test("settles a rejected trash prompt without starting follow-ups", async () => {
     mocks.trash.mockRejectedValueOnce(new Error("Confirmation unavailable."));
     const menu = await trashDashboard();
-    expect(mocks.danger).toHaveBeenCalledExactlyOnceWith({ title: "Confirmation unavailable." });
+    await vi.waitFor(() => expectOneToast("Confirmation unavailable."));
     expect(mocks.patchPreferences).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
     expect(menu.disabled).toBe(false);

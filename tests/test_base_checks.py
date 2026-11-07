@@ -11,7 +11,7 @@ from django.test import override_settings
 from django.test.utils import isolate_apps
 
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_ownership
+from angee.base.checks import check_ownership, check_sealed_permissions
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.hooks import check_hook, check_hooks
@@ -381,3 +381,16 @@ def test_installed_models_spell_ownership_one_way() -> None:
     """
 
     assert [error.msg for error in check_ownership() if error.id == "angee.E045"] == []
+
+
+def test_a_seal_names_an_installed_owner_and_its_declared_permissions() -> None:
+    """A seal without its owner or on an undeclared permission is reported, never raised."""
+
+    [missing_owner] = check_sealed_permissions("absent", {"absent/thing": ("read",)}, "tests.E001")
+    assert missing_owner.id == "tests.E001"
+    assert "absent declares no permissions schema" in missing_owner.msg
+    [undeclared] = check_sealed_permissions("iam", {"auth/user": ("view_as", "impersonate")}, "tests.E001")
+    assert undeclared.id == "tests.E001"
+    assert "auth/user#impersonate" in undeclared.msg
+    assert "auth/user#view_as" not in undeclared.msg
+    assert check_sealed_permissions("iam", {"auth/user": ("view_as",)}, "tests.E001") == []

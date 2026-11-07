@@ -15,6 +15,9 @@ SETTINGS = {
     # Native HTTP error capture sees coercion values before our safe log policy.
     "SENTRY_DISABLED_INTEGRATIONS:append": [StrawberryIntegration],
     "ANGEE_GRAPHQL_RESOURCE_FILTERS": [],
+    # Owners append dotted callables returning their related groups' count
+    # declarations; see ``angee.graphql.related_counts``.
+    "ANGEE_GRAPHQL_RELATED_COUNTS": [],
     "STRAWBERRY_DJANGO:append": {
         "DEFAULT_PK_FIELD_NAME": PUBLIC_ID_FIELD_NAME,
         "MAP_AUTO_ID_AS_GLOBAL_ID": False,
@@ -44,6 +47,10 @@ def settings(namespace: Mapping[str, Any]) -> dict[str, str | None | dict[str, A
 
 
 def _channel_redis_url(namespace: Mapping[str, Any]) -> str:
-    """Return the Redis URL used for the shared Channels layer."""
+    """Prefer a channel URL, then the stack Redis URL or its Redis broker."""
 
-    return str(namespace.get("CHANNEL_REDIS_URL") or namespace.get("REDIS_URL") or "")
+    url = namespace.get("CHANNEL_REDIS_URL") or namespace.get("REDIS_URL")
+    if url:
+        return str(url)
+    broker_url = str(namespace.get("CELERY_BROKER_URL") or "")
+    return broker_url if broker_url.startswith(("redis://", "rediss://")) else ""

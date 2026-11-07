@@ -54,7 +54,7 @@ def _claimed_create(
             ),
         )
         if replay is not None:
-            instance = require_rebac_queryset(model).with_actor(actor).filter(pk=replay.pk).first()
+            instance = require_rebac_queryset(model, actor=actor).filter(pk=replay.pk).first()
             if instance is None:
                 raise PermissionDenied("The claimed creation result is not readable.")
             return instance

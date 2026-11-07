@@ -14,7 +14,7 @@ export interface RecordConversationPaneProps {
 export function RecordConversationPane({ context, attachmentId }: RecordConversationPaneProps): ReactElement {
   const t = useMessagingT();
   const query = useRecordSourceThreads(context);
-  if (query.isFetching && !query.data) return <LoadingPanel message={t("transcript.loading")} />;
+  if (query.isFetching && !query.data) return <LoadingPanel loadingLabel={t("transcript.loading")} />;
   const thread = query.data?.record_source_threads.find((edge) => edge.id === attachmentId)?.thread;
   if (query.error || !thread) {
     return <EmptyState icon="channel" className="min-h-48 p-4"

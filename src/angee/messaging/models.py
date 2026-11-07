@@ -40,7 +40,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Obje
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.db.backends.base.base import BaseDatabaseWrapper
-from django.db.models.fields.json import DataContains
+from django.db.models.fields.json import DataContains, KeyTextTransform
 from django.db.models.functions import MD5, Coalesce, JSONArray
 from django.db.models.sql.compiler import SQLCompiler
 from django.utils import timezone
@@ -53,7 +53,6 @@ from rebac import (
     SubjectRef,
     actor_context,
     current_actor,
-    database_context,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -63,7 +62,7 @@ from rebac.backends import backend
 from rebac.resources import model_resource_type
 
 from angee.base.exceptions import DomainError
-from angee.base.fields import DiagnosticTextField, ModelLabelField
+from angee.base.fields import ModelLabelField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
@@ -75,7 +74,8 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, require_rebac_queryset
+from angee.base.prefetch import prefetched
 from angee.base.refs import RecordRef, generic_pointer_model
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
@@ -87,6 +87,7 @@ from angee.messaging.managers import (
     FragmentManager,
     MessageEdgeManager,
     MessageManager,
+    MessagePointers,
     MessageQuerySet,
     MessageStarManager,
     PartManager,
@@ -267,9 +268,6 @@ class ThreadedModelMixin(models.Model):
     :mod:`angee.base.refs`).
     """
 
-    thread_attachment_role: ClassVar[str] = "chatter"
-    """The attachment role used for the model's primary chatter thread."""
-
     @classmethod
     def thread_messages_expression(cls, record_id: Any) -> MessageQuerySet[Message]:
         """Return messages of the record's primary thread for a SQL subquery.
@@ -295,7 +293,7 @@ class ThreadedModelMixin(models.Model):
         attached = thread_model._base_manager.redirect_group(survivor).filter(
             attachments__content_type_id=models.Subquery(content_type),
             attachments__object_id=models.OuterRef("_record_id"),
-            attachments__role=cls.thread_attachment_role,
+            attachments__role=ThreadAttachment.AttachmentRole.CHATTER,
         )
         return rows.alias(_record_attached=models.Exists(attached)).filter(
             thread_id__isnull=False,
@@ -368,7 +366,7 @@ class ThreadedModelMixin(models.Model):
 
     @contextmanager
     def _own_write_scope(self) -> Iterator[None]:
-        """Carry this saved row's database and actor into its chatter bookkeeping."""
+        """Carry this saved row's actor into its chatter bookkeeping."""
 
         scope: AbstractContextManager[None] = nullcontext()
         if isinstance(self, RebacMixin):
@@ -377,8 +375,7 @@ class ThreadedModelMixin(models.Model):
                 scope = system_context(reason="messaging.record_write")
             elif actor is not None and actor != current_actor():
                 scope = actor_context(actor)
-        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
-        with database_context(using), scope:
+        with scope:
             yield
 
     def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
@@ -413,10 +410,10 @@ class ThreadedModelMixin(models.Model):
         if create:
             return attachment_model.objects.ensure_for_record(
                 self,
-                role=self.thread_attachment_role,
+                role=ThreadAttachment.AttachmentRole.CHATTER,
                 title=self.message_thread_title(),
             )
-        return attachment_model.objects.for_record(self, role=self.thread_attachment_role)
+        return attachment_model.objects.for_record(self, role=ThreadAttachment.AttachmentRole.CHATTER)
 
     def message_post(
         self,
@@ -690,7 +687,7 @@ class ThreadedModelMixin(models.Model):
         """
 
         using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             bound_actor = self.actor() if isinstance(self, RebacMixin) else None
             scope_actor = idempotency_actor or bound_actor or current_actor()
             attachment = self.message_thread_attachment(create=True)
@@ -774,7 +771,7 @@ class ThreadedModelMixin(models.Model):
             self,
             party=party,
             user=user,
-            role=self.thread_attachment_role,
+            role=ThreadAttachment.AttachmentRole.CHATTER,
             notification_policy=notification_policy,
             subtype_keys=subtype_keys,
         )
@@ -787,7 +784,7 @@ class ThreadedModelMixin(models.Model):
                 self,
                 party=party,
                 user=user,
-                role=self.thread_attachment_role,
+                role=ThreadAttachment.AttachmentRole.CHATTER,
             )
         )
 
@@ -799,7 +796,7 @@ class ThreadedModelMixin(models.Model):
                 self,
                 party=party,
                 user=user,
-                role=self.thread_attachment_role,
+                role=ThreadAttachment.AttachmentRole.CHATTER,
             )
         )
 
@@ -807,7 +804,7 @@ class ThreadedModelMixin(models.Model):
         """Return this row's chatter followers."""
 
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        return follower_model.objects.for_record(self, role=self.thread_attachment_role)
+        return follower_model.objects.for_record(self, role=ThreadAttachment.AttachmentRole.CHATTER)
 
     def message_suggested_recipients(
         self,
@@ -922,7 +919,7 @@ class ThreadedModelMixin(models.Model):
                     follower_model.objects.db_manager(self._state.db).subscribe(
                         self,
                         user=account,
-                        role=self.thread_attachment_role,
+                        role=ThreadAttachment.AttachmentRole.CHATTER,
                     )
 
     def can_post(self, user: Any = None) -> bool:
@@ -1480,6 +1477,12 @@ class Thread(
 
         return self.display_title or f"thread:{self.public_id}"
 
+    @classmethod
+    def display_title_fields(cls) -> tuple[str, ...]:
+        """Fields :attr:`display_title`, and so ``__str__``, reads from a projected row (``title`` selected)."""
+
+        return ("title__text", "modality")
+
     @property
     def display_title(self) -> str:
         """Name a status feed by its category, never by unrelated participants."""
@@ -1637,37 +1640,6 @@ class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel,
         if related.exists():
             reference.move(related, survivor=survivor)
         return None
-
-    POINTER_COLUMNS: ClassVar[tuple[str, ...]] = ("label", "content_type_id", "object_id")
-    """The columns a record pointer reads from an edge: its label and its record's identity."""
-
-    @classmethod
-    def pointer_annotations(cls, path: str) -> dict[str, models.F]:
-        """Annotate the record pointer of the edge a row reaches at ``path``, through the join.
-
-        The edge row itself is never loaded; :meth:`pointer_from_row` rebuilds the
-        pointer from these columns. The caller owns whether the row's readers may
-        see the edge's record.
-        """
-
-        return {f"_{path}_pointer_{column}": models.F(f"{path}__{column}") for column in cls.POINTER_COLUMNS}
-
-    @classmethod
-    def pointer_from_row(cls, row: models.Model, path: str) -> ThreadAttachment | None:
-        """Return the unsaved edge ``row`` reaches at ``path``, carrying only its record pointer.
-
-        It reads :meth:`pointer_annotations` when the row carries them, else the
-        edge by its id under system context (a structural read of the same columns).
-        """
-
-        edge_id = getattr(row, f"{path}_id")
-        if edge_id is None:
-            return None
-        prefix = f"_{path}_pointer_"
-        if all(hasattr(row, f"{prefix}{column}") for column in cls.POINTER_COLUMNS):
-            return cls(**{column: getattr(row, f"{prefix}{column}") for column in cls.POINTER_COLUMNS})
-        with system_context(reason="messaging.thread_attachment.pointer"):
-            return cls._base_manager.only(*cls.POINTER_COLUMNS).get(pk=edge_id)
 
 
 class FileSourceThreads(Composable, extends="storage.File"):
@@ -2052,6 +2024,11 @@ class Message(
     ] = {
         "is_held": lambda rows: models.ExpressionWrapper(
             models.Q(**rows.model.held_draft_fields()), output_field=models.BooleanField(),
+        ),
+        # The metadata.mailbox group axis drills by exact match on this one key, so the
+        # provider metadata document itself is not a filter.
+        "metadata_mailbox": lambda rows: KeyTextTransform(
+            "mailbox", "metadata", output_field=models.TextField(null=True),
         ),
     }
 
@@ -2525,12 +2502,15 @@ class Message(
         return thread is None or not thread.is_record_attached()
 
 
-class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
-    """A recipient's delivery ledger and acknowledgement of one inbox item.
+_MESSAGE_POINTER = "_inbox_message_pointer"
+"""Where a notification's narrow message context lands, through ``ThreadNotification.message_pointers_prefetch``."""
 
-    ``read_at`` records acknowledgement of this notification independently of
-    the delivery lifecycle and failure diagnostics. A derived-audience recipient
-    need not follow the record. ``ThreadFollower.last_read_message`` instead
+
+class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
+    """One recipient's inbox item and its acknowledgement.
+
+    ``read_at`` records acknowledgement of this notification. A derived-audience
+    recipient need not follow the record. ``ThreadFollower.last_read_message`` instead
     records an explicit follower's position in the record's message history;
     acknowledging an inbox item neither creates a follow nor advances that cursor.
     Every account told under inbox or email policy gets a delivery row, including
@@ -2543,17 +2523,6 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
 
         INBOX = "inbox", "Inbox"
         EMAIL = "email", "Email"
-
-    class NotificationStatus(models.TextChoices):
-        """Delivery lifecycle for a notification."""
-
-        READY = "ready", "Ready to send"
-        PROCESS = "process", "Processing"
-        PENDING = "pending", "Sent"
-        SENT = "sent", "Delivered"
-        BOUNCE = "bounce", "Bounced"
-        EXCEPTION = "exception", "Exception"
-        CANCELED = "canceled", "Canceled"
 
     sqid_prefix = "ntf_"
     thread = models.ForeignKey(
@@ -2586,17 +2555,11 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
         related_name="+",
     )
     notification_type = StateField(choices_enum=NotificationType, default=NotificationType.INBOX, db_index=True)
-    notification_status = StateField(
-        choices_enum=NotificationStatus,
-        default=NotificationStatus.READY,
-        db_index=False,
-    )
-    failure_type = models.CharField(max_length=64, blank=True, default="")
-    failure_reason = DiagnosticTextField(blank=True, default="")
     read_at = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = ThreadNotificationManager()
+    _message_pointers = MessagePointers()
 
     class Meta:
         """Django model options for thread notifications."""
@@ -2610,27 +2573,25 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
                 name="uq_thread_notification_message_user",
             ),
         )
-        indexes = (
-            models.Index(fields=("thread", "user")),
-            # The delivery worker's queue: only undelivered rows enter the index
-            # (the Zulip scheduled-send pattern), so it stays tiny at any volume.
-            models.Index(
-                fields=("notification_status", "created_at"),
-                condition=models.Q(notification_status__in=("ready", "process")),
-                name="ix_thread_notification_pending",
-            ),
-            # Delivery-error surfacing per user.
-            models.Index(
-                fields=("user", "notification_status"),
-                condition=models.Q(notification_status__in=("bounce", "exception")),
-                name="ix_thread_notification_failed",
-            ),
-        )
+        indexes = (models.Index(fields=("thread", "user")),)
 
     def __str__(self) -> str:
         """Return a readable notification label."""
 
         return f"{self.user_id} notified for {self.message_id}"
+
+    @classmethod
+    def message_pointers_prefetch(cls, actor: Any) -> models.Prefetch:
+        """Read a notification list's narrow message context for ``actor`` once, as a native prefetch hint."""
+
+        return models.Prefetch(
+            "_message_pointers", queryset=require_rebac_queryset(cls, actor=actor), to_attr=_MESSAGE_POINTER,
+        )
+
+    def message_pointer(self, actor: Any) -> Any:
+        """This notification's narrow message context for ``actor``, from its list's batch when one read it."""
+
+        return prefetched(self, _MESSAGE_POINTER, lambda: type(self).message_pointers_prefetch(actor))
 
 
 class Fragment(AuditMixin, AngeeDataModel, concrete=True):

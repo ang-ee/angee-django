@@ -34,7 +34,6 @@ from rebac import (
     SubjectRef,
     check_new,
     current_actor,
-    database_context,
     generic_target,
     system_context,
     to_subject_ref,
@@ -57,7 +56,6 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import row_lock_paths
-from angee.base.refs import RecordRef
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend
 from angee.messaging.models import ThreadedModelMixin
@@ -383,6 +381,7 @@ class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], 
         """A visible tree root has no readable parent in the same trash state."""
 
         actor = relation_actor(self)
+        # Scoping needs the reader; an expression inspected without one reads no parent.
         parents = self.none() if actor is None else self.with_actor(actor).filter(is_trashed=removed).scoped()
         return ~models.Exists(parents.filter(pk=models.OuterRef("parent_id")))
 
@@ -638,7 +637,7 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         using = self._db or router.db_for_write(self.model, instance=target)
         bindings = self.db_manager(using, hints={"instance": target})
         boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
-        with database_context(using), boundary, transaction.atomic(using=using):
+        with boundary, transaction.atomic(using=using):
             reference = generic_target(target)
             claim_values = [reference.content_type.pk, reference.object_id, vault.pk, role, body]
             if idempotency_key is not None:
@@ -693,7 +692,7 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         target = self._saved(target, "target")
         using = self._db or router.db_for_write(self.model, instance=target)
         bindings = self.db_manager(using, hints={"instance": target})
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             reference = generic_target(target)
             with system_context(reason="knowledge.record_binding.lock"):
                 canonical = reference.content_type.model_class()
@@ -746,11 +745,6 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
 
         return self.for_record(record, role=role).filter(page__isnull=False)
 
-    def vaults_for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
-        """Return vault bindings on ``record`` without loading gated vault content."""
-
-        return self.for_record(record, role=role).filter(vault__isnull=False)
-
     def for_knowledge(
         self,
         knowledge: models.Model,
@@ -762,16 +756,6 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         knowledge, owner_field = self._knowledge_owner_instance(knowledge)
         queryset = self.get_queryset().filter(**{owner_field: knowledge})
         return queryset if role is None else queryset.filter(role=self._role(role))
-
-    def records_for_page(self, page: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
-        """Return public refs for actor-readable records bound from ``page``."""
-
-        return tuple(binding.record_ref for binding in self.for_knowledge(page, role=role))
-
-    def records_for_vault(self, vault: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
-        """Return public refs for actor-readable records bound from ``vault``."""
-
-        return tuple(binding.record_ref for binding in self.for_knowledge(vault, role=role))
 
     @classmethod
     def _knowledge_owner(
@@ -1331,6 +1315,11 @@ class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits=
 class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
     """Owns the wikilink edge set derived from page bodies."""
 
+    def backlinks_to(self, page: Any) -> models.QuerySet[LinkT]:
+        """Resolved links into ``page`` from untrashed source pages the actor reads."""
+
+        return self.filter(target_page_id=page.pk, is_resolved=True, source_page__is_trashed=False).scoped()
+
     def rebuild_for(self, markdown: Any) -> None:
         """Replace the source page's outgoing links from its current body.
 
@@ -1353,7 +1342,7 @@ class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
         vault_ids = {body.vault_id for body in batch}
         using = self._db or router.db_for_write(self.model, instance=batch[0])
         links = self.model._base_manager.db_manager(using)
-        with database_context(using), system_context(reason="knowledge.backlinks"), transaction.atomic(using=using):
+        with system_context(reason="knowledge.backlinks"), transaction.atomic(using=using):
             resolved = {
                 (vault_id, title): pk
                 for vault_id, title, pk in page_model._base_manager.using(using).filter(
@@ -1388,7 +1377,7 @@ class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
         for page in batch:
             affected |= models.Q(vault_id=page.vault_id, outgoing_links__target_text=page.title)
         using = self._db or router.db_for_write(self.model, instance=batch[0])
-        with database_context(using), system_context(reason="knowledge.backlinks.targets"):
+        with system_context(reason="knowledge.backlinks.targets"):
             self.db_manager(using).rebuild_many(markdown._base_manager.using(using).filter(affected).distinct())
 
 

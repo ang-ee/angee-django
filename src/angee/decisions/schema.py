@@ -9,11 +9,13 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
+from rebac import generic_target
 from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 
+from angee.base.pagination import clamp_page_size
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.hasura import (
@@ -24,11 +26,12 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
+from angee.graphql.related_counts import RelatedCount
 from angee.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
-    with_record_reference_access,
+    readable_record_references,
 )
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
@@ -82,8 +85,7 @@ class DecisionType(AngeeNode):
         """
         actor = get_current_user(info)
         links = DecisionRecord.objects.with_actor(actor).filter(decision_id=cast(Any, self).pk)
-        return "; ".join(str(link.record) for link in with_record_reference_access(links)
-                         if link._angee_record_readable and link.record is not None)
+        return "; ".join(str(link.record) for link in readable_record_references(links) if link.record is not None)
 
 
 _DECISIONS = hasura_model_resource(
@@ -106,15 +108,32 @@ _RECORDS = hasura_model_resource(
 
 
 @strawberry.type
+class DecideResult(ActionResult):
+    """The accepted decision projection alongside the action's refusal contract."""
+
+    decision_row: strawberry.Private[Any] = None
+
+    @strawberry.field
+    def decision(self, info: strawberry.Info) -> DecisionType | None:
+        """Return the answer only through the caller's optimized read scope."""
+        if self.decision_row is None:
+            return None
+        actor = get_current_user(info)
+        rows = Decision.objects.with_actor(actor).filter(pk=self.decision_row.pk)
+        return optimize(DecisionType.get_queryset(rows, info), info).first()
+
+
+@strawberry.type
 class DecisionMutation:
     @strawberry.mutation
-    @action_guard("Could not decide.", camel_case_keys=False)
+    @action_guard("Could not decide.", camel_case_keys=False, result_type=DecideResult)
     def decide(
         self, info: strawberry.Info, id: PublicID, chosen: list[str], revision: int, values: JSON | None = None,
-    ) -> ActionResult:
+    ) -> DecideResult:
         decision = authorized_permission_target(info, Decision, id, "act")
-        decision = decision.decide(actor=get_current_user(info), revision=revision, chosen=chosen, values=values)
-        return ActionResult(ok=True, message="Decision recorded.", id=decision.sqid)
+        actor = get_current_user(info)
+        answered = decision.decide(actor=actor, revision=revision, chosen=chosen, values=values)
+        return DecideResult(ok=True, message="Decision recorded.", id=answered.sqid, decision_row=answered)
 
 
 @strawberry.type
@@ -132,9 +151,28 @@ class DecisionQuery:
             Decision.objects.with_actor(actor)
             .for_records(record)
             .exclude(answered_at=None)
-            .order_by("-answered_at", "-pk")[: max(1, min(limit, 100))]
+            .order_by("-answered_at", "-pk")[: clamp_page_size(limit)]
         )
         return list(optimize(DecisionType.get_queryset(queryset, info), info))
+
+
+def related_counts() -> tuple[RelatedCount, ...]:
+    """The decisions concerning a record and the readable records a decision concerns.
+
+    A decision's Concerns group lists ``decisions_by_pk.records`` and drops the
+    references whose target the reader cannot see; the count keeps the same rows.
+    """
+
+    return (
+        RelatedCount("decisions.decisions", lambda record: DecisionRecord.objects.filter(
+            **generic_target(record).lookups(DecisionRecord, "record"),
+        )),
+        RelatedCount(
+            "decisions.concerns",
+            lambda decision: readable_record_references(DecisionRecord.objects.filter(decision=decision)),
+            target="decisions.Decision",
+        ),
+    )
 
 
 schemas = {"console": {

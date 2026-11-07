@@ -9,7 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db.models import Prefetch, prefetch_related_objects
+from django.db.models import Prefetch
 from django.urls import reverse
 from graphql import GraphQLError
 from rebac import ObjectRef, PermissionDenied, generic_target, system_context
@@ -21,6 +21,7 @@ from strawberry_django.optimizer import optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
+from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -31,7 +32,13 @@ from angee.graphql.ids import (
     require_instance_for_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import RecordReferenceNode, actor_scoped_public_id, with_record_reference_access
+from angee.graphql.related_counts import RelatedCount
+from angee.graphql.relations import (
+    RecordReferenceNode,
+    actor_scoped_public_id,
+    readable_record_references,
+    with_record_reference_access,
+)
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission
@@ -93,11 +100,14 @@ class DriveType(AngeeNode):
     owns_items: auto
 
 
+_ANCESTORS = "_storage_ancestors"
+
+
 def _folder_ancestors_prefetch(info: strawberry.Info) -> Prefetch:
     """Optimize the hierarchy owner's readable ancestors with native selection hints."""
 
     rows = cast("FolderQuerySet[FolderModel]", optimize(Folder.objects.all(), info))
-    return rows.model.ancestors_prefetch(rows, to_attr="_storage_ancestors")
+    return rows.model.ancestors_prefetch(rows, to_attr=_ANCESTORS)
 
 
 @strawberry_django.type(Folder)
@@ -118,9 +128,8 @@ class FolderType(AngeeNode):
     def ancestors(self, info: strawberry.Info) -> list[FolderType]:
         """Readable ancestors in path order; hidden parents contribute no label."""
 
-        if not hasattr(self, "_storage_ancestors"):
-            prefetch_related_objects([cast(FolderModel, self)], _folder_ancestors_prefetch(info))
-        return cast(list[FolderType], cast(Any, self)._storage_ancestors)
+        ancestors = prefetched(cast(FolderModel, self), _ANCESTORS, lambda: _folder_ancestors_prefetch(info))
+        return cast(list[FolderType], ancestors)
 
 
 @strawberry_django.type(File)
@@ -209,7 +218,7 @@ class StorageQuery:
         source = instance_for_id(File, file)
         if source is None:
             return []
-        return list(with_record_reference_access(source.attachments.select_related("file")))
+        return list(with_record_reference_access(_file_attachments(source)))
 
     @strawberry.field(name="record_files")
     def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
@@ -358,7 +367,7 @@ _DRIVE_RESOURCE = hasura_model_resource(
     model=Drive,
     name="drives",
     get_queryset=_browsable_drives,
-    filterable=["id", "slug", "name", "is_archived", "backend", "owns_items"],
+    filterable=["id", "slug", "name", "is_archived", "backend", "owns_items", "created_at"],
     sortable=["slug", "name", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["is_archived", "created_at"],
@@ -587,6 +596,30 @@ _SHARED_TYPES = [
     *_FOLDER_RESOURCE.types,
     *_FILE_RESOURCE.types,
 ]
+
+
+def _file_attachments(file: Any) -> Any:
+    """One file's edges, the rows its Attached to group lists."""
+
+    return file.attachments.select_related("file")
+
+
+def related_counts() -> tuple[RelatedCount, ...]:
+    """A record's files and the readable records a file is attached to, as their groups list them.
+
+    The Attached to group drops the edges whose target the reader cannot see; the
+    count keeps the same rows.
+    """
+
+    return (
+        RelatedCount("storage.files", FileAttachment._default_manager.for_record),
+        RelatedCount(
+            "storage.attached-to",
+            lambda file: readable_record_references(_file_attachments(file)),
+            target="storage.File",
+        ),
+    )
+
 
 schemas = {
     "public": {

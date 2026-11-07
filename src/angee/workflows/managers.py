@@ -17,9 +17,9 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import DatabaseError, IntegrityError, OperationalError, connection, transaction
-from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value, Window
+from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
-from django.db.models.functions import Concat, Least, Now, RowNumber
+from django.db.models.functions import Concat, Least, Now
 from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, generic_target, system_context, to_subject_ref
@@ -434,16 +434,18 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         if operations is not None:
             links = links.filter(operation__in=operations)
         subjects: QuerySet[WorkflowRun, Mapping[str, object]] = self.filter(subject_filter).values("pk")
-        link_runs = links.values("run_id")
+        link_runs: QuerySet[StepRecord, Mapping[str, object]] = links.values("run_id")
         if limit is not None:
-            subjects = self.filter(subject_filter).alias(_rank=Window(RowNumber(),
-                partition_by=["subject_content_type_id", "subject_object_id"], order_by=["-created_at", "-pk"])
-            ).filter(_rank__lte=limit).values("pk")
-            link_runs = links.values("content_type_id", "object_id", "run_id").annotate(
+            subjects = self.filter(subject_filter).first_per_group(
+                "subject_content_type_id", "subject_object_id", order_by=["-created_at", "-pk"], limit=limit,
+            ).values("pk")
+            # django-stubs types values() as the base QuerySet; Django keeps StepRecord's queryset class.
+            per_run = cast("AngeeQuerySet[StepRecord]", links.values("content_type_id", "object_id", "run_id").annotate(
                 _created=Max("run__created_at"),
-            ).annotate(_rank=Window(RowNumber(), partition_by=["content_type_id", "object_id"],
-                                   order_by=[F("_created").desc(), F("run_id").desc()])
-            ).filter(_rank__lte=limit).values("run_id")
+            ))
+            link_runs = per_run.first_per_group(
+                "content_type_id", "object_id", order_by=[F("_created").desc(), F("run_id").desc()], limit=limit,
+            ).values("run_id")
         if not ancestors:
             return self.filter(Q(pk__in=subjects) | Q(pk__in=link_runs)).order_by(
                 "created_at", "pk",
@@ -975,7 +977,7 @@ class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
                 target = generic_target(record)
             except ValueError:
                 return  # Unsaved or untyped records cannot have watches.
-            with transaction.atomic(), system_context(reason="workflows.watch_capture"):
+            with transaction.atomic(using=record._state.db), system_context(reason="workflows.watch_capture"):
                 model = target.content_type.model_class()
                 assert model is not None
                 rows = model._default_manager.filter(pk=target.object_id)
@@ -1005,18 +1007,22 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
             return changed
 
     def nodes(self) -> Any:
-        """Read declared nodes with bounded map progress, excluding item rows."""
-        return self.exclude(node_key__endswith=MAP_BODY_SUFFIX).defer("input", "output", "state").annotate(
+        """Select declared node rows, excluding map item rows."""
+        return self.exclude(node_key__endswith=MAP_BODY_SUFFIX)
+
+    def graph_rows(self) -> Any:
+        """Project failure reasons and map progress without loading row payloads."""
+        return self.defer("input", "output", "state").annotate(
             _failure_reason=self.model.failure_reason_expression(),
             _map_total=self.model.map_total_expression(),
             _map_settled=self.model.map_settled_expression(),
         )
 
     def item_counts(self) -> Any:
-        """Aggregate every admitted map item without fetching its payload."""
+        """Aggregate every admitted map item per run without fetching its payload."""
         return (self.filter(node_key__endswith=MAP_BODY_SUFFIX)
-                .values("node_key", "status").annotate(count=Count("pk"), attempts=Sum("attempt"))
-                .order_by("node_key", "status"))
+                .values("run_id", "node_key", "status").annotate(count=Count("pk"), attempts=Sum("attempt"))
+                .order_by("run_id", "node_key", "status"))
 
     def for_map(self, run_id: Any, node_key: Any) -> Any:
         """Select a containing map's body rows, accepting native ORM expressions."""

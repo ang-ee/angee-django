@@ -179,7 +179,7 @@ class ChangeReadGate:
                 model = apps.get_model(reference.model)
             except (LookupError, ValueError):
                 continue
-            scope = require_rebac_queryset(model).with_actor(self.actor).with_action("read")
+            scope = require_rebac_queryset(model, actor=self.actor).with_action("read")
             if instance_from_public_id(model, reference.id, queryset=scope) is not None:
                 readable.append(reference)
         return replace(change, related_records=tuple(readable))

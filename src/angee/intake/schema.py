@@ -155,7 +155,6 @@ class ConsoleTaskIntakeExtension(TaskIntakeFields):
 class ChannelIntakeExtension:
     """Contribute intake configuration onto messaging's channel node."""
 
-    intake_trigger: auto
     intake_field_map: auto
     intake_requester_domains: auto
     intake_queue: WorkQueueType | None = actor_scoped_to_one("intake_queue")

@@ -15,7 +15,6 @@ export {
   type ResourceInvalidationTarget,
 } from "./invalidation";
 export {
-  ActiveGraphQLSchemaProvider,
   EMPTY_SCHEMA_FIELD_METADATA,
   ModelMetadataProvider,
   defineAngeeSchemaMetadata,
@@ -32,7 +31,6 @@ export {
   schemaFieldMetadataFromDataResources,
   schemaFieldMetadataWithVocabulary,
   type ResourceVocabulary,
-  useActiveGraphQLSchemaName,
   useModelMetadata,
   useModelRootFields,
   useSchemaFieldMetadata,
@@ -98,7 +96,6 @@ export {
   refineResourceName,
   refineResourceIdentifier,
   refineResourcesFromAngeeSchemaMetadata,
-  refineResourcesFromSchemaMetadata,
   refineResourcesFromDataResources,
   type AngeeRefineResource,
   type RefineResourceMetadata,

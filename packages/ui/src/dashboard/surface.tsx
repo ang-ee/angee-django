@@ -168,7 +168,7 @@ function DashboardSkeleton({
 }): React.ReactElement {
   return (
     <SkeletonStatus
-      label={label}
+      loadingLabel={label}
       className={cn("flex min-h-0 flex-1 flex-col", className)}
     >
       <div aria-hidden="true" className="flex min-h-14 flex-none items-center justify-between gap-4 border-b border-border-subtle px-4 py-3">
@@ -386,7 +386,7 @@ function DashboardVisibility({ policies, useVisibility, ...props }: React.Compon
   const t = useDashboardT();
   const visibility = useVisibility(policies.map(({ policy }) => policy));
   if (visibility.error) return <ErrorBanner description={visibility.error.message} />;
-  if (visibility.loading) return <SkeletonStatus label={t("surface.loading")} />;
+  if (visibility.loading) return <SkeletonStatus loadingLabel={t("surface.loading")} />;
   const permitted = new Set(policies.filter((_, index) => visibility.allowed[index] === true).map(({ id }) => id));
   return <DashboardLayout {...props} visibleIds={props.snapshot.widgets
     .filter((widget) => !widget.visibility || permitted.has(widget.id)).map(({ id }) => id)} />;

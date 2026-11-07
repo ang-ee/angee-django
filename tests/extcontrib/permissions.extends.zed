@@ -1,6 +1,6 @@
 // Additive REBAC extension — contributes to a definition owned by another addon.
 // @rebac_package: extcontrib
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 9
 
 // `scopedemo/doc` is owned by `tests.scopedemo`; this fragment contributes a
 // `reviewer` relation and unions it into the `read` arm without editing the
@@ -13,14 +13,15 @@ definition scopedemo/doc {
 }
 
 // The record owns its read gate; source evidence never grants conversation read.
+// The record lends its chatter thread read, which the inbox never lists.
 definition messaging/thread {
     relation chatter_record: chatterdemo/doc // rebac:field={"path":"attachments__chatterdemo_chatterdoc","filters":{"attachments__role":"chatter"}}
 
-    permission read_granted = chatter_record->read
+    permission chatter_read = chatter_record->read
 }
 
 // Account actions follow the bound team's live roster. Preview authority stays
-// with the target's seat paths; this constant deliberately contributes no arm.
+// with IAM's platform-admin rule; this fragment contributes no preview arm.
 // The role manages people: `list` admits it to the whole directory and to every
 // account's restricted fields. `write` reaches only the name fields: IAM's
 // field gates keep identity, credential and authority columns with administrators.

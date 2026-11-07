@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
 from strawberry_django_aggregates import TimeGranularity, group_by_alias
 from strawberry_django_hasura.filtering import PORTABLE_LOOKUPS
@@ -150,8 +151,9 @@ class ResourceQueryProjection:
                 identity_path=identity_path,
                 paths=paths,
                 label_path=relation.label_path if relation else None,
-                drill=self.drill(axis.drill, fields),
-                extractions=tuple(replace(item, drill=self.drill(item.drill, fields)) for item in axis.extractions),
+                drill=self.drill(axis.drill, fields, axis=axis),
+                extractions=tuple(replace(item, drill=self.drill(item.drill, fields, axis=axis))
+                                  for item in axis.extractions),
             )
         if self.row_model == "client":
             canonical_labels = {self.canonical(label) for label in consumed_labels}
@@ -433,14 +435,41 @@ class ResourceQueryProjection:
             label_path=f"{path}.{label}" if label else None,
         )
 
-    def drill(self, drill: DataQueryDrill | None, fields: dict[str, DataQueryField]) -> DataQueryDrill | None:
+    def drill(
+        self, drill: DataQueryDrill | None, fields: dict[str, DataQueryField], *, axis: DataQueryAxis,
+    ) -> DataQueryDrill | None:
+        """Project one declared bucket predicate; a declared group axis without one fails the build.
+
+        Only an extraction may declare no drill (a number part such as a weekday
+        spans many ranges), and only a backend without JSON containment may leave a
+        JSON bucket unavailable. Every other gap is a resource declaration error.
+        """
+
+        owner = self.model._meta.label if self.model is not None else self.types.node
         if drill is None:
+            if axis.server is not None and axis.drill is None:
+                raise ImproperlyConfigured(
+                    f"{owner} declares group axis {axis.field!r} without a drill; "
+                    "declare the filter that selects one bucket or remove the group axis."
+                )
             return None
         name = self.canonical(drill.field)
         field = fields.get(name)
         required = {"gte", "lt"} if drill.kind == "range" else {"jsonContains"} if drill.kind == "json" else {"exact"}
         if field is None or field.filter is None or not required.issubset(field.filter.operators):
-            return None
+            comparison = self.comparison(drill.field)
+            if (
+                drill.kind == "json"
+                and not connection.features.supports_json_field_contains
+                and comparison is not None
+                and "_contains" in comparison.fields
+            ):
+                return None
+            raise ImproperlyConfigured(
+                f"{owner} group axis {axis.field!r} drills through filter {name!r} with "
+                f"{sorted(required)}, which the resource does not declare; "
+                "declare the filter or remove the group axis."
+            )
         null_mode = drill.null_mode
         if null_mode == "isNull" and "isNull" not in field.filter.operators:
             null_mode = "unavailable"

@@ -155,12 +155,11 @@ class ResponderRemovalResult(ActionResult):
 
     @strawberry.field
     def removed_shares(self) -> list[RemovedShare]:
-        # The shared guard returns a base ActionResult on domain failure.
-        return self._removed if isinstance(self, ResponderRemovalResult) else []
+        return self._removed
 
     @strawberry.field
     def reported_shares(self) -> list[RemovedShare]:
-        return self._reported if isinstance(self, ResponderRemovalResult) else []
+        return self._reported
 
 
 @strawberry_django.type(Round)
@@ -538,7 +537,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Responder admitted.", id=proposal.sqid)
 
     @strawberry.mutation
-    @action_guard("Responder removal failed.", errors=(StaleRevisionError,))
+    @action_guard("Responder removal failed.", errors=(StaleRevisionError,), result_type=ResponderRemovalResult)
     def remove_proposal_round_responder(
         self,
         info: strawberry.Info,
