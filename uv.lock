@@ -669,7 +669,7 @@ requires-dist = [
     { name = "graphql-core", specifier = ">=3.3.1,<3.4" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
-    { name = "strawberry-django-aggregates", git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc" },
+    { name = "strawberry-django-aggregates", specifier = ">=0.14.1,<0.15" },
     { name = "strawberry-django-hasura", specifier = ">=0.15,<0.16" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
     { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=091238ecd4ae07798ef12e9eb24281540da41ced" },
@@ -4610,12 +4610,16 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-aggregates"
-version = "0.14.0"
-source = { git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc#0f374854d19b2709b6d77ae872090ab2a751f1dc" }
+version = "0.14.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/da/fc/a48311f706a74158fc92fc83ee3228fa862184059fbd59e5eb8884849f3d/strawberry_django_aggregates-0.14.1.tar.gz", hash = "sha256:9c7c9f6cfe7088550315ab86b9cc37c025eb225ba1c86ed7d73558d15d2c95f4", size = 179459, upload-time = "2026-11-07T18:52:31.039Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/bd/3caedb3bd790a0e0b0722a348c5c7538cad25a37e68a63b07d3261164162/strawberry_django_aggregates-0.14.1-py3-none-any.whl", hash = "sha256:ab48e246df2640152c7b8433935ae6e4ab3fc9b2a11e29989274cfbf4c7c96b6", size = 115255, upload-time = "2026-11-07T18:52:29.858Z" },
 ]
 
 [[package]]
