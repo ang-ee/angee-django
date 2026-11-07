@@ -1557,8 +1557,14 @@ def _drill_value(drill: DataQueryDrill, value: Any) -> Any:
 
 
 def _bucket_value(value: Any) -> Hashable:
-    """One bucket value as a hashable key, whether a group key or a row's partition value."""
+    """One bucket value as a hashable key, whether a group key or a row's partition value.
 
+    A boolean is its own bucket: JSON ``true`` and ``1`` (``False`` and ``0``) hash alike
+    in Python but are different groups.
+    """
+
+    if isinstance(value, bool):
+        return (bool, value)
     return value if isinstance(value, Hashable) else json.dumps(value, sort_keys=True, default=str)
 
 
@@ -1896,7 +1902,16 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         }
 
         def group_rows(batch: GroupFieldBatch, limit: int) -> list[list[Any]]:
-            """Each group's first page through the list root's own read, filter and ordering."""
+            """Each group's first page through the list root's own read, filter and ordering.
+
+            Rows carry one group axis (a relation with its riding label is one): drills
+            over two axes select their buckets' cross product, and only a per-row bucket
+            membership, which the grouping owner does not expose yet, reads exactly the
+            page's buckets. Such a request is refused before any rows statement.
+            """
+            drills = _group_bucket_drills(model, group_axes, batch.group_by)
+            if len(drills) > 1:
+                raise BadRequest("Group rows carry one group axis; group by one field to page its rows.")
             predicate = where_to_q(
                 batch.where, id_column=id_column, id_decode=id_decode,
                 field_decoders=field_id_decode, lookups=filter_lookups,
@@ -1907,7 +1922,6 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                 queryset, order_by, info=batch.info, id_column=id_column, sortable_aliases=sortable_aliases,
             )
             queryset = apply_ordering(queryset, order_by, id_column=id_column, sortable_aliases=sortable_aliases)
-            drills = _group_bucket_drills(model, group_axes, batch.group_by)
             partition = _group_partition(model, drills, [group.key for group in batch.groups])
             # A drill through a declared filter expression reads that expression's alias.
             queryset = prepare_filters(queryset, partition.predicate)
