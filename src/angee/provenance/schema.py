@@ -53,6 +53,7 @@ from angee.provenance.statements import (
     StatementsMixin,
     StatementSourceMixin,
     prime_readable_statement_records,
+    readable_statement_read,
 )
 
 Changeset = changeset_model()
@@ -309,7 +310,7 @@ def _statement_source_reference(version: Any, actor: Any) -> HistoryReferenceTyp
     link = getattr(version, "_readable_statement_link", None)
     if link is not None:
         return _history_reference(link, label=link.statement_source_label)
-    source = version.readable_asserting_record(actor)
+    source = readable_statement_read(version, actor)[1]
     return _history_reference(source) if source is not None else None
 
 
@@ -580,7 +581,7 @@ class RecordHistory:
                     source=_statement_source_reference(version, self.actor),
                     evidence=[
                         _history_reference(record, pointer=ref.pointer)
-                        for ref, record in version.readable_evidence_records(self.actor)
+                        for ref, record in readable_statement_read(version, self.actor)[0]
                     ],
                 )
             )

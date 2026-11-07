@@ -529,7 +529,8 @@ def test_generic_statement_source_uses_its_link_owner_without_an_integrate_strea
             return self.name
 
     link = LocalLink(pk=7, name="Local source")
-    reference = provenance_schema._statement_source_reference(SimpleNamespace(_readable_statement_link=link))
+    # A readable retained link names the source before any principal is read for the reader.
+    reference = provenance_schema._statement_source_reference(SimpleNamespace(_readable_statement_link=link), None)
     assert reference is not None
     assert (reference.model, str(reference.id), reference.label) == ("base.LocalLink", link.public_id, "Local source")
     assert LocalLink.presentation_related == ()
