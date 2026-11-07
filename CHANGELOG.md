@@ -10,7 +10,7 @@ live in code docstrings.
 
 ## Unreleased — django-zed-rebac 0.31
 
-- The base addon requires `django-zed-rebac>=0.31.3,<0.32` (GraphQL its
+- The base addon requires `django-zed-rebac>=0.31.4,<0.32` (GraphQL its
   `strawberry-django` extra, the dev group its `caveats` extra); the engine now
   requires `django-cte>=5,<6`.
 - The library ships only its local backend: `rebac.Backend`, `SpiceDBBackend`,
@@ -21,18 +21,29 @@ live in code docstrings.
 - An actor-scoped read compiles to one actor-independent statement: arrows,
   subject sets and memberships are predicates (each id set one CTE), not reads
   decided beforehand. A scoped read is its revision witness plus one statement,
-  and console reads issue a fraction of their statements, but an administrator
-  now reads the full policy SQL, as a member does: on the composed test host
-  the admin transcript is 2,639 KB (85 KB on 0.30), the member's 2,639 KB
-  (2,505 KB). The console ceilings and the statement pins are re-measured.
+  and a fetched page adds one decision of its gated fields per distinct
+  permission over the fetched ids.
+- Inside a request's evaluator scope, a witness statement decides whether the
+  actor holds a permission's constant arms (`admin->member`). An administrator
+  then reads a statement of those arms alone, decided again at each read
+  because this host's user type has a field-backed relation and so keeps no
+  witness; a member pays one witness per distinct arm per request beside the
+  full policy. On the composed test host the admin transcript is 59 statements
+  and 200 KB (0.30: 35 and 85 KB), the member's 32 and 2,648 KB (0.30: 250 and
+  2,505 KB). The console ceilings and the statement pins are re-measured.
 - Known limit: a statement materializes the id sets it reaches without the
-  outer row restriction, so on SQLite a message's parts read scans the
-  `messaging/part` table (and thread, message, channel and integration tables)
-  once per statement beside its seek on the requested message's parts.
+  outer row restriction, and a member's keeps the constant arms' every-row
+  branches, so on SQLite a member's parts read of one message scans the
+  `messaging/part` table beside its seek on that message's parts; an
+  administrator's read seeks only them.
 - A related manager reads with its source instance's pinned actor (never its
   sudo pin) instead of the ambient actor, and `iterator()` streams chunk by
   chunk. A row list loaded for one actor and reused under another actor's
   context returns the first actor's relations; load the rows for that actor.
+  Inside `system_context()`, read the relation of an actor-pinned instance
+  through the model's manager, as operator step retry does.
+- An embedded `sudo()` or `system_context()` queryset is audited when its
+  enclosing statement executes, so its audit row follows that statement.
 - GraphQL permission projections (`permissions_field`, `held_permissions`,
   `permission_expression` filter expressions) and `Membership.with_can_read`
   compose REBAC's native `permission_expression` instead of a correlated scoped
