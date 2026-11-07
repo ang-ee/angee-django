@@ -20,6 +20,12 @@ def wake_run(run_id: int) -> int:
     return runner.wake_runs(run_id)
 
 
+@shared_task(name="workflows.wake_decisions")
+def wake_decisions(decision_id: int) -> int:
+    """Wake one answered decision's waiters after its verdict commits."""
+    return runner.wake_decisions(decision_id)
+
+
 @shared_task(name="workflows.cancel")
 def cancel(run_id: int, actor: str) -> None:
     """Cancel outside the requesting transaction, retaining its permission scope."""

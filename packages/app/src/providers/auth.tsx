@@ -191,7 +191,9 @@ export function createAngeeAuthProviderFromRequest(
   };
   const sharedIdentity = async (): Promise<AuthIdentity | null> => {
     const query = identityQueryOptions(provider);
-    return options.queryClient ? options.queryClient.fetchQuery(query) : query.queryFn();
+    // The mounted identity observer refreshes invalidations; route checks reuse
+    // its last answer instead of issuing a second public and preview read.
+    return options.queryClient ? options.queryClient.ensureQueryData(query) : query.queryFn();
   };
   const provider: RefineAuthProvider = {
     async check() {
@@ -290,9 +292,11 @@ export function createAngeeAuthProviderFromRequest(
  * The identity-query contract, owned once. Refine's `useGetIdentity` reads the
  * react-query entry keyed `keys().auth().action("identity")`; the route gate
  * (`@angee/app` `beforeLoad`) reaches that SAME entry through
- * `queryClient.ensureQueryData(identityQueryOptions(authProvider))`, so the gate
- * `useRuntimeAuthState`, `check`, and `getPermissions` share one
- * session/preview identity query.
+ * `queryClient.ensureQueryData(identityQueryOptions(authProvider))`, as do
+ * `check` and `getPermissions`, so the gate, `useRuntimeAuthState`, `check`,
+ * and `getPermissions` share one session/preview identity query and reuse its
+ * answer: the mounted observer re-reads an invalidated entry, and the host's
+ * `onAuthChange` reset leaves a login or logout nothing to reuse.
  * Its public session read gates the console-only preview projection.
  * `staleTime: Infinity` keeps warm navigations from
  * re-issuing it — refine's `useInvalidateAuthStore` (login/logout and preference

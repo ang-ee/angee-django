@@ -48,16 +48,18 @@ function fixture(pane: "navigator" | "results" | "related", initialSearch = "", 
     const content = variables.options?.lens === "attachments" || variables.options?.lens === "text";
     if (document === InboxResults) return { data: { inbox_results: { count: 60, message_count: 60, rows: [{
       id: content ? "file:attachment" : "result-one", latest: rowMessage.sent_at, count: 2, part_count: content ? 2 : 0,
-      message: { ...rowMessage, title: `Message page ${variables.page}` },
+      message_id: rowMessage.id,
       part: content ? { id: "part-one", name: "Report.pdf", role: "BODY" } : null,
       file: content ? { id: "attachment", filename: "Report.pdf", url: "/report.pdf", mime_type: { mime_type: "application/pdf" }, size_bytes: "20" } : null,
       fragment: null,
-    }] } } };
+    }], messages: [{ ...rowMessage, title: `Message page ${variables.page}` }] } } };
     if (document === InboxRelatedTarget) return { data: { inbox_related_target: {
       id: "file:one", label: "Pinned file", count: 60, unit: "messages", source: null, part: null, file: null, fragment: null,
     } } };
     if (document === InboxConnections) return { data: { inbox_connections: {
-      count: 60, message_count: 60, rows: [{ id: "connection-one", message: rowMessage, part: null, handle: null, src: null, dst: null }],
+      count: 60, message_count: 60,
+      rows: [{ id: "connection-one", message_id: rowMessage.id, part: null, handle: null, src_id: null, dst_id: null }],
+      messages: [rowMessage],
     } } };
     throw new Error("Unexpected inbox operation");
   }) } satisfies RefineTestDataProvider;

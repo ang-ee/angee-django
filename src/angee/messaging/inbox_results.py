@@ -12,6 +12,7 @@ from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery,
 from django.db.models.functions import Cast, TruncDate
 from pydantic import BaseModel, ConfigDict, Field
 
+from angee.base.querysets import MergeableQuerySet
 from angee.messaging.inbox import InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroupPage, InboxGroups, InboxGroupScope
 
@@ -28,13 +29,16 @@ class InboxResultOptions(BaseModel):
 
 @dataclass(frozen=True)
 class InboxResultRow:
-    """One message, exact file/fragment, or unavailable attachment use."""
+    """One message, exact file/fragment, or unavailable attachment use.
+
+    ``message_id`` names the row's message by public ID; the page carries it.
+    """
 
     id: str
     latest: datetime
     count: int
     part_count: int
-    message: Any
+    message_id: str
     part: Any | None = None
     file: Any | None = None
     fragment: Any | None = None
@@ -135,11 +139,17 @@ class InboxResults:
                 label_field="_sender_name", empty_label="Unknown sender",
             )
         elif axis == "conversation":
-            threads = self.inbox.threads
-            readable_thread = {f"{prefix}thread_id__in": Subquery(threads.values("pk"))}
-            rows = rows.annotate(
+            # A conversation groups under the readable survivor of its thread's
+            # redirect: readers resolve a merged record to its canonical one. An
+            # unreadable thread is not an exposed grouping identity: a readable
+            # message in it groups under its readable survivor, else stands alone.
+            # Redirects are flattened to one hop, so the survivor is a column of
+            # the row's own thread.
+            readable = Subquery(self.inbox.threads.values("pk"))
+            rows = rows.alias(_survivor=MergeableQuerySet.survivor_id(f"{prefix}thread__")).annotate(
                 _bucket=Case(
-                    When(**readable_thread, then=F(f"{prefix}thread_id")),
+                    When(_survivor__in=readable, then=F("_survivor")),
+                    When(**{f"{prefix}thread_id__in": readable}, then=F(f"{prefix}thread_id")),
                     default=-F("_message"),
                     output_field=models.BigIntegerField(),
                 ),
@@ -173,13 +183,14 @@ class InboxResults:
         order = "_order_at" if self.options.oldest else "-_order_at"
         if not self.is_content:
             count = activity.count()
+            selected = list(
+                activity.order_by(order, "pk").values_list("pk", "sqid", "_order_at")[InboxPage.window(page, size)]
+            )
             return InboxPage(
-                [
-                    InboxResultRow(f"message:{message.sqid}", message._order_at, 1, 0, message)
-                    for message in activity.order_by(order, "pk")[InboxPage.window(page, size)]
-                ],
+                [InboxResultRow(f"message:{sqid}", order_at, 1, 0, str(sqid)) for _, sqid, order_at in selected],
                 count,
                 count,
+                self.inbox.page_messages([pk for pk, _, _ in selected]),
             )
         groups = (
             activity.scoped_for_aggregate()
@@ -219,10 +230,7 @@ class InboxResults:
             if self.options.lens == "attachments"
             else {}
         )
-        messages = {
-            record.pk: record
-            for record in self.inbox.messages.filter(pk__in=[part.message_id for part in sources.values()])
-        }
+        message_model = self.inbox.messages.model
         rows = []
         for group in selected:
             key = group["_identity"]
@@ -236,7 +244,7 @@ class InboxResults:
                     group["latest"],
                     group["messages"],
                     group["parts"],
-                    messages[part.message_id],
+                    message_model.public_id_from_pk(part.message_id),
                     part,
                     file,
                     fragment,
@@ -247,11 +255,16 @@ class InboxResults:
             .values("_identity", "message_id")
             .aggregate(records=Count("_identity", distinct=True), messages=Count("message_id", distinct=True))
         )
-        return InboxPage(rows, totals["records"], totals["messages"])
+        return InboxPage(
+            rows,
+            totals["records"],
+            totals["messages"],
+            self.inbox.page_messages([part.message_id for part in sources.values()]),
+        )
 
 
 class InboxConversationGroups(InboxGroups):
-    """A mixed thread/standalone axis; model owners encode and resolve public IDs."""
+    """A mixed survivor-thread/standalone axis; model owners encode and resolve public IDs."""
 
     def __init__(self, rows: Any, *, inbox: MessageInbox, **kwargs: Any) -> None:
         super().__init__(rows, **kwargs)
@@ -283,16 +296,27 @@ class InboxConversationGroups(InboxGroups):
         return replace(result, rows=rows)
 
     def scope(self, value: str | None) -> Any:
+        """Select one bucket through its member threads, never a scan of the bucket CASE.
+
+        A survivor's bucket spans :meth:`Thread.member_threads`, readable or not: a
+        redirect is identity, not content, while every message stays gated by the
+        rows. A redirect is its own bucket only while its survivor is unreadable.
+        """
+
         kind, _, public_id = (value or "").partition(":")
         if kind == "thread":
             record = self.inbox.threads.from_public_id(public_id)
-        elif kind == "message":
-            record = self.inbox.messages.from_public_id(public_id)
-        else:
+            if record is None:
+                raise ValueError("Conversation unavailable.")
+            if record.merged_into_id is None:
+                members = Subquery(record.member_threads().values("pk"))
+                return self.rows.filter(**{f"{self.scope_field}__in": members})
+            if self.inbox.threads.filter(pk=record.merged_into_id).exists():
+                raise ValueError("Conversation unavailable.")
+            return self.rows.filter(**{self.scope_field: record.pk})
+        if kind != "message":
             raise ValueError("Unknown conversation selection.")
+        record = self.inbox.messages.from_public_id(public_id)
         if record is None:
             raise ValueError("Conversation unavailable.")
-        return (
-            self.rows.filter(**{self.scope_field: record.pk})
-            if kind == "thread" else self.rows.filter(_bucket=-record.pk)
-        )
+        return self.rows.filter(_bucket=-record.pk)

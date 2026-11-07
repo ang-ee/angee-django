@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
@@ -41,6 +41,15 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
         ]
         membership = Q(pk__in=models.Subquery(rows[0].union(*rows[1:]))) if rows else Q(pk__in=())
         return self.filter(membership | self._merge_touching(record))
+
+    def closed_for_record(self, record: HistoryMixin) -> Self:
+        """Return the closed changesets touching an admitted record's document.
+
+        History and the timeline share this rule: a record's read implies only its
+        closed changesets; an open one stays behind the changeset's own read.
+        """
+
+        return self.touching(record).filter(state=cast(Any, self.model).State.CLOSED)
 
     @staticmethod
     def _merge_touching(record: HistoryMixin) -> Q:

@@ -1,7 +1,7 @@
 """HTTP defaults activate only through an enabled serving capability."""
 
 SETTINGS = {
-    "ROOT_URLCONF": "django_compose.urls",
+    "ROOT_URLCONF": "angee.server.urls",
     "ASGI_APPLICATION": "angee.server.application",
     "MIDDLEWARE:prepend": ["django.middleware.security.SecurityMiddleware"],
     "MIDDLEWARE:append": [

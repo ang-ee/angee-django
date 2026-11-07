@@ -1,6 +1,7 @@
 """Admission and the single conditional verdict transition."""
 
 from collections.abc import Sequence
+from copy import copy
 from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
@@ -168,7 +169,8 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
                     for target in sorted(targets, key=lambda target: (target.content_type.pk, target.object_id))
                 ]
             )
-            if assignees and not any(decision.with_actor(person).has_access("act") for person in assignees):
+            # Probe each assignee on a copy: an instance actor pin would outlive the probe.
+            if assignees and not any(copy(decision).with_actor(person).has_access("act") for person in assignees):
                 raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})
             publish_change(decision, action="create", update_fields=None)
         return decision.with_actor(asking) if asking is not None else decision
