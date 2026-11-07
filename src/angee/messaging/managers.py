@@ -1071,6 +1071,20 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
                 raise PermissionDenied("Reading a redirected chatter thread requires record read access.")
         return attachment
 
+    def readable_for_record(self, record: Any, *, role: str = "chatter") -> ThreadAttachmentT | None:
+        """Return ``for_record``'s edge once the actor may read the thread it discloses.
+
+        An admitted record implies only its own chatter role. Any other role, such
+        as an attached ``source`` conversation, also requires the thread's read.
+        """
+
+        attachment = self.for_record(record, role=role)
+        if attachment is not None and role != record.thread_attachment_role:
+            actor = current_actor()
+            if actor is None or not attachment.thread.with_actor(actor).has_access("read"):
+                raise PermissionDenied("Reading this attachment requires thread read access.")
+        return attachment
+
     def source_threads_for_record(self, record: Any) -> Any:
         """Return every source-conversation edge attached to ``record``."""
 
@@ -2267,10 +2281,11 @@ def _record_attachment(record: Any, *, role: str = "chatter") -> ThreadAttachmen
     The resolution logic (content-type lookup, ``select_related`` on the thread,
     unscoped read) lives once on :meth:`ThreadAttachmentManager.for_record`; the
     follower and notification managers resolve their bookkeeping edge through
-    that owner rather than each re-deriving it.
+    :meth:`ThreadAttachmentManager.readable_for_record`, so a role other than the
+    record's own chatter also requires the thread's read.
     """
 
-    return apps.get_model("messaging", "ThreadAttachment").objects.for_record(record, role=role)
+    return apps.get_model("messaging", "ThreadAttachment").objects.readable_for_record(record, role=role)
 
 
 def _record_thread_title(record: Any) -> str:
@@ -3328,11 +3343,14 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         rows = self.db_manager(hints={"instance": record}).all()
         using = rows.db
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        attachment = attachment_model.objects.db_manager(hints={"instance": record}).for_record(record, role=role)
+        attachment = attachment_model.objects.db_manager(hints={"instance": record}).readable_for_record(
+            record, role=role,
+        )
         if attachment is None:
             return rows.none().annotate(_order_at=self.chronological_time())
-        # Chatter reads bypass per-row REBAC: the record-level gate already authorised
-        # the whole feed, so scope with sudo and compose the chainable read predicates.
+        # Chatter reads bypass per-row REBAC: the record-level gate (and, for any other
+        # role, the thread's read) already authorised the whole feed, so scope with sudo
+        # and compose the chainable read predicates.
         queryset = (
             rows.sudo(reason="messaging.message.for_record")
             .for_thread(attachment.thread)
@@ -3754,10 +3772,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         """Return one message of ``record``'s thread by public id, in or out of the trash.
 
         Elevated structural lookup, like the transcript it serves: the caller has
-        gated the record's read and, for a trashed message, its moderation.
+        gated the record's read and, for a trashed message, its moderation; a role
+        other than the record's own chatter also requires the thread's read.
         """
 
-        attachment = apps.get_model("messaging", "ThreadAttachment").objects.for_record(record, role=role)
+        attachment = apps.get_model("messaging", "ThreadAttachment").objects.readable_for_record(record, role=role)
         if attachment is None:
             return None
         return (
