@@ -105,9 +105,12 @@ function MatchWindow({
         ? navigation.at.slice(8)
         : (ids[0] ?? ""),
     },
-    { models: INBOX_MODELS },
+    // The header counts the whole conversation, so a new window's read keeps the last window's facts;
+    // a retained read from another conversation is never shown.
+    { models: INBOX_MODELS, keepPreviousData: true },
   );
-  const matches = query.data?.inbox_transcript_matches ?? null;
+  const read = query.data?.inbox_transcript_matches ?? null;
+  const matches = read?.thread.id === navigation.thread ? read : null;
   const errorMessage = query.error?.message ?? null;
   useEffect(() => { onMatches(matches); }, [matches, onMatches]);
   useEffect(() => { onError(errorMessage); }, [errorMessage, onError]);
