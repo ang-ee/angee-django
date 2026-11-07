@@ -7,9 +7,10 @@ the configuration disables generated changelogs.
 
 Add a note for every consumer-visible change to a publishable package; tests,
 stories and internal refactors need none. The bump is what the change asks of
-the package's consumers: `major` when they must change code (a removed or
-renamed export, prop, key or contract, or input that now fails), `minor` when it
-adds public API or capability, and `patch` for a fix that keeps the contract.
+the package's consumers, under 0.x semantics while the group is below 1.0:
+`minor` when they must change code (a removed or renamed export, prop, key or
+contract, or input that now fails) or gain public API, and `patch` for a fix
+that keeps the contract. `major` is reserved for the 1.0 release.
 
 The five publishable `@angee` packages are a fixed group because they form one layered release surface: leaf changes can affect every package above them, so their versions advance together.
 
