@@ -273,6 +273,12 @@ surface, not an import file.
 may target. A data resource's `recordEdges` lists the edges its records can
 carry; record surfaces for one edge apply only there.
 
+**Related count** — the row count of one Links-tab group on a record, read
+without its rows. The group's addon declares a `RelatedCount` under the group's
+id whose read is the owner method the group's root lists, bounded like that
+root; `related_counts` counts a record's groups in one statement. A related
+count names a group, not an edge model: several groups may list one record edge.
+
 **Merge** — folding one or more *merged records* into a *survivor* of the same
 model (`MergeableMixin.merge`, the shared `merge_records` verb). Each
 *reference* to a merged record, meaning a foreign key or a record edge pointing

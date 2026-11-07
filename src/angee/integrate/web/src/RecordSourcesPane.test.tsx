@@ -29,8 +29,8 @@ const context: ChatterViewContext = {
 };
 
 beforeEach(() => {
-  mocks.query.mockReset().mockImplementation((_document: unknown, variables?: { edges?: string[] }) => variables?.edges ? {
-    data: { record_edge_counts: [{ edge: "integrate.sources", count: 1 }] },
+  mocks.query.mockReset().mockImplementation((_document: unknown, variables?: { groups?: string[] }) => variables?.groups ? {
+    data: { related_counts: [{ group: "integrate.sources", count: 1 }] },
     error: null,
     isLoading: false,
   } : {
@@ -60,7 +60,7 @@ const containers = containersFromChildren(CHATTER_CONTAINERS, {
   "related#groups": { "integrate.sources": recordSourcesGroup },
 });
 
-test("the Sources badge counts its declared edge before the pane opens, without reading rows", () => {
+test("the Sources badge counts its declared related count before the pane opens, without reading rows", () => {
   const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers }}>
     <RelatedCountProbe id="related" context={context} onCount={onCount} />
@@ -68,7 +68,7 @@ test("the Sources badge counts its declared edge before the pane opens, without 
 
   expect(mocks.query).not.toHaveBeenCalledWith(RecordSourcesDocument, expect.anything(), expect.anything());
   expect(mocks.query).toHaveBeenCalledWith(expect.anything(), {
-    model: "accounting.Bill", id: "bil_1", edges: ["integrate.sources"],
+    model: "accounting.Bill", id: "bil_1", groups: ["integrate.sources"],
   }, { enabled: true, models: ["integrate.RecordLink"] });
   expect(onCount).toHaveBeenLastCalledWith("related", 1);
 });

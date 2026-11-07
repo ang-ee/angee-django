@@ -92,7 +92,7 @@ export const runDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.decisions"]!,
-    countEdge: { id: "workflows.decisions", models: RELATED_MODELS },
+    count: { id: "workflows.decisions", models: RELATED_MODELS },
     render: (context, label) => <RunDecisionsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -138,7 +138,7 @@ export const recordRunsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enWorkflowsMessages["related.runs"]!,
     when: hasRuns,
-    countEdge: { id: "workflows.runs", models: RUN_MODELS },
+    count: { id: "workflows.runs", models: RUN_MODELS },
     render: (context, label) => <RecordRunsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -176,7 +176,7 @@ export const decisionRunGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.run"]!,
-    countEdge: { id: "workflows.run", models: [DECISION_MODEL, STEP_RUN_MODEL] },
+    count: { id: "workflows.run", models: [DECISION_MODEL, STEP_RUN_MODEL] },
     render: (context, label) => <DecisionRunGroup key={context.view.sqid} context={context} label={label} />,
   },
 };

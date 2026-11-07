@@ -177,10 +177,10 @@ export const DecisionStepsDocument = graphql(`
   }
 `);
 
-/** The runs that worked on one record, through the run owner's read. */
+/** The newest runs that worked on one record, through the run owner's read and its record run limit. */
 export const RecordRelatedRunsDocument = graphql(`
   query RecordRelatedRuns($records: [TimelineRecordInput!]!) {
-    record_timeline(records: $records, run_limit: 20) {
+    record_timeline(records: $records) {
       records {
         record_model record_id
         runs { id display_name status outcome_label created_at finished_at version { workflow { display_name } } }

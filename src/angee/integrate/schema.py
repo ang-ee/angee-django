@@ -51,11 +51,11 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
-from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
+from angee.graphql.related_counts import RelatedCount
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
@@ -1939,10 +1939,10 @@ _CONSOLE_TYPES: list[object] = [
 ]
 
 
-def record_edges() -> tuple[RecordEdge, ...]:
-    """A record's retained sources, read like the record_links rows the Sources group lists."""
+def related_counts() -> tuple[RelatedCount, ...]:
+    """A record's retained sources: the record_links rows the Sources group lists, by exact pointer."""
 
-    return (RecordEdge("integrate.sources", lambda record: RecordLink._default_manager.filter(
+    return (RelatedCount("integrate.sources", lambda record: RecordLink._default_manager.filter(
         **generic_target(record).lookups(RecordLink, "target"),
     )),)
 

@@ -119,6 +119,12 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
     ))
 
 
+def readable_record_references(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    """Keep only the generic references whose targets the actor currently reads."""
+
+    return with_record_reference_access(queryset).filter(_angee_record_readable=True)
+
+
 @strawberry.type
 class RecordReferenceNode(AngeeNode):
     """Project a generic reference only while its current target is readable.

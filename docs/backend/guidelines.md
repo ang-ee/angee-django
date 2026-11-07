@@ -1700,10 +1700,11 @@ some types derives that set from the schema through
 instead of listing it again. Resource metadata projects the inverse as
 `recordEdges`, so a surface listing one edge applies only to the record types
 that can carry it; a resolver does not re-decide that per request. A related
-group counts that same read: its addon declares a
-[`RecordEdge`](../../src/angee/graphql/edges.py) in
-`ANGEE_GRAPHQL_RECORD_EDGES`, and `record_edge_counts` counts every requested
-edge on a readable record in one statement. Each
+group counts the read its root lists: its addon declares a
+[`RelatedCount`](../../src/angee/graphql/related_counts.py) in
+`ANGEE_GRAPHQL_RELATED_COUNTS` whose `rows` call the owner method the group's
+root calls, with the root's page bound as its `limit`, and `related_counts`
+counts every requested group on a readable record in one statement. Each
 edge's own `permissions.zed` states its rule:
 [storage](../../src/angee/storage/permissions.zed),
 [knowledge](../../src/angee/knowledge/permissions.zed),

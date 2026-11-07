@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from functools import partial
+from collections.abc import Sequence
 
 from django.apps import AppConfig
 from django.core import checks
@@ -10,7 +10,16 @@ from sentry_sdk.integrations.logging import ignore_logger
 
 from angee.base.hooks import check_hooks
 
-check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS", "ANGEE_GRAPHQL_RECORD_EDGES"))
+
+def check_settings(app_configs: Sequence[AppConfig] | None = None, **kwargs: object) -> list[checks.CheckMessage]:
+    """Validate GraphQL's hook settings, then resolve every related count declaration and target."""
+
+    errors = check_hooks(("ANGEE_GRAPHQL_RESOURCE_FILTERS", "ANGEE_GRAPHQL_RELATED_COUNTS"), app_configs, **kwargs)
+    if errors:
+        return errors
+    from angee.graphql.related_counts import check_related_counts
+
+    return check_related_counts()
 
 
 class GraphQLConfig(AppConfig):

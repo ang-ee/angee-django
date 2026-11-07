@@ -32,10 +32,10 @@ from angee.graphql.actions import (
 )
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
-from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
+from angee.graphql.related_counts import RelatedCount
 from angee.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_to_many,
@@ -50,7 +50,7 @@ from angee.workflows.definition import Body, Definition, Issue
 from angee.workflows.models import RunGraphNode
 from angee.workflows.states import RunOrigin, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
-from angee.workflows.timeline import TimelineSelection
+from angee.workflows.timeline import RECORD_RUN_LIMIT, TimelineSelection
 from angee.workflows.triggers import TriggerGrantTarget
 
 strawberry.enum(cast(Any, RunOrigin))
@@ -967,7 +967,7 @@ class RecordTimelineQuery:
     @strawberry_django.field
     def record_timeline(
         self, info: strawberry.Info, records: list[TimelineRecordInput], include_runs: bool = True,
-        run_limit: int = 20,
+        run_limit: int = RECORD_RUN_LIMIT,
     ) -> RecordTimelineSelectionType:
         """One read for a record or selection, through the record and run owners."""
         if len(records) > 100:
@@ -998,20 +998,24 @@ class RecordTimelineQuery:
         )
 
 
-def record_edges() -> tuple[RecordEdge, ...]:
+def related_counts() -> tuple[RelatedCount, ...]:
     """The runs that worked on a record, a run's asked decisions and a decision's asking run.
 
-    Each reads like its Related group's rows: the run owner's ``about`` selection,
-    and the steps whose readable decision or run the run and decision pages list.
+    Each reads like its Related group's rows: the run owner's ``about`` selection
+    the record timeline lists (its newest ``RECORD_RUN_LIMIT`` runs), and the steps
+    whose readable decision or run the run and decision pages list.
     """
 
     decisions = apps.get_model("decisions", "Decision")
     return (
-        RecordEdge("workflows.runs", lambda record: WorkflowRun.objects.about(record)),
-        RecordEdge("workflows.decisions", lambda run: StepRun.objects.filter(
+        RelatedCount(
+            "workflows.runs", lambda record: WorkflowRun.objects.about(record, limit=RECORD_RUN_LIMIT),
+            limit=RECORD_RUN_LIMIT,
+        ),
+        RelatedCount("workflows.decisions", lambda run: StepRun.objects.filter(
             run=run, decision_id__in=decisions.objects.all().scoped().values("pk"),
         ), target="workflows.WorkflowRun"),
-        RecordEdge("workflows.run", lambda decision: StepRun.objects.filter(
+        RelatedCount("workflows.run", lambda decision: StepRun.objects.filter(
             decision=decision, run_id__in=WorkflowRun.objects.all().scoped().values("pk"),
         ), target="decisions.Decision"),
     )

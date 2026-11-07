@@ -249,14 +249,15 @@ export interface RelatedGroupContent {
   edge?: { model: string };
   label: ReactNode;
   /**
-   * The record edge (`record_edge_counts`) counting this group's rows for the badge
-   * and its label, and the models whose changes recount it. The edge's owner
-   * declares it beside the row read it counts.
+   * The group's related count (`related_counts`, by the group id its owner
+   * declares beside the row read it counts) for the badge and its label, and
+   * the models whose changes recount it.
    */
-  countEdge?: { id: string; models: readonly string[] };
+  count?: { id: string; models: readonly string[] };
   /**
    * Row-derived count while the Links panel is mounted, from the group's own row
-   * read: the count of a group without an edge, or of one whose rows partition its edge.
+   * read: the count of a group without a related count, or of one whose rows
+   * partition another group's related count.
    */
   usePaneCount?: (context: ChatterViewContext) => number | undefined;
   /** Whether the group offers its one verb (upload, bind) on this record; a group with neither rows nor a verb is absent. */

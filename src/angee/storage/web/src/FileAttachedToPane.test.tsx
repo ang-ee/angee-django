@@ -36,14 +36,14 @@ function Group() {
   </AppRuntimeProvider></InAppLinkProvider></Provider>;
 }
 
-/** The edge count and the redacted rows answer their own reads. */
+/** The related count and the redacted rows answer their own reads. */
 function reads(count: number, attachments: readonly object[]) {
-  sdk.query.mockImplementation((_document: unknown, variables?: { edges?: string[] }) => variables?.edges
-    ? { data: { record_edge_counts: [{ edge: "storage.attached-to", count }] } }
+  sdk.query.mockImplementation((_document: unknown, variables?: { groups?: string[] }) => variables?.groups
+    ? { data: { related_counts: [{ group: "storage.attached-to", count }] } }
     : { data: { file_attachments: attachments } });
 }
 
-test("the Attached to label counts its readable edge and rows use their shared reference labels and hrefs", async () => {
+test("the Attached to label counts its readable edges and rows use their shared reference labels and hrefs", async () => {
   reads(1, [
     { id: "fat_1", model_label: "example.Record", record_id: "rec_1" },
     { id: "fat_hidden", model_label: null, record_id: null },
@@ -70,14 +70,14 @@ test("the reverse read shows loading and errors while its count is unknown", () 
   expect(screen.getByRole("alert").textContent).toContain("Read failed");
 });
 
-test("the Attached to badge counts its declared edge without the attachment read", () => {
+test("the Attached to badge counts its declared related count without the attachment read", () => {
   sdk.query.mockReset();
   reads(2, []);
   const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
     "storage.File#groups": { "storage.attached-to": fileAttachedToGroup },
   }) }}><RelatedCountProbe id="related" context={context} onCount={onCount} /></AppRuntimeProvider>);
-  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "storage.File", id: "fil_1", edges: ["storage.attached-to"] }, expect.anything());
+  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "storage.File", id: "fil_1", groups: ["storage.attached-to"] }, expect.anything());
   expect(sdk.query).not.toHaveBeenCalledWith(StorageFileAttachments, expect.anything(), expect.anything());
   expect(onCount).toHaveBeenLastCalledWith("related", 2);
 });

@@ -49,10 +49,10 @@ function FilesGroup() {
   </AppRuntimeProvider>;
 }
 
-/** The Files edge count and the record's file rows answer their own reads. */
+/** The Files related count and the record's file rows answer their own reads. */
 function reads(attachments: readonly object[]) {
-  sdk.query.mockImplementation((_document: unknown, variables?: { edges?: string[] }) => variables?.edges
-    ? { data: { record_edge_counts: [{ edge: "storage.files", count: attachments.length }] }, isPending: false }
+  sdk.query.mockImplementation((_document: unknown, variables?: { groups?: string[] }) => variables?.groups
+    ? { data: { related_counts: [{ group: "storage.files", count: attachments.length }] }, isPending: false }
     : { data: { record_files: { can_upload: true, attachments } }, isPending: false });
 }
 
@@ -68,7 +68,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-test("the group counts its declared edge and each row links to its file page", () => {
+test("the group counts its declared related count and each row links to its file page", () => {
   render(<FilesGroup />);
   expect(screen.getByText("Files").closest("li")?.textContent).toContain("Files· 1");
   expect(sdk.query).toHaveBeenCalledWith(StorageRecordFiles, {
@@ -81,11 +81,11 @@ test("the group counts its declared edge and each row links to its file page", (
   expect(sdk.navigate).toHaveBeenCalledWith("/storage/fil_1");
 });
 
-test("the Files badge counts its declared edge without requesting attachment rows", () => {
+test("the Files badge counts its declared related count without requesting attachment rows", () => {
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
     "related#groups": { "storage.files": recordFilesGroup },
   }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
-  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "example.Record", id: "rec_1", edges: ["storage.files"] }, expect.anything());
+  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "example.Record", id: "rec_1", groups: ["storage.files"] }, expect.anything());
   expect(sdk.query).not.toHaveBeenCalledWith(StorageRecordFiles, expect.anything(), expect.anything());
 });
 

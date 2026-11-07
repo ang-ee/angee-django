@@ -27,7 +27,7 @@ export const decisionConcernsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: enDecisionsMessages["related.concerns"]!,
-    countEdge: { id: "decisions.concerns", models: DECISION_MODELS },
+    count: { id: "decisions.concerns", models: DECISION_MODELS },
     render: (context, label) => <DecisionConcernsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -78,7 +78,7 @@ export const recordDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enDecisionsMessages["related.decisions"]!,
     when: concernsRecords,
-    countEdge: { id: "decisions.decisions", models: DECISION_MODELS },
+    count: { id: "decisions.decisions", models: DECISION_MODELS },
     render: (context, label) => <RecordDecisionsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };

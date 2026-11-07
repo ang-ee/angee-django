@@ -17,8 +17,8 @@ import { RelatedPane, RelatedCountProbe } from "./RelatedPane";
 
 afterEach(() => { cleanup(); query.mockReset(); });
 
-const edgeCounts = (counts: Record<string, number>) => ({
-  data: { record_edge_counts: Object.entries(counts).map(([edge, count]) => ({ edge, count })) },
+const groupCounts = (counts: Record<string, number>) => ({
+  data: { related_counts: Object.entries(counts).map(([group, count]) => ({ group, count })) },
 });
 
 const context: ChatterViewContext = {
@@ -40,11 +40,11 @@ function Count() {
   return <><RelatedCountProbe id="related" context={context} onCount={publish} /><span>Related {count}</span></>;
 }
 
-test("one read counts every edge-counted group and the badge sums them", () => {
-  query.mockReturnValue(edgeCounts({ "example.files": 2, "example.pages": 3 }));
+test("one read counts every group declaring a related count and the badge sums them", () => {
+  query.mockReturnValue(groupCounts({ "example.files": 2, "example.pages": 3 }));
   const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": {
-    files: { content: { label: "Files", countEdge: { id: "example.files", models: ["example.File"] }, render: () => null } },
-    pages: { content: { label: "Pages", countEdge: { id: "example.pages", models: ["example.Page"] }, render: () => null } },
+    files: { content: { label: "Files", count: { id: "example.files", models: ["example.File"] }, render: () => null } },
+    pages: { content: { label: "Pages", count: { id: "example.pages", models: ["example.Page"] }, render: () => null } },
   } });
   const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers }}>
@@ -53,7 +53,7 @@ test("one read counts every edge-counted group and the badge sums them", () => {
   expect(onCount).toHaveBeenLastCalledWith("related", 5);
   expect(query).toHaveBeenCalled();
   for (const [, variables, options] of query.mock.calls) {
-    expect(variables).toEqual({ model: "example.Record", id: "rec_1", edges: ["example.files", "example.pages"] });
+    expect(variables).toEqual({ model: "example.Record", id: "rec_1", groups: ["example.files", "example.pages"] });
     expect(options).toEqual({ enabled: true, models: ["example.File", "example.Page"] });
   }
 });
@@ -93,10 +93,10 @@ test("row-derived counts stay dormant until the Links pane is active", () => {
   expect(onCount).toHaveBeenLastCalledWith("related", 3);
 });
 
-test("an incomplete badge requests no edge counts beside a lazy group", () => {
+test("an incomplete badge requests no related counts beside a lazy group", () => {
   const rows = vi.fn(() => 3);
   const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": {
-    counted: { content: { label: "Counted", countEdge: { id: "example.counted", models: [] }, render: () => null } },
+    counted: { content: { label: "Counted", count: { id: "example.counted", models: [] }, render: () => null } },
     lazy: { content: { label: "Lazy", usePaneCount: rows, render: () => null } },
   } });
   const onCount = vi.fn();
@@ -108,10 +108,10 @@ test("an incomplete badge requests no edge counts beside a lazy group", () => {
   expect(onCount).toHaveBeenLastCalledWith("related", undefined);
 });
 
-test("active Links reuses a partitioning group's row count instead of also requesting its edge", () => {
+test("active Links reuses a partitioning group's row count instead of also requesting its related count", () => {
   const rows = vi.fn(() => 3);
   const containers = containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { example: { content: { label: "Example", countEdge: { id: "example.edge", models: [] },
+    "related#groups": { example: { content: { label: "Example", count: { id: "example.group", models: [] },
       usePaneCount: rows, render: () => null } } },
   });
   render(<AppRuntimeProvider runtime={{ containers }}>
@@ -166,9 +166,9 @@ test("useVerb controls the label action and empty-group presence", () => {
 });
 
 test("count probes never mount the group's action or write state", () => {
-  query.mockReturnValue(edgeCounts({ "example.files": 3 }));
+  query.mockReturnValue(groupCounts({ "example.files": 3 }));
   const group = vi.fn(() => <li>Rows</li>);
-  render(<Example probe content={{ label: "Files", countEdge: { id: "example.files", models: [] }, render: group }} />);
+  render(<Example probe content={{ label: "Files", count: { id: "example.files", models: [] }, render: group }} />);
   expect(screen.getByText("Related 3")).toBeTruthy();
   expect(group).not.toHaveBeenCalled();
 });

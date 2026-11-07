@@ -82,7 +82,6 @@ export const RecordSourcesDocument = graphql(`
     record_links(
       where: { model_label: { _eq: $modelLabel }, record_id: { _eq: $recordId } }
       order_by: [{ updated_at: desc }]
-      limit: 100
     ) {
       id
       external_key

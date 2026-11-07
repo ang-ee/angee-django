@@ -62,8 +62,8 @@ function Groups({ groups, current = context }: {
 }
 
 beforeEach(() => {
-  sdk.query.mockReset().mockImplementation((document, variables) => variables?.edges
-    ? { data: { record_edge_counts: variables.edges.map((edge: string) => ({ edge, count: 1 })) }, isPending: false }
+  sdk.query.mockReset().mockImplementation((document, variables) => variables?.groups
+    ? { data: { related_counts: variables.groups.map((group: string) => ({ group, count: 1 })) }, isPending: false }
     : document === KnowledgePageRecordBindings
     ? { data: { page_record_bindings: [{ id: "krb_1", model_label: "example.Record", record_id: "rec_1", role: "contract" }] }, isPending: false }
     : document === KnowledgePages
@@ -98,11 +98,11 @@ test("role configuration filters one shared query and each row links to the page
   expect(sdk.navigate).toHaveBeenCalledWith("/knowledge/page/pg_1");
 });
 
-test("a Pages badge counts its declared edge without binding rows", () => {
+test("a Pages badge counts its declared related count without binding rows", () => {
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
     "related#groups": { pages: recordPagesGroup() },
   }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
-  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "example.Record", id: "rec_1", edges: ["knowledge.pages"] }, expect.anything());
+  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "example.Record", id: "rec_1", groups: ["knowledge.pages"] }, expect.anything());
   expect(sdk.query).not.toHaveBeenCalledWith(KnowledgeRecordPages, expect.anything(), expect.anything());
 });
 
@@ -120,7 +120,7 @@ test("a page's Backlinks and Bound to badges count their declared edges without 
     "knowledge.Page#groups": { backlinks: pageBacklinksGroup, bound: pageBoundToGroup },
   }) }}><RelatedCountProbe id="related" context={page} onCount={onCount} /></AppRuntimeProvider>);
   expect(sdk.query).toHaveBeenCalledWith(expect.anything(), {
-    model: "knowledge.Page", id: "rec_1", edges: ["knowledge.backlinks", "knowledge.bound-to"],
+    model: "knowledge.Page", id: "rec_1", groups: ["knowledge.backlinks", "knowledge.bound-to"],
   }, expect.anything());
   expect(sdk.query).not.toHaveBeenCalledWith(KnowledgePage, expect.anything(), expect.anything());
   expect(sdk.query).not.toHaveBeenCalledWith(KnowledgePageRecordBindings, expect.anything(), expect.anything());
@@ -182,12 +182,12 @@ test("Bound-to rows use the shared reference label and route lookup", async () =
   expect(sdk.navigate).toHaveBeenCalledWith("/records/rec_1");
 });
 
-test.each([pageBacklinksGroup, pageBoundToGroup])("reverse groups load their rows and disappear when their edge counts none ($content.label)", (group) => {
+test.each([pageBacklinksGroup, pageBoundToGroup])("reverse groups load their rows and disappear when their related count is zero ($content.label)", (group) => {
   sdk.query.mockReturnValue({ data: undefined, isPending: true });
   const view = render(<Groups groups={{ reverse: group }} />);
   expect(screen.getByRole("status").textContent).toContain("Loading page");
-  sdk.query.mockImplementation((_document, variables) => variables?.edges
-    ? { data: { record_edge_counts: variables.edges.map((edge: string) => ({ edge, count: 0 })) }, isPending: false }
+  sdk.query.mockImplementation((_document, variables) => variables?.groups
+    ? { data: { related_counts: variables.groups.map((group: string) => ({ group, count: 0 })) }, isPending: false }
     : { data: { pages_by_pk: { backlinks: [] }, page_record_bindings: [] }, isPending: false });
   view.rerender(<Groups groups={{ reverse: group }} />);
   expect(screen.queryByText(String(group.content.label))).toBeNull();

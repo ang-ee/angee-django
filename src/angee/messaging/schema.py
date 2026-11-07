@@ -45,9 +45,9 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
-from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.related_counts import RelatedCount
 from angee.graphql.relations import (
     RecordPointerType,
     RecordReferenceNode,
@@ -2085,10 +2085,10 @@ _MESSAGING_SCHEMA_BUCKET = {
 }
 
 
-def record_edges() -> tuple[RecordEdge, ...]:
+def related_counts() -> tuple[RelatedCount, ...]:
     """The source conversations a record came from, as the Conversations group lists them."""
 
-    return (RecordEdge("messaging.conversations", ThreadAttachment.objects.source_threads_for_record),)
+    return (RelatedCount("messaging.conversations", ThreadAttachment.objects.source_threads_for_record),)
 
 
 schemas = {

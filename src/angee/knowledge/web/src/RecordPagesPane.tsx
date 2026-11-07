@@ -61,9 +61,9 @@ export function recordPagesGroup(options: RecordPagesGroupOptions = {}): Contain
       edge: { model: RECORD_BINDING_MODEL },
       bindingRole: role,
       when,
-      // The generic edge counts every page binding. Role groups declare none, so
+      // The generic group's related count counts every page binding. Role groups declare none, so
       // where one is eligible the badge waits for Links, whose rows partition roles.
-      ...(role === undefined ? { countEdge: { id: "knowledge.pages", models: BINDING_MODELS } } : {}),
+      ...(role === undefined ? { count: { id: "knowledge.pages", models: BINDING_MODELS } } : {}),
       usePaneCount: (context) => useRecordPagesRead(context, role).bindings?.length,
       useVerb: (context) => useRecordPagesRead(context, role).canBind,
       render: (context, label) => <RecordPagesGroup key={context.view.sqid} context={context} role={role} label={label} />,
@@ -139,7 +139,7 @@ export const pageBacklinksGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: "Backlinks",
-    countEdge: { id: "knowledge.backlinks", models: PAGE_READ_MODELS },
+    count: { id: "knowledge.backlinks", models: PAGE_READ_MODELS },
     render: (context, label) => <>{label()}<li><PageBacklinks context={context} /></li></>,
   },
 };
@@ -149,7 +149,7 @@ export const pageBoundToGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: "Bound to",
-    countEdge: { id: "knowledge.bound-to", models: BINDING_MODELS },
+    count: { id: "knowledge.bound-to", models: BINDING_MODELS },
     render: (context, label) => <>{label()}<li><PageBoundTo context={context} /></li></>,
   },
 };
