@@ -128,9 +128,13 @@ def test_thousand_items_stay_within_concurrency_and_query_bound(
             # The native write owner resolves one installed
             # policy per write. Its 11 write gates read one schema witness each;
             # retain a separate bound on the execution's remaining statements.
+            # Since REBAC 0.31 the advance block and the pinned related read it
+            # opens (``run.step_runs.system_context(...)``) are two bypass entries,
+            # so the item that settles the map writes a second ``workflows.advance``
+            # audit row: 101 statements, 100 before.
             witnesses = sum(is_rebac_revision_read(query["sql"]) for query in queries)
             assert witnesses <= 11, (item.map_index, witnesses)
-            assert 0 < len(queries) - witnesses <= 100, (item.map_index, len(queries) - witnesses)
+            assert 0 < len(queries) - witnesses <= 101, (item.map_index, len(queries) - witnesses)
             completed += 1
             assert body_rows(run).exclude(status="succeeded").count() <= 4
     run_until(run, max_steps=1000)
