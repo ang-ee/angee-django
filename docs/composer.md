@@ -264,7 +264,10 @@ installed app order; an addon's `app_name` selects its namespace. The registered
 `angee.server.E001` check reports identical native matching chains;
 `angee.server.E002` refuses silk with `DEBUG` off unless
 `ANGEE_PROFILING_ALLOW_PRODUCTION` is true.
-After Django setup, [`angee.server.asgi`](../src/angee/server/asgi.py) serves
+The first ASGI call into [`angee.server.application`](../src/angee/server/__init__.py)
+loads [`angee.server.asgi`](../src/angee/server/asgi.py) once, off the event loop,
+so its Django setup and the addon contributions it reads may use the database.
+After Django setup, it serves
 Django's `ASGIHandler` with the `http_mounts` and `lifespans` contributions and
 the `protocols()` mapping of enabled addons' `asgi` modules, rejects mount and
 protocol collisions, and owns async lifespan teardown. GraphQL contributes its Channels

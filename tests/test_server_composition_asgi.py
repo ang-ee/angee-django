@@ -25,7 +25,10 @@ angee.base.addons.optional_addon_module = (
     lambda config, name, index=None: getattr(config, "modules", {}).get(name)
 )
 from django.conf import settings
-settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0)
+settings.configure(
+    INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
+    DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+)
 import django
 django.setup()
 from django.apps import apps, AppConfig
@@ -174,6 +177,39 @@ configs[1] = contributor("two", protocols={"http": mounted})
 try: _Application()
 except ImproperlyConfigured as error: assert "Django HTTP fallback" in str(error) and "two" in str(error)
 else: raise AssertionError("reserved protocol accepted")
+""")
+
+
+def test_server_application_loads_the_native_application_once_off_the_event_loop():
+    """Construction may read the database, so the first ASGI call builds it off the loop, once."""
+
+    run(SETUP + """
+import asyncio
+from asgiref.testing import ApplicationCommunicator
+from django.db import connection
+import angee.server
+loads = []
+async def mounted(scope, receive, send):
+    await send({"type": "http.response.start", "status": 204, "headers": []})
+    await send({"type": "http.response.body", "body": b""})
+def http_mounts():
+    # On the event loop this raises SynchronousOnlyOperation.
+    loads.append(connection.get_autocommit())
+    return [("/probe", mounted)]
+config = contributor("probe")
+config.modules["asgi"].http_mounts = http_mounts
+apps.get_app_configs = lambda: [config]
+async def main():
+    for _ in range(2):
+        scope = {"type": "http", "path": "/probe", "root_path": ""}
+        comm = ApplicationCommunicator(angee.server.application, scope)
+        assert (await comm.receive_output())["status"] == 204
+        await comm.receive_output()
+        await comm.wait()
+asyncio.run(main())
+from angee.server.asgi import application as native
+assert loads == [True], loads
+assert angee.server._native_application is native
 """)
 
 
