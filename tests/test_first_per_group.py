@@ -62,7 +62,10 @@ def test_first_per_group_ranks_inside_the_callers_scope() -> None:
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("ordered_group_tables")
 def test_first_per_group_ranks_a_grouped_selection_without_the_models_ordering() -> None:
-    """``Meta.ordering`` never splits a grouped selection into one group per ordering value."""
+    """``Meta.ordering`` never splits a grouped selection into one group per ordering value.
+
+    The rank is a selected annotation, so each kept row carries its ``_group_rank``.
+    """
 
     rows = OrderedGroupThing.system_queryset()
     for name, ranks in (("a", (3, 1, 2)), ("b", (5,))):
@@ -72,7 +75,7 @@ def test_first_per_group_ranks_a_grouped_selection_without_the_models_ordering()
 
     kept = list(grouped.first_per_group("name", order_by=["-_top"], limit=1).order_by("name"))
 
-    assert kept == [{"name": "a", "_top": 3}, {"name": "b", "_top": 5}]
+    assert kept == [{"name": "a", "_top": 3, "_group_rank": 1}, {"name": "b", "_top": 5, "_group_rank": 1}]
 
 
 @pytest.mark.django_db(transaction=True)
