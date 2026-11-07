@@ -21,7 +21,6 @@ _Settings = TypedDict(
         "MEDIA_URL": str,
         "ANGEE_REBAC_FORCE_OVERWRITE": bool,
         "ANGEE_MERGE_GUARDS": list[str],
-        "REBAC_BACKEND": str,
         "REBAC_LOCAL_BACKEND_STORAGE": str,
         "REBAC_STRICT_MODE": bool,
         "REBAC_LINT_BARE_PREFETCH": bool,
@@ -43,7 +42,6 @@ SETTINGS: _Settings = {
     "ANGEE_REBAC_FORCE_OVERWRITE": False,
     # Additive guards refuse removal before one record is folded into another.
     "ANGEE_MERGE_GUARDS": [],
-    "REBAC_BACKEND": "local",
     "REBAC_LOCAL_BACKEND_STORAGE": "registry",
     "REBAC_STRICT_MODE": True,
     "REBAC_LINT_BARE_PREFETCH": False,

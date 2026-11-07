@@ -134,7 +134,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 AUTH_USER_MODEL = "iam.User"
 AUTHENTICATION_BACKENDS = ["angee.iam.auth.ModelBackend"]
 ANGEE_CHANGESET_MODEL = "provenance.Changeset"
-REBAC_BACKEND = "local"
 REBAC_LOCAL_BACKEND_STORAGE = "registry"
 REBAC_STRICT_MODE = True
 REBAC_FIELD_READ_MODE = "redact"
