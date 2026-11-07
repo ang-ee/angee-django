@@ -430,16 +430,36 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     assert sent == [stub_payload.as_message(), stub_payload.as_message()]
 
 
-@override_settings(
-    DEBUG=False,
-    ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER=False,
-    CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
+@pytest.mark.parametrize(
+    ("debug", "broker", "allow", "safe"),
+    [
+        (True, "redis://localhost:6379/0", False, False),
+        (False, "redis://localhost:6379/0", False, False),
+        (True, "redis://localhost:6379/0", True, True),
+        (True, None, False, True),
+        (False, None, False, False),
+        (True, "amqp://guest:guest@localhost//", False, False),
+    ],
 )
-def test_inmemory_channel_layer_requires_dev_or_explicit_opt_in() -> None:
-    """The default in-memory changes transport is loud outside dev/test."""
+def test_inmemory_channel_layer_requires_brokerless_dev_or_test_opt_in(
+    debug: bool,
+    broker: str | None,
+    allow: bool,
+    safe: bool,
+) -> None:
+    """A host with a Celery broker cannot share an in-memory subscription transport."""
 
-    with pytest.raises(ImproperlyConfigured, match="dev-only"):
-        publishing.change_channel_layer()
+    with override_settings(
+        DEBUG=debug,
+        CELERY_BROKER_URL=broker,
+        ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER=allow,
+        CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
+    ):
+        if safe:
+            assert publishing.change_channel_layer() is not None
+        else:
+            with pytest.raises(ImproperlyConfigured, match="cannot deliver GraphQL changes across processes"):
+                publishing.change_channel_layer()
 
 
 def test_ws_consumer_uses_rebac_channels_mixin() -> None:

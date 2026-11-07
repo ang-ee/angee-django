@@ -17,7 +17,7 @@ def test_project_entrypoints_dispatch_to_native_owners() -> None:
 
     launcher = ast.parse((PROJECT_TEMPLATE / "manage.py.jinja").read_text())
     settings = ast.parse((PROJECT_TEMPLATE / "settings.py").read_text())
-    assert any(isinstance(node, ast.ImportFrom) and node.module == "django_compose.management"
+    assert any(isinstance(node, ast.ImportFrom) and node.module == "angee.server.management"
                and [alias.name for alias in node.names] == ["execute"] for node in ast.walk(launcher))
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "execute"
                for node in ast.walk(launcher))

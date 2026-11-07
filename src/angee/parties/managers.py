@@ -34,7 +34,6 @@ from rebac import (
     PermissionDenied,
     actor_context,
     current_actor,
-    database_context,
     system_context,
 )
 from rebac.actors import is_sudo, to_subject_ref
@@ -524,7 +523,6 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         using = handles_owner.db
         link_owner = apps.get_model("parties", "Party").objects.db_manager(using)
         with (
-            database_context(using),
             system_context(reason="parties.handle.claim_control"),
             transaction.atomic(using=using),
         ):
@@ -1020,7 +1018,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Assert normal handle facts from native supporting records, preserving person decisions."""
         owner = self.db_manager(self._db or party._state.db, hints={"instance": party})
         using = owner.db
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             source = to_subject_ref(asserted_by)
             subject = apps.get_model("parties", "Party")._base_manager.using(using).get(pk=party.pk)
             refs = [EvidenceReference.of(row) for row in evidence]

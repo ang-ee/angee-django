@@ -22,7 +22,7 @@ export function ProjectManagerAccessRole({ targetId }: AccessRoleOwnerProps): nu
   const settle = useActionResultRun();
   const roster = query.data?.project_manager_roster;
   const people = React.useMemo(() => roster?.people.map((person) => ({
-    subject: person.subject, label: person.label, seatId: person.seat_id,
+    subject: person.subject, label: person.label, seatId: person.seat_id ?? undefined,
     roleId: "work.manager", roleLabel: t("access.manager"), removable: person.removable,
   })) ?? [], [roster?.people, t]);
   const add = React.useCallback(async (subject: string) => {

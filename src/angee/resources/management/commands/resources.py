@@ -7,7 +7,6 @@ from typing import Any, cast
 
 from django.apps import AppConfig, apps
 from django.core.management.base import BaseCommand, CommandParser
-from rebac import database_context
 
 from angee.resources.models import Resource
 
@@ -45,8 +44,7 @@ class Command(BaseCommand):
 
         del args
         handler = cast(Callable[[dict[str, Any]], None], options["handler"])
-        with database_context(options["database"]):
-            handler(options)
+        handler(options)
 
     def _add_selection_arguments(self, parser: CommandParser) -> None:
         """Add tier selection arguments shared by all subcommands."""

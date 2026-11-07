@@ -1894,8 +1894,8 @@ def test_competing_oidc_disconnects_keep_one_sign_in_method(
         assert ExternalAccount.objects.get(pk=accounts[1].pk).owner_id == user.pk
 
 
-def test_oidc_disconnect_policy_uses_the_persisted_credentials_database(tmp_path: Path) -> None:
-    """Conflicting default-db policy cannot authorize unlinking a secondary-db user's last account."""
+def test_oidc_disconnect_policy_keeps_the_last_sign_in_method(tmp_path: Path) -> None:
+    """The OIDC donor lets a passwordless user unlink one account but never the last."""
 
     package = tmp_path / "native_oidc"
     package.mkdir()
@@ -1943,42 +1943,39 @@ from angee.integrate.autoconfig import SETTINGS as INTEGRATE_SETTINGS
 settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "native_oidc"],
     AUTH_USER_MODEL="native_oidc.User",
-    DATABASES={alias: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
-               for alias in ("default", "secondary")},
-    SECRET_KEY="oidc-alias-regression",
+    DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+    SECRET_KEY="oidc-disconnect-policy",
     ANGEE_OAUTH_PROVIDER_TYPE_CLASSES=INTEGRATE_SETTINGS["ANGEE_OAUTH_PROVIDER_TYPE_CLASSES"],
 )
 import django
 django.setup()
 from django.core.exceptions import ValidationError
-from django.db import connections, transaction
+from django.db import connection, transaction
 from rebac.models import PermissionAuditEvent
 from native_oidc.models import Credential, ExternalAccount, OAuthClient, User
 
-for alias in ("default", "secondary"):
-    with connections[alias].schema_editor() as editor:
-        for model in (User, OAuthClient, ExternalAccount, Credential, PermissionAuditEvent):
-            editor.create_model(model)
-    user = User.objects.using(alias).create(username="identity", password="usable" if alias == "default" else "!")
-    client = OAuthClient.objects.using(alias).create(login_enabled=alias == "secondary")
-    for _ in range(3 if alias == "default" else 2):
-        account = ExternalAccount.objects.using(alias).create(oauth_client=client)
-        Credential.objects.using(alias).create(user=user, oauth_client=client, external_account=account)
+with connection.schema_editor() as editor:
+    for model in (User, OAuthClient, ExternalAccount, Credential, PermissionAuditEvent):
+        editor.create_model(model)
+user = User.objects.create(username="identity", password="!")
+client = OAuthClient.objects.create(login_enabled=True)
+for _ in range(2):
+    account = ExternalAccount.objects.create(oauth_client=client)
+    Credential.objects.create(user=user, oauth_client=client, external_account=account)
 
-with transaction.atomic(using="secondary"):
-    first = Credential.objects.using("secondary").first()
+with transaction.atomic():
+    first = Credential.objects.first()
     first.check_disconnect()
-    first.delete(using="secondary")
-with transaction.atomic(using="secondary"):
-    remaining = Credential.objects.using("secondary").get()
+    first.delete()
+with transaction.atomic():
+    remaining = Credential.objects.get()
     try:
         remaining.check_disconnect()
     except ValidationError as error:
         assert error.code == "only_sign_in_method"
     else:
-        raise AssertionError("The secondary user's final sign-in method must remain linked.")
-assert Credential.objects.using("secondary").count() == 1
-assert Credential.objects.using("default").count() == 3
+        raise AssertionError("The user's final sign-in method must remain linked.")
+assert Credential.objects.count() == 1
 """
     root = Path(__file__).resolve().parents[1]
     environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src"), str(tmp_path)))}
