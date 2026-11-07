@@ -668,12 +668,15 @@ class ThreadQuerySet[ThreadT: Thread](
     """Chainable read scopes for message threads."""
 
     def inbox(self) -> Self:
-        """Return channel/inbox threads — those not attached to a record.
+        """Return channel/inbox threads — those not attached to a record — under ``read_inbox``.
 
         A thread bound to a model row through a ``ThreadAttachment`` is record
         chatter; it is reachable only through the record-scoped ``record_thread``
         payload (gated on the parent record's read) and must never surface in the
         owner-scoped generic ``threads`` list, aggregate, or by-pk lookup.
+        Without chatter, ``read_inbox`` admits exactly the readers ``read`` does
+        and compiles no record's read. The action replaces the caller's; a verb
+        that needs another selects it after this one.
         """
 
         # A structural anti-join inside the already authorized inbox queryset: the
@@ -681,7 +684,11 @@ class ThreadQuerySet[ThreadT: Thread](
         # separately audited system read. Equality on the survivor id is hashed once.
         chatter = self.model._base_manager.filter(attachments__role="chatter").survivor_ids()
         attached = chatter.filter(survivor=self.survivor_id(ref=models.OuterRef))
-        return self.alias(_record_attached=models.Exists(attached)).filter(_record_attached=False)
+        return (
+            self.alias(_record_attached=models.Exists(attached))
+            .filter(_record_attached=False)
+            .with_action("read_inbox")
+        )
 
     def for_channel(self, channel: Any) -> Self:
         """Return the threads that belong to ``channel`` — the purge-scope predicate.
@@ -2461,9 +2468,12 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
     """Chainable read scopes for chatter/ingest messages."""
 
     def trash_targets(self) -> Self:
-        """Keep record chatter off the shared trash verbs; its record moderates it."""
+        """Keep record chatter off the shared trash verbs; its record moderates it.
 
-        return self.inbox()
+        The caller's ``delete`` scope stays: only the population narrows.
+        """
+
+        return self._without_record_chatter()
 
     def due_deliveries(self, *, now: datetime) -> Self:
         """Due unclaimed holds/retries and lost dispatches, never an uncertain effect."""
@@ -2565,16 +2575,21 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         return self.filter(channel=channel)
 
     def inbox(self) -> Self:
-        """Return channel/inbox messages — those not attached to a record thread.
+        """Return channel/inbox messages — those not attached to a record thread — under ``read_inbox``.
 
         A message whose thread carries a ``ThreadAttachment`` is record chatter,
         reachable only through the record-scoped ``record_thread`` payload (gated on
         the parent record's read); it must never surface in the owner-scoped generic
         ``messages`` list, aggregate, or by-pk lookup. A message with no thread (an
         ingested mail whose thread was merged away) is not record-attached and stays
-        in the inbox.
+        in the inbox. Without chatter, ``read_inbox`` admits exactly the readers
+        ``read`` does and compiles no record's read. The action replaces the
+        caller's; a verb that needs another selects it after this one.
         """
 
+        return self._without_record_chatter().with_action("read_inbox")
+
+    def _without_record_chatter(self) -> Self:
         # The same structural anti-join as ``ThreadQuerySet.inbox``. A message
         # without a thread has no survivor id, so it matches no redirect group.
         thread_model = apps.get_model("messaging", "Thread")
@@ -3253,7 +3268,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             # send_held is precisely channel write, including for discard. The
             # identity owner decodes once and performs one scoped pk__in query.
             scoped = (
-                self.with_actor(actor).with_action("send_held").inbox().lock_if_supported().order_by("pk")
+                self.with_actor(actor).inbox().with_action("send_held").lock_if_supported().order_by("pk")
             )
             rows = instances_from_public_ids(self.model, [str(item.id) for item in selection], queryset=scoped)
             threads = []

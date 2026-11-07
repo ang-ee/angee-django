@@ -29,7 +29,7 @@ class InboxTranscript:
         self.thread = inbox.threads.from_public_id(thread)
         if self.thread is None:
             raise ValueError("Conversation unavailable.")
-        self.messages = inbox.collection("messaging", "Message").for_thread(self.thread).untrashed()
+        self.messages = inbox.collection("messaging", "Message").inbox().for_thread(self.thread).untrashed()
         self.matching = matching.for_thread(self.thread)
 
     def matches(self, *, visible: list[str], at: str = "") -> InboxTranscriptMatches:
