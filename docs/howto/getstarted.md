@@ -456,6 +456,52 @@ angee --root "$ANGEE_ROOT" restart django celery-worker
   `angee --operator <url>`, or `ANGEE_OPERATOR_URL`, sends the CLI's commands to
   that API instead of running the operator in-process against `--root`.
 
+### Profile live requests
+
+[`angee.server`](../../src/angee/server/autoconfig.py) profiles live HTTP requests
+with [django-silk](https://github.com/jazzband/django-silk) when a project opts in.
+Silk records each request's headers, body and response, and every ORM statement
+with its traceback and timing, into the project database, and serves a UI over
+them. It is a development and staging tool: enabling it adds silk's tables, and
+system check `angee.server.E002` refuses it with `DEBUG` off unless the project
+sets `ANGEE_PROFILING_ALLOW_PRODUCTION: true` in `settings.yaml` (an environment
+string is not accepted).
+
+1. Install the extra: add `"angee-server[profiling]"` to the project's
+   `[project].dependencies` in its `pyproject.toml`.
+2. Opt in: add `silk` to `INSTALLED_APPS` in the stack's `settings.yaml`.
+3. Apply both with the whole-application restart from the stack root,
+   `angee --root "$ANGEE_ROOT" job run deps --chained-restart`. The chain installs
+   the extra, recomposes, and `provision` applies silk's migrations.
+4. Sign in to the app as a platform admin, then open `/profiling/` on the Django
+   server's own address, using the app's host name so its session cookie applies.
+   The UI dev proxy and the ingress route only the app's API paths.
+
+With `silk` rooted, the server puts silk's middleware first, so it records the
+queries of every middleware after it, and mounts silk's UI at `profiling/` beside
+Django's own static view, which serves silk's stylesheets and scripts under
+`/static/` only while `DEBUG` is on. Production serving of `/static/` is the
+ingress's job: the stack ingress forwards `/static/*` to Django, which has no
+static view with `DEBUG` off, so there silk's UI renders unstyled. Only
+signed-in users that the `ANGEE_PROFILING_PERMISSION` hook admits can open it;
+IAM fills the hook with its platform-admin check. Silk keeps the latest 1,000
+requests and skips the stack's readiness probe. Its cProfile profiler stays off,
+which is silk's default; set `SILKY_PYTHON_PROFILER: true` only while you profile
+one request at a time. Any `TEMPLATES` or `SILKY_*` value in `settings.yaml`
+replaces the server's default for that setting. Silk's middleware is
+synchronous, so Django runs each profiled request through a thread on the ASGI
+stack, and the recorded timings include that thread handoff.
+
+Silk profiles requests on a running stack;
+[`measure_graphql_document`](../../src/angee/graphql/testing/documents.py)
+replays one GraphQL document in-process as one actor and pins its statement
+ceiling in tests ([GraphQL Document Budgets](../checks.md#graphql-document-budgets)).
+Find a slow request with silk, then pin the fix with a document budget.
+
+To turn profiling off, remove `silk` from `INSTALLED_APPS` and restart; silk's
+tables remain. To drop them, run `uv run --no-sync python manage.py migrate silk zero`
+from the stack root first, while `silk` is still installed.
+
 ## What's needed for agents to self-build?
 
 Angee is built so an agent can drive the entire loop, because every operation is
