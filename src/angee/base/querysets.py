@@ -195,6 +195,12 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
         inherited ``Meta.ordering`` never joins a grouped selection's ``GROUP BY``;
         callers order the kept rows. Filters chained afterwards apply before the
         ranking, as Django wraps a window filter in an outer query.
+
+        The rank is a selected annotation (``_group_rank``), so that outer query reads
+        the ranked rows whole. A masked rank makes Django re-select the rows by one
+        column per distinct select expression: an annotation equal to a selected
+        column (a partition key over the model's own field) collapses into it, and
+        every later value is read through the previous field's converter.
         """
 
         if not partition_by:
@@ -202,7 +208,7 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
         if limit < 1:
             raise ValueError("first_per_group keeps at least one row per group.")
         rank = models.Window(RowNumber(), partition_by=list(partition_by), order_by=list(order_by))
-        return cast(Self, self.order_by().alias(_group_rank=rank).filter(_group_rank__lte=limit))
+        return cast(Self, self.order_by().annotate(_group_rank=rank).filter(_group_rank__lte=limit))
 
 
 class AngeeQuerySet(
