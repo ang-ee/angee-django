@@ -124,7 +124,8 @@ def _project_runs(runs: list[Any], actor: Any, selections: list[Selection]) -> N
         graphs = WorkflowRun.graphs_for(runs, actor, writable=writable, **_graph_details(actor, steps))
         subject = to_subject_ref(actor)
         for run in runs:
-            run.__dict__["_graph_projection"] = (subject, graphs[run.pk])
+            if run.pk in graphs:
+                run.__dict__["_graph_projection"] = (subject, graphs[run.pk])
 
 
 @strawberry_django.type(Workflow)

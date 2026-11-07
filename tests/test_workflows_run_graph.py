@@ -162,6 +162,24 @@ def test_graph_requires_a_reader_and_uses_actor_scoped_step_resources(schema, ex
     assert hidden.errors is None and hidden.data["workflowrun_by_pk"] is None
 
 
+def test_run_list_graphs_leave_out_only_a_run_the_reader_lost(execution):
+    """A run lost between the list read and the graph read fails only its own graph."""
+    actor, _ = execution
+    reader = create_user("graph-list-reader")
+    workflow = load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor)
+    kept, lost = start_run(workflow, actor=actor), start_run(workflow, actor=actor)
+    for run in (kept, lost):
+        run.with_actor(actor).grant_record_access("reader", reader)
+    listed = {run.pk: run for run in WorkflowRun.objects.with_actor(reader).filter(pk__in=[kept.pk, lost.pk])}
+    assert set(listed) == {kept.pk, lost.pk}
+    lost.with_actor(actor).revoke_record_access("reader", reader)
+    graphs = WorkflowRun.graphs_for(list(listed.values()), reader)
+    assert set(graphs) == {kept.pk}
+    assert [node.node.key for node in graphs[kept.pk].nodes] == ["entry"]
+    with pytest.raises(PermissionDenied, match="requires a reader"):
+        listed[lost.pk].graph(reader)
+
+
 def test_graph_survives_removing_a_published_step_implementation(schema, execution, settings):
     """A parked execution remains inspectable with its published reader vocabulary."""
     actor, _ = execution

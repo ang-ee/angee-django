@@ -369,9 +369,12 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         related: Sequence[models.Prefetch] = (),
     ) -> RunGraph:
         """Read this run's frozen topology, batching only the step details a reader selects."""
-        return type(self).graphs_for(
+        graphs = type(self).graphs_for(
             (self,), actor, step_fields=step_fields, map_fields=map_fields, related=related,
-        )[self.pk]
+        )
+        if self.pk not in graphs:
+            raise PermissionDenied("A run graph requires a reader.")
+        return graphs[self.pk]
 
     @classmethod
     def graphs_for(
@@ -384,21 +387,27 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         related: Sequence[models.Prefetch] = (),
         writable: set[int] | None = None,
     ) -> dict[int, RunGraph]:
-        """Read readable runs' frozen topologies with one statement per step table.
+        """Read the reader's runs' frozen topologies with one statement per step table.
 
-        ``step_fields`` and ``map_fields`` name the details selected on node rows and
-        on their map item rows; ``related`` prefetches the selected relations;
-        ``writable`` reuses the reader's already-read run write answers. Each selected
-        detail costs at most one statement per batch, never one per run or step.
+        A run the reader can no longer read gets no graph, so one lost run never
+        fails the list; its own :meth:`graph` refuses it. ``step_fields`` and
+        ``map_fields`` name the details selected on node rows and on their map item
+        rows; ``related`` prefetches the selected relations; ``writable`` reuses the
+        reader's already-read run write answers. Each selected detail costs at most
+        one statement per batch, never one per run or step.
         """
         if not runs:
             return {}
         if actor is None:
             raise PermissionDenied("A run graph requires a reader.")
-        by_id = {run.pk: run for run in runs}
-        readable = cls.objects.with_actor(actor).scoped_for_aggregate().filter(pk__in=list(by_id))
-        if set(readable.values_list("pk", flat=True)) != by_id.keys():
-            raise PermissionDenied("A run graph requires a reader.")
+        readable = set(
+            cls.objects.with_actor(actor).scoped_for_aggregate()
+            .filter(pk__in=[run.pk for run in runs]).values_list("pk", flat=True)
+        )
+        by_id = {run.pk: run for run in runs if run.pk in readable}
+        if not by_id:
+            return {}
+        runs = tuple(by_id.values())
         steps = cast(Any, cls._meta.get_field("step_runs").related_model.objects.with_actor(actor)).filter(
             run_id__in=list(by_id),
         )
