@@ -11,13 +11,14 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 from strawberry import auto
 
-from angee.graphql.data.hasura import GROUP_ROWS_MAX_LIMIT, hasura_model_resource
+from angee.base.pagination import MAX_PAGE_SIZE
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import SchemaAddon
 from tests.tables import model_tables
-from tests.test_aggregates import HasuraJsonResourceThing, ResourceChild, ResourceParent
+from tests.test_aggregates import HasuraJsonResourceThing, HasuraResourceThing, ResourceChild, ResourceParent
 
 CHILD_GROUPS = """
 query ChildGroups($where: group_children_bool_exp, $limit: Int!) {
@@ -103,7 +104,7 @@ def test_group_rows_follow_the_where_and_respect_the_declared_limit() -> None:
         with system_context(reason="test.group_rows.read"):
             data = result_data(execute_schema(schema, CHILD_GROUPS, {"limit": 5, "where": {"name": {"_neq": "a3"}}}))
             assert _rows_by_parent(data) == {"alpha": ["a2", "a1"]}
-            for limit in (0, GROUP_ROWS_MAX_LIMIT + 1):
+            for limit in (0, MAX_PAGE_SIZE + 1):
                 result = execute_schema(schema, CHILD_GROUPS, {"limit": limit})
                 assert result.errors is not None
                 assert "Group rows limit must be between 1" in str(result.errors[0])
@@ -150,3 +151,44 @@ def test_json_path_groups_carry_rows_including_the_missing_key_bucket() -> None:
         group["key"]["metadata__mailbox"]: [row["name"] for row in group["rows"]]
         for group in data["group_json_things_groups"]
     } == {"INBOX": ["one", "three"], "Sent": ["two"], None: ["four"]}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_group_rows_without_an_order_follow_the_models_meta_ordering() -> None:
+    @strawberry_django.type(HasuraResourceThing)
+    class GroupOrderedThingType(AngeeNode):
+        word_count: auto
+
+    resource = hasura_model_resource(
+        GroupOrderedThingType,
+        model=HasuraResourceThing,
+        name="group_ordered_things",
+        filterable=["id", "name"],
+        sortable=["name"],
+        aggregatable=["id"],
+        groupable=["name"],
+        get_queryset=lambda info: HasuraResourceThing.objects.all(),
+        insert=False,
+        update=False,
+        delete=False,
+    )
+    schema = _schema(resource, GroupOrderedThingType)
+    with model_tables((HasuraResourceThing,)):
+        with system_context(reason="test.group_rows.ordered.seed"):
+            for name, word_count in (("alpha", 1), ("alpha", 3), ("alpha", 2), ("beta", 5)):
+                HasuraResourceThing.objects.create(name=name, word_count=word_count)
+
+        with system_context(reason="test.group_rows.ordered.read"):
+            data = result_data(execute_schema(schema, """
+                query {
+                  group_ordered_things_groups(group_by: [{field: NAME}]) {
+                    key { name }
+                    rows(limit: 2) { word_count }
+                  }
+                }
+            """))
+    # ``Meta.ordering`` is ``-word_count``: the carried page is the list root's, not insertion order.
+    assert {
+        group["key"]["name"]: [row["word_count"] for row in group["rows"]]
+        for group in data["group_ordered_things_groups"]
+    } == {"alpha": [3, 2], "beta": [5]}

@@ -14,6 +14,9 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
+MAX_PAGE_SIZE = 100
+"""Largest page one read returns, records or group headers alike; refine's ``MAX_PAGE_SIZE`` mirrors it."""
+
 
 class InvalidKeysetCursor(ValueError):
     """A cursor cannot be decoded in the current query's signing scope."""

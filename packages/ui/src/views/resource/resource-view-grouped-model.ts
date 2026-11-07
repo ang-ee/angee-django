@@ -1,6 +1,7 @@
 import { ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import type { PaginationState, Row as TableRowModel } from "@tanstack/react-table";
 import {
+  clampPageSize,
   stableSerialize,
   type AggregateBucket,
   type AngeeListBatchEntry,
@@ -119,7 +120,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
   const resourceQuery =
     params.query ?? (modelMetadata ? ResourceQuery.from(modelMetadata) : null);
   // The one owner of a group's first-page size: the groups read carries that page.
-  const declaredLeafPageSize = params.leafPageSize ?? GROUPED_LEAF_PAGE_SIZE;
+  const declaredLeafPageSize = clampPageSize(params.leafPageSize ?? GROUPED_LEAF_PAGE_SIZE);
 
   const emitLeaf = (
     bucketKey: string,

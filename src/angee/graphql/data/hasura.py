@@ -63,8 +63,9 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for, public_id_of
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.refs import RecordRefMixin
+from angee.base.pagination import MAX_PAGE_SIZE
 from angee.base.permissions import declared_rebac_definition, require_rebac_queryset
-from angee.base.querysets import row_lock_paths
+from angee.base.querysets import AngeeQuerySet, row_lock_paths
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import (
@@ -1380,10 +1381,6 @@ def _resource_filter_projection(
     )
 
 
-GROUP_ROWS_MAX_LIMIT = 100
-"""Bound on one group's carried first page; the client declares the page size."""
-
-
 def group_rows_field(
     node: type,
     resolve: Callable[[GroupFieldBatch, int], Sequence[Sequence[Any]]],
@@ -1391,14 +1388,14 @@ def group_rows_field(
     """Declare ``<res>_group.rows``: every group's first page from one read per groups page.
 
     ``limit`` is the client's declared per-group page size, required and bounded
-    by ``GROUP_ROWS_MAX_LIMIT``; ``order_by`` is the list root's own ordering.
+    by ``MAX_PAGE_SIZE``; ``order_by`` is the list root's own ordering.
     ``resolve(batch, limit)`` returns one page per group in ``batch.groups`` order.
     """
 
     def pages(batch: GroupFieldBatch) -> Sequence[Sequence[Any]]:
         limit = batch.arguments["limit"]
-        if not 1 <= limit <= GROUP_ROWS_MAX_LIMIT:
-            raise ValueError(f"Group rows limit must be between 1 and {GROUP_ROWS_MAX_LIMIT}.")
+        if not 1 <= limit <= MAX_PAGE_SIZE:
+            raise ValueError(f"Group rows limit must be between 1 and {MAX_PAGE_SIZE}.")
         return resolve(batch, limit) if batch.groups else []
 
     return GroupField(
@@ -1478,6 +1475,16 @@ def _group_bucket(model: type[models.Model], drills: Sequence[DataQueryDrill], k
     return bucket
 
 
+def _orders_by_pk(model: type[models.Model], term: Any) -> bool:
+    """Whether one native ordering term already orders by the primary key."""
+
+    if isinstance(term, models.OrderBy):
+        term = term.expression
+    name = term.name if isinstance(term, models.F) else term.removeprefix("-") if isinstance(term, str) else None
+    pk = model._meta.pk
+    return pk is not None and name in {"pk", pk.name, pk.attname}
+
+
 def _first_rows_per_group(
     queryset: models.QuerySet[Any],
     buckets: Sequence[models.Q],
@@ -1485,11 +1492,18 @@ def _first_rows_per_group(
     info: strawberry.Info,
     limit: int,
 ) -> list[list[Any]]:
-    """Read every bucket's first ``limit`` rows in the queryset's order with one statement."""
+    """Read every bucket's first ``limit`` rows in the list root's order with one statement.
 
-    if not hasattr(queryset, "first_per_group"):
+    The order is the queryset's own, else its model's ``Meta.ordering``, ending
+    on the primary key when neither already does, so a page is deterministic.
+    """
+
+    if not isinstance(queryset, AngeeQuerySet):
         raise ImproperlyConfigured(f"{queryset.model._meta.label} group rows need an Angee queryset.")
-    ordering = [*queryset.query.order_by] or ["pk"]
+    model = queryset.model
+    ordering = [*queryset.query.order_by] or [*model._meta.ordering]
+    if not any(_orders_by_pk(model, term) for term in ordering):
+        ordering.append("pk")
     labelled = queryset.filter(reduce(operator.or_, buckets)).annotate(
         _angee_group_bucket=models.Case(
             *(models.When(bucket, then=models.Value(index)) for index, bucket in enumerate(buckets)),

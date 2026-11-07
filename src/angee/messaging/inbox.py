@@ -20,6 +20,7 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
+from angee.base.pagination import MAX_PAGE_SIZE
 from angee.base.permissions import actor_user_id
 
 
@@ -111,8 +112,8 @@ class InboxPage:
     def window(page: int, size: int) -> slice:
         """Validate the bounded offset page shared by records and group headers."""
 
-        if page < 1 or size < 1 or size > 100:
-            raise ValueError("Page must be positive and page size must be between 1 and 100.")
+        if page < 1 or not 1 <= size <= MAX_PAGE_SIZE:
+            raise ValueError(f"Page must be positive and page size must be between 1 and {MAX_PAGE_SIZE}.")
         return slice((page - 1) * size, page * size)
 
 

@@ -758,7 +758,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   authored document owns variables, results and count units; the shared list
   owns filtering, grouping, virtualized rendering and independent group pages.
   A grouped page is one request: at the leaf level the `groups` document
-  receives `leafPageSize` and returns each group's first page in `bucket.rows`;
+  receives `leafPageSize`, clamped to refine's `MAX_PAGE_SIZE` (100, the
+  server's bound on one page), and returns each group's first page in `bucket.rows`;
   `rows` serves only a later or resized page of one group. A server-grouped
   first page the groups read did not carry is an error, never a per-group fetch.
   `CollectionTreeView` composes the same transport with native tree expansion
