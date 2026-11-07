@@ -234,6 +234,33 @@ def test_removed_entry_step_leaves_the_run_input_unreadable(schema, execution, s
         definition.validate_input(run.input)
 
 
+def test_reader_input_sets_aside_only_consumers_an_unregistered_step_owns(execution, register_step, settings):
+    """A broken registered contract still raises while an unrelated downstream step is unregistered."""
+    actor, _ = execution
+
+    class ReaderConsumer(Echo):
+        key = "reader_consumer"
+
+    register_step(ReaderConsumer)
+    workflow = load_workflow({"nodes": {
+        "entry": {"step": ReaderConsumer.key, "next": {"done": "later"}},
+        "later": {"step": "echo"},
+    }}, actor=actor)
+    run = start_run(workflow, actor=actor, input={"value": 4})
+
+    class BrokenConsumer(ReaderConsumer):
+        @classmethod
+        def input_schema(cls):
+            raise ImproperlyConfigured("broken consumer contract")
+
+    register_step(BrokenConsumer)
+    without_step(settings, "echo")
+    definition = WorkflowRun.system_queryset().get(pk=run.pk).policy_version.definition
+    assert definition.unregistered_steps == {"later"}
+    with pytest.raises(ImproperlyConfigured, match="broken consumer contract"):
+        definition.redacted_input(run.input, set())
+
+
 def test_run_document_resolves_with_null_input_when_its_entry_step_is_gone(schema, execution, settings):
     """The run record read keeps resolving; only the unreadable input projects null."""
     actor, _ = execution
