@@ -898,25 +898,17 @@ def test_change_read_gate_redacts_denied_fields(
     """Field-gated values are redacted when their field action denies."""
 
     monkeypatch.setattr(access, "model_resource_type", lambda model: "group")
-    monkeypatch.setattr(access, "gated_read_fields", lambda model: frozenset({"secret"}))
+    monkeypatch.setattr(access, "gated_read_fields", lambda model: {"secret"})
     monkeypatch.setattr(access, "backend", lambda: object())
     actions: list[str] = []
-    batches: list[tuple[frozenset[str], tuple[str, ...]]] = []
 
     def check(*args: object, **kwargs: object) -> SimpleNamespace:
-        """Record the row check used by the subscription gate."""
+        """Record the REBAC checks used by the subscription gate."""
 
         actions.append(kwargs["action"])
-        return SimpleNamespace(allowed=True)
-
-    def visible(**kwargs: Any) -> dict[str, frozenset[str]]:
-        """Record the one field batch; the actor reads no gated field."""
-
-        batches.append((kwargs["fields"], tuple(kwargs["resource_ids"])))
-        return {name: frozenset() for name in kwargs["fields"]}
+        return SimpleNamespace(allowed=kwargs["action"] != "read__secret")
 
     monkeypatch.setattr(access, "check_field_access", check)
-    monkeypatch.setattr(access, "visible_id_sets", visible)
     gate = ChangeReadGate(Group, anonymous_actor())
 
     event = gate.filter(
@@ -929,8 +921,7 @@ def test_change_read_gate_redacts_denied_fields(
     assert event is not None
     assert event.changed_fields == ["name"]
     assert event.changed_values == {"name": "editors"}
-    assert actions == ["read"]
-    assert batches == [(frozenset({"secret"}), ("1",))]
+    assert actions == ["read", "read__secret"]
 
 
 def test_change_read_gate_keeps_allowed_field_gates(
@@ -939,23 +930,17 @@ def test_change_read_gate_keeps_allowed_field_gates(
     """Field-gated values remain in live payloads when the actor may read them."""
 
     monkeypatch.setattr(access, "model_resource_type", lambda model: "group")
-    monkeypatch.setattr(access, "gated_read_fields", lambda model: frozenset({"secret"}))
+    monkeypatch.setattr(access, "gated_read_fields", lambda model: {"secret"})
     monkeypatch.setattr(access, "backend", lambda: object())
     actions: list[str] = []
 
     def check(*args: object, **kwargs: object) -> SimpleNamespace:
-        """Record the row check used by the subscription gate."""
+        """Record the resource and field checks used by the subscription gate."""
 
         actions.append(kwargs["action"])
         return SimpleNamespace(allowed=True)
 
-    def visible(**kwargs: Any) -> dict[str, frozenset[str]]:
-        """Every supplied row holds every gated field."""
-
-        return {name: frozenset(kwargs["resource_ids"]) for name in kwargs["fields"]}
-
     monkeypatch.setattr(access, "check_field_access", check)
-    monkeypatch.setattr(access, "visible_id_sets", visible)
     gate = ChangeReadGate(Group, anonymous_actor())
 
     event = gate.filter(
@@ -968,7 +953,7 @@ def test_change_read_gate_keeps_allowed_field_gates(
     assert event is not None
     assert event.changed_fields == ["name", "secret"]
     assert event.changed_values == {"name": "editors", "secret": "visible"}
-    assert actions == ["read"]
+    assert actions == ["read", "read__secret"]
 
 
 def test_publisher_projection_validates_before_wiring(monkeypatch: pytest.MonkeyPatch) -> None:

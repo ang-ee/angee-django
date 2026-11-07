@@ -75,5 +75,5 @@ def test_plain_native_composer_preserves_host_choices_without_capability_default
     compose_configure(namespace)
     assert namespace["ROOT_URLCONF"] == "project.urls"
     assert namespace["ASGI_APPLICATION"] == "project.asgi.application"
-    for name in ("MIDDLEWARE", "COMPOSE_INTEGRATIONS", "REBAC_STRICT_MODE", "ANGEE_CHANGESET_MODEL"):
+    for name in ("MIDDLEWARE", "COMPOSE_INTEGRATIONS", "REBAC_BACKEND", "ANGEE_CHANGESET_MODEL"):
         assert name not in namespace

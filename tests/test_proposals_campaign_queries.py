@@ -23,16 +23,12 @@ from tests.proposals_models import Proposal, Round
 from tests.queries import is_rebac_revision_read
 from tests.test_project_access import project_access_schema as project_access_schema
 
-# django-zed-rebac owns these fixed policy reads. Application row
+# django-zed-rebac owns these fixed scope-compilation reads. Application row
 # reads and roster expansion have separate exact guards below.
 # Projection guards run only on a fetch, sharing one schema operation across
 # selected columns; reading a filled result cache adds no guard statements.
-# 0.31 compiles scopes inline (149 -> 4): two revision witnesses and two batched field-visibility reads.
-REBAC_TRACK_STATUS_QUERY_CEILING = 4
-# 0.31 compiles scopes inline (43 -> 4): three revision witnesses and one batched field-visibility read.
-REBAC_ROUND_QUERY_CEILING = 4
-# 0.31 (43 -> 2): one revision witness and one batched field-visibility read beside the roster and its audit.
-REBAC_ROUND_ROSTER_QUERY_CEILING = 2
+REBAC_TRACK_STATUS_QUERY_CEILING = 149
+REBAC_ROUND_QUERY_CEILING = 43
 
 
 def test_round_delete_preview_checks_collected_proposals_without_rechecking_them(
@@ -83,8 +79,7 @@ def _list_statement_categories(queries, model, *, roster=False, projection=None,
         elif sql.startswith("SELECT DISTINCT ") and '"rebac_' in sql.partition(" WHERE ")[0]:
             category = "actor_sets"
         elif sql.startswith("SELECT ") and sql.partition(" FROM ")[0].endswith(' AS "pk"'):
-            # Candidate rows with their verdict: 0.31's batched held and field-visibility reads.
-            category = "held_rows"
+            category = "decided_rows"
         else:
             pytest.fail(f"Unexpected statement in list projection: {statement}")
         categories[category] += 1
@@ -168,8 +163,7 @@ def test_round_lists_use_one_application_select_and_constant_policy_and_roster_r
             assert len(rows) == limit
             categories.append(_list_statement_categories(queries, Round, roster=roster))
         assert categories[0] == categories[1], categories
-        ceiling = REBAC_ROUND_ROSTER_QUERY_CEILING if roster else REBAC_ROUND_QUERY_CEILING
-        assert categories[0].total() - 1 - 2 * roster <= ceiling, categories
+        assert categories[0].total() - 1 - 2 * roster <= REBAC_ROUND_QUERY_CEILING, categories
 
 
 def test_round_and_proposal_read_scopes_compile_to_sql_for_non_admins(campaign: ProposalCampaign) -> None:
@@ -204,7 +198,8 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
         (c.person("responder"), set()),
     ):
         with actor_context(actor):
-            # The compiled scope's actor and arrow facts are predicates of the one row projection.
+            # The compiled scope prepares bounded actor/arrow facts at SQL
+            # execution, then one row projection.
             expression = Task.clarification_waiting_expression(to_subject_ref(actor))
             categories = []
             for limit in (5, 50):
@@ -231,8 +226,9 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
                     for row in waiting[1:]
                 )
             assert categories[0] == categories[1], categories
-            # 0.31 compiles the arrow sources inline (27 -> 4): one witness, the row projection, two bypass audits.
-            assert categories[0].total() <= 4, categories
+            # A record task reaches each declared subject type's direct holders, its removal
+            # authority and its subject task's owner: arrow sources, constant in rows.
+            assert categories[0].total() <= 27, categories
     with actor_context(manager):
         as_actor(round, manager).remove_responder(c.person("third"))
         waiting = as_actor(questions[0], manager).clarification_waiting()
@@ -278,7 +274,7 @@ def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipie
             bypass_audit=2,
             schema_revision=1,
             actor_sets=1,
-            held_rows=1,
+            decided_rows=1,
             constant_decision=1,
         )
     with actor_context(c.person("responder")):
@@ -354,6 +350,5 @@ def test_task_audience_list_projection_has_constant_query_count(campaign: Propos
                 rows = read(limit)
             assert len(rows) == limit
             counts.append(len(queries))
-        # 0.31 compiles each verb's scope inline (61 -> 7): three witnesses, the row query,
-        # two embedded-bypass audits at execution and one batched field-visibility read.
-        assert counts == [7, 7], counts
+        # Constant in rows; a record task's subject types and trash authority add arrow sources to each verb.
+        assert counts == [61, 61], counts

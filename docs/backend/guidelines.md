@@ -574,11 +574,11 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 `REBAC_SUPERUSER_BYPASS=False`, so every actor — superusers included — reaches
 data through REBAC, never a queryset bypass.
 
-- **The local backend is the only REBAC backend.** The library ships no other
-  and Angee selects none: field- and const-backed relations, `authenticated`,
-  and SQL read scopes are evaluated against the Django rows themselves, which no
-  remote tuple store can see. Do not mirror column facts into tuples to make a
-  remote backend viable.
+- **The local backend is the only supported REBAC backend.** Base
+  [autoconfig](../../src/angee/base/autoconfig.py) selects it because field- and
+  const-backed relations, `authenticated`, and SQL read scopes are evaluated
+  against the Django rows themselves, which no remote tuple store can see. Do not
+  mirror column facts into tuples to keep another backend viable.
 - **Permission fragments widen `read_granted`; the owner derives `read`.**
   Consumer addons union their additional read arms into the resource owner's
   `read_granted` permission. The owning definition alone derives `read`, so its
