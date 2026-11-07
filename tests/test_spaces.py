@@ -670,6 +670,8 @@ def test_narrow_space_thread_labels_have_constant_queries(spaces_tables: None) -
           space_threads(limit: $limit, order_by: [{last_message_at: desc}]) { id display_name }
         }
     """
+    # Measured warm: the first read resolves the policy's content types once per process.
+    result_data(execute_schema(schema, query, {"limit": 1}, user=member))
     counts = []
     for size in (1, 25):
         with CaptureQueriesContext(connection) as captured:
