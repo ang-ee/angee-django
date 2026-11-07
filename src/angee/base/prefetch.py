@@ -80,7 +80,8 @@ class ReaderMemo:
     the reader's subject reference; the row's own method answers from it, and any
     other actor asks the owning rule again. Nothing is remembered without an actor,
     under sudo (whose answers bypass the reader's policy) or as ``None``, which
-    :meth:`get` returns for a row with no answer.
+    :meth:`get` returns for a row with no answer; nor is anything answered under
+    sudo, so an elevated read asks the owning rule as it would without a memo.
     """
 
     def __init__(self, attribute: str) -> None:
@@ -94,9 +95,9 @@ class ReaderMemo:
             vars(row).setdefault(self.attribute, {})[key, to_subject_ref(actor)] = value
 
     def get(self, row: Any, key: Hashable, actor: Any) -> Any:
-        """``row``'s answer ``key`` remembered for ``actor``, or ``None``."""
+        """``row``'s answer ``key`` remembered for ``actor``, or ``None`` without one, under sudo or unanswered."""
 
-        if actor is None:
+        if actor is None or is_sudo():
             return None
         return vars(row).get(self.attribute, {}).get((key, to_subject_ref(actor)))
 

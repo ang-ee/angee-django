@@ -36,6 +36,16 @@ def test_a_reader_memo_never_remembers_without_an_actor_under_sudo_or_none() -> 
     assert vars(row) == {}
 
 
+@pytest.mark.django_db
+def test_a_reader_memo_answers_nothing_under_sudo() -> None:
+    # Entering sudo writes REBAC's mandatory bypass audit row.
+    memo, row = ReaderMemo("_test_answers"), SimpleNamespace()
+    memo.remember(row, "graph", ALICE, True)
+    with system_context(reason="test.reader_memo"):
+        assert memo.get(row, "graph", ALICE) is None
+    assert memo.get(row, "graph", ALICE) is True
+
+
 def test_instance_prefetch_owns_the_protocol_tuple_and_the_hint_reader() -> None:
     seen: list[Any] = []
 
