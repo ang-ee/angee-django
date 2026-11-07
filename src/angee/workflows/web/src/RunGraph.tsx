@@ -56,7 +56,7 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
   const errorPanel = read.error ? <ErrorBanner description={errorMessage(read.error, t("run.graphLoadFailed"))}
     actions={<Button onClick={() => void read.refetch()}>{t("run.graphReload")}</Button>} /> : null;
   if (!graph || !projected) return errorPanel ?? (read.data && !run
-    ? <InlineEmpty label={t("run.graphUnavailable")} /> : <LoadingPanel message={t("run.graphLoading")} />);
+    ? <InlineEmpty label={t("run.graphUnavailable")} /> : <LoadingPanel loadingLabel={t("run.graphLoading")} />);
   return <div data-testid="run-graph-canvas" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     {errorPanel}
     <GraphView nodes={projected.nodes} edges={projected.edges} nodeStyles={projected.nodeStyles}

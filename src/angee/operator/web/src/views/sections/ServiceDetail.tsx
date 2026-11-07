@@ -23,7 +23,7 @@ export function ServiceDetail(): ReactElement {
     <DaemonRecord
       record={service}
       loading={result.fetching && !snapshot}
-      loadingMessage={t("services.loading")}
+      loadingLabel={t("services.loading")}
       notFound={{ icon: "server", title: t("services.detail.notFound"), description: name }}
       eyebrow={t("services.record")}
       title={service?.name}

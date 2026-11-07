@@ -56,6 +56,6 @@ export default function HeicPreview({ file }: PreviewProviderProps): ReactElemen
   if (state.error) {
     return <ErrorBanner title={t("preview.loadError")} description={errorMessage(state.error, t("preview.loadError"))} />;
   }
-  if (!state.url) return <LoadingPanel message={t("preview.decoding")} />;
+  if (!state.url) return <LoadingPanel loadingLabel={t("preview.decoding")} />;
   return <ImagePreviewSurface src={state.url} alt={file.name} />;
 }

@@ -78,7 +78,7 @@ class ClarificationCase(TransactionTestCase):
             return self.as_user(self.round, self.asker).ask("Question", "Question details", **kwargs)
 
     def execute(self, document, variables, user):
-        request = graphql_request(user, "/graphql/")
+        request = graphql_request(user)
         with actor_context(user):
             return GraphQLSchemas.from_discovery().build("console").execute_sync(
                 document, variable_values=variables, context_value=SimpleNamespace(request=request)

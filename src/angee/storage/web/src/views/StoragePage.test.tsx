@@ -134,8 +134,8 @@ vi.mock("@angee/ui", async (importOriginal) => {
           return message;
         }, [messages], ), EmptyState: ({ title }: { title: string }) => (
       <section data-testid="empty-state">{title}</section>
-    ), Glyph: () => <span />, LoadingPanel: ({ message }: { message: string }) => (
-      <section data-testid="loading">{message}</section>
+    ), Glyph: () => <span />, LoadingPanel: ({ loadingLabel }: { loadingLabel: string }) => (
+      <section data-testid="loading">{loadingLabel}</section>
     ), PreviewPane: ({ file }: { file: { name: string } }) => (
       <section data-testid="preview-pane">{file.name}</section>
     ), useBreadcrumbLeafLabel: sdkMocks.useBreadcrumbLeafLabel, useConfirm: () => confirmAlways, };

@@ -42,6 +42,6 @@ export function PartyStatementRedirect(): React.ReactElement {
   if (query.error) {
     return <ErrorBanner description={t("partyRedirect.unavailable")} />;
   }
-  if (id && query.isFetching) return <LoadingPanel message={t("partyRedirect.loading")} />;
+  if (id && query.isFetching) return <LoadingPanel loadingLabel={t("partyRedirect.loading")} />;
   return <EmptyState icon="handle" title={t("partyRedirect.unavailable")} />;
 }

@@ -9,8 +9,11 @@ export interface BusyRun {
   busy: boolean;
   /** Run an async action, tracking `busy` and firing `onChanged` on success; a failure rejects. */
   run: <T>(action: () => Promise<T>) => Promise<T>;
-  /** Run an action whose caller acts on its resolved value: a thrown failure toasts once and resolves `fallback`. */
-  settle: <T>(action: () => Promise<T>, fallback: T) => Promise<T>;
+  /**
+   * Run an action whose caller acts on its resolved value: a thrown failure toasts once
+   * (its message, else `failureTitle`, else the generic error) and resolves `fallback`.
+   */
+  settle: <T>(action: () => Promise<T>, fallback: T, failureTitle?: string) => Promise<T>;
 }
 
 /**
@@ -39,8 +42,8 @@ export function useBusyRun(onChanged?: () => void): BusyRun {
     [onChanged],
   );
   const settle = useCallback(
-    <T>(action: () => Promise<T>, fallback: T): Promise<T> => run(action).catch((error: unknown) => {
-      toast.danger({ title: errorMessage(error, t("error.generic")) });
+    <T>(action: () => Promise<T>, fallback: T, failureTitle?: string): Promise<T> => run(action).catch((error: unknown) => {
+      toast.danger({ title: errorMessage(error, failureTitle ?? t("error.generic")) });
       return fallback;
     }),
     [run, t, toast],

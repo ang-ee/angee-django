@@ -28,6 +28,7 @@ from strawberry import auto
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
+from angee.base.models.trash import TrashQuerySet
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -505,9 +506,6 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     def needaction(self, info: strawberry.Info) -> bool:
         """Return whether this message sits past the current user's read receipt."""
 
-        resolved = getattr(self, "_current_user_needaction", None)
-        if resolved is not None:
-            return bool(resolved)
         return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
 
     @strawberry_django.field(
@@ -613,9 +611,6 @@ class RecordMessageType(TrashedRefMixin, AngeeNode):
     def needaction(self, info: strawberry.Info) -> bool:
         """Return whether this message sits past the current user's read receipt."""
 
-        resolved = getattr(self, "_current_user_needaction", None)
-        if resolved is not None:
-            return bool(resolved)
         return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
 
     @strawberry_django.field(
@@ -815,6 +810,13 @@ class NotificationMessagePointerType:
         )
 
 
+def _notification_message_pointers(info: strawberry.Info) -> Any:
+    """Read the listed notifications' message context once for the request's reader."""
+
+    del info
+    return ThreadNotification.message_pointers_prefetch(current_actor())
+
+
 @strawberry_django.type(ThreadNotification)
 class ThreadNotificationType(AngeeNode):
     """GraphQL projection of a recipient's delivery and per-item acknowledgement."""
@@ -823,14 +825,13 @@ class ThreadNotificationType(AngeeNode):
     attachment: "ThreadAttachmentType | None" = actor_scoped_to_one("attachment")
     follower: "ThreadFollowerType | None" = actor_scoped_to_one("follower")
 
-    @strawberry_django.field(only=["message_id", "attachment_id", "thread_id", "user_id"])
+    @strawberry_django.field(
+        only=["message_id", "attachment_id", "thread_id", "user_id"], prefetch_related=[_notification_message_pointers],
+    )
     def message(self) -> NotificationMessagePointerType | None:
         """Project only recipient context authorized by the attached record's read owner."""
 
-        row = cast(Any, self)
-        if not hasattr(row, "_inbox_message_pointer"):
-            ThreadNotification.objects.prime_message_pointers([row], current_actor())
-        return cast(NotificationMessagePointerType | None, row._inbox_message_pointer)
+        return cast(NotificationMessagePointerType | None, cast(Any, self).message_pointer(current_actor()))
 
     user: "UserType | None" = actor_scoped_to_one("user")
     notification_type: auto
@@ -1984,9 +1985,7 @@ def _notification_inbox_queryset(info: strawberry.Info) -> Any:
 
     del info
     return (
-        ThreadNotification.objects.with_action("read_inbox")
-        .exclude(message__is_trashed=True)
-        .with_message_pointers()
+        ThreadNotification.objects.with_action("read_inbox").filter(TrashQuerySet.untrashed_q("message__"))
     )
 
 
@@ -2308,7 +2307,7 @@ def _record_thread_payload(
     attachment_count = (
         apps.get_model("messaging", "Part")
         .objects.using(thread._state.db)
-        .filter(message__thread_id__in=thread.member_threads().values("pk"), message__is_trashed=False)
+        .filter(TrashQuerySet.untrashed_q("message__"), message__thread_id__in=thread.member_threads().values("pk"))
         .attachments()
         .count()
         if thread is not None
@@ -2350,15 +2349,9 @@ def _record_thread_payload(
         # Prime both through their owner instead of re-walking each message's record.
         _record_message_access_cache(info)[messages[0].thread_id] = record_access
     if messages and thread is not None and user is not None:
-        # One receipt-anchored scan primes the page's needaction flags — the same
+        # One receipt-anchored scan answers the page's needaction flags — the same
         # unread set the badge counts, restricted to the rows on this page.
-        needaction_message_ids = set(
-            ThreadFollower.objects.unread_messages(thread, user=user)
-            .filter(pk__in=[message.pk for message in messages])
-            .values_list("pk", flat=True)
-        )
-        for message in messages:
-            setattr(message, "_current_user_needaction", message.pk in needaction_message_ids)
+        ThreadFollower.objects.needaction_for_messages(thread, messages, user=user)
     removed_message_count = None
     if record_access[1]:
         removed_message_count = (

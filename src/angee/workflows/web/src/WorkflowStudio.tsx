@@ -43,7 +43,7 @@ export function WorkflowStudio({ recordId, active = true }: { recordId: string; 
   if (!read.data) return read.error
     ? <ErrorBanner description={errorMessage(read.error, t("studio.loadFailed"))}
         actions={<Button onClick={() => void read.refetch()}>{t("studio.reload")}</Button>} />
-    : <LoadingPanel message={t("studio.loading")} />;
+    : <LoadingPanel loadingLabel={t("studio.loading")} />;
   const record = read.data.workflow_by_pk;
   if (record?.draft == null || record.draft_revision == null) return <ErrorBanner description={t("studio.unavailable")} />;
   return <StudioSession key={recordId} recordId={recordId} initial={read.data}

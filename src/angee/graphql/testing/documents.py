@@ -8,17 +8,25 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
 
+from django.contrib.sessions.middleware import SessionMiddleware
 from django.db import connections
+from django.http import HttpResponse
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
 
-def graphql_request(user: Any, path: str = "/graphql/public/") -> Any:
-    """Return a bare POST request to ``path`` carrying ``user``."""
+def graphql_request(user: Any, *, session: bool = False) -> Any:
+    """Return a bare GraphQL POST request carrying ``user``; no resolver reads its path.
 
-    request = RequestFactory().post(path)
+    ``session`` binds the configured native Django session backend, as login and
+    logout verbs need.
+    """
+
+    request = RequestFactory().post("/graphql/public/")
     request.user = user
+    if session:
+        SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
     return request
 
 
@@ -29,17 +37,19 @@ def execute_schema(
     *,
     user: Any | None = None,
     request: Any | None = None,
+    session: bool = False,
 ) -> Any:
     """Execute a GraphQL operation as the request's user.
 
     The actor context wraps execution as ``rebac.middleware.ActorMiddleware``
-    does for a served request.
+    does for a served request; without a ``request``, ``graphql_request`` builds
+    one for ``user``, with a session when ``session`` asks for it.
     """
 
     # Django's auth models need the app registry; this module imports before it.
     from django.contrib.auth.models import AnonymousUser
 
-    request = request or graphql_request(user or AnonymousUser())
+    request = request or graphql_request(user or AnonymousUser(), session=session)
     actor = getattr(request, "user", AnonymousUser())
     with actor_context(actor):
         return schema.execute_sync(

@@ -74,7 +74,8 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, require_rebac_queryset
+from angee.base.prefetch import prefetched
 from angee.base.refs import RecordRef, generic_pointer_model
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
@@ -86,6 +87,7 @@ from angee.messaging.managers import (
     FragmentManager,
     MessageEdgeManager,
     MessageManager,
+    MessagePointers,
     MessageQuerySet,
     MessageStarManager,
     PartManager,
@@ -2500,6 +2502,10 @@ class Message(
         return thread is None or not thread.is_record_attached()
 
 
+_MESSAGE_POINTER = "_inbox_message_pointer"
+"""Where a notification's narrow message context lands, through ``ThreadNotification.message_pointers_prefetch``."""
+
+
 class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
     """One recipient's inbox item and its acknowledgement.
 
@@ -2553,6 +2559,7 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = ThreadNotificationManager()
+    _message_pointers = MessagePointers()
 
     class Meta:
         """Django model options for thread notifications."""
@@ -2572,6 +2579,19 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
         """Return a readable notification label."""
 
         return f"{self.user_id} notified for {self.message_id}"
+
+    @classmethod
+    def message_pointers_prefetch(cls, actor: Any) -> models.Prefetch:
+        """Read a notification list's narrow message context for ``actor`` once, as a native prefetch hint."""
+
+        return models.Prefetch(
+            "_message_pointers", queryset=require_rebac_queryset(cls, actor=actor), to_attr=_MESSAGE_POINTER,
+        )
+
+    def message_pointer(self, actor: Any) -> Any:
+        """This notification's narrow message context for ``actor``, from its list's batch when one read it."""
+
+        return prefetched(self, _MESSAGE_POINTER, lambda: type(self).message_pointers_prefetch(actor))
 
 
 class Fragment(AuditMixin, AngeeDataModel, concrete=True):

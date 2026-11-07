@@ -14,14 +14,16 @@ from typing import Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.apps import apps
+from django.core.exceptions import BadRequest
 from django.db import connections
 from django.db.models import Count, Exists, OuterRef, Q, Subquery
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
-from angee.base.pagination import MAX_PAGE_SIZE
+from angee.base.pagination import valid_page_size
 from angee.base.permissions import actor_user_id, contextual_action_holds
+from angee.messaging.managers import MessageQuerySet
 
 
 class InboxCoverage(BaseModel):
@@ -109,20 +111,16 @@ class InboxPage:
     messages: Any = None
 
     @staticmethod
-    def valid_size(size: int) -> int:
-        """Return ``size`` when it is a page size records and group headers admit."""
-
-        if not 1 <= size <= MAX_PAGE_SIZE:
-            raise ValueError(f"Page size must be between 1 and {MAX_PAGE_SIZE}.")
-        return size
-
-    @staticmethod
     def window(page: int, size: int) -> slice:
-        """Validate the bounded offset page shared by records and group headers."""
+        """The bounded offset page shared by records and group headers.
+
+        A page before the first, or a size outside the page bound (``valid_page_size``),
+        is the client's error: clamping it would move every later page.
+        """
 
         if page < 1:
-            raise ValueError("Page must be positive.")
-        return slice((page - 1) * InboxPage.valid_size(size), page * size)
+            raise BadRequest("Page must be positive.")
+        return slice((page - 1) * valid_page_size(size), page * size)
 
 
 @dataclass(frozen=True)
@@ -149,15 +147,16 @@ class MessageInbox:
     """Query owner for personal inbox reads, composed from a MessageQuerySet.
 
     The collection supplies the actor. :meth:`eligible` owns the base population,
-    for messages and for their parts, read under ``read_inbox``; every count, group,
-    search and page derives from it, and a result population narrows it
+    for messages and for their parts; messages read under the action
+    ``MessageQuerySet.inbox`` selects. Every count, group, search and page derives
+    from it, and a result population narrows it
     (:class:`~angee.messaging.inbox_results.InboxResults`) and stays distinct.
     """
 
     def __init__(self, queryset: Any) -> None:
         self.actor = queryset.actor() or current_actor()
         self.user_id = actor_user_id(self.actor)
-        self.messages = queryset.with_action("read_inbox").filter(self.eligible()).for_feed(all_copies=True)
+        self.messages = queryset.inbox().filter(self.listed()).for_feed(all_copies=True)
         self.handles = self.collection("parties", "Handle").with_sender_name()
         self.parties = self.collection("parties", "Party")
         self.threads = self.collection("messaging", "Thread").inbox()
@@ -174,12 +173,13 @@ class MessageInbox:
         read authorizes the message. The message queryset owns each predicate.
         """
 
-        messages = apps.get_model("messaging", "Message").objects
-        return (
-            messages.inbox_q(through)
-            & messages.published_q(through)
-            & ~Q(**{f"{through}thread__modality": "public_thread"})
-        )
+        return MessageQuerySet.inbox_q(through) & MessageInbox.listed(through)
+
+    @staticmethod
+    def listed(through: str = "") -> Q:
+        """What the inbox lists of its population: published messages outside public threads."""
+
+        return MessageQuerySet.published_q(through) & ~Q(**{f"{through}thread__modality": "public_thread"})
 
     def collection(self, app: str, model: str, *, action: str | None = None) -> Any:
         """Propagate the message collection actor to every joined read owner."""
@@ -197,8 +197,9 @@ class MessageInbox:
         joins the message without scoping it again. A narrower population (a result
         set whose canonical-copy and sender rules read the actor's own messages)
         still carries its own message scope. While the effective policy leaves that
-        implication unproved (an exclusion or override on the part's read), parts
-        keep their generic read inside the separately scoped eligible messages.
+        implication unproved (an exclusion or override on the part's read, or one on
+        the message or thread reads its arrow reaches), parts keep their generic read
+        inside the separately scoped eligible messages.
         """
 
         contextual = contextual_action_holds(apps.get_model("messaging", "Part"), "read_inbox")
@@ -473,9 +474,7 @@ class MessageInbox:
         rows = self.matching(all_uses, InboxSearch(text=text, quoted=True))
         # A lazy page lets the GraphQL projection load the selected relations once.
         return InboxPage(
-            rows.with_title_text().order_by("_order_at" if oldest else "-_order_at", "pk")[
-                InboxPage.window(page, size)
-            ],
+            rows.with_title_text().chronological(oldest_first=oldest)[InboxPage.window(page, size)],
             rows.count(),
             all_uses.count(),
         )

@@ -20,7 +20,7 @@ class RuleStageTests(WorkCase):
 
     def test_generated_update_refuses_rule_stage(self):
         task = self.task()
-        request = graphql_request(self.moderator, "/graphql/")
+        request = graphql_request(self.moderator)
         with actor_context(self.moderator):
             result = (
                 GraphQLSchemas.from_discovery()

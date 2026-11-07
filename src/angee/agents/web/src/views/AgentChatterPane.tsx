@@ -78,7 +78,7 @@ export function AgentChatterPane({
   const { openedIds } = useOpenedAgents({ selectedId });
 
   if (loading) {
-    return <LoadingPanel message={t("chat.resolving")} />;
+    return <LoadingPanel loadingLabel={t("chat.resolving")} />;
   }
   if (session === null) {
     return (
@@ -104,9 +104,9 @@ export function AgentChatterPane({
         const rosterAgent = agents.find((agent) => agent.id === id);
         const runtimeClass = rosterAgent?.runtime_class
           ?? (id === resolved.agent_id ? resolved.runtime_class : undefined);
-        if (runtimeClass === undefined) return <LoadingPanel message={t("chat.resolving")} />;
+        if (runtimeClass === undefined) return <LoadingPanel loadingLabel={t("chat.resolving")} />;
         return (
-          <LazyBoundary pending={<LoadingPanel message={t("chat.resolving")} />}>
+          <LazyBoundary pending={<LoadingPanel loadingLabel={t("chat.resolving")} />}>
             <AgentChat
               agentId={id}
               view={liveView}

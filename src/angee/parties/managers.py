@@ -41,6 +41,7 @@ from angee.base.hooks import resolve_hooks
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.trash import ArchiveQuerySet
+from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
@@ -1768,7 +1769,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def search_display_name(self, query: str, *, limit: int = 20) -> list[Any]:
         """Return a bounded actor-visible people list filtered by display name."""
 
-        bounded = max(1, min(int(limit), 100))
+        bounded = clamp_page_size(limit)
         return list(
             self.canonical()
             .with_circle_names()

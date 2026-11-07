@@ -218,6 +218,8 @@ jobs:
             tests/test_knowledge_clone_concurrency_campaign.py tests/test_knowledge_search.py \
             tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_secondary_locks_and_rollback \
             tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
+            tests/test_messaging_inbox_read.py tests/test_inbox_explorer.py tests/test_inbox_part_reads.py \
+            tests/test_group_rows.py \
             tests/test_optimistic_lock.py \
             tests/test_ownership_seams.py tests/test_proposals_campaign_queries.py \
             tests/test_proposals_concurrency.py tests/test_sequence.py \

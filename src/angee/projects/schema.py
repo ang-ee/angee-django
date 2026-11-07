@@ -354,11 +354,14 @@ _TASK_ACTION_ANNOTATIONS = {
 
 
 
+_SUBJECT = "_projects_subject"
+
+
 def _subject_targets(info: strawberry.Info) -> Prefetch:
     """Read the listed tasks' subjects once per subject type, through the reader's own scope."""
 
     del info
-    return Task.record_targets_prefetch(current_actor(), to_attr="_projects_subject")
+    return Task.record_targets_prefetch(current_actor(), to_attr=_SUBJECT)
 
 def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
     """The row's verb annotations: optimized on reads, read once for a mutation payload."""
@@ -393,7 +396,7 @@ class TaskProjectionMixin:
         reference = row.record_ref
         if not reference.public_id:
             return None
-        target = prefetched(row, _subject_targets(info))
+        target = prefetched(row, _SUBJECT, lambda: _subject_targets(info))
         return RecordPointerType.from_reference(reference, label=str(target) if target is not None else "")
 
     @strawberry_django.field(only=Task.visibility_audience_fields())

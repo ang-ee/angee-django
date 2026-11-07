@@ -23,6 +23,7 @@ from strawberry_django.queryset import run_type_get_queryset
 from angee.base.implementations import resolve_all_impl_classes
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for
+from angee.base.permissions import require_rebac_queryset
 from angee.base.prefetch import prefetched
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import (
@@ -32,7 +33,12 @@ from angee.graphql.actions import (
     authorized_permission_target,
 )
 from angee.graphql.capabilities import permission_expression, permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
+from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+    optimize_selection,
+)
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
@@ -48,6 +54,7 @@ from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.provenance.evidence import readable_evidence
 from angee.workflows.definition import Body, Definition, Issue
+from angee.workflows.managers import StepRunQuerySet
 from angee.workflows.models import RunGraphNode
 from angee.workflows.states import RunOrigin, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
@@ -73,13 +80,16 @@ _STEP_POLICY_VERSION = WorkflowRun.policy_version_prefetch("run__")
 _RUN_LABEL = {"_workflow_name": F("version__workflow__name")}
 
 
+_GRAPH_STEP_RUNS = "_graph_step_runs"
+
+
 def _graph_step_runs(info: strawberry.Info) -> Prefetch:
     """Read the listed runs' declared node rows once, with what their selected step fields need."""
     actor = get_current_user(info)
-    rows = StepRun.objects.none() if actor is None else StepRun.objects.with_actor(actor).nodes()
+    rows = cast("StepRunQuerySet[Any]", require_rebac_queryset(StepRun, actor=actor)).nodes()
     return Prefetch(
         "step_runs", queryset=optimize(rows, info, store=OptimizerStore.with_hints(only=["run_id"])),
-        to_attr="_graph_step_runs",
+        to_attr=_GRAPH_STEP_RUNS,
     )
 
 
@@ -194,7 +204,8 @@ class WorkflowRunType(RecordReferenceNode):
         A run list reads every run's rows once, with what the selected step fields
         need; a run read another way reads its own rows the same way.
         """
-        return cast(list[StepRunType], prefetched(cast(Any, self), _graph_step_runs(info)))
+        rows = prefetched(cast(Any, self), _GRAPH_STEP_RUNS, lambda: _graph_step_runs(info))
+        return cast(list[StepRunType], rows)
 
     @strawberry_django.field(only=["status", "stopped_at"], prefetch_related=[_run_cancel])
     def can_cancel(self, info: strawberry.Info) -> bool:
@@ -943,8 +954,8 @@ class _TimelineRuns:
         """The selection's runs oldest first; the native optimizer loads the selected fields once."""
         if self.rows is None:
             rows = WorkflowRun.objects.with_actor(get_current_user(info)).filter(pk__in=self.run_ids)
-            optimized = run_type_get_queryset(rows.order_by("created_at", "pk"), WorkflowRunType, info)
-            self.rows = {run.pk: run for run in optimized}
+            selected = run_type_get_queryset(rows.order_by("created_at", "pk"), WorkflowRunType, info)
+            self.rows = {run.pk: run for run in optimize_selection(selected, info)}
         return self.rows
 
 

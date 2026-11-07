@@ -169,7 +169,7 @@ function LocationList({
 }): React.ReactElement {
   const t = useStorageIntegrateT();
   if (fetching && entries.length === 0) {
-    return <LoadingPanel density="inline" message={t("mount.browse.loading")} />;
+    return <LoadingPanel density="inline" loadingLabel={t("mount.browse.loading")} />;
   }
   if (entries.length === 0) {
     return <InlineEmpty icon="folder" label={t("mount.browse.empty")} />;

@@ -7,7 +7,7 @@ readers keep reading its chatter through it.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,18 +17,19 @@ import pytest
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.checks.registry import registry
-from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import MissingActorError, actor_context, system_context
 from rebac.evaluator import evaluator_scope
+from rebac.models import SchemaOverride, SchemaPermission
 from rebac.schema import PermBinOp, PermRef, permission_sources
 
 from angee.base.build import extension_source_map, merged_schemas
+from angee.base.permissions import contextual_action_holds
 from angee.base.testing.permissions import installed_field_owners
 from angee.messaging.checks import check_derived_reads
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
-from angee.messaging.testing.models import Channel, Message, Thread, ThreadAttachment
+from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
 from angee.projects.testing.models import Project, ProjectBinding, Task
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import Page, Vault, create_platform_admin, make_integration
@@ -139,10 +140,14 @@ def test_check_refuses_fragment_arms_on_derived_reads(tmp_path: Path, fragment: 
         assert "inbox_contrib" in error.msg
 
 
-def test_a_missing_messaging_declaration_is_a_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("angee.messaging.checks.declared_schema_path", lambda config: None)
-    with pytest.raises(ImproperlyConfigured, match="angee.messaging declares no permissions schema"):
-        check_derived_reads()
+def test_a_missing_messaging_declaration_is_a_check_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sealed reads are never compared against an empty declaration; the check reports, never raises."""
+
+    monkeypatch.setattr("angee.base.checks.declared_schema_path", lambda config: None)
+    [error] = check_derived_reads()
+    assert error.id == "messaging.E003"
+    assert "messaging declares no permissions schema" in error.msg
+    assert "messaging/thread#read_inbox" in error.msg
 
 
 def test_installed_composition_keeps_the_derived_reads() -> None:
@@ -299,6 +304,45 @@ def test_inbox_reads_observe_grant_changes_on_the_next_statement(campaign_access
     assert not Message.objects.with_actor(world.owner).inbox().filter(pk=world.trashed.pk).exists()
     assert Message.objects.with_actor(world.other_owner).inbox().filter(pk=world.trashed.pk).exists()
     _assert_inbox_equals_read(world)
+
+
+@pytest.fixture
+def tightened_thread_read(campaign_access: Any) -> Iterator[SchemaOverride]:
+    """A live override narrowing the generic thread read to thread owners; it does not reach ``read_inbox``."""
+
+    read = SchemaPermission.objects.get(definition__resource_type="messaging/thread", name="read")
+    override = SchemaOverride.objects.create(
+        kind=SchemaOverride.KIND_TIGHTEN, target=read, expression="owner", reason="test: narrow generic thread reads",
+    )
+    yield override
+    SchemaOverride.objects.filter(pk=override.pk).delete()
+
+
+def test_an_override_on_a_derived_read_keeps_the_inbox_on_read(
+    campaign_user: Any, tightened_thread_read: SchemaOverride,
+) -> None:
+    """The inbox follows an override on thread ``read``: it reads ``read`` until the override moves to ``read_granted``.
+
+    Without the fallback, ``read_inbox`` would still admit the channel thread the override hides.
+    """
+
+    world = _inbox_world(campaign_user)
+    # The thread's proof fails, and with it every read whose arrow reaches the thread's inbox read.
+    for model in (Thread, Message, Part):
+        assert not contextual_action_holds(model, "read_inbox"), model
+    with system_context(reason="tests.messaging.inbox_read.population"):
+        population = {Thread: _pks(Thread.objects.inbox()), Message: _pks(Message.objects.inbox())}
+    for name in _ACTORS:
+        actor = getattr(world, name)
+        for model, rows in population.items():
+            readable = model.objects.with_actor(actor).with_action("read").filter(pk__in=rows)
+            assert _pks(model.objects.with_actor(actor).inbox()) == _pks(readable), (name, model)
+    # The channel owner's channel thread left its generic read, so it leaves the inbox too.
+    assert _pks(Thread.objects.with_actor(world.owner).inbox()) == {world.owned.pk}
+    assert world.thread_a.with_actor(world.owner).has_access("read_inbox")
+    tightened_thread_read.delete()
+    assert contextual_action_holds(Thread, "read_inbox")
+    assert _pks(Thread.objects.with_actor(world.owner).inbox()) == {world.thread_a.pk, world.owned.pk}
 
 
 def test_inbox_reads_follow_the_pinned_actor_and_fail_closed(campaign_access: Any, campaign_user: Any) -> None:

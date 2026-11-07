@@ -19,7 +19,7 @@ from typing import Any, cast
 
 import strawberry
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import BadRequest, ValidationError
 from django.db import models
 from rebac import SubjectRef, current_actor
 from rebac.field_visibility import redacted_fields
@@ -30,6 +30,7 @@ from strawberry.scalars import JSON
 from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
+from angee.base.pagination import valid_page_size
 from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
@@ -57,7 +58,6 @@ from angee.provenance.statements import (
 Changeset = changeset_model()
 
 HISTORY_LIMIT_DEFAULT = 25
-HISTORY_LIMIT_MAX = 100
 
 # The nested choices keep their owner's names on the wire; a bare ``Action`` would collide.
 strawberry.enum(cast(Any, ChangesetContract.Action), name="ChangesetAction")
@@ -212,10 +212,10 @@ def provenance_model(label: str) -> type[models.Model]:
     return model
 
 
-def _statement_origin(statement: Statement) -> str:
+def _statement_origin(statement: Statement, actor: Any) -> str:
     """Name a readable asserting principal, otherwise disclose only its kind."""
 
-    source = statement.readable_asserting_source
+    source = statement.readable_asserting_source(actor)
     if source is not None:
         return str(public_subject_ref(source))
     return str(SourceKind(statement.source_kind).label)
@@ -234,7 +234,7 @@ def field_provenance(record: StatementsMixin, actor: Any) -> list[FieldProvenanc
                 FieldProvenanceType(
                     field=name,
                     authority=cast(Any, row.fact_authority),
-                    origin=_statement_origin(row),
+                    origin=_statement_origin(row, actor),
                     statement_model=statement_model._meta.label,
                     statement_id=PublicID(public_id_of(row)),
                     changeset_id=PublicID(public_id_for(Changeset, row.changeset_id))
@@ -303,13 +303,13 @@ def _history_reference(record: models.Model, *, pointer: str = "", label: str | 
     )
 
 
-def _statement_source_reference(version: Any) -> HistoryReferenceType | None:
+def _statement_source_reference(version: Any, actor: Any) -> HistoryReferenceType | None:
     """Prefer a readable retained link; otherwise name the readable principal."""
 
     link = getattr(version, "_readable_statement_link", None)
     if link is not None:
         return _history_reference(link, label=link.statement_source_label)
-    source = getattr(version, "_readable_asserting_source", None)
+    source = version.readable_asserting_record(actor)
     return _history_reference(source) if source is not None else None
 
 
@@ -577,10 +577,10 @@ class RecordHistory:
                     confidence=version.confidence,
                     history_type=cast(Any, HistoryType(version.history_type)),
                     values=cast(JSON, values),
-                    source=_statement_source_reference(version),
+                    source=_statement_source_reference(version, self.actor),
                     evidence=[
                         _history_reference(record, pointer=ref.pointer)
-                        for ref, record in getattr(version, "_readable_evidence_records", ())
+                        for ref, record in version.readable_evidence_records(self.actor)
                     ],
                 )
             )
@@ -653,8 +653,9 @@ class RecordHistory:
 
 
 def _validate_page(limit: int, offset: int) -> None:
-    if not 1 <= limit <= HISTORY_LIMIT_MAX or offset < 0:
-        raise ValidationError(f"History requires a limit from 1 to {HISTORY_LIMIT_MAX} and a nonnegative offset.")
+    valid_page_size(limit)
+    if offset < 0:
+        raise BadRequest("History requires a nonnegative offset.")
 
 
 @strawberry.type

@@ -235,9 +235,10 @@ Use these owners instead of maintaining another contract in an addon:
   read per referenced type, a reader's facts for a run list) is an
   [`InstancePrefetch`](../../src/angee/base/prefetch.py) hinted through a native
   `Prefetch(..., to_attr=...)`; a row's per-reader answers live in a
-  `ReaderMemo`, never seeded without an actor or under sudo. A resolver reads
-  the hint's attribute through `prefetched(row, hint)`, so a row loaded another
-  way reads its own value through the same prefetch.
+  `ReaderMemo`, never remembered without an actor or under sudo. A resolver reads
+  the hint's attribute through `prefetched(row, to_attr, build)`, which builds the
+  hint only for a row loaded another way, so it reads its own value through the
+  same prefetch; each hint factory declares its `to_attr` once.
 - Model-backed `hasura_model_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
   that Angee exposes but does not own, pass an explicit sqid public identity
@@ -594,8 +595,11 @@ data through REBAC, never a queryset bypass.
   [`messaging/thread`](../../src/angee/messaging/permissions.zed) takes grants for
   any conversation in `read_granted` and a record's read of its own chatter in
   `chatter_read`, and its inbox checks `read_inbox`, which skips the chatter arms.
-  `messaging.E003` ([`check_derived_reads`](../../src/angee/messaging/checks.py))
-  refuses a fragment arm on a thread or message `read` or `read_inbox`.
+  An owner seals the permissions it derives this way through the base
+  [sealed-permission check](../../src/angee/base/checks.py)
+  (`check_sealed_permissions`), which refuses a fragment that changes one:
+  messaging's [`check_derived_reads`](../../src/angee/messaging/checks.py)
+  (`messaging.E003`) seals the thread and message `read` and `read_inbox`.
 - **One user identity for authorization and attribution.** Every person and
   agent acts as its own `AUTH_USER_MODEL` row. Workflows also act as their linked
   `kind=service` user for trigger admission and triggered runs; source-declared
@@ -749,14 +753,16 @@ data through REBAC, never a queryset bypass.
   arms from them (`scope->viewer` for read, `scope->editor` for write).
 - **A child listed within readable parents authorizes each parent once.** Declare
   a contextual action that is exactly one arrow to the parent action the listing
-  reads (`messaging/part#read_inbox = message->read`), keep direct child grants on
-  `read`, and select the parent population with relation-path predicates from its
-  owner (`MessageInbox.eligible("message__")`), never a second, separately scoped
-  parent subquery. [`contextual_action_holds`](../../src/angee/base/permissions.py)
-  admits the action only while the effective policy proves it; otherwise the
-  caller keeps `read` inside the scoped parent population. A result population
-  whose own rules read the actor's rows (canonical copies, sender scope) stays a
-  scoped subquery.
+  reads (`messaging/part#read_inbox = message->read_inbox`), keep direct child
+  grants on `read`, and select the parent population with relation-path predicates
+  from its owner (`MessageInbox.eligible("message__")`), never a second, separately
+  scoped parent subquery. [`contextual_action_holds`](../../src/angee/base/permissions.py)
+  admits the action only while the effective policy proves it, for the child and
+  for every parent purpose read its arrow reaches (`messaging/message#read_inbox`,
+  then `messaging/thread#read_inbox`, each stated as declared); otherwise the
+  caller keeps `read` inside the scoped parent population, and the inbox reads
+  threads and messages under `read`. A result population whose own rules read the
+  actor's rows (canonical copies, sender scope) stays a scoped subquery.
 - A `read__<field>`-gated field is never filterable, sortable, groupable, or aggregatable.
   Filter or order on its gate's terms instead: a named filter expression or
   queryset alias built with REBAC's `queryset.readable(field)` is NULL wherever
@@ -1468,9 +1474,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
   checks the real actor's `view_as` permission and the target's eligibility;
   [ViewAs](../../src/angee/graphql/view_as.py) binds both `request.user` and
   the ambient actor to that target. `auth/user#view_as` is IAM's platform-admin
-  arm alone: the `angee.iam.E001` [system check](../../src/angee/iam/checks.py)
-  refuses a permission fragment that extends it, so an addon grants its display
-  need through its own record's read. Mutations and HTTP subscriptions fail with
+  arm alone: IAM seals it ([`angee.iam.E001`](../../src/angee/iam/checks.py), a
+  sealed-permission check), refusing a permission fragment that extends it, so
+  an addon grants its display need through its own record's read. Mutations and HTTP subscriptions fail with
   `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
   [GraphQL WebSocket consumer](../../src/angee/graphql/consumers.py) retains its
   handshake actor and does not support this header. [MCP execution](../../src/angee/mcp/graphql.py)

@@ -17,6 +17,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -26,11 +27,9 @@ from django.apps import apps
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, transaction
-from django.http import HttpResponse
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context, system_context, to_object_ref, to_subject_ref
@@ -75,6 +74,8 @@ integrate_connect = importlib.import_module("angee.integrate.connect")
 # The connection/login surface now spans three addons; tests compose them the way
 # the runtime does (one merged schema per bucket).
 _SCHEMA_SOURCES = (iam_schema.schemas, integrate_schema.schemas, oidc_schema.schemas)
+# IAM's verbs read and rotate the request session, so every operation here carries one.
+_execute = partial(execute_schema, session=True)
 
 
 def test_available_connections_returns_only_enabled_oauth_clients_without_secret_fields(
@@ -237,7 +238,7 @@ def test_login_complete_provisions_and_logs_in(
         email="oidc@example.com",
     )
     public_schema = _schema("public")
-    request = _request(AnonymousUser())
+    request = graphql_request(AnonymousUser(), session=True)
 
     start = _data(
         _execute(
@@ -324,7 +325,7 @@ def test_login_complete_returns_oidc_flow_error_payload(
 
     oauth_client = _oauth_client("oidc-error", is_oidc=True, is_enabled=True)
     public_schema = _schema("public")
-    request = _request(AnonymousUser())
+    request = graphql_request(AnonymousUser(), session=True)
     start = _data(
         _execute(
             public_schema,
@@ -412,7 +413,7 @@ def test_login_upgrades_a_stale_password_hash_for_valid_credentials(
             _schema("public"),
             _LOGIN_MUTATION,
             {"username": "rehash-user", "password": raw_password},
-            request=_request(AnonymousUser()),
+            request=graphql_request(AnonymousUser(), session=True),
         )
     )
 
@@ -442,7 +443,7 @@ def test_login_with_wrong_password_fails_and_writes_no_hash_upgrade(
             _schema("public"),
             _LOGIN_MUTATION,
             {"username": "no-rehash-user", "password": "wrong-password"},
-            request=_request(AnonymousUser()),
+            request=graphql_request(AnonymousUser(), session=True),
         )
     )
 
@@ -470,7 +471,7 @@ def test_login_refuses_service_account(
             _schema("public"),
             _LOGIN_MUTATION,
             {"username": "svc-agent", "password": "secret"},
-            request=_request(AnonymousUser()),
+            request=graphql_request(AnonymousUser(), session=True),
         )
     )
 
@@ -495,7 +496,7 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
         email="link@example.com",
     )
     public_schema = _schema("public")
-    request = _request(user)
+    request = graphql_request(user, session=True)
     start = _data(
         _execute(
             public_schema,
@@ -583,7 +584,7 @@ def test_connect_account_complete_uses_bounded_provider_error_message(
     user = User.objects.create_user(username="connect-rate-limited", email="connect@example.com")
     oauth_client = _oauth_client("connect-anthropic", is_oidc=False)
     public_schema = _schema("public")
-    request = _request(user)
+    request = graphql_request(user, session=True)
     oauth_client_id = str(oauth_client.sqid)
     start = _data(
         _execute(
@@ -2162,24 +2163,6 @@ def _dedup(values: tuple[Any, ...]) -> tuple[Any, ...]:
     return tuple(out)
 
 
-def _execute(
-    schema: Any,
-    query: str,
-    variables: dict[str, Any] | None = None,
-    *,
-    user: Any | None = None,
-    request: Any | None = None,
-) -> Any:
-    """Execute a GraphQL operation with a session-bearing request context."""
-
-    return execute_schema(
-        schema,
-        query,
-        variables,
-        request=request or _request(user or AnonymousUser()),
-    )
-
-
 def _sdl_block(sdl: str, header: str) -> str:
     """Return one SDL block by its header prefix."""
 
@@ -2187,14 +2170,6 @@ def _sdl_block(sdl: str, header: str) -> str:
     body = sdl.index("{", start)
     end = sdl.index("\n}", body)
     return sdl[start:end]
-
-
-def _request(user: Any) -> Any:
-    """Return a request with the configured native Django session backend."""
-
-    request = graphql_request(user)
-    SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
-    return request
 
 
 _LOGIN_MUTATION = """

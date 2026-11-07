@@ -49,7 +49,7 @@ function FeedPostsTab({ recordId }: RecordPanelContext): React.ReactElement {
     models: FEED_MESSAGE_MODELS,
   });
   if (query.isFetching && !query.data) {
-    return <LoadingPanel density="inline" message={t("feed.postsLoading")} />;
+    return <LoadingPanel density="inline" loadingLabel={t("feed.postsLoading")} />;
   }
   if (query.error) {
     return (

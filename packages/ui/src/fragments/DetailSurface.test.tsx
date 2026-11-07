@@ -10,7 +10,7 @@ afterEach(() => cleanup());
 describe("DetailSurface", () => {
   test("renders the shared loading state before detail chrome", () => {
     render(
-      <DetailSurface loading loadingMessage="Loading service" title="Ignored">
+      <DetailSurface loading loadingLabel="Loading service" title="Ignored">
         <span>Hidden body</span>
       </DetailSurface>,
     );

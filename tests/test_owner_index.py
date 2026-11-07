@@ -6,7 +6,7 @@ Python ``def``, ``class`` or assignment target at any depth, or an exported
 declaration of a TypeScript or ES module. Every public class a foundation
 ``models``/``fields`` module declares and every ``angee.*`` source distribution has
 a row, including explicit libraries. No skill, capability guide or reference file
-cites a line: only ``docs/`` references keep one.
+cites a line, as a path, a shorthand or in prose: only ``docs/`` references keep one.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ LINE_REFERENCE = re.compile(
     r"|\bREADME:\d+"  # a README line
     r"|\b(?:guidelines|glossary|stack|checks|composer|frontend|backend|appearance):\d+"  # a guide line in shorthand
     r"|`:\d+|(?<=[\s(]):\d+(?=[\s),;.-]|$)"  # a bare :line continuing an earlier path
+    r"|\bline \d+\b"  # a line cited in prose, beside the anchor that already names the rule
 )
 EXPORT = re.compile(r"^\s*export\s+(?:default\s+)?(?:async\s+)?(?:const|function|class|type|interface)\s+(\w+)", re.M)
 

@@ -24,6 +24,7 @@ from rebac.testing import install_schema
 from angee.base.identity import public_subject_ref
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import public_id_of
+from angee.base.pagination import MAX_PAGE_SIZE
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
@@ -159,10 +160,11 @@ def test_history_pages_by_changeset_and_refuses_an_unbounded_page() -> None:
     refused = execute_schema(
         schema,
         HISTORY,
-        {"model": "knowledge.Page", "id": public_id_of(page), "limit": provenance_schema.HISTORY_LIMIT_MAX + 1},
+        {"model": "knowledge.Page", "id": public_id_of(page), "limit": MAX_PAGE_SIZE + 1},
         user=owner,
     )
-    assert refused.errors and "limit" in refused.errors[0].message
+    assert refused.errors and f"Page size must be between 1 and {MAX_PAGE_SIZE}" in refused.errors[0].message
+    assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
 
 
 def test_history_locates_an_older_selected_changeset_within_the_records_own_pages() -> None:

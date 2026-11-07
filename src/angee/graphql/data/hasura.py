@@ -17,7 +17,7 @@ import strawberry
 import strawberry_django
 from asgiref.sync import sync_to_async
 from django.conf import settings
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.core.exceptions import BadRequest, FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.expressions import BaseExpression, Combinable, CombinedExpression
 from django.db.models.fields.reverse_related import ForeignObjectRel
@@ -64,7 +64,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for, public_id_of
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.refs import RecordRefMixin
-from angee.base.pagination import MAX_PAGE_SIZE
+from angee.base.pagination import MAX_PAGE_SIZE, valid_page_size
 from angee.base.permissions import declared_rebac_definition, require_rebac_queryset
 from angee.base.querysets import AngeeQuerySet, row_lock_paths
 from angee.graphql.access import assert_no_gated_read_fields
@@ -107,7 +107,6 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
-from graphql import GraphQLError
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
@@ -1383,30 +1382,34 @@ def _resource_filter_projection(
     )
 
 
+def optimize_selection[M: models.Model](queryset: models.QuerySet[M], info: strawberry.Info) -> models.QuerySet[M]:
+    """Load what the selection ``info`` names for a queryset a resolver materializes itself.
+
+    The request's active optimizer extension decides, as it does for root fields;
+    outside one, REBAC's guarded ``optimize`` applies the same hints.
+    """
+
+    active = optimizer.get()
+    return active.optimize(queryset, info) if active is not None else optimize(queryset, info)
+
+
 def group_rows_field(
     node: type,
     resolve: Callable[[GroupFieldBatch, int], Sequence[Sequence[Any]]],
 ) -> GroupField:
     """Declare ``<res>_group.rows``: every group's first page from one read per groups page.
 
-    ``limit`` is the client's declared per-group page size, required and bounded
-    by ``MAX_PAGE_SIZE``, as is the groups page that selects rows; either bound
-    refuses the client's request as ``BAD_USER_INPUT``. ``order_by`` is the list
-    root's own ordering.
+    ``limit`` is the client's declared per-group page size, required and refused
+    outside the page bound (``valid_page_size``); a groups page wider than
+    ``MAX_PAGE_SIZE`` that selects rows is refused the same way, before its rows
+    statement. ``order_by`` is the list root's own ordering.
     ``resolve(batch, limit)`` returns one page per group in ``batch.groups`` order.
     """
 
     def pages(batch: GroupFieldBatch) -> Sequence[Sequence[Any]]:
-        limit = batch.arguments["limit"]
-        if not 1 <= limit <= MAX_PAGE_SIZE:
-            raise GraphQLError(
-                f"Group rows limit must be between 1 and {MAX_PAGE_SIZE}.", extensions={"code": "BAD_USER_INPUT"},
-            )
+        limit = valid_page_size(batch.arguments["limit"])
         if len(batch.groups) > MAX_PAGE_SIZE:
-            raise GraphQLError(
-                f"Group rows carry at most {MAX_PAGE_SIZE} groups; page the groups with a limit.",
-                extensions={"code": "BAD_USER_INPUT"},
-            )
+            raise BadRequest(f"Group rows carry at most {MAX_PAGE_SIZE} groups; page the groups with a limit.")
         return resolve(batch, limit) if batch.groups else []
 
     return GroupField(
@@ -1554,8 +1557,14 @@ def _drill_value(drill: DataQueryDrill, value: Any) -> Any:
 
 
 def _bucket_value(value: Any) -> Hashable:
-    """One bucket value as a hashable key, whether a group key or a row's partition value."""
+    """One bucket value as a hashable key, whether a group key or a row's partition value.
 
+    A boolean is its own bucket: JSON ``true`` and ``1`` (``False`` and ``0``) hash alike
+    in Python but are different groups.
+    """
+
+    if isinstance(value, bool):
+        return (bool, value)
     return value if isinstance(value, Hashable) else json.dumps(value, sort_keys=True, default=str)
 
 
@@ -1597,10 +1606,8 @@ def _first_rows_per_group(
         .first_per_group(*partition.partitions, order_by=ordering, limit=limit)
         .order_by(*ordering)
     )
-    active = optimizer.get()
-    kept = active.optimize(kept, info) if active is not None else optimize(kept, info)
     pages: list[list[Any]] = [[] for _ in range(groups)]
-    for row in kept:
+    for row in optimize_selection(kept, info):
         group = partition.index.get(tuple(_bucket_value(getattr(row, name)) for name in names))
         if group is not None:
             pages[group].append(row)
@@ -1682,6 +1689,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     representation-field search.
     ``context_fields`` declares the readable fields whose native widgets render
     the compact record-header facts line.
+
+    The list root and aggregate nodes return at most ``MAX_PAGE_SIZE`` rows a page
+    (upstream ``max_rows``): a larger or missing ``limit`` is clamped, aggregate
+    math stays unpaged.
 
     A groupable resource's ``<res>_group`` carries ``rows(limit, order_by)``:
     each group's first page read through the list root's own scoped read, filter
@@ -1891,7 +1902,16 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         }
 
         def group_rows(batch: GroupFieldBatch, limit: int) -> list[list[Any]]:
-            """Each group's first page through the list root's own read, filter and ordering."""
+            """Each group's first page through the list root's own read, filter and ordering.
+
+            Rows carry one group axis (a relation with its riding label is one): drills
+            over two axes select their buckets' cross product, and only a per-row bucket
+            membership, which the grouping owner does not expose yet, reads exactly the
+            page's buckets. Such a request is refused before any rows statement.
+            """
+            drills = _group_bucket_drills(model, group_axes, batch.group_by)
+            if len(drills) > 1:
+                raise BadRequest("Group rows carry one group axis; group by one field to page its rows.")
             predicate = where_to_q(
                 batch.where, id_column=id_column, id_decode=id_decode,
                 field_decoders=field_id_decode, lookups=filter_lookups,
@@ -1902,7 +1922,6 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                 queryset, order_by, info=batch.info, id_column=id_column, sortable_aliases=sortable_aliases,
             )
             queryset = apply_ordering(queryset, order_by, id_column=id_column, sortable_aliases=sortable_aliases)
-            drills = _group_bucket_drills(model, group_axes, batch.group_by)
             partition = _group_partition(model, drills, [group.key for group in batch.groups])
             # A drill through a declared filter expression reads that expression's alias.
             queryset = prepare_filters(queryset, partition.predicate)
@@ -1943,6 +1962,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         write_backend=resource_write_backend,
         id_decode=id_decode,
         id_column=id_column,
+        max_rows=MAX_PAGE_SIZE,
     )
     if contributed_filters:
         resource.types.append(_resource_filter_projection(

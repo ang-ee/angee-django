@@ -217,7 +217,7 @@ function TranscriptBody({
   ) : null;
 
   if (transcript.isFetching && messages.length === 0) {
-    return <LoadingPanel message={t("transcript.loading")} />;
+    return <LoadingPanel loadingLabel={t("transcript.loading")} />;
   }
   if (transcript.error) {
     return <ErrorBanner title={t("transcript.error")} description={t("transcript.emptyHint")} />;

@@ -112,7 +112,7 @@ export function States() {
     <U.EmptyState title="Nothing here yet" description="Add a record to get started." actions={<U.Button>Add record</U.Button>} />
     <U.ErrorBanner title="Unable to load records" description="The service is unavailable." actions={<U.Button>Retry</U.Button>} />
     <U.InlineEmpty label="No matching records" />
-    <U.LoadingPanel message="Loading records" />
+    <U.LoadingPanel loadingLabel="Loading records" />
     <U.LazyBoundary pending={<U.LoadingPanel />}><U.Chip>Loaded content</U.Chip></U.LazyBoundary>
     <U.SkeletonStatus loadingLabel="Loading" /><U.SkeletonText />
   </div>;

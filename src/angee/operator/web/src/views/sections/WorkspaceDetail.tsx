@@ -18,7 +18,7 @@ export function WorkspaceDetail(): ReactElement {
     <DaemonRecord
       record={workspace}
       loading={result.fetching && !snapshot}
-      loadingMessage={t("workspaces.loading")}
+      loadingLabel={t("workspaces.loading")}
       notFound={{ icon: "files", title: t("workspaces.detail.notFound"), description: name }}
       eyebrow={t("workspaces.record")}
       title={workspace?.name}

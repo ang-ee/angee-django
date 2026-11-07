@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableRow } from "../ui/table";
 
 export interface LoadingPanelProps {
   /** The accessible pending label; it is announced, never rendered as visible text. */
-  message?: string;
+  loadingLabel?: string;
   /** Line count and height of the status skeleton; the page shape fills its region. */
   density?: "page" | "inline";
   /**
@@ -26,12 +26,12 @@ const PAGE_ROW_WIDTHS = ["w-2/3", "w-1/2", "w-3/4", "w-2/5", "w-3/5", "w-1/2"] a
  * @kind fragment
  */
 export function LoadingPanel({
-  message,
+  loadingLabel,
   density = "page",
   shape = "status",
 }: LoadingPanelProps): React.ReactElement {
   const t = useUiT();
-  const label = message ?? t("loading.default");
+  const label = loadingLabel ?? t("loading.default");
   const inline = density === "inline";
 
   if (shape === "page") {

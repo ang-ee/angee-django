@@ -146,7 +146,7 @@ export function SchemaPage(): ReactElement {
     return (
       <>
         <PrimaryPanePublisher node={explorer} />
-        <LoadingPanel density="inline" message={t("schema.loading")} />
+        <LoadingPanel density="inline" loadingLabel={t("schema.loading")} />
       </>
     );
   }

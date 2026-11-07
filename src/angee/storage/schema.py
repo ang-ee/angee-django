@@ -100,11 +100,14 @@ class DriveType(AngeeNode):
     owns_items: auto
 
 
+_ANCESTORS = "_storage_ancestors"
+
+
 def _folder_ancestors_prefetch(info: strawberry.Info) -> Prefetch:
     """Optimize the hierarchy owner's readable ancestors with native selection hints."""
 
     rows = cast("FolderQuerySet[FolderModel]", optimize(Folder.objects.all(), info))
-    return rows.model.ancestors_prefetch(rows, to_attr="_storage_ancestors")
+    return rows.model.ancestors_prefetch(rows, to_attr=_ANCESTORS)
 
 
 @strawberry_django.type(Folder)
@@ -125,7 +128,8 @@ class FolderType(AngeeNode):
     def ancestors(self, info: strawberry.Info) -> list[FolderType]:
         """Readable ancestors in path order; hidden parents contribute no label."""
 
-        return cast(list[FolderType], prefetched(cast(FolderModel, self), _folder_ancestors_prefetch(info)))
+        ancestors = prefetched(cast(FolderModel, self), _ANCESTORS, lambda: _folder_ancestors_prefetch(info))
+        return cast(list[FolderType], ancestors)
 
 
 @strawberry_django.type(File)

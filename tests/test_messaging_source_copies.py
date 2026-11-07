@@ -102,7 +102,7 @@ def test_copy_anchor_cannot_widen_current_search_thread_or_read_scope(retained_f
 
 def test_copy_anchor_and_match_navigation_share_the_merged_transcript(retained_feed_copy):
     left, right, reader = retained_feed_copy
-    request = graphql_request(reader, "/graphql/console/")
+    request = graphql_request(reader)
     result = result_data(execute_schema(
         _schema(),
         """query($thread: ID!, $id: ID!, $anchor: String!) {

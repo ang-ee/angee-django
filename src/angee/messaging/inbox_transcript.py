@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from angee.messaging.inbox import MessageInbox
-from angee.messaging.managers import _MESSAGE_ORDER
+from angee.messaging.managers import MESSAGE_ORDER
 
 
 @dataclass(frozen=True)
@@ -43,10 +43,10 @@ class InboxTranscript:
             raise ValueError("Message unavailable in this conversation.")
         before, after = self.matching, self.matching
         if anchor is not None:
-            before = before.filter(_MESSAGE_ORDER.before(anchor.chronological_key))
-            after = after.filter(_MESSAGE_ORDER.after(anchor.chronological_key))
-        previous = before.order_by(*_MESSAGE_ORDER.ordering()).first()
-        following = after.order_by(*_MESSAGE_ORDER.ordering(oldest_first=True)).first()
+            before = before.filter(MESSAGE_ORDER.before(anchor.chronological_key))
+            after = after.filter(MESSAGE_ORDER.after(anchor.chronological_key))
+        previous = before.order_by(*MESSAGE_ORDER.ordering()).first()
+        following = after.order_by(*MESSAGE_ORDER.ordering(oldest_first=True)).first()
         return InboxTranscriptMatches(
             thread=self.thread,
             count=self.matching.count(),

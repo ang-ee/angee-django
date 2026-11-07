@@ -16,7 +16,7 @@ from rebac import SubjectRef, check_new, current_actor, proposed_forward_relatio
 from rebac import user_subject_type as _user_subject_type
 from rebac.backends import backend
 from rebac.managers import RebacQuerySet
-from rebac.resources import model_resource_type
+from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import Definition, PermArrow, PermBinOp, PermExpr, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
 from rebac.schema.parser import parse_zed
@@ -108,13 +108,15 @@ def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
     return backend().schema().get_definition(resource_type) if resource_type else None
 
 
-def effective_rebac_schema(app_config: AppConfig) -> Schema | None:
-    """Reuse one parsed bound declaration while its source identity is unchanged.
+def declared_rebac_schema(app_config: AppConfig) -> Schema | None:
+    """The declaration this AppConfig binds (a host's composed file, else the authored one), parsed once.
 
-    State lives only on this AppConfig's binding. Native path discovery still
-    observes missing files and declaration changes; nanosecond modification/change
-    times and inode identity invalidate same-path rewrites and atomic replacement.
-    Request policy never reads this startup snapshot.
+    The parse is reused while its source identity is unchanged. State lives only
+    on this AppConfig's binding. Native path discovery still observes missing files
+    and declaration changes; nanosecond modification/change times and inode identity
+    invalidate same-path rewrites and atomic replacement. Request policy reads
+    ``effective_rebac_definition`` (the synced store with its overrides), never this
+    startup snapshot.
     """
 
     declared_schema_path(app_config)
@@ -147,34 +149,82 @@ def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
         config = apps.get_app_config(model._meta.app_label)
     except LookupError:
         return None
-    schema = effective_rebac_schema(config)
+    schema = declared_rebac_schema(config)
     return schema.get_definition(resource_type) if schema is not None else None
 
 
-def contextual_action_holds(model: type[models.Model], action: str, *, generic: str = "read") -> bool:
-    """Whether a listing constrained to readable parents may scope ``model`` by ``action``.
+def contextual_action_holds(model: type[models.Model], action: str) -> bool:
+    """Whether a listing may scope ``model`` by its narrower ``action`` in place of ``read``.
 
-    A contextual child action is exactly one arrow, ``relation->parent_action``: the
-    child's own actor-scoped read checks its live parent, so the listing selects the
-    parent population with joins instead of a second, separately scoped parent
-    subquery. It holds while the effective policy (the synced schema with its
-    overrides) keeps that shape and ``generic`` stays a union with an arrow arm
-    through the same relation; the parent's policy owns ``parent_action`` implying
-    the parent permission that arm names. A missing permission, any extension of
-    ``action``, or an exclusion or intersection over ``generic`` (a tightening
-    override) leaves the implication unproved: the caller keeps ``generic`` inside an
-    independently scoped parent population. Field gates are unaffected; they keep
-    their own ``read__<field>`` checks under either action.
+    The effective policy (the synced schema with its overrides) proves it in one of
+    two shapes. A contextual child action is exactly one arrow,
+    ``relation->parent_action``, while ``read`` stays a union with an arrow arm
+    through the same relation: the child's own actor-scoped read checks its live
+    parent, so a listing constrained to readable parents selects them with joins
+    instead of a second, separately scoped parent subquery. Extending ``read``
+    keeps that; an exclusion or intersection over it (a tightening override) does
+    not. A purpose read, such as ``messaging/thread#read_inbox``, is stated with
+    ``read`` exactly as the model's composed declaration states them, and that
+    declaration's owner proves it answers as ``read`` does within the population its
+    listing selects: an override on either, or a store not yet synced to the
+    declaration, leaves it unproved. In both shapes, an arrow to a parent's narrower
+    action where ``read`` takes the parent's ``read`` holds only while the parent's
+    action holds in turn. Unproved, the caller keeps ``read``. Field gates are
+    unaffected; they keep their own ``read__<field>`` checks under either action.
     """
 
-    definition = effective_rebac_definition(model)
+    resource_type = model_resource_type(model)
+    return resource_type is not None and _action_holds(backend().schema(), resource_type, action)
+
+
+def _action_holds(schema: Schema, resource_type: str, action: str) -> bool:
+    definition = schema.get_definition(resource_type)
     if definition is None:
         return False
     expressions = {permission.name: permission.expression for permission in definition.permissions}
-    contextual, general = expressions.get(action), expressions.get(generic)
-    if not isinstance(contextual, PermArrow) or general is None:
+    narrow, read = expressions.get(action), expressions.get("read")
+    if narrow is None or read is None:
         return False
-    return any(isinstance(arm, PermArrow) and arm.via == contextual.via for arm in _union_arms(general))
+    if isinstance(narrow, PermArrow):
+        arms = {arm.via: arm.target for arm in _union_arms(read) if isinstance(arm, PermArrow)}
+        pairs = [(narrow, arms.get(narrow.via))]
+    else:
+        model = model_for_resource_type(resource_type)
+        declared = declared_rebac_definition(model) if model is not None else None
+        stated = {permission.name: permission.expression for permission in declared.permissions} if declared else {}
+        if stated.get(action) != narrow or stated.get("read") != read:
+            return False
+        reads = {(arrow.via, arrow.target) for arrow in _arrows(read)}
+        pairs = [
+            (arrow, "read" if (arrow.via, "read") in reads else None)
+            for arrow in _arrows(narrow)
+            if (arrow.via, arrow.target) not in reads
+        ]
+    return all(
+        target is not None and (
+            arrow.target == target
+            or target == "read" and _action_holds(schema, _parent_type(definition, arrow.via), arrow.target)
+        )
+        for arrow, target in pairs
+    )
+
+
+def _parent_type(definition: Definition, via: str) -> str:
+    """The one resource type the relation ``via`` stores, else an empty name that no definition has."""
+
+    relation = next((relation for relation in definition.relations if relation.name == via), None)
+    types = {subject.type for subject in relation.allowed_subjects} if relation is not None else set()
+    return types.pop() if len(types) == 1 else ""
+
+
+def _arrows(expression: PermExpr) -> Iterator[PermArrow]:
+    """Yield the arrows anywhere in ``expression``, without following sub-permissions."""
+
+    if isinstance(expression, PermArrow):
+        yield expression
+    elif isinstance(expression, PermBinOp):
+        yield from _arrows(expression.left)
+        yield from _arrows(expression.right)
 
 
 def _union_arms(expression: PermExpr) -> Iterator[PermExpr]:

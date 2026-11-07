@@ -121,9 +121,9 @@ class _ReaderBatch(InstancePrefetch):
         self.batch = batch
 
     def related(
-        self, instances: list[Any], queryset: models.QuerySet[Any], actor: Any,
+        self, instances: list[Any], queryset: models.QuerySet[Any],
     ) -> tuple[list[Any], Callable[[Any], object], Callable[[Any], object]]:
-        del queryset
+        actor = self.reader(queryset)
         if actor is not None and instances:
             getattr(type(instances[0]), self.batch)(instances, actor)
         return [], id, lambda run: run.pk
@@ -138,9 +138,8 @@ class _PolicyVersions(InstancePrefetch):
     """
 
     def related(
-        self, instances: list[Any], queryset: models.QuerySet[Any], actor: Any,
+        self, instances: list[Any], queryset: models.QuerySet[Any],
     ) -> tuple[models.QuerySet[Any], Callable[[Any], object], Callable[[Any], object]]:
-        del actor
         versions = queryset.filter(pk__in={run.version_id for run in instances})
         return versions, lambda version: version.pk, lambda run: run.version_id
 

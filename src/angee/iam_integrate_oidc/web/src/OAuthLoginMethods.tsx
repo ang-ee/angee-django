@@ -44,7 +44,7 @@ export function OAuthLoginMethods(): ReactNode {
   }
 
   if (fetching && connections.length === 0) {
-    return <LoadingPanel density="inline" message={t("login.loadingOptions")} />;
+    return <LoadingPanel density="inline" loadingLabel={t("login.loadingOptions")} />;
   }
 
   if (queryError && connections.length === 0) {

@@ -229,7 +229,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
       renderTree={renderTree}
       renderContentWithoutRoots={openFileId !== null || Boolean(requestedFolder)}
       loading={initialDrives.list.fetching && drives.length === 0}
-      loadingContent={<LoadingPanel message={t("loading")} />}
+      loadingContent={<LoadingPanel loadingLabel={t("loading")} />}
       emptyContent={
         <EmptyState
           fill

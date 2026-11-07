@@ -25,7 +25,7 @@ import tests.test_agents_graphql  # noqa: F401 -- register related models before
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.graphql.testing.documents import execute_schema, graphql_request
+from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
 from angee.messaging.testing.models import Channel
 from tests import test_messaging as messaging_models
@@ -246,7 +246,7 @@ def test_message_by_pk_serves_title_beside_a_parts_selection(composed_tables: No
             }
             """,
             {"id": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["messages_by_pk"]
     assert payload["title"] == "Detail subject"
@@ -275,7 +275,7 @@ def test_message_parts_projection_returns_depth_first_order(composed_tables: Non
             }
             """,
             {"id": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["messages_by_pk"]["parts"]
 
@@ -294,7 +294,7 @@ def test_message_parts_projection_returns_depth_first_order(composed_tables: Non
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]["messages"][-1]["parts"]
 
@@ -382,7 +382,7 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     )
     schema = _schema()
     # Warm process-wide metadata caches, then measure fresh requests/querysets.
-    _data(execute_schema(schema, query, {**variables, "limit": 1}, request=_request(admin)))
+    _data(execute_schema(schema, query, {**variables, "limit": 1}, user=admin))
     manager_type = type(messaging_models.Part.objects)
     reading_order = manager_type.reading_order_for_message
     visited: list[str] = []
@@ -402,7 +402,7 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     for size in (3, 6):
         visited.clear()
         with CaptureQueriesContext(connection) as captured:
-            payload = _data(execute_schema(schema, query, {**variables, "limit": size}, request=_request(admin)))
+            payload = _data(execute_schema(schema, query, {**variables, "limit": size}, user=admin))
         rows = payload["messages"] if surface == "messages" else payload["record_thread"]["messages"]
         # Chatter selects the newest page, then returns it chronologically.
         page = expected[:size] if surface == "messages" else expected[-size:]
@@ -439,7 +439,7 @@ def test_inbox_labels_coexist_with_guarded_relation_selections(composed_tables: 
         }
     """
     schema = _schema()
-    visible = _data(execute_schema(schema, document, {"id": message.sqid}, request=_request(admin)))["messages"]
+    visible = _data(execute_schema(schema, document, {"id": message.sqid}, user=admin))["messages"]
     assert visible[0]["thread_title"] == "Original"
     assert visible[0]["thread"]["title"]["text"] == "Original"
     assert visible[0]["channel_vendor_name"] == "Board-Label-Vendor"
@@ -456,7 +456,7 @@ def test_inbox_labels_coexist_with_guarded_relation_selections(composed_tables: 
                 }
                 """,
                 {"id": message.sqid},
-                request=_request(subject),
+                user=subject,
             )
         )["messages"]
         assert hidden == [{"id": message.sqid, "thread_title": "", "channel_vendor_name": ""}]
@@ -501,7 +501,7 @@ def test_message_sender_and_participant_expose_resolved_party(composed_tables: N
             }
             """,
             {"id": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["messages_by_pk"]
 
@@ -557,7 +557,7 @@ def test_inbox_sender_redacts_party_without_party_read(composed_tables: None) ->
             }
             """,
             {"id": message.sqid},
-            request=_request(reader),
+            user=reader,
         )
     )["messages_by_pk"]
 
@@ -613,7 +613,7 @@ def test_handle_party_redacts_mixed_visibility_without_permission_error(
           }
         }
         """,
-        request=_request(reader),
+        user=reader,
     )
 
     assert result.errors is None, result.errors
@@ -663,7 +663,7 @@ def test_handle_party_batches_one_related_model_query(
               }
             }
             """,
-            request=_request(admin),
+            user=admin,
         )
 
     assert result.errors is None, result.errors
@@ -709,7 +709,7 @@ def test_handle_party_regates_sudo_loaded_parent(
           sudo_handles { value party { display_name } }
         }
         """,
-        request=_request(reader),
+        user=reader,
     )
 
     assert result.errors is None, result.errors
@@ -761,7 +761,7 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
             }
             """,
             {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
-            request=_request(reader),
+            user=reader,
         )
     )["record_thread"]
     assert visible == {
@@ -785,7 +785,7 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
         }
         """,
         {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
-        request=_request(reader),
+        user=reader,
     )
     assert narrowed.errors is not None
     assert "Cannot query field 'party' on type 'RecordHandleType'" in str(narrowed.errors[0])
@@ -820,7 +820,7 @@ def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(
             }
             """,
             {"messageId": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["parts"]
     assert [part["role"] for part in payload] == ["BODY"]
@@ -858,7 +858,7 @@ def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables:
                 _schema(),
                 document,
                 {"where": {"message": {"_eq": message.sqid}}},
-                request=_request(admin),
+                user=admin,
             )
         )
     assert {row["key"]["role"]: row["aggregate"]["count"] for row in data["parts_groups"]} == {"BODY": 1, "QUOTED": 1}
@@ -903,7 +903,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
         }
         """,
         {"id": message.sqid},
-        request=_request(admin),
+        user=admin,
     )
     assert refused_message.errors is not None
 
@@ -919,7 +919,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
             }
             """,
             {"id": thread.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["update_threads_by_pk"]
     assert updated_thread == {"visibility": "PUBLIC", "title": {"text": "Original"}}
@@ -933,7 +933,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
         }
         """,
         {"id": message.sqid},
-        request=_request(admin),
+        user=admin,
     )
     assert stale_message_write.errors is not None
     stale_thread_write = execute_schema(
@@ -944,7 +944,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
         }
         """,
         {"id": thread.sqid},
-        request=_request(admin),
+        user=admin,
     )
     assert stale_thread_write.errors is not None
 
@@ -957,7 +957,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
             }
             """,
             {"id": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["delete_messages_by_pk"]
     assert deleted == {"id": message.sqid, "status": "SYNCED"}
@@ -1011,7 +1011,7 @@ def test_message_channel_group_key_drills_down_with_public_id(
                     {"field": "CHANNEL__DISPLAY_NAME"},
                 ],
             },
-            request=_request(admin),
+            user=admin,
         )
     )["messages_groups"]
     bucket_channel_id = grouped[0]["key"]["channel_id"]
@@ -1028,7 +1028,7 @@ def test_message_channel_group_key_drills_down_with_public_id(
             }
             """,
             {"channel": bucket_channel_id},
-            request=_request(admin),
+            user=admin,
         )
     )["messages"]
 
@@ -1056,7 +1056,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
     # The record's creation is a history line, not a message: no thread exists before the first post.
@@ -1092,7 +1092,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Follow up from GraphQL.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
     assert posted["error_code"] is None
@@ -1124,7 +1124,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
     assert after["error_code"] is None
@@ -1175,7 +1175,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Internal note from GraphQL.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
 
@@ -1217,7 +1217,7 @@ def test_record_chatter_post_reply(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]["message"]
 
@@ -1258,7 +1258,7 @@ def test_record_chatter_post_reply(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "parent": root["id"],
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
 
@@ -1294,7 +1294,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]["message"]
 
@@ -1328,7 +1328,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
                 "message": posted["id"],
                 "reaction": "👍",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_message_reaction"]
 
@@ -1369,7 +1369,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
                 "message": posted["id"],
                 "reaction": "👍",
             },
-            request=_request(other),
+            user=other,
         )
     )
 
@@ -1391,7 +1391,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]["messages"][-1]["reaction_groups"]
 
@@ -1435,7 +1435,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
                 "message": posted["id"],
                 "reaction": "👍",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_message_reaction"]["reaction_groups"]
 
@@ -1484,7 +1484,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "message": message.sqid,
             },
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_message_starred"]
 
@@ -1510,7 +1510,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
     assert thread == {
@@ -1533,7 +1533,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(other),
+            user=other,
         )
     )["record_thread"]
     assert other_thread == {
@@ -1565,7 +1565,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "message": message.sqid,
             },
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_message_starred"]
 
@@ -1602,7 +1602,7 @@ def test_record_chatter_update_message(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Original GraphQL body.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
 
@@ -1639,7 +1639,7 @@ def test_record_chatter_update_message(composed_tables: None) -> None:
                 "message": posted["message"]["id"],
                 "body": "Updated GraphQL body.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["update_record_message"]
 
@@ -1685,7 +1685,7 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Delete me.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]["message"]
     second = _data(
@@ -1703,7 +1703,7 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Keep me.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]["message"]
 
@@ -1731,7 +1731,7 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "message": first["id"],
             },
-            request=_request(admin),
+            user=admin,
         )
     )["delete_record_message"]
 
@@ -1781,7 +1781,7 @@ def test_record_chatter_update_rejects_retained_notification(composed_tables: No
                 "message": message.sqid,
                 "body": "Tampered",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["update_record_message"]
 
@@ -1801,7 +1801,7 @@ def test_record_chatter_returns_retained_notification_body(composed_tables: None
             messages { message_type parts { fragment { text } } }
           }
         }
-    """, {"id": ticket.sqid}, request=_request(admin)))["record_thread"]
+    """, {"id": ticket.sqid}, user=admin))["record_thread"]
     assert result["messages"] == [
         {"message_type": "NOTIFICATION", "parts": [{"fragment": {"text": "Stage: New → Won"}}]},
     ]
@@ -1836,7 +1836,7 @@ def test_record_chatter_searches_comments_and_retained_notification_bodies(compo
                 }
                 """,
                 {"model": "messaging.ThreadedTicket", "id": ticket.sqid, "search": term},
-                request=_request(admin),
+                user=admin,
             )
         )["record_thread"]
 
@@ -1910,7 +1910,7 @@ def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
                     "after": after,
                     "around": around,
                 },
-                request=_request(admin),
+                user=admin,
             )
         )["record_thread"]
 
@@ -1993,7 +1993,7 @@ def test_record_chatter_orders_interleaved_backfilled_email(composed_tables: Non
                     "before": None,
                     **window,
                 },
-                request=_request(admin),
+                user=admin,
             )
         )["record_thread"]
         return [message["preview"] for message in payload["messages"]]
@@ -2032,7 +2032,7 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
 
@@ -2071,7 +2071,7 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
         }
     """
     schema = _schema()
-    _data(execute_schema(schema, query, {"id": ticket.sqid, "limit": 1}, request=_request(admin)))
+    _data(execute_schema(schema, query, {"id": ticket.sqid, "limit": 1}, user=admin))
     counts = []
     for size in (1, 25):
         with CaptureQueriesContext(connection) as captured:
@@ -2080,7 +2080,7 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
                     schema,
                     query,
                     {"id": ticket.sqid, "limit": size},
-                    request=_request(admin),
+                    user=admin,
                 )
             )["record_thread"]
         assert len(payload["messages"]) == size
@@ -2126,7 +2126,7 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
                 "id": ticket.sqid,
                 "body": "Please review this.",
             },
-            request=_request(poster),
+            user=poster,
         )
     )["post_record_message"]
     assert posted == {
@@ -2151,7 +2151,7 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(watcher),
+            user=watcher,
         )
     )["record_thread"]
     assert unread == {
@@ -2175,7 +2175,7 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(watcher),
+            user=watcher,
         )
     )["mark_record_thread_read"]
     assert read["error_code"] is None
@@ -2224,7 +2224,7 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(watcher),
+            user=watcher,
         )
     )["record_thread"]
     assert unread["error_code"] is None
@@ -2261,7 +2261,7 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "message": first.sqid,
             },
-            request=_request(watcher),
+            user=watcher,
         )
     )["mark_record_message_done"]
     assert done["error_code"] is None
@@ -2289,7 +2289,7 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(watcher),
+            user=watcher,
         )
     )["record_thread"]
     assert {message["id"]: message["needaction"] for message in refreshed["messages"]} == {
@@ -2345,7 +2345,7 @@ def test_record_chatter_post_notifies_direct_recipient(composed_tables: None) ->
                 "body": "Direct heads-up.",
                 "recipient": str(recipient.sqid),
             },
-            request=_request(poster),
+            user=poster,
         )
     )["post_record_message"]
     assert posted == {
@@ -2372,7 +2372,7 @@ def test_record_chatter_post_notifies_direct_recipient(composed_tables: None) ->
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(recipient),
+            user=recipient,
         )
     )["record_thread"]
     assert unread == {
@@ -2431,7 +2431,7 @@ def test_record_thread_returns_suggested_recipients(composed_tables: None) -> No
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(poster),
+            user=poster,
         )
     )["record_thread"]
 
@@ -2483,7 +2483,7 @@ def test_suggested_recipients_withhold_restricted_fields_from_a_non_manager(comp
           }
         }""",
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(poster),
+            user=poster,
         )
     )["record_thread"]["suggested_recipients"]
 
@@ -2537,7 +2537,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid, "file": file.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
 
@@ -2599,7 +2599,7 @@ def test_record_chatter_follow_toggle(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_following"]
 
@@ -2635,7 +2635,7 @@ def test_record_chatter_follow_toggle(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
 
@@ -2666,7 +2666,7 @@ def test_record_chatter_follow_toggle(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_following"]
 
@@ -2848,13 +2848,6 @@ def _storage_drive(tmp_path: Path, *, owner: Any) -> Any:
     )
 
 
-def _request(user: Any) -> Any:
-    """Return a console-shaped POST request bound to ``user``."""
-
-    request = graphql_request(user, "/graphql/console/")
-    return request
-
-
 def _grant(resource: Any, relation: str, user: Any) -> None:
     """Write one direct relationship tuple for ``user`` on ``resource``."""
 
@@ -2899,7 +2892,7 @@ def test_generic_thread_and_message_lists_exclude_record_chatter(composed_tables
               messages_aggregate { aggregate { count } }
             }
             """,
-            request=_request(admin),
+            user=admin,
         )
     )
     thread_ids = {row["id"] for row in data["threads"]}
@@ -2922,7 +2915,7 @@ def test_generic_thread_and_message_lists_exclude_record_chatter(composed_tables
             }
             """,
             {"thread": record_thread.sqid, "message": record_message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )
     # The by-pk route excludes the record thread/message too — not just the list.
@@ -2958,13 +2951,13 @@ def test_generic_delete_excludes_record_thread_from_its_creator(composed_tables:
           delete_threads_by_pk(id: $id) { id }
         }
     """
-    record_result = execute_schema(schema, delete, {"id": record_thread.sqid}, request=_request(creator))
+    record_result = execute_schema(schema, delete, {"id": record_thread.sqid}, user=creator)
     # The record thread is not on the generic write surface: the by-pk lookup misses
     # it, so the delete resolves no target and reports the miss.
     assert record_result.errors is not None
     assert (record_result.data or {}).get("delete_threads_by_pk") is None
 
-    inbox_deleted = _data(execute_schema(schema, delete, {"id": inbox_thread.sqid}, request=_request(creator)))[
+    inbox_deleted = _data(execute_schema(schema, delete, {"id": inbox_thread.sqid}, user=creator))[
         "delete_threads_by_pk"
     ]
     assert inbox_deleted == {"id": inbox_thread.sqid}
@@ -3142,7 +3135,7 @@ def test_delete_channel_preview_counts_purge_as_deleted(composed_tables: None) -
             }
             """,
             {"id": channel.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["delete_channel"]
     counts = {group["label"]: group["count"] for group in preview["deleted"]}
@@ -3165,7 +3158,7 @@ def test_delete_channel_preview_counts_purge_as_deleted(composed_tables: None) -
             }
             """,
             {"id": channel.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )
     assert not Channel._base_manager.filter(pk=channel.pk).exists()
@@ -3196,7 +3189,7 @@ def test_delete_channel_denied_for_non_admin_reader(composed_tables: None) -> No
         }
         """,
         {"id": channel.sqid},
-        request=_request(reader),
+        user=reader,
     )
 
     assert result.errors is not None

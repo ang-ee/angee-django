@@ -2077,7 +2077,7 @@ def test_oauth_completion_returns_typed_outage_for_refused_endpoint(
         mutation = {
             "login": "login_complete", "link": "link_account_complete", "connect": "connect_account_complete",
         }[flow_name]
-        request = graphql_request(AnonymousUser() if flow_name == "login" else user, "/graphql/console/")
+        request = graphql_request(AnonymousUser() if flow_name == "login" else user)
         result = result_data(execute_schema(schema, f'''mutation {{
           {mutation}(code: "code", state: "{token}", redirect_uri: "{redirect}") {{
             error error_code
@@ -2216,7 +2216,7 @@ def test_oidc_login_with_blank_secret_public_client(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
     monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
-    request = graphql_request(AnonymousUser(), "/graphql/console/")
+    request = graphql_request(AnonymousUser())
     request.session = SessionStore()
     result = result_data(execute_schema(schema, f'''mutation {{
       login_complete(code: "code", state: "{token}", redirect_uri: "{redirect}") {{ ok error error_code }}
@@ -2244,7 +2244,7 @@ def test_oidc_completion_returns_typed_integration_error(
     monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
     monkeypatch.setattr(identity, f"complete_{flow_name}", refuse)
     mutation = "login_complete" if flow_name == "login" else "link_account_complete"
-    request = graphql_request(user if flow_name == "link" else AnonymousUser(), "/graphql/console/")
+    request = graphql_request(user if flow_name == "link" else AnonymousUser())
     result = result_data(execute_schema(schema, f'''mutation {{
       {mutation}(code: "code", state: "state", redirect_uri: "https://app.example/callback") {{ error error_code }}
     }}''', request=request))[mutation]

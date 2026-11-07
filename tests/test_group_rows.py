@@ -14,7 +14,7 @@ from strawberry import auto
 
 from angee.base.models.base import AngeeDataModel
 from angee.base.pagination import MAX_PAGE_SIZE
-from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.data.hasura import _bucket_value, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -124,7 +124,8 @@ def test_group_rows_follow_the_where_and_respect_the_declared_limit() -> None:
             for limit in (0, MAX_PAGE_SIZE + 1):
                 result = execute_schema(schema, CHILD_GROUPS, {"limit": limit})
                 assert result.errors is not None
-                assert "Group rows limit must be between 1" in str(result.errors[0])
+                assert f"Page size must be between 1 and {MAX_PAGE_SIZE}" in str(result.errors[0])
+                assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -296,3 +297,54 @@ def test_date_extraction_groups_carry_rows_by_their_range_drill() -> None:
     assert sorted([row["name"] for row in group["rows"]] for group in data["dated_group_things_groups"]) == [
         ["a", "b"], ["c"],
     ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_group_rows_over_two_axes_are_refused_before_any_rows_statement() -> None:
+    """Two axes' drills would read their buckets' cross product; the request reads no rows at all."""
+
+    @strawberry_django.type(ResourceChild)
+    class TwoAxisChildType(AngeeNode):
+        name: auto
+
+    resource = hasura_model_resource(
+        TwoAxisChildType,
+        model=ResourceChild,
+        name="two_axis_children",
+        filterable=["id", "name", "parent"],
+        sortable=["name"],
+        aggregatable=["id"],
+        groupable=["parent", "name"],
+        get_queryset=lambda info: ResourceChild.objects.all(),
+        insert=False,
+        update=False,
+        delete=False,
+    )
+    schema = _schema(resource, TwoAxisChildType)
+    groups = "query { two_axis_children_groups(group_by: [{field: PARENT}, {field: NAME}]) { aggregate { count } %s } }"
+    with model_tables((ResourceParent, ResourceChild)):
+        with system_context(reason="test.group_rows.two_axes.seed"):
+            for parent in ("alpha", "beta"):
+                owner = ResourceParent.objects.create(name=parent)
+                for name in ("x", "y"):
+                    ResourceChild.objects.create(name=name, parent=owner)
+
+        with system_context(reason="test.group_rows.two_axes.read"):
+            with CaptureQueriesContext(connection) as counted:
+                assert len(result_data(execute_schema(schema, groups % ""))["two_axis_children_groups"]) == 4
+            with CaptureQueriesContext(connection) as carried:
+                refused = execute_schema(schema, groups % "rows(limit: 1) { name }")
+    assert refused.errors is not None
+    assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert "Group rows carry one group axis" in refused.errors[0].message
+    # The refusal comes before the rows statement: no more statements than the groups read.
+    assert len(carried) <= len(counted)
+    assert not any("ROW_NUMBER" in query["sql"].upper() for query in carried)
+
+
+def test_a_boolean_bucket_is_never_the_number_it_hashes_as() -> None:
+    """JSON ``true`` and ``1`` are separate groups, as are ``false`` and ``0``."""
+
+    assert len({_bucket_value(True), _bucket_value(1), _bucket_value(False), _bucket_value(0)}) == 4
+    assert _bucket_value(1) == _bucket_value(1) and _bucket_value(True) == _bucket_value(True)
+    assert _bucket_value({"b": 1, "a": 2}) == _bucket_value({"a": 2, "b": 1})

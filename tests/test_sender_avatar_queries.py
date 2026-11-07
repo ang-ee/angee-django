@@ -36,7 +36,7 @@ def test_message_lists_the_inbox_navigator_and_same_as_pairs_batch_their_avatars
     owner = get_user_model().objects.create_user(username="sender-avatar-owner")
     channel = make_integration(owner.username, model=Channel, owner=owner)
     schema = _schema()
-    request = graphql_request(owner, "/graphql/console/")
+    request = graphql_request(owner)
     shown: dict[str, str] = {}
 
     def seed(start: int, count: int) -> None:

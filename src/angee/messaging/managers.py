@@ -46,7 +46,6 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, NotSupportedError, connections, models, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import MD5, Coalesce, Greatest
-from django.db.models.query import ModelIterable
 from django.utils import timezone
 from django.utils.html import strip_tags
 from rebac import (
@@ -60,7 +59,6 @@ from rebac import (
 )
 from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.backends import backend
-from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.managers import AngeeManager
@@ -69,8 +67,8 @@ from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.permissions import actor_user_id, require_rebac_queryset
-from angee.base.prefetch import ReaderMemo
+from angee.base.permissions import actor_user_id, contextual_action_holds, require_rebac_queryset
+from angee.base.prefetch import InstancePrefetch, ReaderMemo
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
@@ -90,7 +88,6 @@ from angee.messaging.delivery import (
 )
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
-from angee.messaging.inbox import MessageInbox
 from angee.messaging.source_copies import observe_email_identity
 from angee.parties.managers import Signing
 from angee.parties.models import Handle
@@ -103,6 +100,7 @@ if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
     from angee.messaging.backends import ParsedMessage, ParsedThread
+    from angee.messaging.inbox import MessageInbox
     from angee.messaging.models import (
         Channel,
         Fragment,
@@ -481,7 +479,8 @@ def _message_search_query(term: str) -> models.Q:
 # at a page boundary. These express the keyset comparison against an `(at, pk)` anchor.
 
 
-_MESSAGE_ORDER = KeysetOrder("_order_at")
+MESSAGE_ORDER = KeysetOrder("_order_at")
+"""Messages' total chronology, ``_order_at`` then pk: every message page, keyset or offset, pages it."""
 
 
 class _MessageChronology(TypedDict):
@@ -662,6 +661,17 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
     )
 
 
+def _inbox_action(model: type[models.Model]) -> str:
+    """``read_inbox`` while the effective policy proves it stands in for ``read`` there, else ``read``.
+
+    An override on a thread or message ``read`` or ``read_inbox``, or a store not yet
+    synced to messaging's declaration, keeps the inbox on ``read``
+    (``contextual_action_holds``); overrides meant for both reads target ``read_granted``.
+    """
+
+    return "read_inbox" if contextual_action_holds(model, "read_inbox") else "read"
+
+
 class ThreadQuerySet[ThreadT: Thread](
     MergeableQuerySet[ThreadT], OwnerQuerySet[ThreadT], AngeeHistoryQuerySet[ThreadT],
 ):
@@ -675,20 +685,31 @@ class ThreadQuerySet[ThreadT: Thread](
         payload (gated on the parent record's read) and must never surface in the
         owner-scoped generic ``threads`` list, aggregate, or by-pk lookup.
         Without chatter, ``read_inbox`` admits exactly the readers ``read`` does
-        and compiles no record's read. The action replaces the caller's; a verb
-        that needs another selects it after this one.
+        and compiles no record's read; the inbox reads it while the effective policy
+        proves that (``_inbox_action``), else ``read``. The action replaces the
+        caller's; a verb that needs another selects it after this one.
         """
 
-        # A structural anti-join inside the already authorized inbox queryset: the
-        # unscoped base manager supplies every redirect group without opening a
-        # separately audited system read. Equality on the survivor id is hashed once.
-        chatter = self.model._base_manager.filter(attachments__role="chatter").survivor_ids()
-        attached = chatter.filter(survivor=self.survivor_id(ref=models.OuterRef))
-        return (
-            self.alias(_record_attached=models.Exists(attached))
-            .filter(_record_attached=False)
-            .with_action("read_inbox")
-        )
+        return self.filter(self.inbox_q()).with_action(_inbox_action(self.model))
+
+    @staticmethod
+    def inbox_q(through: str = "") -> models.Q:
+        """Select :meth:`inbox` threads, or rows reaching one through the relation path ``through``.
+
+        A row qualifies while no thread in the redirect group of the thread it
+        reaches (itself, for an empty ``through``) is a record's chatter.
+        ``MessageQuerySet.inbox_q`` selects through a message's thread; a row without
+        a thread has no survivor id, so it matches no group.
+        """
+
+        # A structural anti-join inside the already authorized queryset: the unscoped
+        # base manager supplies every redirect group without opening a separately
+        # audited system read. Equality on the survivor id is hashed once.
+        thread_model = apps.get_model("messaging", "Thread")
+        chatter_role = apps.get_model("messaging", "ThreadAttachment").AttachmentRole.CHATTER
+        chatter = thread_model._base_manager.filter(attachments__role=chatter_role).survivor_ids()
+        attached = chatter.filter(survivor=MergeableQuerySet.survivor_id(through, ref=models.OuterRef))
+        return ~models.Q(models.Exists(attached))
 
     def for_channel(self, channel: Any) -> Self:
         """Return the threads that belong to ``channel`` — the purge-scope predicate.
@@ -1040,7 +1061,6 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
 
 _READABLE_ATTACHMENTS = ReaderMemo("_messaging_readable_attachments")
 """A record's readable thread attachments per role, for the reader that read them."""
-"""The instance attribute holding a record's remembered readable thread edges."""
 
 
 class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryManager[ThreadAttachmentT]):
@@ -1401,6 +1421,10 @@ class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](AngeeQuerySet[Thre
 _ThreadFollowerManagerBase = AngeeManager.from_queryset(ThreadFollowerQuerySet)
 
 
+_NEEDACTION = ReaderMemo("_messaging_needaction")
+"""A page message's needaction marker, for the reader whose unread scan answered it."""
+
+
 class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerManagerBase[ThreadFollowerT]):
     """Owns party subscriptions to model-attached chatter threads."""
 
@@ -1707,13 +1731,13 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
 
         message_model = apps.get_model("messaging", "Message")
         queryset = message_model._base_manager.using(thread._state.db).filter(
-            thread_id__in=thread.member_threads().values("pk"), is_trashed=False,
+            TrashQuerySet.untrashed_q(), thread_id__in=thread.member_threads().values("pk"),
         ).annotate(
             _order_at=MessageQuerySet.chronological_time()
         )
         if history_before is not None:
-            queryset = queryset.filter(_MESSAGE_ORDER.before(history_before.chronological_key))
-        latest = queryset.order_by(*_MESSAGE_ORDER.ordering()).first()
+            queryset = queryset.filter(MESSAGE_ORDER.before(history_before.chronological_key))
+        latest = queryset.order_by(*MESSAGE_ORDER.ordering()).first()
         if latest is None:
             return
         follower.last_read_message = latest
@@ -1745,10 +1769,10 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if target is None:
             target = (
                 message_model._base_manager.using(self.db).filter(
-                    thread_id__in=thread.member_threads().values("pk"), is_trashed=False,
+                    TrashQuerySet.untrashed_q(), thread_id__in=thread.member_threads().values("pk"),
                 )
                 .annotate(_order_at=MessageQuerySet.chronological_time())
-                .order_by(*_MESSAGE_ORDER.ordering())
+                .order_by(*MESSAGE_ORDER.ordering())
                 .first()
             )
         if target is None:
@@ -1803,14 +1827,16 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if follower is None:
             return message_model._base_manager.none()
         queryset = (
-            message_model._base_manager.filter(thread_id__in=thread.member_threads().values("pk"), is_trashed=False)
+            message_model._base_manager.filter(
+                TrashQuerySet.untrashed_q(), thread_id__in=thread.member_threads().values("pk"),
+            )
             .annotate(_order_at=MessageQuerySet.chronological_time())
             .filter(follower.notification_preference.subscribed_subtype_q())
         )
         if follower.last_read_message is None:
             return queryset
         anchor = follower.last_read_message.chronological_key
-        return queryset.filter(_MESSAGE_ORDER.after(anchor))
+        return queryset.filter(MESSAGE_ORDER.after(anchor))
 
     def unread_count_for_record(
         self,
@@ -1844,15 +1870,30 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             return 0
         return self.mark_read_up_to(attachment.thread, party=party, user=user, user_id=user_id)
 
+    def needaction_for_messages(self, thread: Any, messages: Sequence[Any], *, user: Any) -> None:
+        """Answer :meth:`needaction_for_message` for a page of ``thread``'s messages with one unread scan.
+
+        The answers are remembered for ``user``; another reader asks the per-message rule.
+        """
+
+        unread = set(self.unread_messages(thread, user=user).filter(
+            pk__in=[message.pk for message in messages],
+        ).values_list("pk", flat=True))
+        for message in messages:
+            _NEEDACTION.remember(message, "needaction", user, message.pk in unread)
+
     def needaction_for_message(self, message: Any, *, party: Any = None, user: Any = None, user_id: Any = None) -> bool:
         """Return whether ``message`` needs ``user``'s attention: past their read receipt
         AND within their subtype subscription.
 
         Reads the same muting rule as the unread scan (``NotificationPreference.is_subscribed_to``),
         so a muted or non-subscribed subtype is never needaction even when it sits past the
-        receipt — the per-message marker cannot disagree with the badge count.
+        receipt — the per-message marker cannot disagree with the badge count. A page
+        :meth:`needaction_for_messages` answered for ``user`` answers from that scan.
         """
 
+        if (remembered := _NEEDACTION.get(message, "needaction", user)) is not None:
+            return bool(remembered)
         if message.thread_id is None or message.is_trashed:
             return False
         party_id = self.get_party_id(party=party, user=user, user_id=user_id)
@@ -1898,27 +1939,28 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         return deleted
 
 
-class NotificationPointerIterable(ModelIterable):
-    """Prime the narrowed inbox projection once per materialized Django page."""
+class MessagePointers(InstancePrefetch):
+    """A notification list's narrow message context, read once for the hint's reader.
 
-    def __iter__(self) -> Iterator[Any]:
-        rows = list(super().__iter__())
-        manager = self.queryset.model._default_manager
-        if not isinstance(manager, ThreadNotificationManager):
-            raise ImproperlyConfigured("NotificationPointerIterable requires a ThreadNotificationManager.")
-        manager.prime_message_pointers(rows, relation_actor(self.queryset))
-        yield from rows
+    Hint it through ``ThreadNotification.message_pointers_prefetch``: each listed
+    notification gets its message, or ``None`` when the reader no longer reads the
+    message's threaded record (``ThreadNotificationManager.message_pointers``).
+    """
+
+    def related(
+        self, instances: list[Any], queryset: models.QuerySet[Any],
+    ) -> tuple[list[Any], Callable[[Any], object], Callable[[Any], object]]:
+        pointers = queryset.model._default_manager.message_pointers(instances, self.reader(queryset))
+        messages = list({message.pk: message for message in pointers.values()}.values())
+        return (
+            messages,
+            lambda message: message.pk,
+            lambda notification: pointers[notification.pk].pk if notification.pk in pointers else None,
+        )
 
 
 class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](AngeeQuerySet[ThreadNotificationT]):
     """Chainable read scopes for per-recipient delivery rows."""
-
-    def with_message_pointers(self) -> Self:
-        """Batch the recipient's narrow message context after filtering and pagination."""
-
-        queryset = self.all()
-        queryset._iterable_class = NotificationPointerIterable
-        return queryset
 
     def for_attachment(self, attachment: Any) -> Self:
         """Return notifications bound to one record's chatter attachment edge."""
@@ -1936,8 +1978,8 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
 ):
     """Owns per-item delivery and acknowledgement, independently of follower cursors."""
 
-    def prime_message_pointers(self, rows: Sequence[Any], actor: Any) -> None:
-        """Load narrow message context, checking read once per distinct attached record.
+    def message_pointers(self, rows: Sequence[Any], actor: Any) -> dict[Any, Any]:
+        """Each notification's narrow message context by pk, checking read once per distinct attached record.
 
         Elevated bookkeeping loads never authorize a message. Only a current
         recipient who can still read its threaded record gets the pointer.
@@ -1946,14 +1988,12 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
 
         from angee.messaging.models import ThreadedModelMixin
 
-        for row in rows:
-            row._inbox_message_pointer = None
         if not rows or actor is None:
-            return
+            return {}
         recipient_id = actor_user_id(actor)
         rows = [row for row in rows if str(row.user_id) == str(recipient_id)]
         if not rows:
-            return
+            return {}
         with system_context(reason="messaging.notification.message_pointers"):
             messages = {
                 message.pk: message
@@ -1988,6 +2028,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             attachment.thread_id: current(attachment) for attachment in attachments if attachment.role == "chatter"
         }
         allowed: dict[tuple[Any, Any], bool] = {}
+        pointers: dict[Any, Any] = {}
         for row in rows:
             attachment = by_id.get(row.attachment_id) if row.attachment_id is not None else by_thread.get(row.thread_id)
             if attachment is None:
@@ -1999,19 +2040,16 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             message = messages.get(row.message_id)
             if allowed[key] and message is not None and not message.is_trashed:
                 message._inbox_attachment = attachment
-                row._inbox_message_pointer = message
+                pointers[row.pk] = message
         senders = {
             sender.pk: sender
             for sender in apps.get_model("parties", "Handle")
             .objects.with_actor(actor)
-            .filter(
-                pk__in={row._inbox_message_pointer.sender_id for row in rows if row._inbox_message_pointer is not None}
-            )
+            .filter(pk__in={message.sender_id for message in pointers.values()})
         }
-        for row in rows:
-            message = row._inbox_message_pointer
-            if message is not None:
-                message._meta.get_field("sender").set_cached_value(message, senders.get(message.sender_id))
+        for message in pointers.values():
+            message._meta.get_field("sender").set_cached_value(message, senders.get(message.sender_id))
+        return pointers
 
     @transaction.atomic
     def mark_read(self, notification: Any, actor: Any) -> Any:
@@ -2054,10 +2092,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         return (
             self.sudo(reason="messaging.notification.for_record")
             .for_attachment(attachment)
-            .filter(
-                user_id=resolved_user_id,
-            )
-            .exclude(message__is_trashed=True)
+            .filter(TrashQuerySet.untrashed_q("message__"), user_id=resolved_user_id)
         )
 
     def fanout_for_message(
@@ -2473,11 +2508,14 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             NotificationPreference.subscribed_row_q(
                 notification_policy="_follow_policy", subtype_keys="_follow_subtypes",
             ),
-            models.Q(_read_pk__isnull=True) | _MESSAGE_ORDER.after((models.F("_read_at"), models.F("_read_pk"))),
+            models.Q(_read_pk__isnull=True) | MESSAGE_ORDER.after((models.F("_read_at"), models.F("_read_pk"))),
         )
 
     def explorer(self) -> MessageInbox:
         """Compose personal-inbox reads from this collection's current scope."""
+
+        # The inbox query owner composes these querysets, so it imports this module.
+        from angee.messaging.inbox import MessageInbox
 
         return MessageInbox(self)
 
@@ -2506,26 +2544,23 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         ``messages`` list, aggregate, or by-pk lookup. A message with no thread (an
         ingested mail whose thread was merged away) is not record-attached and stays
         in the inbox. Without chatter, ``read_inbox`` admits exactly the readers
-        ``read`` does and compiles no record's read. The action replaces the
-        caller's; a verb that needs another selects it after this one.
+        ``read`` does and compiles no record's read; the inbox reads it while the
+        effective policy proves that (``_inbox_action``), else ``read``. The action
+        replaces the caller's; a verb that needs another selects it after this one.
         """
 
-        return self.filter(self.inbox_q()).with_action("read_inbox")
+        return self.filter(self.inbox_q()).with_action(_inbox_action(self.model))
 
     @staticmethod
     def inbox_q(through: str = "") -> models.Q:
         """Select :meth:`inbox` messages, or rows reaching one through the relation path ``through``.
 
         A part filters ``inbox_q("message__")`` on its message's join, so its own
-        actor-scoped read is the only authorization of that message.
+        actor-scoped read is the only authorization of that message. The thread's
+        chatter rule decides (``ThreadQuerySet.inbox_q``).
         """
 
-        # The same structural anti-join as ``ThreadQuerySet.inbox``. A message
-        # without a thread has no survivor id, so it matches no redirect group.
-        thread_model = apps.get_model("messaging", "Thread")
-        chatter = thread_model._base_manager.filter(attachments__role="chatter").survivor_ids()
-        attached = chatter.filter(survivor=MergeableQuerySet.survivor_id(f"{through}thread__", ref=models.OuterRef))
-        return ~models.Q(models.Exists(attached))
+        return ThreadQuerySet.inbox_q(f"{through}thread__")
 
     def automated_sender_ids(self) -> models.QuerySet[Any]:
         """Return the senders whose every message here is automated mail.
@@ -2679,7 +2714,16 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             if kind == "message":
                 canonical |= queryset.untrashed().filter(sqid=value)
             queryset = canonical
-        return queryset.order_by(*_MESSAGE_ORDER.ordering())
+        return queryset.chronological()
+
+    def chronological(self, *, oldest_first: bool = False) -> Self:
+        """Order by the message feed's total chronology, ``_order_at`` then pk, newest first unless ``oldest_first``.
+
+        Every message page, keyset or offset, pages this one order; the queryset
+        carries ``_order_at`` (:meth:`for_feed`).
+        """
+
+        return self.order_by(*MESSAGE_ORDER.ordering(oldest_first=oldest_first))
 
     @staticmethod
     def _feed_search(search: str) -> str:
@@ -2722,7 +2766,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
                     ZoneInfo(zone) if zone else timezone.get_current_timezone(),
                 )
                 around = (
-                    queryset.filter(_order_at__gte=instant).order_by(*_MESSAGE_ORDER.ordering(oldest_first=True)).first()
+                    queryset.filter(_order_at__gte=instant).order_by(*MESSAGE_ORDER.ordering(oldest_first=True)).first()
                     or queryset.first()
                 )
             else:
@@ -2731,7 +2775,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
                 raise ValueError("Message unavailable in this conversation.")
         try:
             page = queryset.keyset_page(
-                order=_MESSAGE_ORDER,
+                order=MESSAGE_ORDER,
                 cursor_scope=(scope, search, all_copies),
                 cursor_salt="angee.messaging.feed.v1",
                 before_cursor=before_cursor,
@@ -3355,8 +3399,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         count = int(queryset.count())
         # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
         # return the page chronological ascending so the client renders it verbatim.
-        ascending = _MESSAGE_ORDER.ordering(oldest_first=True)
-        descending = _MESSAGE_ORDER.ordering()
+        ascending = MESSAGE_ORDER.ordering(oldest_first=True)
+        descending = MESSAGE_ORDER.ordering()
         if around not in (None, ""):
             anchor = self._record_message_anchor(queryset, around)
             if anchor is None:
@@ -3364,19 +3408,19 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             before_limit = max(1, limit // 2)
             after_limit = max(0, limit - before_limit)
             page = [
-                *queryset.filter(_MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
-                *queryset.filter(_MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
+                *queryset.filter(MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
+                *queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
             ]
         elif before not in (None, ""):
             anchor = self._record_message_anchor(queryset, before)
             if anchor is None:
                 return [], count
-            page = list(queryset.filter(_MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
+            page = list(queryset.filter(MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
         elif after not in (None, ""):
             anchor = self._record_message_anchor(queryset, after)
             if anchor is None:
                 return [], count
-            page = list(queryset.filter(_MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
+            page = list(queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
         else:
             page = list(queryset.order_by(*descending)[:limit])
         return sorted(page, key=lambda message: message.chronological_key), count
@@ -3391,8 +3435,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             return False
         edge = messages[-1] if newer else messages[0]
         scope = self.record_scope(record, role=role, search=search, message_types=message_types)
-        boundary = (_MESSAGE_ORDER.after(edge.chronological_key) if newer
-                    else _MESSAGE_ORDER.before(edge.chronological_key))
+        boundary = (MESSAGE_ORDER.after(edge.chronological_key) if newer
+                    else MESSAGE_ORDER.before(edge.chronological_key))
         return bool(scope.filter(boundary).exists())
 
     def _record_message_anchor(self, queryset: Any, value: Any) -> tuple[Any, Any] | None:

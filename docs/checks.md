@@ -89,7 +89,10 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
 knowledge, messaging, proposals, sequences, spaces, storage, the system
 queryset, work and task ordering locks, integrate streams and workflow
-integrate steps, and the composed
+integrate steps, the [grouped rows](../tests/test_group_rows.py) partitions, the
+messaging inbox's [explorer](../tests/test_inbox_explorer.py),
+[thread and message reads](../tests/test_messaging_inbox_read.py) and
+[part reads](../tests/test_inbox_part_reads.py), and the composed
 [intake access decision](../tests/test_intake_access_decision.py). It also runs
 [task ordering](../tests/test_task_rank_allocation.py),
 [record tasks](../tests/test_projects_record_tasks.py), and the
@@ -227,8 +230,8 @@ adapter parity, and mocked helper behavior without starting the application.
 file that declares the symbol, and every public class a foundation models or fields
 module declares, and every source distribution (including libraries), has a row. It
 also refuses any `path:line` or `path:line-line` in the skills, capability guides
-and their references, and a guide line in shorthand (`guidelines:120`); only
-`docs/` references keep a line.
+and their references, a guide line in shorthand (`guidelines:120`) and a line
+cited in prose (`line 120`); only `docs/` references keep a line.
 Disabling pytest-django, application configuration, and conftest intentionally
 isolates these tests; use normal pytest for application or template behavior.
 If template source changes too, run its contract tests and the Python suite above. A prose-only

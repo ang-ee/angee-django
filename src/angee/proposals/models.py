@@ -55,6 +55,7 @@ from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
+from angee.base.prefetch import prefetched
 from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, ClosedUpdateQuerySet
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
 from angee.base.validators import validate_value
@@ -78,6 +79,9 @@ _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
 
 _CLARIFICATION_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "clarification")
 """Anonymous attribution shared by clarification content and nested history."""
+
+_ROSTER = "_roster_entries"
+"""Where a round's roster facts land, through ``Round.roster_prefetch``."""
 
 
 class ClarificationWidenBlocked(DomainError, ValidationError):
@@ -651,7 +655,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             )
             .order_by("responder_id")
         )
-        return models.Prefetch("proposals", queryset=rows, to_attr="_roster_entries")
+        return models.Prefetch("proposals", queryset=rows, to_attr=_ROSTER)
 
     def roster(self, *, permitted: bool | None = None, status: bool | None = None) -> list[RosterEntry]:
         """Use batched permission answers and prefetched scalar facts on lists."""
@@ -661,11 +665,9 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             return []
         if status is None:
             status = self.has_access("roster_status")
-        if "_roster_entries" not in self.__dict__:
-            models.prefetch_related_objects([self], type(self).roster_prefetch())
         return [
             RosterEntry(row.responder_id, row._roster_name, row._roster_track_status if status else None)
-            for row in self._roster_entries
+            for row in prefetched(self, _ROSTER, type(self).roster_prefetch)
         ]
 
     def requester_user_id(self) -> Any | None:

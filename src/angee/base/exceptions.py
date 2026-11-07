@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, PermissionDenied, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, BadRequest, ObjectDoesNotExist, PermissionDenied, ValidationError
 from rebac import MissingActorError
 
 INTERNAL_ERROR_MESSAGE = "An unexpected error occurred."
@@ -46,6 +46,9 @@ def classify_error(error: BaseException | None) -> ErrorClassification:
         return ErrorClassification("VALIDATION", " ".join(validation.messages))
     if isinstance(error, TransitionNotAllowed | ObjectDoesNotExist):
         return ErrorClassification("BAD_USER_INPUT", "The requested operation was refused.")
+    if isinstance(error, BadRequest):
+        # Django's client-error type: its authored message names the argument the client fixes.
+        return ErrorClassification("BAD_USER_INPUT", str(error))
     return ErrorClassification("INTERNAL", INTERNAL_ERROR_MESSAGE)
 
 

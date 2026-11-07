@@ -117,7 +117,7 @@ export type MetricStripProps = Omit<
   loading?: boolean;
   /** How many skeleton tiles a loading strip shows (default 4). */
   loadingCount?: number;
-  loadingMessage?: string;
+  loadingLabel?: string;
 };
 
 /**
@@ -280,7 +280,7 @@ function AnimatedMetricTileNumber({
  * @kind fragment
  */
 export const MetricStrip = React.forwardRef<HTMLDivElement, MetricStripProps>(
-  function MetricStrip({ className, density = "compact", items, metrics, loading = false, loadingCount = 4, loadingMessage, ...props }, ref) {
+  function MetricStrip({ className, density = "compact", items, metrics, loading = false, loadingCount = 4, loadingLabel, ...props }, ref) {
     const styles = metricStripVariants({ density });
     const resolved: readonly MetricTileValue[] =
       metrics ?? items?.map((item) => definitionFromTuple(item)) ?? [];
@@ -294,8 +294,8 @@ export const MetricStrip = React.forwardRef<HTMLDivElement, MetricStripProps>(
           <Skeleton shape="text" size="lg" className="mt-3 w-24" />
         </Card>
       ));
-      return loadingMessage
-        ? <SkeletonStatus loadingLabel={loadingMessage} className={cn(styles.root(), className)}>{tiles}</SkeletonStatus>
+      return loadingLabel
+        ? <SkeletonStatus loadingLabel={loadingLabel} className={cn(styles.root(), className)}>{tiles}</SkeletonStatus>
         : <div aria-hidden="true" className={cn(styles.root(), className)}>{tiles}</div>;
     }
 
