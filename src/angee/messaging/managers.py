@@ -691,16 +691,26 @@ class ThreadQuerySet[ThreadT: Thread](
         caller's; a verb that needs another selects it after this one.
         """
 
-        # A structural anti-join inside the already authorized inbox queryset: the
-        # unscoped base manager supplies every redirect group without opening a
-        # separately audited system read. Equality on the survivor id is hashed once.
-        chatter = self.model._base_manager.filter(attachments__role="chatter").survivor_ids()
-        attached = chatter.filter(survivor=self.survivor_id(ref=models.OuterRef))
-        return (
-            self.alias(_record_attached=models.Exists(attached))
-            .filter(_record_attached=False)
-            .with_action(_inbox_action(self.model))
-        )
+        return self.filter(self.inbox_q()).with_action(_inbox_action(self.model))
+
+    @staticmethod
+    def inbox_q(through: str = "") -> models.Q:
+        """Select :meth:`inbox` threads, or rows reaching one through the relation path ``through``.
+
+        A row qualifies while no thread in the redirect group of the thread it
+        reaches (itself, for an empty ``through``) is a record's chatter.
+        ``MessageQuerySet.inbox_q`` selects through a message's thread; a row without
+        a thread has no survivor id, so it matches no group.
+        """
+
+        # A structural anti-join inside the already authorized queryset: the unscoped
+        # base manager supplies every redirect group without opening a separately
+        # audited system read. Equality on the survivor id is hashed once.
+        thread_model = apps.get_model("messaging", "Thread")
+        chatter_role = apps.get_model("messaging", "ThreadAttachment").AttachmentRole.CHATTER
+        chatter = thread_model._base_manager.filter(attachments__role=chatter_role).survivor_ids()
+        attached = chatter.filter(survivor=MergeableQuerySet.survivor_id(through, ref=models.OuterRef))
+        return ~models.Q(models.Exists(attached))
 
     def for_channel(self, channel: Any) -> Self:
         """Return the threads that belong to ``channel`` — the purge-scope predicate.
@@ -1052,7 +1062,6 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
 
 _READABLE_ATTACHMENTS = ReaderMemo("_messaging_readable_attachments")
 """A record's readable thread attachments per role, for the reader that read them."""
-"""The instance attribute holding a record's remembered readable thread edges."""
 
 
 class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryManager[ThreadAttachmentT]):
@@ -2530,15 +2539,11 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         """Select :meth:`inbox` messages, or rows reaching one through the relation path ``through``.
 
         A part filters ``inbox_q("message__")`` on its message's join, so its own
-        actor-scoped read is the only authorization of that message.
+        actor-scoped read is the only authorization of that message. The thread's
+        chatter rule decides (``ThreadQuerySet.inbox_q``).
         """
 
-        # The same structural anti-join as ``ThreadQuerySet.inbox``. A message
-        # without a thread has no survivor id, so it matches no redirect group.
-        thread_model = apps.get_model("messaging", "Thread")
-        chatter = thread_model._base_manager.filter(attachments__role="chatter").survivor_ids()
-        attached = chatter.filter(survivor=MergeableQuerySet.survivor_id(f"{through}thread__", ref=models.OuterRef))
-        return ~models.Q(models.Exists(attached))
+        return ThreadQuerySet.inbox_q(f"{through}thread__")
 
     def automated_sender_ids(self) -> models.QuerySet[Any]:
         """Return the senders whose every message here is automated mail.
