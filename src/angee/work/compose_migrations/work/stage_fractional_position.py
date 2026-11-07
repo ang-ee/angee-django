@@ -21,6 +21,8 @@ def spread_stages(apps, schema_editor):
             context, index = row.queue_id, 0
         index += 1
         rows.filter(pk=row.pk).update(position=index * FractionalRankField.STEP)
+    # Flush deferred FK checks from the updates before AddConstraint alters the table.
+    schema_editor.connection.check_constraints()
 
 
 class Migration(migrations.Migration):
