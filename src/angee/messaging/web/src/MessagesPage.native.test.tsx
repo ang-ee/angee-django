@@ -54,7 +54,7 @@ function checked(element: HTMLElement): boolean {
   return element.getAttribute("aria-checked") === "true";
 }
 
-function dataProvider({ count = 2, fail = false, transportFailure = false, limitFailure = false, limitPending = false } = {}) {
+function dataProvider({ count = 2, limit = 100, fail = false, transportFailure = false, limitFailure = false, limitPending = false } = {}) {
   const rows: MessageListRow[] = Array.from({ length: count }, (_, index) => ({
     id: String(index + 1), title: `Message ${index + 1}`, preview: "A held reply",
     created_at: "2026-10-01T00:00:00Z", channel: { id: "channel", display_name: "Discussion" },
@@ -64,7 +64,7 @@ function dataProvider({ count = 2, fail = false, transportFailure = false, limit
     if (meta?.gqlQuery === ActionSelectionLimit) {
       if (limitPending) return new Promise<never>(() => undefined);
       if (limitFailure) throw new Error("Limit unavailable");
-      return { data: { action_selection_limit: 100 } };
+      return { data: { action_selection_limit: limit } };
     }
     if (meta?.gqlMutation) {
       if (transportFailure) throw new Error("Publish unavailable");
@@ -199,15 +199,18 @@ test("a transport refusal keeps selection and permits another attempt", async ()
 });
 
 test("both held verbs disable above the server's selection bound", async () => {
-  const f = await fixture({ held: true, count: 101 });
+  // Only the group's carried first page (20 rows) is loaded and selectable, so the server's bound sits below it.
+  const f = await fixture({ held: true, count: 3, limit: 2 });
   const all = screen.getByRole("checkbox", { name: "Select all loaded rows" });
   fireEvent.click(all);
   expect(checked(all)).toBe(true);
-  expect((await screen.findByRole("button", { name: "Send now" })).hasAttribute("disabled")).toBe(true);
-  expect(screen.getByRole("button", { name: "Discard" }).hasAttribute("disabled")).toBe(true);
-  const reason = await screen.findByText("Select at most 100 held drafts.");
-  expect(screen.getByRole("button", { name: "Send now" }).getAttribute("aria-describedby")).toBe(reason.id);
-  expect(screen.getByRole("button", { name: "Discard" }).getAttribute("aria-describedby")).toBe(reason.id);
+  const reason = await screen.findByText("Select at most 2 held drafts.");
+  for (const name of ["Send now", "Discard"]) {
+    const button = screen.getByRole("button", { name });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(button.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(button.getAttribute("aria-busy")).toBeNull();
+  }
   expect(f.mutations()).toHaveLength(0);
 });
 
