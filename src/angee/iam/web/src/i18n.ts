@@ -13,7 +13,6 @@ export const enIamMessages: Record<string, string> = {
   "assignmentSubjects.users": "Users",
   "assignmentSubjects.groups": "Groups",
   "assignmentSubjects.label": "Reviewers",
-  "assignmentSubjects.loading": "Loading reviewers…",
   "assignmentSubjects.add": "Add reviewer",
   "assignmentSubjects.unavailable": "Reviewer choices could not be loaded.",
 

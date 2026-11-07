@@ -453,7 +453,7 @@ export function RecordThreadConversation({
       replyToMessage={replyToMessage}
       onClearReply={() => setReplyToMessage(null)}
       recipientOptions={recipientOptions}
-      recipientsLoading={recipientUsersQuery.isFetching}
+      recipientsLoading={recipientUsersQuery.isLoading}
       posting={postState.fetching}
       onPost={handlePost}
       onError={setError}
@@ -754,18 +754,15 @@ function ComposerRecipients({
   onRemove: (id: string) => void;
   onAutofollowChange: (checked: boolean) => void;
 }): React.ReactElement {
-  const placeholder = loading
-    ? t("composer.loadingRecipients")
-    : available.length > 0
-      ? t("composer.addRecipient")
-      : t("composer.noRecipients");
+  const placeholder = available.length > 0 ? t("composer.addRecipient") : t("composer.noRecipients");
   return (
     <div className="space-y-1.5 rounded-6 border border-border-subtle bg-surface px-2 py-2">
       <div className="flex items-center gap-2">
         <Glyph decorative name="users" className="shrink-0 text-fg-muted" />
         <Select
           value=""
-          disabled={disabled || loading || available.length === 0}
+          loading={loading}
+          disabled={disabled || available.length === 0}
           placeholder={placeholder}
           aria-label={t("composer.addRecipient")}
           className="min-w-0 flex-1"

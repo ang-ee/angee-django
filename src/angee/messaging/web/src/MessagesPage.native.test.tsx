@@ -54,7 +54,7 @@ function checked(element: HTMLElement): boolean {
   return element.getAttribute("aria-checked") === "true";
 }
 
-function dataProvider({ count = 2, fail = false, transportFailure = false, limitFailure = false } = {}) {
+function dataProvider({ count = 2, fail = false, transportFailure = false, limitFailure = false, limitPending = false } = {}) {
   const rows: MessageListRow[] = Array.from({ length: count }, (_, index) => ({
     id: String(index + 1), title: `Message ${index + 1}`, preview: "A held reply",
     created_at: "2026-10-01T00:00:00Z", channel: { id: "channel", display_name: "Discussion" },
@@ -62,6 +62,7 @@ function dataProvider({ count = 2, fail = false, transportFailure = false, limit
   }));
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     if (meta?.gqlQuery === ActionSelectionLimit) {
+      if (limitPending) return new Promise<never>(() => undefined);
       if (limitFailure) throw new Error("Limit unavailable");
       return { data: { action_selection_limit: 100 } };
     }
@@ -233,7 +234,19 @@ test("an action limit read error explains both disabled verbs instead of loading
     const button = screen.getByRole("button", { name });
     expect(button.hasAttribute("disabled")).toBe(true);
     expect(button.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(button.getAttribute("aria-busy")).toBeNull();
   }
-  expect(screen.queryByText("Loading the action selection limit.")).toBeNull();
+  expect(f.mutations()).toHaveLength(0);
+});
+
+test("while the action limit loads both verbs are busy, with no reason copy", async () => {
+  const f = await fixture({ held: true, limitPending: true });
+  fireEvent.click(rowCheckbox("Message 1"));
+  for (const name of ["Send now", "Discard"]) {
+    const button = await screen.findByRole("button", { name });
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(button.getAttribute("aria-describedby")).toBeNull();
+  }
   expect(f.mutations()).toHaveLength(0);
 });

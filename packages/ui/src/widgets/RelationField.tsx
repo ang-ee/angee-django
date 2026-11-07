@@ -6,7 +6,6 @@ import { Button } from "../ui/button";
 import { Pager, type PagerProps } from "../ui/pager";
 import { Chip } from "../ui/chip";
 import { Combobox } from "../ui/combobox";
-import { SkeletonStatus, SkeletonText } from "../ui/skeleton";
 import type { WidgetControlProps } from "./types";
 import type { Tone } from "../lib/tones";
 
@@ -159,9 +158,7 @@ export function RelationField({
       </Combobox.Trigger>
       <Combobox.Popup align="start" className="min-w-56 p-0" initialFocus={searchRef}>
         <Combobox.Search ref={searchRef} placeholder={searchPlaceholder ?? t("relation.searchPlaceholder")} />
-        {searchState?.pending ? <SkeletonStatus label={t("relation.loading")} className="p-3">
-          <SkeletonText lines={3} />
-        </SkeletonStatus> : null}
+        <Combobox.Status loading={Boolean(searchState?.pending)} loadingMessage={t("relation.loading")} />
         {searchState?.error ? <div role="alert" className="p-3 text-13 text-danger-text">
           {searchState.error}
           {searchState.retry ? <Button size="sm" variant="ghost" onClick={searchState.retry}>
