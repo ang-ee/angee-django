@@ -11,8 +11,9 @@ from pathlib import Path
 import pytest
 import strawberry
 from django.apps import apps
+from django.core import checks
 from django.core.management import call_command
-from django.core.management.base import CommandError
+from django.core.management.base import CommandError, SystemCheckError
 from django.test import override_settings
 from django.test.utils import override_system_checks
 from django_compose import provision
@@ -103,6 +104,31 @@ def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks()
             provision.ProvisionContext("default", command.stdout, command.stderr),
         )
         provision.run_step(command, ["check"])
+
+
+def test_failing_security_check_stops_provisioning_before_the_permission_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A security-tagged refusal, such as ``angee.iam.E001``, leaves the permission schema unsynced."""
+
+    def refuse(app_configs: object = None, **kwargs: object) -> list[checks.CheckMessage]:
+        return [checks.Error("A fragment widens a guarded permission.", id="tests.E001")]
+
+    commands: list[str] = []
+    native_call = provision.call_command
+
+    def recording_call(command: str, *args: object, **options: object) -> object:
+        commands.append(command)
+        return native_call(command, *args, **options)
+
+    monkeypatch.setattr(provision, "call_command", recording_call)
+    command = Command()
+    with override_system_checks([]), pytest.raises(SystemCheckError, match="tests.E001"):
+        checks.register(refuse, checks.Tags.security)
+        apps.get_app_config("base").compose_provision(
+            provision.ProvisionContext("default", command.stdout, command.stderr),
+        )
+    assert commands == ["check"]
 
 
 @pytest.mark.django_db

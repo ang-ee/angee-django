@@ -25,7 +25,7 @@ from django.db.models.expressions import Combinable
 from django.utils import timezone
 from django_choices_field import IntegerChoicesField
 from django_compose.models import Composable
-from rebac import PermissionDenied, current_actor, database_context, system_context
+from rebac import PermissionDenied, current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
@@ -98,7 +98,6 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
         queues = self.db_manager(self._db or user._state.db, hints={"instance": user})
         using = queues.db
         with (
-            database_context(using),
             system_context(reason="work.queue.personal.provision"),
             transaction.atomic(using=using),
         ):
@@ -281,7 +280,7 @@ class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits
         kwargs["using"] = using
         try:
             self.key = self.key.strip().upper()
-            with database_context(using), transaction.atomic(using=using):
+            with transaction.atomic(using=using):
                 self._validate_default_stage()
                 self._validate_estimate_settings()
                 super().save(*args, **kwargs)
@@ -1193,7 +1192,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         self._state.db = using
         kwargs["using"] = using
         try:
-            with database_context(using), transaction.atomic(using=using):
+            with transaction.atomic(using=using):
                 defaulted = self._apply_queue_and_stage_defaults(provision=True)
                 defaulted.update(self._validate_estimate(update_fields=update_fields))
                 if not stage_written:
@@ -1246,7 +1245,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         """Move to the first completed stage, or use the base verb without a queue."""
 
         using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             if self.queue_id is None:
                 return self._base_verb("complete", feedback=feedback)
             previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)

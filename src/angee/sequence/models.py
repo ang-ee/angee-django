@@ -37,7 +37,7 @@ from datetime import date
 from django.apps import apps
 from django.db import models
 from django.utils import timezone
-from rebac import database_context, system_context
+from rebac import system_context
 
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
@@ -68,7 +68,7 @@ class SequenceManager[SequenceT: Sequence](AngeeManager[SequenceT]):
         """
 
         draw_date = on_date or timezone.localdate()
-        with database_context(self.db), system_context(reason="sequence.next_value"):
+        with system_context(reason="sequence.next_value"):
             sequence = self.get(key=key)
             period = sequence.period_key(draw_date)
             value = self._counter_model().objects.db_manager(sequence._state.db).draw(sequence, period)
@@ -86,7 +86,7 @@ class SequenceManager[SequenceT: Sequence](AngeeManager[SequenceT]):
         """
 
         draw_date = on_date or timezone.localdate()
-        with database_context(self.db), system_context(reason="sequence.preview_next"):
+        with system_context(reason="sequence.preview_next"):
             sequence = self.filter(key=key).first()
             if sequence is None or not sequence.preview_enabled:
                 return None

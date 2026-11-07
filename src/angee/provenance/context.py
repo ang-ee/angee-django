@@ -362,8 +362,9 @@ def changeset(
     Asynchronous entrypoints use ``async with``. ``process=True`` is for an
     entrypoint that owns the whole process (a management command, a test): threads
     it starts without copying the context write under this boundary too. An explicit
-    ``using`` binds fresh attribution rows to the selected database; omitted values
-    retain Django router behavior. Nested scopes restore the previous boundary.
+    ``using`` passes a Django-supplied alias (a command's ``--database``) through to
+    fresh attribution rows; omitted, Django's router places them. Nested scopes
+    restore the previous boundary.
     """
 
     facts: dict[str, object] = {

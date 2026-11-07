@@ -17,7 +17,8 @@ the linked source and the installed `django_compose` modules.
    It loads deployment inputs and delegates once to `django_compose.conf.configure`.
    The compiler derives the enabled closure from the project's `INSTALLED_APPS`.
 3. **Compose explicitly.** The rendered `manage.py` calls
-   `django_compose.management.execute`. `python manage.py compose` selects build
+   `angee.server.management.execute`, which passes its `ManagementUtility`
+   subclass to `django_compose.management.execute`. `python manage.py compose` selects build
    mode before settings or models load, then emits the concrete model tree,
    receipt, and declared capability artifacts. No database is provisioned.
 4. **Consume verified output.** Ordinary management and serving processes use
@@ -65,8 +66,7 @@ Custom integrations consume `django_compose.components` and
 | Source-local catalogue facts and resource retirement exemptions | [`CatalogueIntegration`](../src/angee/resources/build.py) |
 | Web manifest and Tailwind projection | [`WebIntegration`](../src/angee/web/build.py) |
 | Database readiness and optional app preparation hooks | `django_compose.provision` |
-| Explicit URL and ASGI contributions | `django_compose.urls` and `django_compose.asgi` |
-| HTTP defaults, Uvicorn commands and connection policy | [`angee.server`](../src/angee/server/) |
+| URL and ASGI composition, command contexts, HTTP defaults, Uvicorn commands and connection policy | [`angee.server`](../src/angee/server/) |
 | GraphQL schema, SDL and WebSocket policy | [`schema.py`](../src/angee/graphql/schema.py) resolves and validates schema declarations; [`asgi.py`](../src/angee/graphql/asgi.py) validates WebSocket contributions; ready-phase [`SchemaIntegration`](../src/angee/graphql/sdl.py) emits SDL/metadata during compose |
 | MCP tools, HTTP mount and lifespan | [`angee.mcp`](../src/angee/mcp/) |
 | In-place addon layout and metadata defaults | Published [hatch-angee](https://github.com/ang-ee/hatch-angee) backend |
@@ -131,8 +131,9 @@ Loaded dependency edges come from `COMPOSE_CLOSURE`; model and field views read
 Django's registry and `_meta`, with contribution origins from emitted compiler facts.
 Catalogue display remains metadata-only. Selection checks do not prove model
 composition or migration safety; those remain explicit composition/history checks.
-`requires_apps`, `autoconfig`, `Composable` and `compose_urls` are django-compose
-extension contracts; they are not built-in Django behavior. Django owns
+`requires_apps`, `autoconfig` and `Composable` are django-compose extension
+contracts; addon `urls` and `asgi` modules are [serving](#serving) contracts.
+They are not built-in Django behavior. Django owns
 `AppConfig`, app population and the final `INSTALLED_APPS` registry.
 
 ## Autoconfig
@@ -255,13 +256,20 @@ the web manifest to generate TypeScript. Python does not render schema-shaped TS
 web, GraphQL or MCP declares it through native requirements. Model-only projects
 need no HTTP server. Ordinary Django URL settings remain valid.
 
-Native `django_compose.urls` reads explicit `AppConfig.compose_urls`, with optional
-prefix and namespace. Native `django_compose.asgi` reads `compose_asgi()` contributions
-after Django setup, rejects collisions and owns async lifespan teardown.
-GraphQL contributes its Channels WebSocket protocol; MCP contributes its HTTP
-mount and fresh native lifespan. `angee.server` supplies HTTP defaults and
-connection policy around those generic seams. Importing an app or its settings
-starts no server or background task.
+[`angee.server.urls`](../src/angee/server/urls.py) is the default `ROOT_URLCONF`:
+its readiness route, then each enabled addon's `urls` module through Django's
+`include()`, in installed app order; an addon's `app_name` selects its namespace.
+The registered `angee.server.E001` check reports identical native matching chains.
+After Django setup, [`angee.server.asgi`](../src/angee/server/asgi.py) serves
+Django's `ASGIHandler` with the `http_mounts` and `lifespans` contributions and
+the `protocols()` mapping of enabled addons' `asgi` modules, rejects mount and
+protocol collisions, and owns async lifespan teardown. GraphQL contributes its Channels
+WebSocket protocol; MCP contributes its HTTP mount and fresh native lifespan.
+The rendered `manage.py` calls [`angee.server.management.execute`](../src/angee/server/management/__init__.py),
+which passes a `ManagementUtility` subclass to django-compose's launcher. It
+enters the `ANGEE_SERVER_COMMAND_CONTEXT` factories IAM and provenance contribute
+after Django parses the winning command. Importing an app or its settings starts
+no server or background task.
 
 ## Example Project Shape
 
@@ -282,7 +290,7 @@ ANGEE_DATA_DIR: "{BASE_DIR}/.angee/data"
 ```
 
 `manage.py` selects `DJANGO_SETTINGS_MODULE=settings` and delegates to
-`django_compose.management.execute`. The authored root and generated package
+`angee.server.management.execute`. The authored root and generated package
 must be importable through normal Python installation/path semantics.
 
 ## Invariants

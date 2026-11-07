@@ -2,12 +2,19 @@
 
 from pathlib import Path
 
+from django.db import connection
+
 from tests.composed_host import run_composed_tests
 
 
 def run_intake_tests(tmp_path: Path, test_class: str) -> None:
     """Run one intake contract group against real emitted models in isolation."""
-    run_composed_tests(tmp_path, f"tests.native_intake_capture.{test_class}", app="angee.intake")
+    run_composed_tests(
+        tmp_path,
+        f"tests.native_intake_capture.{test_class}",
+        app="angee.intake",
+        test_postgresql=connection.vendor == "postgresql",
+    )
 
 
 def test_composed_intake_capture(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ from django.db import models, transaction
 from django.db.models import BooleanField, Exists, ExpressionWrapper, F, OuterRef, Q
 from django.db.models.functions import Now
 from pydantic import JsonValue, TypeAdapter
-from rebac import actor_context, current_actor, generic_target, system_context, to_subject_ref
+from rebac import actor_context, check_permission, current_actor, generic_target, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
 from angee.base.managers import AngeeManager
@@ -168,7 +168,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
                     for target in sorted(targets, key=lambda target: (target.content_type.pk, target.object_id))
                 ]
             )
-            if assignees and not any(decision.with_actor(person).has_access("act") for person in assignees):
+            if assignees and not any(check_permission("act", decision, actor=person).allowed for person in assignees):
                 raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})
             publish_change(decision, action="create", update_fields=None)
         return decision.with_actor(asking) if asking is not None else decision

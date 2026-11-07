@@ -1693,7 +1693,10 @@ class MessagingMutation:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
-        ThreadFollower.objects.mark_read_for_record(record, user=user, role=input.role)
+        try:
+            ThreadFollower.objects.mark_read_for_record(record, user=user, role=input.role)
+        except PermissionDenied as error:
+            return RecordThreadPayload.from_error(error, invalid_code="BAD_RECORD")
         return _record_thread_payload(record, info, role=input.role)
 
 
@@ -2280,7 +2283,10 @@ def _record_thread_payload(
 ) -> RecordThreadPayload:
     """Return a record thread payload with follower state for the request user."""
 
-    attachment = ThreadAttachment.objects.for_record(record, role=role)
+    try:
+        attachment = ThreadAttachment.objects.readable_for_record(record, role=role)
+    except PermissionDenied as error:
+        return RecordThreadPayload.from_error(error, invalid_code="BAD_RECORD")
     thread = attachment.thread if attachment is not None else None
     messages, message_result_count = (
         Message.objects.for_record(
@@ -2292,6 +2298,7 @@ def _record_thread_payload(
             after=after,
             around=around,
             message_types=message_types,
+            attachment=attachment,
         )
         if thread is not None
         else ([], 0)
@@ -2326,7 +2333,7 @@ def _record_thread_payload(
     is_following = self_follower is not None
     notifications = (
         list(
-            ThreadNotification.objects.for_record(record, user=user, role=role).select_related(
+            ThreadNotification.objects.for_record(record, user=user, role=role, attachment=attachment).select_related(
                 "thread", "attachment", "follower", "message", "message__subtype", "user"
             )[:50]
         )
@@ -2334,7 +2341,7 @@ def _record_thread_payload(
         else []
     )
     unread_count = (
-        ThreadFollower.objects.unread_count_for_record(record, user=user, role=role)
+        ThreadFollower.objects.unread_count_for_record(record, user=user, role=role, attachment=attachment)
         if thread is not None and user is not None
         else 0
     )
@@ -2354,7 +2361,7 @@ def _record_thread_payload(
         for message in messages:
             setattr(message, "_current_user_needaction", message.pk in needaction_message_ids)
     message_has_error_counter = (
-        ThreadNotification.objects.error_count_for_record(record, user=user, role=role)
+        ThreadNotification.objects.error_count_for_record(record, user=user, role=role, attachment=attachment)
         if thread is not None and user is not None
         else 0
     )

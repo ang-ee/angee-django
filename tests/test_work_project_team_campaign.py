@@ -12,7 +12,9 @@ from angee.base.testing.permissions import installed_field_owners
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project
 from angee.spaces.testing.models import Group, Membership
+from angee.work import schema as work_schema
 from angee.work.models import ProjectWork
+from tests.conftest import addon_schema, execute_schema
 from tests.test_productivity_write_behavior import Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema
 
@@ -61,6 +63,33 @@ def test_project_roster_access_matrix_does_not_carry_share_or_delete(team_case):
             assert project.has_access("delete") is False
             assert project.has_access("write__team") is False
             assert Project.objects.filter(pk=project.pk).exists() is expected_read
+
+
+def test_project_roster_hides_seat_identity_without_membership_read(team_case):
+    project, team, _, author, users = team_case
+    with system_context(reason="test.work.private_roster"):
+        team.visibility = "private"
+        team.save(update_fields=["visibility"])
+    query = """query($project: ID!) {
+      project_manager_roster(project: $project) {
+        people { subject label seat_id removable }
+      }
+    }"""
+    schema = addon_schema(work_schema.schemas, "console")
+    assert project.with_actor(author).has_access("read")
+    assert not team.with_actor(author).has_access("read")
+    hidden = execute_schema(schema, query, {"project": project.sqid}, user=author)
+    assert hidden.errors is None
+    people = hidden.data["project_manager_roster"]["people"]
+    assert people and all(person["label"] for person in people)
+    assert all(person["subject"] is None and person["seat_id"] is None and not person["removable"] for person in people)
+
+    team_reader = users["owner"]
+    assert team.with_actor(team_reader).has_access("read")
+    visible = execute_schema(schema, query, {"project": project.sqid}, user=team_reader)
+    assert visible.errors is None
+    people = visible.data["project_manager_roster"]["people"]
+    assert people and all(person["subject"] and person["seat_id"] for person in people)
 
 
 @pytest.mark.parametrize("clear", [False, True])

@@ -4,17 +4,16 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any
 
-from django.db import DEFAULT_DB_ALIAS
-from rebac import database_context, system_context
+from rebac import system_context
 
 
 @contextmanager
 def command_context(command: str, argv: Sequence[str], options: Mapping[str, Any]) -> Iterator[None]:
-    """Audit stock auth commands on the database selected by Django's parser."""
+    """Run stock auth commands' permission bookkeeping as audited system work."""
 
-    del argv
+    del argv, options
     if command not in {"createsuperuser", "changepassword"}:
         yield
         return
-    with database_context(options.get("database") or DEFAULT_DB_ALIAS), system_context(reason=f"auth.{command}"):
+    with system_context(reason=f"auth.{command}"):
         yield

@@ -46,9 +46,9 @@ def held_permissions(
     """Return declared permission names held by the ambient actor on this row.
 
     List projections reuse SQL annotations; single records use the same
-    annotations on a one-row queryset. Neither instance-local nor ambient
-    elevation grants a capability: the permission scopes pin the concrete
-    ambient actor. Without an actor no capabilities are granted.
+    annotations on a one-row queryset read through the actor's own scope, so a
+    row the actor cannot read holds nothing. Neither instance-local nor ambient
+    elevation grants a capability. Without an actor no capabilities are granted.
     ``model`` may name an MTI ancestor owning the requested permission; its row
     shares the record's primary key.
     """
@@ -66,7 +66,7 @@ def held_permissions(
     ):
         annotations = permission_annotations(owner, names)
         values = (
-            require_rebac_queryset(owner).system_context(reason="graphql.permissions")
+            require_rebac_queryset(owner).with_actor(actor)
             .filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
             or {}
         )
@@ -125,11 +125,8 @@ def _permission_annotation(model: type[models.Model], name: str, info: Any = Non
 
 def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.Exists:
     """Project one permission using the target queryset's actor and native scope."""
-    actor = relation_actor(queryset)
-    if actor is None:
-        return models.Exists(queryset.model._base_manager.none())
-    scoped = require_rebac_queryset(queryset.model).with_actor(actor).with_action(name).scoped_for_aggregate()
-    return models.Exists(scoped.filter(pk=models.OuterRef("pk")))
+    scoped = require_rebac_queryset(queryset.model, actor=relation_actor(queryset))
+    return models.Exists(scoped.with_action(name).scoped_for_aggregate().filter(pk=models.OuterRef("pk")))
 
 
 def permissions_field(names: Iterable[str]) -> Any:

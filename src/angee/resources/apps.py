@@ -21,8 +21,7 @@ class ResourcesConfig(AppConfig):
     def compose_provision(self, context: ProvisionContext) -> None:
         """Reload selected tiers idempotently; explicit project settings opt into demo."""
 
-        context.call('resources', 'load', database=context.database,
-                     include_demo=conf.settings.ANGEE_RESOURCE_INCLUDE_DEMO)
+        context.call('resources', 'load', include_demo=conf.settings.ANGEE_RESOURCE_INCLUDE_DEMO)
 
     def ready(self) -> None:
         super().ready()

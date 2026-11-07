@@ -6,6 +6,27 @@ from collections.abc import Sequence
 
 from django.apps import AppConfig
 from django.core import checks
+from django.core.exceptions import ImproperlyConfigured
+
+from angee.graphql.publishing import validate_channel_layer
+
+
+def check_graphql_channel_layer(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Report unsafe process-local change delivery before the first publish."""
+
+    del app_configs, kwargs
+    try:
+        validate_channel_layer()
+    except ImproperlyConfigured as error:
+        return [checks.Error(
+            str(error),
+            hint="Configure Redis-backed CHANNEL_LAYERS for worker broadcasts, or run DEBUG without a Celery broker.",
+            id="angee.graphql.E003",
+        )]
+    return []
 
 
 def check_graphql_schemas(
