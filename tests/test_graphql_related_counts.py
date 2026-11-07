@@ -92,6 +92,8 @@ def test_an_unreadable_record_has_no_counts(schema, referenced):
 
 def test_every_applicable_group_shares_one_count_statement(schema, referenced):
     owner, _outsider, _records, decisions = referenced
+    # Measured warm, as document budgets are: Django caches each content type on first use.
+    counts(schema, owner, decisions[0], "decisions.concerns", "decisions.decisions")
     with CaptureQueriesContext(connection) as one:
         counts(schema, owner, decisions[0], "decisions.concerns")
     with CaptureQueriesContext(connection) as two:
