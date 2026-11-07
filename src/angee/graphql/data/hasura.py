@@ -27,7 +27,6 @@ from django.utils.module_loading import import_string
 from rebac import PermissionDenied, system_context
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
-from rebac.relation_loading import relation_actor
 from strawberry.extensions import FieldExtension
 from strawberry.types import get_object_definition
 from strawberry_django.fields.types import field_type_map
@@ -65,7 +64,7 @@ from angee.base.models.identity import instance_from_public_id, instances_from_p
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.pagination import MAX_PAGE_SIZE, valid_page_size
-from angee.base.permissions import declared_rebac_definition, require_rebac_queryset
+from angee.base.permissions import declared_rebac_definition
 from angee.base.querysets import AngeeQuerySet, row_lock_paths
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -105,7 +104,12 @@ from angee.graphql.introspection import (
     is_to_one_relation,
     require_field_for_path,
 )
-from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
+from angee.graphql.relations import (
+    RecordReferenceNode,
+    actor_scoped_relation_expression,
+    relation_read_queryset,
+    with_record_reference_access,
+)
 from angee.graphql.writes import write_queryset
 
 if TYPE_CHECKING:
@@ -725,9 +729,9 @@ class _RelationIDDecoder:
     def __call__(self, value: _DecodedRelationID) -> Any:
         return value.value
 
-    def resolve(self, values: Iterable[str], actor: Any) -> dict[str, _DecodedRelationID]:
-        """Read the operands' targets under the source's reader; without one, nothing resolves."""
-        queryset = require_rebac_queryset(self.model, actor=actor).with_action("read").scoped_for_aggregate()
+    def resolve(self, values: Iterable[str], source: models.QuerySet[Any]) -> dict[str, _DecodedRelationID]:
+        """Read the operands' targets as ``source`` reads its relations (``relation_read_queryset``)."""
+        queryset = relation_read_queryset(self.model, source).scoped_for_aggregate()
         instances = instances_from_public_ids(self.model, values, queryset=queryset)
         return {
             value: _DecodedRelationID(self.decoder(value) if self.decoder is not None else instance.pk)
@@ -821,7 +825,7 @@ class _RelationFilterExtension(FieldExtension):
 
         prepared = adapt(where)
         if comparisons:
-            actor = relation_actor(source())
+            reading = source()
             for name, items in comparisons.items():
                 operands = [
                     (item, field.name, getattr(item, field.name))
@@ -832,7 +836,7 @@ class _RelationFilterExtension(FieldExtension):
                     str(value) for _, _, operand in operands
                     for value in (operand if isinstance(operand, list) else [operand])
                 }
-                resolved = self.decoders[name].resolve(values, actor) if values else {}
+                resolved = self.decoders[name].resolve(values, reading) if values else {}
                 missing = _DecodedRelationID(_UnresolvedRelationID())
                 for item, attribute, operand in operands:
                     setattr(item, attribute, (
