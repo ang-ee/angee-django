@@ -43,6 +43,12 @@ live in code docstrings.
   That actor survives `system_context()`, so system work on an actor-bound row
   reads its relations through `<related>.system_context(reason=...)`, as
   workflow advancement and operator step retry do.
+- REBAC's `relation_actor()` answers no actor inside `system_context()`, where
+  0.30 answered the ambient actor. `held_permissions`, `permission_annotations`
+  and `permissions_field` decide for the ambient actor they stamp, so a verb's
+  admission inside a system block still sees that actor's own rights;
+  `permission_expression(queryset, name)` follows the queryset's relation actor
+  and projects nothing there unless the queryset is pinned.
 - An embedded `sudo()` or `system_context()` queryset is audited when its
   enclosing statement executes, so its audit row follows that statement.
 - GraphQL permission projections (`permissions_field`, `held_permissions`,

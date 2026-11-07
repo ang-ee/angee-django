@@ -120,20 +120,29 @@ def _permission_model(model: type[models.Model], owner: type[models.Model] | Non
 
 
 def _permission_annotation(model: type[models.Model], name: str, info: Any = None) -> Any:
+    """Project ``name`` for the ambient actor the projection is stamped with.
+
+    The actor is ``current_actor()`` even inside ``system_context``: elevation grants
+    no capability, and the actor's own rights stay its own.
+    """
     del info
-    return permission_expression(model._default_manager.all(), name)
+    return _actor_permission(model, name, current_actor())
 
 
 def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.Expression:
     """Project one permission per row for the target queryset's actor.
 
     REBAC's native projection decides it inside the row query; a queryset
-    without an actor holds nothing.
+    without an actor holds nothing, as does an unpinned queryset inside
+    ``system_context``, whose relation actor REBAC leaves unset.
     """
-    actor = relation_actor(queryset)
+    return _actor_permission(queryset.model, name, relation_actor(queryset))
+
+
+def _actor_permission(model: type[models.Model], name: str, actor: Any) -> models.Expression:
     if actor is None:
         return models.Value(False)
-    return native_permission_expression(queryset.model, name, actor=actor)
+    return native_permission_expression(model, name, actor=actor)
 
 
 def permissions_field(names: Iterable[str]) -> Any:
