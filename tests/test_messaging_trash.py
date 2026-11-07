@@ -23,7 +23,6 @@ from tests.conftest import SchemaAddon, create_platform_admin
 from tests.messaging_campaign import comment_record as comment_record
 from tests.messaging_campaign import grant, make_user
 from tests.test_messaging_graphql import (
-    _request,
     _schema,
     iam_schema,
     integrate_schema,
@@ -120,12 +119,12 @@ def test_moderator_trash_removes_a_comment_from_every_reader_surface(discussion:
         assert _thread(case, reader, search="Off topic")["messages"] == []
         with actor_context(reader):
             assert not Message.objects.filter(pk=case.removed.pk).exists()
-        removed = result_data(execute_schema(_schema(), REMOVED, {"id": case.record.sqid}, request=_request(reader)))
+        removed = result_data(execute_schema(_schema(), REMOVED, {"id": case.record.sqid}, user=reader))
         assert removed["record_removed_messages"]["error_code"] == "PERMISSION_DENIED"
         assert removed["record_removed_messages"]["messages"] == []
     assert _unread(case) == unread - 1
 
-    listed = result_data(execute_schema(_schema(), REMOVED, {"id": case.record.sqid}, request=_request(case.writer)))
+    listed = result_data(execute_schema(_schema(), REMOVED, {"id": case.record.sqid}, user=case.writer))
     rows = listed["record_removed_messages"]["messages"]
     assert listed["record_removed_messages"]["message_result_count"] == 1
     assert [(row["preview"], row["is_trashed"], row["trash_reason"]) for row in rows] == [
@@ -206,18 +205,18 @@ def test_shared_verbs_trash_inbox_messages_but_never_record_chatter(discussion: 
     with actor_context(owner):
         assert Message.objects.filter(pk=inbox.pk).exists()
 
-    trashed = result_data(execute_schema(schema, SHARED_TRASH, {"id": inbox.sqid}, request=_request(owner)))
+    trashed = result_data(execute_schema(schema, SHARED_TRASH, {"id": inbox.sqid}, user=owner))
     assert trashed == {"trash_record": {"ok": True}}
     with actor_context(owner):
         assert not Message.objects.filter(pk=inbox.pk).exists()
     with actor_context(admin):
         assert Message.objects.filter(pk=inbox.pk, is_trashed=True).exists()
-    restored = result_data(execute_schema(schema, SHARED_RESTORE, {"id": inbox.sqid}, request=_request(owner)))
+    restored = result_data(execute_schema(schema, SHARED_RESTORE, {"id": inbox.sqid}, user=owner))
     assert restored == {"restore_record": {"ok": True}}
 
     chatter_owner = Thread._base_manager.get(pk=case.removed.thread_id).owner
     for user in (case.writer, *([chatter_owner] if chatter_owner is not None else [])):
-        refused = result_data(execute_schema(schema, SHARED_TRASH, {"id": case.removed.sqid}, request=_request(user)))
+        refused = result_data(execute_schema(schema, SHARED_TRASH, {"id": case.removed.sqid}, user=user))
         assert refused == {"trash_record": {"ok": False}}
     assert not Message._base_manager.get(pk=case.removed.pk).is_trashed
 
@@ -245,7 +244,7 @@ def _thread(case: Any, user: Any, *, search: str = "") -> dict[str, Any]:
     """Read the record thread as ``user``."""
 
     data = result_data(execute_schema(
-        _schema(), THREAD, {"id": case.record.sqid, "search": search}, request=_request(user),
+        _schema(), THREAD, {"id": case.record.sqid, "search": search}, user=user,
     ))
     return data["record_thread"]
 
@@ -257,7 +256,7 @@ def _run(mutation: str, case: Any, user: Any, *, message: Any, **variables: Any)
     if "reason" not in mutation:
         variables.pop("confirm")
     data = result_data(execute_schema(
-        _schema(), mutation, {"id": case.record.sqid, "message": message.sqid, **variables}, request=_request(user),
+        _schema(), mutation, {"id": case.record.sqid, "message": message.sqid, **variables}, user=user,
     ))
     return next(iter(data.values()))
 

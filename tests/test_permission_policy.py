@@ -19,6 +19,7 @@ from angee.base.permissions import (
     declared_rebac_schema,
     declared_schema_path,
     effective_rebac_definition,
+    purpose_read_holds,
 )
 from angee.graphql.access import is_gated_read_axis
 
@@ -146,7 +147,7 @@ def test_a_purpose_read_holds_only_while_the_derived_reads_are_stated_as_declare
         _PARENT.format(read=parent_read) + _purpose(*synced),
         _PARENT.format(read="reader") + _purpose(*_DECLARED),
     )
-    assert contextual_action_holds(Record, "read_inbox") is holds
+    assert purpose_read_holds(Record, "read_inbox") is holds
 
 
 def test_startup_snapshot_needs_no_policy_backend(tmp_path, monkeypatch):
