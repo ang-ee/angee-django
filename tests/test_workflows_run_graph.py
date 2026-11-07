@@ -449,6 +449,8 @@ def test_drill_in_step_permission_queries_are_bounded(schema, execution):
     failed = graph.nodes[-1].step_run
     assert failed is not None and failed.can_retry(operator)
     last_run.with_actor(starter).revoke_record_access("operator", operator)
+    # The graph read remembered only the graph, so the read row asks the write policy again.
+    assert not last_run.can_cancel(operator)
     # The batch's answers belong to the run rows it read; a fresh read asks the policy again.
     fresh = WorkflowRun.system_queryset().get(pk=last_run.pk)
     assert not fresh.can_cancel(operator)

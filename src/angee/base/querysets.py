@@ -182,8 +182,8 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
 
     def first_per_group(
         self,
-        *partition_by: str | models.Expression,
-        order_by: Sequence[str | models.Expression],
+        *partition_by: str | models.Expression | models.F,
+        order_by: Sequence[str | models.Expression | models.F],
         limit: int,
     ) -> Self:
         """Keep the first ``limit`` rows of each group, ranked by one SQL window.

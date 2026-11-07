@@ -91,6 +91,35 @@ def test_record_timeline_run_graphs_cost_the_same_for_one_or_five_runs(schema, r
         measure(query, cancelable=False)
 
 
+def test_record_timeline_reads_its_runs_once_for_one_or_five_records(schema, review):
+    """Every record of a selection shares one run read, not one per record."""
+    actor = review[0]
+    workflow = load_workflow({"nodes": {"review": {"step": "question"}}}, actor=actor)
+    records = [vault_for(actor, name=f"Timeline record {index}") for index in range(5)]
+    for record in records:
+        run_until(WorkflowRun.objects.start(workflow, actor=actor, subject=record))
+    with_runs = """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records: $records) { records { record_id runs { id graph_step_runs { id } } } }
+    }"""
+    without_runs = """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records: $records) { records { record_id } }
+    }"""
+
+    def statements(document, selected):
+        variables = {"records": [{"model": record._meta.label, "id": record.sqid} for record in selected]}
+        execute_schema(schema, document, variables, user=actor)
+        with CaptureQueriesContext(connection) as queries:
+            data = result_data(execute_schema(schema, document, variables, user=actor))
+        return len(queries), data["record_timeline"]["records"]
+
+    costs = []
+    for selected in (records[:1], records):
+        read, rows = statements(with_runs, selected)
+        assert [len(row["runs"]) for row in rows] == [1] * len(selected)
+        costs.append(read - statements(without_runs, selected)[0])
+    assert costs[0] == costs[1], costs
+
+
 @pytest.mark.parametrize("operation,canceled", [("read", False), ("created", True), ("changed", True)])
 def test_deletion_only_enqueues_active_runs_that_modify_the_record(review, register_step, operation, canceled):
     actor, _, sent, question = review

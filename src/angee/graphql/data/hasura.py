@@ -25,6 +25,7 @@ from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
 from django.utils.module_loading import import_string
 from rebac import PermissionDenied, system_context
+from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
 from strawberry.extensions import FieldExtension
@@ -1388,7 +1389,8 @@ def group_rows_field(
     """Declare ``<res>_group.rows``: every group's first page from one read per groups page.
 
     ``limit`` is the client's declared per-group page size, required and bounded
-    by ``MAX_PAGE_SIZE``; ``order_by`` is the list root's own ordering.
+    by ``MAX_PAGE_SIZE``, as is the groups page that selects rows; ``order_by``
+    is the list root's own ordering.
     ``resolve(batch, limit)`` returns one page per group in ``batch.groups`` order.
     """
 
@@ -1396,6 +1398,8 @@ def group_rows_field(
         limit = batch.arguments["limit"]
         if not 1 <= limit <= MAX_PAGE_SIZE:
             raise ValueError(f"Group rows limit must be between 1 and {MAX_PAGE_SIZE}.")
+        if len(batch.groups) > MAX_PAGE_SIZE:
+            raise ValueError(f"Group rows carry at most {MAX_PAGE_SIZE} groups; page the groups with a limit.")
         return resolve(batch, limit) if batch.groups else []
 
     return GroupField(
@@ -1437,42 +1441,115 @@ def _group_bucket_drills(
     return drills
 
 
-def _group_bucket(model: type[models.Model], drills: Sequence[DataQueryDrill], key: Any) -> models.Q:
-    """Select one group's rows by its drills over the list read's redacted values."""
+@dataclass(frozen=True)
+class _GroupPartition:
+    """A groups page's buckets as one predicate and one partition key per row.
 
-    bucket = models.Q()
-    for drill in drills:
-        value = getattr(key, drill.value_key)
-        if drill.kind == "json":
-            lookup = f"{drill.field}__{(drill.json_path or '').replace('.', '__')}"
-            condition = (
-                models.Q(**{f"{lookup}__isnull": True}) | models.Q(**{lookup: None})
-                if value is None else models.Q(**{lookup: value})
-            )
-        else:
-            # A relation compares its redacted key alias, as relation filters and groups do;
-            # a value drill may name a declared filter expression rather than a field.
-            lookup = _relation_axis_alias(drill.field) if drill.kind == "identity" else drill.field
-            if value is None:
-                condition = models.Q(**{f"{lookup}__isnull": True})
-            elif drill.kind == "identity":
-                field = require_field_for_path(model, drill.field)
-                condition = models.Q(**{lookup: _public_pk(cast(Any, field).related_model, value)})
-            elif drill.kind == "range":
-                field = require_field_for_path(model, drill.field)
-                span = getattr(key, cast(str, drill.range_key))
-                start, end = span.from_, span.to
-                if isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
-                    start, end = start.date(), end.date()
-                condition = models.Q(**{f"{lookup}__gte": start, f"{lookup}__lt": end})
-            else:
-                if isinstance(value, enum.Enum):
-                    value = value.value
-                if drill.value_transform == "json" and isinstance(value, str):
-                    value = json.loads(value)
-                condition = models.Q(**{lookup: value})
-        bucket &= condition
-    return bucket
+    Each drill compares one expression once, so a relation's redacted key alias
+    is read once, never once per group. ``partitions`` rank the rows per bucket;
+    ``keys[name]`` is the expression whose value names a row's bucket on one
+    drill, and ``index`` maps a bucket's values, in ``keys`` order, to its group.
+    """
+
+    predicate: models.Q
+    partitions: list[BaseExpression | models.F]
+    keys: dict[str, BaseExpression | models.F]
+    index: dict[tuple[Hashable, ...], int]
+
+
+def _group_partition(
+    model: type[models.Model], drills: Sequence[DataQueryDrill], keys: Sequence[Any],
+) -> _GroupPartition:
+    """Select every bucket of the groups page by its drills over the list read's redacted values."""
+
+    predicate = models.Q()
+    partitions: list[BaseExpression | models.F] = []
+    expressions: dict[str, BaseExpression | models.F] = {}
+    columns: list[list[Hashable]] = []
+    for position, drill in enumerate(drills):
+        condition, partition, expression, values = _drill_partition(model, drill, keys)
+        predicate &= condition
+        partitions.append(partition)
+        expressions[f"_angee_group_key_{position}"] = expression
+        columns.append([_bucket_value(value) for value in values])
+    index = {values: group for group, values in enumerate(zip(*columns, strict=True))} if columns else {}
+    return _GroupPartition(predicate, partitions, expressions, index)
+
+
+def _drill_partition(
+    model: type[models.Model], drill: DataQueryDrill, keys: Sequence[Any],
+) -> tuple[models.Q, BaseExpression | models.F, BaseExpression | models.F, list[Any]]:
+    """One drill's predicate over every group, its partition and key expressions, and each group's value."""
+
+    if drill.kind == "range":
+        field = require_field_for_path(model, drill.field)
+        spans: list[tuple[Any, Any]] = []
+        values: list[Any] = []
+        for key in keys:
+            if getattr(key, drill.value_key) is None:
+                values.append(None)
+                continue
+            span = getattr(key, cast(str, drill.range_key))
+            start, end = span.from_, span.to
+            if isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
+                start, end = start.date(), end.date()
+            if (start, end) not in spans:
+                spans.append((start, end))
+            values.append(spans.index((start, end)))
+        arms = [models.Q(**{f"{drill.field}__gte": start, f"{drill.field}__lt": end}) for start, end in spans]
+        condition = reduce(operator.or_, arms, models.Q(pk__in=[]))
+        if None in values:
+            condition |= models.Q(**{f"{drill.field}__isnull": True})
+        # A range compares the row's own column; its one arm per span reads no subquery.
+        expression: BaseExpression | models.F = models.Case(
+            *(models.When(arm, then=models.Value(position)) for position, arm in enumerate(arms)),
+            output_field=models.IntegerField(),
+        )
+        return condition, expression, expression, values
+    if drill.kind == "json":
+        lookup = f"{drill.field}__{(drill.json_path or '').replace('.', '__')}"
+        values = [getattr(key, drill.value_key) for key in keys]
+        missing = models.Q(**{f"{lookup}__isnull": True}) | models.Q(**{lookup: None})
+        expression = models.F(lookup)
+        # A missing key and a JSON null are one bucket, so both rank as SQL null; the
+        # key itself is read through the native key transform, which decodes either as None.
+        partition: BaseExpression | models.F = models.Case(
+            models.When(missing, then=models.Value(None)), default=expression,
+        )
+    elif drill.kind == "identity":
+        # A relation compares its redacted key alias, as relation filters and groups do.
+        lookup = _relation_axis_alias(drill.field)
+        related = cast(Any, require_field_for_path(model, drill.field)).related_model
+        values = [
+            None if (value := getattr(key, drill.value_key)) is None else _public_pk(related, value) for key in keys
+        ]
+        missing = models.Q(**{f"{lookup}__isnull": True})
+        expression = partition = models.F(lookup)
+    else:
+        # A value drill may name a declared filter expression rather than a field.
+        lookup = drill.field
+        values = [_drill_value(drill, getattr(key, drill.value_key)) for key in keys]
+        missing = models.Q(**{f"{lookup}__isnull": True})
+        expression = partition = models.F(lookup)
+    present = [value for value in values if value is not None]
+    condition = models.Q(**{f"{lookup}__in": present}) if present else models.Q(pk__in=[])
+    return (condition | missing if None in values else condition), partition, expression, values
+
+
+def _drill_value(drill: DataQueryDrill, value: Any) -> Any:
+    """A value drill's group value as the database compares it."""
+
+    if isinstance(value, enum.Enum):
+        value = value.value
+    if drill.value_transform == "json" and isinstance(value, str):
+        value = json.loads(value)
+    return value
+
+
+def _bucket_value(value: Any) -> Hashable:
+    """One bucket value as a hashable key, whether a group key or a row's partition value."""
+
+    return value if isinstance(value, Hashable) else json.dumps(value, sort_keys=True, default=str)
 
 
 def _orders_by_pk(model: type[models.Model], term: Any) -> bool:
@@ -1487,8 +1564,9 @@ def _orders_by_pk(model: type[models.Model], term: Any) -> bool:
 
 def _first_rows_per_group(
     queryset: models.QuerySet[Any],
-    buckets: Sequence[models.Q],
+    partition: _GroupPartition,
     *,
+    groups: int,
     info: strawberry.Info,
     limit: int,
 ) -> list[list[Any]]:
@@ -1496,6 +1574,7 @@ def _first_rows_per_group(
 
     The order is the queryset's own, else its model's ``Meta.ordering``, ending
     on the primary key when neither already does, so a page is deterministic.
+    Rows of a bucket outside the groups page are read but belong to no group.
     """
 
     if not isinstance(queryset, AngeeQuerySet):
@@ -1504,20 +1583,20 @@ def _first_rows_per_group(
     ordering = [*queryset.query.order_by] or [*model._meta.ordering]
     if not any(_orders_by_pk(model, term) for term in ordering):
         ordering.append("pk")
-    labelled = queryset.filter(reduce(operator.or_, buckets)).annotate(
-        _angee_group_bucket=models.Case(
-            *(models.When(bucket, then=models.Value(index)) for index, bucket in enumerate(buckets)),
-            output_field=models.IntegerField(),
-        ),
-    )
-    kept = labelled.first_per_group("_angee_group_bucket", order_by=ordering, limit=limit).order_by(
-        "_angee_group_bucket", *ordering,
+    names = list(partition.keys)
+    kept = (
+        queryset.filter(partition.predicate)
+        .annotate(**partition.keys)
+        .first_per_group(*partition.partitions, order_by=ordering, limit=limit)
+        .order_by(*ordering)
     )
     active = optimizer.get()
-    kept = active.optimize(kept, info) if active is not None else strawberry_django.optimizer.optimize(kept, info)
-    pages: list[list[Any]] = [[] for _ in buckets]
+    kept = active.optimize(kept, info) if active is not None else optimize(kept, info)
+    pages: list[list[Any]] = [[] for _ in range(groups)]
     for row in kept:
-        pages[row._angee_group_bucket].append(row)
+        group = partition.index.get(tuple(_bucket_value(getattr(row, name)) for name in names))
+        if group is not None:
+            pages[group].append(row)
     return pages
 
 
@@ -1817,10 +1896,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             )
             queryset = apply_ordering(queryset, order_by, id_column=id_column, sortable_aliases=sortable_aliases)
             drills = _group_bucket_drills(model, group_axes, batch.group_by)
-            buckets = [_group_bucket(model, drills, group.key) for group in batch.groups]
+            partition = _group_partition(model, drills, [group.key for group in batch.groups])
             # A drill through a declared filter expression reads that expression's alias.
-            queryset = prepare_filters(queryset, reduce(operator.or_, buckets)) if buckets else queryset
-            return _first_rows_per_group(queryset, buckets, info=batch.info, limit=limit)
+            queryset = prepare_filters(queryset, partition.predicate)
+            return _first_rows_per_group(
+                queryset, partition, groups=len(batch.groups), info=batch.info, limit=limit,
+            )
 
         group_fields = {"rows": group_rows_field(node, group_rows)}
     resource = build_hasura_resource(

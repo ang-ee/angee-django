@@ -22,6 +22,7 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.deletion import ProtectedError
+from django.db.models.functions import Cast
 from django.utils.text import capfirst
 from rebac import system_context
 from rebac.field_backing import canonical_model
@@ -54,7 +55,7 @@ class _RecordTargets(InstancePrefetch):
     def related(
         self, instances: list[Any], queryset: models.QuerySet[Any], actor: Any,
     ) -> tuple[list[models.Model], Callable[[models.Model], object], Callable[[Any], object]]:
-        del queryset
+        key_field = queryset.model._meta.get_field(queryset.model.record_ref_field().fk_field)
         keys = {id(instance): instance.record_ref for instance in instances}
         wanted: dict[str, set[Any]] = {}
         for reference in keys.values():
@@ -65,7 +66,9 @@ class _RecordTargets(InstancePrefetch):
         if actor is not None:
             for model_label in sorted(wanted):
                 readable = require_rebac_queryset(apps.get_model(model_label), actor=actor).with_action("read")
-                for target in readable.filter(pk__in=wanted[model_label]):
+                # Compare in the pointer's own key type, as record-reference access does.
+                matched = readable.annotate(_angee_target_key=Cast("pk", output_field=key_field))
+                for target in matched.filter(_angee_target_key__in=wanted[model_label]):
                     targets.append(target)
                     sources[id(target)] = (model_label, str(target.pk))
         return (
