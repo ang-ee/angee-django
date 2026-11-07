@@ -1,5 +1,7 @@
 """Preview authority and role exclusions are scoped in SQL before the cap."""
 
+import re
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
@@ -86,17 +88,17 @@ def test_picker_applies_sql_admission_before_the_capped_limit(iam_admin, monkeyp
 
     monkeypatch.setattr(User._default_manager, "admit_view_as", readmission)
     with CaptureQueriesContext(connection) as captured:
-        assert [person.username for person in User.objects.viewable_people(iam_admin, limit=limit)] == [
-            f"candidate-{i:03}" for i in range(cap)
-        ]
-    reads = [
-        q["sql"] for q in captured if q["sql"].startswith("SELECT") and f'FROM "{User._meta.db_table}"' in q["sql"]
-    ]
-    # 0.31 (1 -> 2): the selection, then one batched decision of the page's gated fields over the
-    # fetched ids, whose first column is ``AS "pk"``.
-    selections = [sql for sql in reads if not sql.partition(",")[0].endswith(' AS "pk"')]
-    assert len(reads) == 2 and len(selections) == 1, reads
-    sql = selections[0]
+        people = User.objects.viewable_people(iam_admin, limit=limit)
+    assert [person.username for person in people] == [f"candidate-{i:03}" for i in range(cap)]
+    table = User._meta.db_table
+    reads = [q["sql"] for q in captured if q["sql"].startswith("SELECT") and f'FROM "{table}"' in q["sql"]]
+    # 0.31 (1 -> 2): the selection, then one batched decision of the page's gated fields over
+    # exactly the fetched ids.
+    [sql, decision] = reads
+    assert decision.partition(",")[0].endswith(' AS "pk"'), decision
+    page = re.search(rf'WHERE "{table}"\."id" IN \(([0-9, ]+)\)$', decision)
+    assert page is not None, decision
+    assert {int(pk) for pk in page.group(1).split(",")} == {person.pk for person in people}
     assert f"LIMIT {cap}" in sql
     where = sql.split(" WHERE ", 1)[1]
     assert all(f'"{field}"' in where for field in ("kind", "is_active", "is_staff", "is_superuser"))
