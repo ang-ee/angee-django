@@ -1,7 +1,5 @@
 """Identity and mapped same_as pair reviews using real domain and engine owners."""
 
-from unittest.mock import patch
-
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -10,8 +8,14 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 from rebac.roles import grant as grant_role
 
 from angee.base.models.identity import public_id_of
-from angee.jobs.enqueue import celery_app
-from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import (
+    capture_tasks,
+    decide,
+    deliver_decision_wakes,
+    load_workflow,
+    run_until,
+    start_run,
+)
 
 Party = apps.get_model("parties", "Party")
 Address = apps.get_model("parties", "Address")
@@ -26,7 +30,7 @@ class PartyWorkflowTests(TransactionTestCase):
 
     def setUp(self):
         """Create independent run actor and reviewer, intercepting transport only."""
-        self.enterContext(patch.object(celery_app, "send_task"))
+        self.sent = self.enterContext(capture_tasks())
         call_command("rebac", "sync", verbosity=0)
         with system_context(reason="party review participants"):
             self.admin = get_user_model().objects.create_user(username="party-review-admin")
@@ -67,8 +71,10 @@ class PartyWorkflowTests(TransactionTestCase):
             self.decisions(run),
             list(StepAttempt.system_queryset().filter(step_run__run=run).values_list("stacktrace", flat=True)),
         )
-        result = decide(self.decisions(run)[0], actor=self.reviewer, chosen=key if isinstance(key, list) else [key])
+        decision = self.decisions(run)[0]
+        result = decide(decision, actor=self.reviewer, chosen=key if isinstance(key, list) else [key])
         self.assertFalse(result.is_open)
+        self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
         run_until(run)
         return result
 
@@ -229,6 +235,7 @@ class PartyWorkflowTests(TransactionTestCase):
         ):
             result = decide(decision, actor=self.reviewer, chosen=[action])
             self.assertFalse(result.is_open)
+            self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
         run_until(run)
         self.assertEqual((run.status, run.outcome), ("succeeded", "done"))
         self.assertEqual(
@@ -283,6 +290,7 @@ class PartyWorkflowTests(TransactionTestCase):
                 with actor_context(self.reviewer):
                     survivor.with_actor(self.reviewer).merge(records=[right.public_id])
                 decide(decision, actor=self.reviewer, chosen=["merge_left"])
+                self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
                 run_until(run)
                 self.assertEqual(Party.system_queryset().get(pk=right.pk).merged_into_id, survivor.pk)
                 if same_target:

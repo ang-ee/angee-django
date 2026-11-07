@@ -1,14 +1,14 @@
 # Container authoring
 
-The recipe for contributing to, declaring and narrowing containers from a web fragment. Contracts: `ContainerChild`, `ContainerAlteration`, `ContainerEntry` (`packages/ui/src/runtime/containers.ts:93-146`); compiler: `compileContainers` (`packages/app/src/containers.ts:44`); rules: [Containers](../../../../docs/frontend/guidelines.md#containers). This file shows shapes and adds no rule.
+The recipe for contributing to, declaring and narrowing containers from a web fragment. Contracts: `ContainerChild`, `ContainerAlteration`, `ContainerEntry` (`packages/ui/src/runtime/containers.ts`); compiler: `compileContainers` (`packages/app/src/containers.ts`); rules: [Containers](../../../../docs/frontend/guidelines.md#containers). This file shows shapes and adds no rule.
 
 ## 1. Find the address
 
-An address is `node#name`. Framework containers sit at a kind node and take a model node: `form#sections` on every form, `projects.Task#sections` on Task and its MTI children. The name after `#` types the content through `ContainerKinds` (`packages/ui/src/runtime/containers.ts:16-66`); the inventory is the [Framework containers](../../../../docs/frontend/guidelines.md#framework-containers) table. A view kind is a `<model>#views` child (`ResourceViewKindContent`), a search shortcut a `resource#search` child ([resource views](../../../../docs/frontend/guidelines.md#resource-views)). No address for the shell place → bring the gap to the owner in `@angee/ui`; do not fork the page ([addresses, kinds and inheritance](../../../../docs/frontend/guidelines.md#addresses-kinds-and-inheritance)).
+An address is `node#name`. Framework containers sit at a kind node and take a model node: `form#sections` on every form, `projects.Task#sections` on Task and its MTI children. The name after `#` types the content through `ContainerKinds` (`packages/ui/src/runtime/containers.ts`); the inventory is the [Framework containers](../../../../docs/frontend/guidelines.md#framework-containers) table. A view kind is a `<model>#views` child (`ResourceViewKindContent`), a search shortcut a `resource#search` child ([resource views](../../../../docs/frontend/guidelines.md#resource-views)). No address for the shell place → bring the gap to the owner in `@angee/ui`; do not fork the page ([addresses, kinds and inheritance](../../../../docs/frontend/guidelines.md#addresses-kinds-and-inheritance)).
 
 ## 2. Declare a child in your namespace
 
-A key `<id>.<name>` under an address declares a child; a second declaration of one id at one address fails composition. Content is the kind's type: a direct `Group`/`Tab`/`Action` element for `#sections`, a `ReactNode` for verbs and chrome, `ChatterTabContent` for `#aside`. From work (`src/angee/work/web/src/index.tsx:100-119`):
+A key `<id>.<name>` under an address declares a child; a second declaration of one id at one address fails composition. Content is the kind's type: a direct `Group`/`Tab`/`Action` element for `#sections`, a `ReactNode` for verbs and chrome, `ChatterTabContent` for `#aside`. From work (`src/angee/work/web/src/index.tsx`):
 
 ```tsx
 containers: {
@@ -25,7 +25,7 @@ Add `permission` (a projected record permission the row must hold), `requires` (
 
 ## 3. Contribute an aside tab or drill-in
 
-A `record#aside` child shows on saved model-backed record views; a `<model>#aside` child on that model's pages. `strip: false` plus `target` makes a drill-in. Gate on the fact the route already carries, never on a probe. From projects (`src/angee/projects/web/src/index.tsx:75-84`):
+A `record#aside` child shows on saved model-backed record views; a `<model>#aside` child on that model's pages. `strip: false` plus `target` makes a drill-in. Gate on the fact the route already carries, never on a probe. From projects (`src/angee/projects/web/src/index.tsx`):
 
 ```tsx
 "record#aside": {
@@ -64,7 +64,7 @@ Narrowing another addon's container requires depending on it; the framework's co
 
 ## 6. Own a container on your page
 
-Name an address on your own node, empty or with children; `models: true` makes it model-scoped, `unique: "key"` keys its children. Read it with `useContainer` and place the children with `containerContents` (declarations a parser reads) or `ContainerOutlet` (rendered nodes). From tags (`src/angee/tags/web/src/index.tsx:47-52`, `views/TagsPage.tsx:15-24`):
+Name an address on your own node, empty or with children; `models: true` makes it model-scoped, `unique: "key"` keys its children. Read it with `useContainer` and place the children with `containerContents` (declarations a parser reads) or `ContainerOutlet` (rendered nodes). From tags (`src/angee/tags/web/src/index.tsx`, `TagsPage` in `views/TagsPage.tsx`):
 
 ```tsx
 // index.tsx
@@ -77,11 +77,11 @@ const scopeColumnEntries = useContainer("tags.tags#columns");
 </List>
 ```
 
-A new kind name is added by declaration merging into `ContainerKinds` (`src/angee/iam/web/src/ShareAccess.tsx`). Memoize `models` and `impls` passed to `useContainer`; an undeclared address only warns in development (`packages/ui/src/runtime/containers.ts:438-441`).
+A new kind name is added by declaration merging into `ContainerKinds` (`src/angee/iam/web/src/ShareAccess.tsx`). Memoize `models` and `impls` passed to `useContainer`; an undeclared address only warns in development (`packages/ui/src/runtime/containers.ts`).
 
 ## 7. Test the contribution
 
-Assert the manifest with `containerChildren(addon, address)` (`packages/app/src/testing.tsx:167`). Render an owner with children placed straight into the runtime, no layering ([rendering and testing](../../../../docs/frontend/guidelines.md#rendering-and-testing)):
+Assert the manifest with `containerChildren(addon, address)` (`packages/app/src/testing.tsx`). Render an owner with children placed straight into the runtime, no layering ([rendering and testing](../../../../docs/frontend/guidelines.md#rendering-and-testing)):
 
 ```tsx
 const containers = containersFromChildren(RESOURCE_CONTAINERS, {
@@ -93,8 +93,8 @@ render(<AppRuntimeProvider runtime={{ containers }}><ResourceViewUtilities value
 Pass a `containerScope` when a `when` rule matters; stories mount the same runtime through `RoutedRuntimeFixture`. In the live app, developer mode's composition dialog and `createApp(...).explain.containers` show each layer's narrowing and every removed child ([developer mode](../../../../docs/frontend/guidelines.md#developer-mode)).
 
 <!--
-Sources: docs/frontend/guidelines.md:1423-1857; packages/app/README.md:162-200; packages/ui/src/runtime/containers.ts:16-260,425-452;
-packages/ui/src/runtime/contracts.ts:195-240; packages/ui/src/lib/container-outlet.tsx:17-26; packages/app/src/containers.ts:33-50;
-packages/app/src/testing.tsx:160-170; src/angee/{work,projects,timeline,tags}/web/src/index.tsx; src/angee/tags/web/src/views/TagsPage.tsx;
-examples/src/example/notes/web/src/index.tsx:32-41.
+Sources: docs/frontend/guidelines.md:1423-1857; packages/app/README.md; packages/ui/src/runtime/containers.ts;
+packages/ui/src/runtime/contracts.ts; packages/ui/src/lib/container-outlet.tsx; packages/app/src/containers.ts;
+packages/app/src/testing.tsx; src/angee/{work,projects,timeline,tags}/web/src/index.tsx; src/angee/tags/web/src/views/TagsPage.tsx;
+examples/src/example/notes/web/src/index.tsx.
 -->

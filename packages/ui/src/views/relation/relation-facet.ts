@@ -56,7 +56,11 @@ export function useRelationFacets(
     document: groupOperation.document, facets: facetSpecs, enabled: facetSpecs.length > 0,
   });
   return React.useMemo(() => facets.map((facet): SearchFacet => ({
-    field: facet.field, label: facet.label, source: "relation", group: facet.group,
+    field: facet.field, label: facet.label,
+    // A declared facet on a scalar axis (an enum) matches its options locally; only a
+    // relation axis looks its options up remotely.
+    source: facet.axis.declaration.kind === "relation" ? "relation" : "scalar",
+    group: facet.group,
     options: (result.facets[facet.field]?.options ?? []).flatMap((option) => {
       const filter = facet.axis.drill({ key: option.key });
       if (!filter) return [];

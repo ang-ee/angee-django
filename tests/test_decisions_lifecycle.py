@@ -85,6 +85,15 @@ def test_unassigned_actorless_question_still_requires_an_admission_reader(people
     assert not Decision.system_queryset().exists()
 
 
+def test_ask_returns_no_assignee_pin(people):
+    requester, *_ = people
+    with system_context(reason="test.actorless_question.return_scope"):
+        actorless = Decision.objects.ask(request_for(people), actor=None)
+    assert actorless.actor() is None
+    asked = Decision.objects.ask(request_for(people), actor=requester)
+    assert asked.actor() == to_subject_ref(requester)
+
+
 @pytest.mark.parametrize("chosen", [[], ["unknown"], ["complete", "complete"], ["complete", "decline"], "complete"])
 def test_invalid_choices_never_close_or_increment(people, chosen):
     requester, reviewer, *_ = people

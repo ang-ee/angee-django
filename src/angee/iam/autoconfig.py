@@ -10,7 +10,7 @@ from typing import Any
 from django.conf import settings as django_settings
 
 SETTINGS = {
-    "COMPOSE_COMMAND_CONTEXT:append": ["angee.iam.context.command_context"],
+    "ANGEE_SERVER_COMMAND_CONTEXT:append": ["angee.iam.context.command_context"],
     "AUTH_USER_MODEL": "iam.User",
     # IAM owns the platform-admin role used by its schema and bootstrap command.
     "REBAC_UNIVERSAL_ADMIN_ROLE": "angee/role:admin",

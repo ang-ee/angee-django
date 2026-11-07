@@ -33,7 +33,6 @@ from rebac import (
     app_settings,
     check_new,
     current_actor,
-    database_context,
     resolve_subjects,
     system_context,
     to_subject_ref,
@@ -537,7 +536,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             raise ValueError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
         using = self._db or router.db_for_write(self.model)
         manager = self.db_manager(using)
-        with database_context(using), system_context(reason="iam.bootstrap_admin"), transaction.atomic(using=using):
+        with system_context(reason="iam.bootstrap_admin"), transaction.atomic(using=using):
             try:
                 user = manager.system_context(reason="iam.bootstrap_admin").get(
                     **{self.model.USERNAME_FIELD: username},

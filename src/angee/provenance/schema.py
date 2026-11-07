@@ -342,9 +342,9 @@ class RecordHistory:
                 self.statement_scopes[model] = scope
 
     def changesets(self) -> models.QuerySet[Any]:
-        """The record's changesets, newest first; ordering is the changeset owner's."""
+        """The record's closed changesets, newest first; ordering is the changeset owner's."""
 
-        return Changeset.objects.sudo(reason="provenance.record_history").touching(self.record)
+        return Changeset.objects.sudo(reason="provenance.record_history").closed_for_record(self.record)
 
     def entries(self, changesets: Iterable[Any]) -> list[HistoryEntryType]:
         """Project an already bounded window, also used by the combined Comments feed."""

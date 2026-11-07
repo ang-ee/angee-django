@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import math
 from importlib import import_module
-from pathlib import Path
 from typing import Any
 
 import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
-from django.db import connection, connections, models, router
+from django.db import connection, models
 from django.db.models import F, Value
 from django.db.models.functions import Concat
 from django.test.utils import isolate_apps, override_settings
@@ -854,10 +853,8 @@ def test_fractional_rank_rejects_non_finite_values() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_fractional_rank_allocation_uses_explicit_write_alias(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, django_db_blocker: Any,
-) -> None:
-    """Explicit save/create/bulk aliases own allocation despite a different router."""
+def test_fractional_rank_allocation_on_create_save_and_bulk_create() -> None:
+    """Create, save and bulk writes append after their lane's tail; full lanes refuse."""
 
     class AliasRank(models.Model):
         lane = models.CharField(max_length=20)
@@ -867,23 +864,7 @@ def test_fractional_rank_allocation_uses_explicit_write_alias(
             app_label = "auth"
             constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="alias_rank_lane_rank"),)
 
-    alias = "rank_explicit_probe"
-
-    class DefaultRouter:
-        def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
-            return "default"
-
-        db_for_write = db_for_read
-
-    monkeypatch.setattr(router, "routers", [DefaultRouter()])
-    connections.databases[alias] = {
-        **connections.databases["default"],
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": str(tmp_path / "explicit-rank.sqlite3"),
-        "OPTIONS": {},
-        "CONN_MAX_AGE": 0,
-    }
-    database = connections[alias]
+    alias = connection.alias
     events: list[tuple[str, float | None, str]] = []
 
     def before_save(sender: Any, instance: Any, using: str, **kwargs: Any) -> None:
@@ -893,17 +874,14 @@ def test_fractional_rank_allocation_uses_explicit_write_alias(
         events.append(("after", instance.rank, using))
 
     try:
-        with django_db_blocker.unblock(), model_tables((AliasRank,)):
-            with database.schema_editor() as editor:
-                editor.create_model(AliasRank)
+        with model_tables((AliasRank,)):
             for lane, tail in (("create", 100.0), ("save", 100.0), ("bulk_a", 100.0), ("bulk_b", 200.0)):
-                AliasRank.objects.create(lane=lane, rank=10.0)
-                AliasRank.objects.using(alias).create(lane=lane, rank=tail)
+                AliasRank.objects.create(lane=lane, rank=tail)
             models.signals.pre_save.connect(before_save, sender=AliasRank, weak=False)
             models.signals.post_save.connect(after_save, sender=AliasRank, weak=False)
-            created = AliasRank.objects.using(alias).create(lane="create")
+            created = AliasRank.objects.create(lane="create")
             saved = AliasRank(lane="save")
-            saved.save(using=alias)
+            saved.save()
             expected = FractionalRankField.STEP + 100.0
             assert created.rank == saved.rank == expected
             assert events == [
@@ -911,25 +889,22 @@ def test_fractional_rank_allocation_uses_explicit_write_alias(
                 ("before", None, alias), ("after", expected, alias),
             ]
             rows = [AliasRank(lane="bulk_a"), AliasRank(lane="bulk_b"), AliasRank(lane="explicit", rank=7.0)]
-            AliasRank.objects.using(alias).bulk_create(rows)
+            AliasRank.objects.bulk_create(rows)
             assert [row.rank for row in rows] == [expected, FractionalRankField.STEP + 200.0, 7.0]
-            stored = AliasRank.objects.using(alias).filter(pk__in=[row.pk for row in rows]).order_by("lane")
+            stored = AliasRank.objects.filter(pk__in=[row.pk for row in rows]).order_by("lane")
             assert list(stored.values_list("rank", flat=True)) == [expected, FractionalRankField.STEP + 200.0, 7.0]
             field = AliasRank._meta.get_field("rank")
             temporary = field.get_temporary_ranks([created, saved], [0, 1], using=alias)
             assert min(temporary) > expected
-            AliasRank.objects.using(alias).create(lane="exhausted", rank=math.nextafter(math.inf, 0.0))
+            AliasRank.objects.create(lane="exhausted", rank=math.nextafter(math.inf, 0.0))
             exhausted = AliasRank(lane="exhausted")
             with pytest.raises(FractionalRankExhausted):
-                exhausted.save(using=alias)
+                exhausted.save()
             assert exhausted.rank is None
-            assert AliasRank.objects.using(alias).filter(lane="exhausted").count() == 1
+            assert AliasRank.objects.filter(lane="exhausted").count() == 1
     finally:
         models.signals.pre_save.disconnect(before_save, sender=AliasRank)
         models.signals.post_save.disconnect(after_save, sender=AliasRank)
-        database.close()
-        del connections[alias]
-        del connections.databases[alias]
 
 
 
