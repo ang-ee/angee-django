@@ -31,7 +31,7 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 | `src/angee/base/apps.py` | REBAC synchronization contribution to upstream provisioning | `BaseConfig.compose_provision`; explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting |
 
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
-`django-zed-rebac` (`docs/stack.md#backend`, line 76); `composed_tables`
+`django-zed-rebac` (`docs/stack.md#backend`); `composed_tables`
 (`src/angee/base/testing/fixtures.py`) and `composed_permissions`
 (`src/angee/base/testing/permissions.py`) sync it into the test database.
 
@@ -87,7 +87,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    }
    ```
    Bump `@rebac_schema_revision` on every edit of this file. A relation stores a plain subject or userset; arrows compute reach (`manager->effective_member`), never `#effective_member` in an allowed subject. Parenthesize `(a - b) + c`. Write `read` so the store can scope lists; `create` is evaluated on the unsaved candidate's field/const relations.
-   **Owner rule:** reach is schema, membership is data (`rebac.memberships`, grants). When a subject must reach a row, the arm belongs here: `docs/backend/guidelines.md#rebac` ("Visibility and access are REBAC-native, always", line 650) rules out a Python provider, `visible_to` or queryset filter as the access decision; Python still narrows a verb's candidate rows.
+   **Owner rule:** reach is schema, membership is data (`rebac.memberships`, grants). When a subject must reach a row, the arm belongs here: `docs/backend/guidelines.md#rebac` ("Visibility and access are REBAC-native, always") rules out a Python provider, `visible_to` or queryset filter as the access decision; Python still narrows a verb's candidate rows.
 
 3. **Express row-dependent access as a live backed relation, never a caveat.** Three shapes, all evaluated against the Django rows:
    ```zed
@@ -104,7 +104,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    relation active_member: auth/user // rebac:attribute={"field":"kind","resource":"person","value":"person","filters":{"is_active":true}}
    ```
    If the condition is a request value (time, IP, a flag the caller passes) → it is not expressible; scoped querysets carry no caveat context (`angee.E024`, `check_rebac_caveats` in `checks.py`). Put the fact on a column and back the relation with it.
-   **Owner rule:** the column owns the fact and the zed reads it (`docs/backend/guidelines.md#rebac`, "no tuple mirrors the column", line 702; `docs/guidelines.md#put-behavior-on-the-owning-object`). A tuple mirror or a Python re-decision of the same condition is a second implementation; orchestrating the verb around the check is not.
+   **Owner rule:** the column owns the fact and the zed reads it (`docs/backend/guidelines.md#rebac`, "no tuple mirrors the column"; `docs/guidelines.md#put-behavior-on-the-owning-object`). A tuple mirror or a Python re-decision of the same condition is a second implementation; orchestrating the verb around the check is not.
 
 4. **Contribute to another addon's definition from `permissions.extends.zed`** (sibling file, own revision header). Name only existing definitions; add relations and uniquely owned capability permissions, and union arms into permissions the base declares. New field gates additionally require that same addon's concrete donor column.
    ```zed
@@ -122,7 +122,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    }
    ```
    If your role must be elevated → union it into `iam/protected#member`; if it manages people → union into `auth/user#list`/account verbs (`tests/extcontrib/permissions.extends.zed`). If the model composes `TaggedModel` → declare the `target`-backed relation on `tags/tag_assignment` or `tags.E002` (`TagAssignment.check` in `src/angee/tags/models.py`) fails startup. Collisions (reused relation or newly introduced permission names), unknown targets, and native-invalid references raise `SchemaExtensionError` (`build.py`).
-   **Owner rule:** the target addon owns the seam, the contributor owns its vocabulary and revision (`docs/backend/guidelines.md#rebac`, "A consumer addon contributes…", line 765, and the revision rule at line 788). The composer emits the merged `runtime/permissions/<package>.zed` (`docs/composer.md#flow`); do not hand-edit or commit it.
+   **Owner rule:** the target addon owns the seam, the contributor owns its vocabulary and revision (`docs/backend/guidelines.md#rebac`, "A consumer addon contributes…", "the contribution is revisioned by the contributing addon"). The composer emits the merged `runtime/permissions/<package>.zed` (`docs/composer.md#flow`); do not hand-edit or commit it.
 
 5. **Declare direct sharing and field gates on the model.** `rebac_grantable` maps a stored (unbacked) relation to the permission that manages it; `angee.E015-E017` (`AngeeModel._check_rebac_grantable` in `base.py`) validate it against the effective definition. Field gates are `read__<field>` / `write__<field>` permissions in the zed (`write__<field>` is enforced on update only; keep protected creation values out of insert inputs).
    - Gates in the owning zed: any permission. Gates in a fragment: only on a concrete column *your* package's donor (`extends` model) contributes to that target; `_id` attnames, base and many-to-many fields are refused and a second package cannot extend your gate (`_merge_definition` in `build.py`).
@@ -141,10 +141,10 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    - Two-phase destructive verbs check the public permission, then run the destructive work elevated, and test the deny branch.
    **Owner rule:** the resolver's budget is input, context, dispatch, result; the access decision lives in the zed and the model (`docs/guidelines.md#keep-policy-above-detail`, `docs/backend/guidelines.md#graphql-actor-and-write-contracts`). Cross-owner orchestration inside the verb is legitimate under `docs/guidelines.md#put-behavior-on-the-owning-object`; a second decision is not.
 
-7. **Sync the stored schema.** `rebac sync` parses every effective `permissions.zed` (the merged file for extended packages) and persists it into the `Schema*` tables; the system checks compare models with *that stored* schema, so they gate every `rebac` subcommand (`docs/backend/guidelines.md#rebac`, line 813). Three distinct operations:
+7. **Sync the stored schema.** `rebac sync` parses every effective `permissions.zed` (the merged file for extended packages) and persists it into the `Schema*` tables; the system checks compare models with *that stored* schema, so they gate every `rebac` subcommand (`docs/backend/guidelines.md#rebac`, "`rebac sync` persists the zed into DB `Schema*` tables"). Three distinct operations:
    - Ordinary sync after a zed edit on a running stack: `rebac sync` (`docs/checks.md#composition-and-schema`), then restart Django through the operator (`docs/howto/getstarted.md#restart-the-running-stack`). `rebac sync --check` is the drift gate; `rebac check` validates without writing.
-   - Retirement of removed definitions, packages or backings: provision's sync step runs `--skip-checks sync --prune-stale --yes` after `migrate` and before `check` (`BaseConfig.compose_provision` in `src/angee/base/apps.py`, `docs/backend/guidelines.md#rebac`, line 825). Run the same shape, in that order, when a type was renamed or removed.
-   - Deliberate overwrite: `--force-overwrite` (explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting) replaces locally managed live policy. Use it only when that replacement is the decision (`docs/backend/guidelines.md#rebac`, line 829); it is not part of an ordinary sync.
+   - Retirement of removed definitions, packages or backings: provision's sync step runs `--skip-checks sync --prune-stale --yes` after `migrate` and before `check` (`BaseConfig.compose_provision` in `src/angee/base/apps.py`, `docs/backend/guidelines.md#rebac`, "Native `rebac --skip-checks sync --prune-stale --yes` retires removed package-managed declarations"). Run the same shape, in that order, when a type was renamed or removed.
+   - Deliberate overwrite: `--force-overwrite` (explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting) replaces locally managed live policy. Use it only when that replacement is the decision (`docs/backend/guidelines.md#rebac`, "`--force-overwrite` remains a separate explicit choice"); it is not part of an ordinary sync.
    If `rebac.E009` names a backing you just renamed, removed or added → the stored schema, not the source, is stale, and the check blocks the very sync that would fix it: run the retirement shape above with `--skip-checks` (`migrate --skip-checks` first when migrations are pending), then `check`. `rebac.E009` is the library's backing check (`check_field_backed_relations` in `rebac/checks.py`); a role or anchor type it cannot resolve needs its `role_anchor` (`roles.py`).
 
    **Owner rule:** sync, prune and overwrite are the library's command options; Angee adds only the merged-file emission and path wiring (the `build.py` module docstring) and provision's step order (`BaseConfig.compose_provision`).
@@ -163,15 +163,15 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 ## Do not
 
 - Caveated subjects or `with` contexts in any zed → `angee.E024` (`check_rebac_caveats` in `src/angee/base/checks.py`); use step 3.
-- A Python provider, `visible_to`, `is_superuser` branch or queryset filter as authorization → `docs/backend/guidelines.md#rebac` ("Visibility and access are REBAC-native, always", line 650).
-- Editing a framework addon's `permissions.zed` to name your role → `docs/backend/guidelines.md#rebac` (line 765); use `permissions.extends.zed`.
+- A Python provider, `visible_to`, `is_superuser` branch or queryset filter as authorization → `docs/backend/guidelines.md#rebac` ("Visibility and access are REBAC-native, always").
+- Editing a framework addon's `permissions.zed` to name your role → `docs/backend/guidelines.md#rebac` ("A consumer addon contributes…"); use `permissions.extends.zed`.
 - A fragment that declares a new non-gate permission → `_merge_definition` (`build.py`) raises. A `read` arm on a definition that owns `read_granted` bypasses its withholding → `docs/backend/guidelines.md#rebac` ("Permission fragments widen `read_granted`"); union there. On `messaging/thread` a record's chatter arm goes to `chatter_read`, which the inbox's `read_inbox` skips; `messaging.E003` (`check_derived_reads` in `src/angee/messaging/checks.py`, a seal through `check_sealed_permissions` in `src/angee/base/checks.py`) refuses an arm on a thread or message `read` or `read_inbox`.
-- `#effective_member` inside a relation's allowed subjects → invalid schema; store the role and arrow (`docs/backend/guidelines.md#rebac`, "Relations constrain stored subjects", line 601).
+- `#effective_member` inside a relation's allowed subjects → invalid schema; store the role and arrow (`docs/backend/guidelines.md#rebac`, "Relations constrain stored subjects").
 - Mirroring a column into tuples, or a remote backend → `docs/stack.md#backend` (local backend only).
-- A private share mutation, Django group M2M, or `auth.Permission` sync → `docs/backend/guidelines.md#rebac` ("Declare direct sharing once", line 553; "Membership has one store", line 609).
-- `system_context` around a user-requested write because it inserts a row → `docs/backend/guidelines.md#rebac` (line 712).
-- Checking `shared_reader` or any arrow-only permission directly or as a field gate → `docs/backend/guidelines.md#rebac` ("Row-dependent shared visibility", line 690).
-- `--force-overwrite` as the routine zed sync → `docs/backend/guidelines.md#rebac` (line 829); step 7 names the three operations.
+- A private share mutation, Django group M2M, or `auth.Permission` sync → `docs/backend/guidelines.md#rebac` ("Declare direct sharing once"; "Membership has one store").
+- `system_context` around a user-requested write because it inserts a row → `docs/backend/guidelines.md#rebac` ("Reserve `system_context`/`asystem_context` for named system-owned work").
+- Checking `shared_reader` or any arrow-only permission directly or as a field gate → `docs/backend/guidelines.md#rebac` ("Row-dependent shared visibility").
+- `--force-overwrite` as the routine zed sync → `docs/backend/guidelines.md#rebac` ("`--force-overwrite` remains a separate explicit choice"); step 7 names the three operations.
 - Hand-editing `runtime/permissions/*.zed` or committing it → `docs/composer.md#flow` (generated output).
 
 ## Verify
@@ -181,15 +181,15 @@ Validator: the addon's focused test module plus the system checks; the loop is `
 - In a jj lane (no host, database or JS install): the focused Python tests, `tests/test_permission_composition.py`, `tests/test_layering.py`, lint and types on touched files, all under `docs/checks.md#python-and-composition-contracts`. Per-actor assertions run here because `composed_tables`/`composed_permissions` sync REBAC into the SQLite test database (`docs/checks.md#source-addon-test-models`).
 - Only on integrated `src`: composition drift, `check` (`angee.E015-E017`, `E022`, `E024`, `E027`, `E045`, `rebac.E009`, `tags.E002`), the stack sync and the composed example suite under `docs/checks.md#composition-and-schema`; the live page under `docs/checks.md#browser-verification`; CI scope under `docs/checks.md#what-ci-actually-runs`.
 - Done means: the test module proves read/write/deny for at least owner, grantee and outsider; `check` is clean; a grant through the share surface appears in `direct_record_access()`; a backed relation leaves no stored tuples.
-- False greens: a green unit suite with a live "loaded N rows outside actor scope" failure (`docs/backend/guidelines.md#rebac`, line 797); admin-only tests that hide a leaked system scope (line 712).
+- False greens: a green unit suite with a live "loaded N rows outside actor scope" failure (`docs/backend/guidelines.md#rebac`, "Never `select_related` a REBAC-guarded relation into an actor-scoped queryset"); admin-only tests that hide a leaked system scope ("User-requested reads and writes retain their actor scope").
 
 ## Pitfalls
 
-- The stored schema gates every `rebac` subcommand and `check`; after a rename or retirement `rebac.E009` describes the store, not the source (`docs/backend/guidelines.md#rebac`, line 813; step 7).
+- The stored schema gates every `rebac` subcommand and `check`; after a rename or retirement `rebac.E009` describes the store, not the source (`docs/backend/guidelines.md#rebac`, "`rebac sync` persists the zed into DB `Schema*` tables"; step 7).
 - `role_anchor` wrapped in a helper captures the helper's module and the composer fails at emission on the mis-capture; call it at module level or pass `module=__name__` (`src/angee/base/models/roles.py`).
-- A const-backed role target without its own `definition` + anchor makes a non-member check raise instead of deny (`docs/backend/guidelines.md#rebac`, "Const-backing", line 751).
-- SQLite's `REBAC_DEPTH_LIMIT` of 8 silently drops rows inherited through deeper hierarchies (`docs/backend/guidelines.md#rebac`, line 820; `SETTINGS` in `src/angee/base/autoconfig.py`).
-- `select_related` of a REBAC-guarded relation inside an actor-scoped queryset passes unit tests and fails live (`docs/backend/guidelines.md#rebac`, line 796).
+- A const-backed role target without its own `definition` + anchor makes a non-member check raise instead of deny (`docs/backend/guidelines.md#rebac`, "Const-backing").
+- SQLite's `REBAC_DEPTH_LIMIT` of 8 silently drops rows inherited through deeper hierarchies (`docs/backend/guidelines.md#rebac`, "`REBAC_DEPTH_LIMIT` bounds compiled SQL nesting"; `SETTINGS` in `src/angee/base/autoconfig.py`).
+- `select_related` of a REBAC-guarded relation inside an actor-scoped queryset passes unit tests and fails live (`docs/backend/guidelines.md#rebac`, "Never `select_related` a REBAC-guarded relation into an actor-scoped queryset").
 - Force-login in tests needs the IAM backend ([authorization pitfalls](references/pitfalls.md)).
 
 ## Read next
