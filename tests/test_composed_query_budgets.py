@@ -30,6 +30,8 @@ def test_composed_addon_query_budgets(tmp_path: Path) -> None:
             "example.notes.tests.test_query_budgets",
             "--test-label",
             "angee.projects.tests.test_query_budgets",
+            "--test-label",
+            "tests.native_graphql_document_budgets",
             "--output",
             str(report),
         ],

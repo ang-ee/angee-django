@@ -11,16 +11,14 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from importlib.util import spec_from_file_location
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 from typing import Any, cast
 
 import pytest
 import tomlkit
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
 from django.db import models
-from django.test import RequestFactory
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
@@ -29,6 +27,9 @@ from angee.agents.testing import models as agents_models  # noqa: F401 -- regist
 from angee.base.testing.packages import write_addon_distribution
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema as execute_schema
+from angee.graphql.testing.documents import graphql_request as graphql_request
+from angee.graphql.testing.documents import result_data as result_data
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
 from angee.intake.models import Need as AbstractNeed
@@ -955,42 +956,6 @@ def addon_schema(schemas: dict[str, Any], name: str, *composed: dict[str, Any]) 
         for key in SCHEMA_PART_KEYS
     }
     return GraphQLSchemas([SchemaAddon({name: parts})]).build(name)
-
-
-def graphql_request(user: Any) -> Any:
-    """Return a bare POST request carrying ``user``."""
-
-    request = RequestFactory().post("/graphql/public/")
-    request.user = user
-    return request
-
-
-def execute_schema(
-    schema: Any,
-    query: str,
-    variables: dict[str, Any] | None = None,
-    *,
-    user: Any | None = None,
-    request: Any | None = None,
-) -> Any:
-    """Execute a GraphQL operation with a request-shaped context."""
-
-    request = request or graphql_request(user or AnonymousUser())
-    actor = getattr(request, "user", AnonymousUser())
-    with actor_context(actor):
-        return schema.execute_sync(
-            query,
-            variable_values=variables or {},
-            context_value=SimpleNamespace(request=request),
-        )
-
-
-def result_data(result: Any) -> dict[str, Any]:
-    """Return result data after asserting the operation succeeded."""
-
-    assert result.errors is None, result.errors
-    assert result.data is not None
-    return cast(dict[str, Any], result.data)
 
 
 def assert_private_hasura_insert_access(

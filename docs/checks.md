@@ -86,8 +86,23 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [delivery contracts](../tests/test_messaging_delivery.py) with PostgreSQL
 [sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
 [comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
-runs with four xdist workers grouped by file, `--nomigrations`, a JUnit report,
-and a zero-skip gate. Pytest-django creates a separate PostgreSQL test database
+also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
+knowledge, messaging, proposals, sequences, spaces, storage, the system
+queryset, work and task ordering locks, integrate streams and workflow
+integrate steps, and the composed
+[intake access decision](../tests/test_intake_access_decision.py). It also runs
+[task ordering](../tests/test_task_rank_allocation.py),
+[record tasks](../tests/test_projects_record_tasks.py), and the
+[projects access campaign](../tests/test_projects_wave3_campaign.py).
+`test_connections.py` and `test_system_queryset.py` contribute only their
+PostgreSQL test nodes because each also has SQLite-only tests; the PostgreSQL
+branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`
+also run by node. Every other listed file runs whole, which keeps the SQLite
+floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
+by pytest-split's `least_duration` algorithm over the
+[PostgreSQL timing map](../.test_durations_postgres); each runs with four xdist
+workers grouped by file, `--nomigrations`, a JUnit report, and a zero-skip
+gate. Pytest-django creates a separate PostgreSQL test database
 for each worker. The composed-host subprocess tests use Django's test runner to
 create separate worker-named secondary test databases; every caller bounds the
 subprocess with the one hang limit in [`composed_host.py`](../tests/composed_host.py). The full
@@ -139,6 +154,28 @@ through their native app lifecycle. Decisions-only suites use
 `angee.decisions.testing` drivers with central concrete models. Name Python
 test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
+
+### GraphQL Document Budgets
+
+[`angee.graphql.testing.documents`](../src/angee/graphql/testing/documents.py) executes
+one document as one actor, as served requests do, and records the SQL Django captured
+on every configured database. The same helpers run an addon schema in the bare source
+host under pytest and the composed console schema under Django's test runner:
+
+```python
+read = measure_graphql_document(schema, document, variables, actor=member)
+assert read.data["projects_aggregate"]["aggregate"]["count"] == 3
+read.assert_ceiling(statements=89, sql_kb=539)
+```
+
+A ceiling is the measured cost: statements exact, SQL text rounded up to the next KB
+of 1,024 bytes. A change that lowers a cost lowers its ceiling in the same change; a
+rise is a regression to fix, never a reason to raise the ceiling. Assert the rows a
+read returns beside its ceiling, so a read that loses rows cannot pass. The
+[console document ceilings](../tests/native_graphql_document_budgets.py) pin the
+console app's inbox, transcript, person, projects and current-user reads for a
+platform admin and a member, each after one warm execution, in the
+[composed query-budget host](../tests/test_composed_query_budgets.py) on SQLite.
 
 ### Owner Search
 
@@ -348,14 +385,17 @@ pushes to `main`. The current tiers are:
   campaigns, about 700 stored seconds each) set a floor near 25 minutes on CI.
   Their cost is per-test fixture setup, a `rebac sync` before every test; making
   that setup cheaper is how the limit comes down.
-- **PostgreSQL:** in three shards of its own beside the SQLite ones, split the
-  same way and with a 40-minute limit, the named workflow, decision and agent session
-  selection runs with `-n 4 --dist loadfile --nomigrations` and prints its 25
-  slowest test durations; each shard writes JUnit output and checks that it did
+- **PostgreSQL:** in six groups of its own beside the SQLite shards, assigned
+  by pytest-split's `least_duration` algorithm over the
+  [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
+  limit (CI runs 1.9–2.6 times the local timings the map records; six groups
+  keep that margin), the named PostgreSQL contract selection runs with
+  `-n 4 --dist loadfile --nomigrations` and prints its 25
+  slowest test durations; each group writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. The `uv` job passes only
-  when Python quality and every shard of both test suites pass, so callers keep
-  one check name.
+  when Python quality, every SQLite shard and every PostgreSQL group pass, so
+  callers keep one check name.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
@@ -377,6 +417,35 @@ times): run `uv run pytest -q -n 4 --dist loadfile --store-durations` in the
 framework checkout and commit `.test_durations`. Ties in the assignment fall back
 to collection order, so an opt-in `-p randomly` run must give every shard one
 shared `--randomly-seed`.
+
+Refresh `.test_durations_postgres` after changing the PostgreSQL selection or
+when its group balance drifts. Run the selected tests serially on PostgreSQL so
+the map records per-test costs without xdist scheduling effects;
+`--clean-durations` drops the entries of tests the selection no longer
+collects, which pytest-split would otherwise keep when it merges into the
+existing map:
+
+```bash
+export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/angee
+pg_tests=$(uv run --locked python - <<'PY'
+import shlex
+from pathlib import Path
+
+import yaml
+
+steps = yaml.safe_load(Path('.github/workflows/reusable-checks.yml').read_text())['jobs']['uv-postgres']['steps']
+run = next(step['run'] for step in steps if step.get('name') == 'Verify PostgreSQL contracts execute without skips')
+print(' '.join(arg for arg in shlex.split(run.split('uv run --locked python -c', 1)[0]) if arg.startswith('tests/')))
+PY
+)
+test -n "$pg_tests"
+uv run --locked python -m pytest -q -n 0 --nomigrations --store-durations --clean-durations --durations-path .test_durations_postgres $pg_tests
+```
+
+The current map came from a local serial macOS arm64 run against PostgreSQL
+16.14; host load was not fixed. CI per-test durations have been 1.9–2.6 times
+the local measurements, so use the map for relative group balance and check
+actual CI wall times against the 60-minute limit.
 
 Separate structural and downstream tiers are not implemented. Separate workflows
 enforce private-path exclusion and other repository policies. Executable jobs in
