@@ -457,7 +457,7 @@ class RecordHistory:
         readable_links: dict[tuple[type[models.Model], Any], models.Model] = {}
         for link_model, ids in links_by_model.items():
             assert issubclass(link_model, StatementLinkMixin)
-            rows = require_rebac_queryset(link_model).with_actor(self.actor).with_action("read").filter(pk__in=ids)
+            rows = require_rebac_queryset(link_model, actor=self.actor).with_action("read").filter(pk__in=ids)
             if link_model.presentation_related:
                 rows = rows.select_related(*link_model.presentation_related)
             readable_links.update({(link_model, row.pk): row for row in rows})
@@ -481,8 +481,7 @@ class RecordHistory:
         for model, items in snapshots.items():
             keys = {pk for pk, _changeset_id in items}
             readable = (
-                require_rebac_queryset(model)
-                .with_actor(self.actor)
+                require_rebac_queryset(model, actor=self.actor)
                 .with_action("read")
                 .using(self.using)
                 .filter(pk__in=keys)

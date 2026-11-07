@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from rebac import SubjectRef, actor_context, system_context
 
 from angee.base.prefetch import InstancePrefetch, ReaderMemo
@@ -52,3 +53,7 @@ def test_instance_prefetch_owns_the_protocol_tuple_and_the_hint_reader() -> None
     assert seen == [ALICE]
     with pytest.raises(ValueError, match="requires one queryset and to_attr"):
         Owner.pairs.get_prefetch_querysets(rows, None)
+    # ``require_rebac_queryset(..., actor=None)`` empties the hint: it reads for no reader.
+    with actor_context(ALICE):
+        Owner.pairs.get_prefetch_querysets(rows, [get_user_model().objects.none()])
+    assert seen == [ALICE, None]

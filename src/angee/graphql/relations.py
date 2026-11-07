@@ -357,13 +357,9 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
         if related_model is None:
             # A public-ID scalar has no nested model projection to optimize.
             return models.Prefetch(field_name)
-        actor = current_actor()
-        manager = require_rebac_queryset(related_model)
-        queryset: models.QuerySet[models.Model] = (
-            manager.none()
-            if actor is None
-            else manager.with_actor(actor).with_action("read")
-        )
+        queryset: models.QuerySet[models.Model] = require_rebac_queryset(
+            related_model, actor=current_actor(),
+        ).with_action("read")
         queryset = run_type_get_queryset(queryset, field.django_type, info)
         assert field.origin_django_type is not None
         relation = field.origin_django_type.model._meta.get_field(field_name)

@@ -6,6 +6,7 @@ from collections.abc import Callable, Hashable, Iterable
 from typing import Any, ClassVar
 
 from django.db import models
+from django.db.models.query import EmptyQuerySet
 from rebac import to_subject_ref
 from rebac.actors import is_sudo
 from rebac.relation_loading import relation_actor
@@ -19,7 +20,8 @@ class InstancePrefetch:
     listed instances' related rows once, through :meth:`related`, and assigns each
     instance its rows (its row, or ``None``, when ``single``) to ``to_attr``.
     ``queryset`` is the hint's own queryset and ``actor`` the reader it names
-    (REBAC's ``relation_actor``), or ``None`` without one.
+    (REBAC's ``relation_actor``), or ``None`` without one or for an emptied hint
+    (``require_rebac_queryset(..., actor=None)``), which reads for no reader.
     """
 
     single: ClassVar[bool] = True
@@ -42,7 +44,9 @@ class InstancePrefetch:
 
         if querysets is None or len(querysets) != 1:
             raise ValueError(f"Prefetching {self.name or type(self).__name__} requires one queryset and to_attr.")
-        rows, row_key, instance_key = self.related(instances, querysets[0], relation_actor(querysets[0]))
+        queryset = querysets[0]
+        actor = None if isinstance(queryset, EmptyQuerySet) else relation_actor(queryset)
+        rows, row_key, instance_key = self.related(instances, queryset, actor)
         return rows, row_key, instance_key, self.single, self.name, False
 
 

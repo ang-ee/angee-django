@@ -223,7 +223,7 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
     readable_sources: dict[tuple[type[models.Model], str, str], models.Model] = {}
     for (model, id_attr), sources in sources_by_model.items():
         visible = (
-            require_rebac_queryset(model).with_actor(actor)
+            require_rebac_queryset(model, actor=actor)
             .with_action("read")
             .filter(**{f"{id_attr}__in": sources})
         )
@@ -617,7 +617,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
             raise ValidationError("Pair endpoints must belong to the same database.")
         actor = instance_actor(left)
         for endpoint in (left, right):
-            visible = require_rebac_queryset(model).with_actor(actor).with_action("read").using(using)
+            visible = require_rebac_queryset(model, actor=actor).with_action("read").using(using)
             if not visible.filter(pk=endpoint.pk).exists():
                 raise PermissionDenied("A pair requires read on both endpoints.")
         ordered = sorted((left, right), key=lambda endpoint: endpoint.pk)
@@ -946,7 +946,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
     def require_statement_write(self, actor: SubjectRef | None) -> None:
         """Admit assertions through the subject's native REBAC write scope."""
 
-        rows = require_rebac_queryset(type(self)).filter(pk=self.pk).with_actor(actor).with_action("write")
+        rows = require_rebac_queryset(type(self), actor=actor).filter(pk=self.pk).with_action("write")
         if not rows.exists():
             raise PermissionDenied("The asserting source requires write on the subject.")
 

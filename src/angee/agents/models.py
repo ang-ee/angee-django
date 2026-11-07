@@ -1676,8 +1676,8 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concret
     def readable_model_handle(self, actor: Any) -> str:
         """Return the selected model handle when ``actor`` may read that model.
 
-        Chat surfaces read the model through the actor's scope, else REBAC's
-        ambient scope; only the service's own provisioning renders the selected
+        Chat surfaces read the model through the actor's scope; without an actor
+        no model is read. Only the service's own provisioning renders the selected
         model structurally.
         """
 
