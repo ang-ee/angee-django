@@ -77,9 +77,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-/** The text of each danger toast the page raised. */
+/** The text of each danger toast the page raised: Base UI stamps the type on a toast's root
+ * (its alertdialog) and on each of its parts, so only the roots count. */
 function toasts(): string[] {
-  return Array.from(document.querySelectorAll('[data-type="danger"]'), (toast) => toast.textContent ?? "");
+  return Array.from(document.querySelectorAll('[role="alertdialog"][data-type="danger"]'), (toast) => toast.textContent ?? "");
 }
 
 function expectOneToast(title: string): void {

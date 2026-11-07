@@ -26,7 +26,7 @@ test("a run's Decisions badge counts its declared related count without the run'
   query.mockReturnValue(groupCount("workflows.decisions", 2));
   const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "workflows.WorkflowRun#groups": { decisions: runDecisionsGroup },
+    "workflows.WorkflowRun#groups": { "workflows.decisions": runDecisionsGroup },
   }) }}><RelatedCountProbe id="related" context={context("workflows.WorkflowRun")} onCount={onCount} /></AppRuntimeProvider>);
   expect(query).toHaveBeenCalledWith(expect.anything(), { model: "workflows.WorkflowRun", id: "rec_1", groups: ["workflows.decisions"] }, expect.anything());
   expect(query).not.toHaveBeenCalledWith(RunRelatedDocument, expect.anything(), expect.anything());
@@ -36,7 +36,7 @@ test("a run's Decisions badge counts its declared related count without the run'
 test("a decision's Run badge counts its declared related count without the decision's steps", () => {
   query.mockReturnValue(groupCount("workflows.run", 1));
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "decisions.Decision#groups": { run: decisionRunGroup },
+    "decisions.Decision#groups": { "workflows.run": decisionRunGroup },
   }) }}><RelatedCountProbe id="related" context={context("decisions.Decision")} onCount={vi.fn()} /></AppRuntimeProvider>);
   expect(query).toHaveBeenCalledWith(expect.anything(), { model: "decisions.Decision", id: "rec_1", groups: ["workflows.run"] }, expect.anything());
   expect(query).not.toHaveBeenCalledWith(DecisionStepsDocument, expect.anything(), expect.anything());
@@ -46,7 +46,7 @@ test("a record's Runs badge counts its declared related count without the timeli
   query.mockReturnValue(groupCount("workflows.runs", 3));
   const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { runs: recordRunsGroup },
+    "related#groups": { "workflows.runs": recordRunsGroup },
   }) }}><RelatedCountProbe id="related" context={context("example.Record")} onCount={onCount} /></AppRuntimeProvider>);
   expect(query).toHaveBeenCalledWith(expect.anything(), { model: "example.Record", id: "rec_1", groups: ["workflows.runs"] }, expect.anything());
   expect(query).not.toHaveBeenCalledWith(RecordRelatedRunsDocument, expect.anything(), expect.anything());
@@ -55,7 +55,7 @@ test("a record's Runs badge counts its declared related count without the timeli
 
 test("a run's derived distinct Records count waits for the Links pane", () => {
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "workflows.WorkflowRun#groups": { records: runRecordsGroup },
+    "workflows.WorkflowRun#groups": { "workflows.records": runRecordsGroup },
   }) }}><RelatedCountProbe id="related" context={context("workflows.WorkflowRun")} onCount={vi.fn()} /></AppRuntimeProvider>);
   expect(query).not.toHaveBeenCalledWith(RunRelatedDocument, expect.anything(), expect.anything());
 });

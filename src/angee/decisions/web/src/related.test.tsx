@@ -17,7 +17,7 @@ test("the Decisions badge counts its declared related count without reading the 
   const custom = vi.fn(async (_params: Partial<CustomParams>) => ({ data: { related_counts: [{ group: "decisions.decisions", count: 2 }] } }));
   const onCount = vi.fn();
   render(<Provider dataProvider={{ custom }}><AppRuntimeProvider runtime={{
-    containers: containersFromChildren(CHATTER_CONTAINERS, { "related#groups": { decisions: recordDecisionsGroup } }),
+    containers: containersFromChildren(CHATTER_CONTAINERS, { "related#groups": { "decisions.decisions": recordDecisionsGroup } }),
   }}><RelatedCountProbe id="related" context={context} onCount={onCount} /></AppRuntimeProvider></Provider>);
   await waitFor(() => expect(onCount).toHaveBeenLastCalledWith("related", 2));
   expect(custom.mock.calls.map(([request]) => request.meta?.gqlVariables)).toContainEqual(
@@ -30,7 +30,7 @@ test("a decision's Concerns badge counts its declared related count without read
   const custom = vi.fn(async (_params: Partial<CustomParams>) => ({ data: { related_counts: [{ group: "decisions.concerns", count: 1 }] } }));
   const onCount = vi.fn();
   render(<Provider dataProvider={{ custom }}><AppRuntimeProvider runtime={{
-    containers: containersFromChildren(CHATTER_CONTAINERS, { "decisions.Decision#groups": { concerns: decisionConcernsGroup } }),
+    containers: containersFromChildren(CHATTER_CONTAINERS, { "decisions.Decision#groups": { "decisions.concerns": decisionConcernsGroup } }),
   }}><RelatedCountProbe id="related" context={{ ...context, route: { ...context.route!, modelLabel: "decisions.Decision", canonicalLabel: "decisions.Decision" } }} onCount={onCount} /></AppRuntimeProvider></Provider>);
   await waitFor(() => expect(onCount).toHaveBeenLastCalledWith("related", 1));
   expect(custom.mock.calls.map(([request]) => request.meta?.gqlVariables)).toContainEqual(

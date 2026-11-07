@@ -100,7 +100,7 @@ test("role configuration filters one shared query and each row links to the page
 
 test("a Pages badge counts its declared related count without binding rows", () => {
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { pages: recordPagesGroup() },
+    "related#groups": { "knowledge.pages": recordPagesGroup() },
   }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
   expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "example.Record", id: "rec_1", groups: ["knowledge.pages"] }, expect.anything());
   expect(sdk.query).not.toHaveBeenCalledWith(KnowledgeRecordPages, expect.anything(), expect.anything());
@@ -108,7 +108,7 @@ test("a Pages badge counts its declared related count without binding rows", () 
 
 test("a role group leaves the Pages badge to Links", () => {
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { pages: recordPagesGroup(), contract: recordPagesGroup({ label: "Contract", role: "contract" }) },
+    "related#groups": { "knowledge.pages": recordPagesGroup(), contract: recordPagesGroup({ label: "Contract", role: "contract" }) },
   }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
   expect(sdk.query).not.toHaveBeenCalled();
 });
@@ -117,7 +117,7 @@ test("a page's Backlinks and Bound to badges count their declared edges without 
   const page = { ...context, route: { ...context.route!, modelLabel: "knowledge.Page" } };
   const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "knowledge.Page#groups": { backlinks: pageBacklinksGroup, bound: pageBoundToGroup },
+    "knowledge.Page#groups": { "knowledge.backlinks": pageBacklinksGroup, "knowledge.bound-to": pageBoundToGroup },
   }) }}><RelatedCountProbe id="related" context={page} onCount={onCount} /></AppRuntimeProvider>);
   expect(sdk.query).toHaveBeenCalledWith(expect.anything(), {
     model: "knowledge.Page", id: "rec_1", groups: ["knowledge.backlinks", "knowledge.bound-to"],
