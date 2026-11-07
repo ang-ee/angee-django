@@ -12,7 +12,6 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import F, Prefetch, prefetch_related_objects
 from django.db.models.lookups import IsNull
-from rebac import to_subject_ref
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -101,14 +100,17 @@ def _graph_details(actor: Any, steps: list[Selection]) -> dict[str, Any]:
     step_fields = frozenset(field.name for field in _fields(steps))
     map_fields = frozenset(field.name for field in _fields(_selected(steps, "map_steps")))
     selected = step_fields | map_fields
-    # Built only when selected: record-reference access reads its target types eagerly.
+    # Built only when the graph is read: record-reference access reads its target types eagerly.
     readers = {
         "awaited_run": lambda: WorkflowRun.objects.with_actor(actor).annotate(**_RUN_LABEL),
         "child_runs": lambda: WorkflowRun.objects.with_actor(actor).annotate(**_RUN_LABEL),
         "decision": lambda: Decision.objects.with_actor(actor),
         "records": lambda: with_record_reference_access(StepRecord.objects.with_actor(actor)),
     }
-    related = tuple(Prefetch(name, queryset=read()) for name, read in readers.items() if name in selected)
+
+    def related() -> tuple[Prefetch, ...]:
+        return tuple(Prefetch(name, queryset=read()) for name, read in readers.items() if name in selected)
+
     return {"step_fields": step_fields, "map_fields": map_fields, "related": related}
 
 
@@ -121,11 +123,7 @@ def _project_runs(runs: list[Any], actor: Any, selections: list[Selection]) -> N
     if "graph" in names:
         prefetch_related_objects(runs, _RUN_POLICY_VERSION)
         steps = _selected(selections, "graph", "nodes", "step_run")
-        graphs = WorkflowRun.graphs_for(runs, actor, writable=writable, **_graph_details(actor, steps))
-        subject = to_subject_ref(actor)
-        for run in runs:
-            if run.pk in graphs:
-                run.__dict__["_graph_projection"] = (subject, graphs[run.pk])
+        WorkflowRun.graphs_for(runs, actor, writable=writable, **_graph_details(actor, steps))
 
 
 @strawberry_django.type(Workflow)
@@ -216,13 +214,9 @@ class WorkflowRunType(RecordReferenceNode):
 
         A run list that already read its graphs as one batch hands each run its own.
         """
-        run = cast(Any, self)
         actor = get_current_user(info)
-        projected = run.__dict__.get("_graph_projection")
-        if projected is not None and projected[0] == to_subject_ref(actor):
-            return cast(WorkflowRunGraph, projected[1])
         steps = _selected(info.selected_fields, "graph", "nodes", "step_run")
-        return cast(WorkflowRunGraph, run.graph(actor, **_graph_details(actor, steps)))
+        return cast(WorkflowRunGraph, cast(Any, self).graph(actor, **_graph_details(actor, steps)))
 
     @strawberry_django.field(only=["status", "stopped_at"])
     def can_cancel(self, info: strawberry.Info) -> bool:

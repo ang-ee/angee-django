@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -100,13 +100,6 @@ class RunGraph:
 
     nodes: tuple[RunGraphNode, ...]
     edges: tuple[RunGraphEdge, ...]
-
-
-def _write_access(seeded: tuple[Any, bool] | None, run: Any, actor: Any) -> bool:
-    """Reuse a batch read's run write answer for its reader; otherwise ask the run's policy."""
-    if seeded is not None and actor is not None and seeded[0] == to_subject_ref(actor):
-        return seeded[1]
-    return bool(run.with_actor(actor).has_access("write"))
 
 
 class _JSONArrayLength(models.Func):
@@ -366,9 +359,15 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         *,
         step_fields: frozenset[str] = frozenset(),
         map_fields: frozenset[str] = frozenset(),
-        related: Sequence[models.Prefetch] = (),
+        related: Callable[[], Sequence[models.Prefetch]] = tuple,
     ) -> RunGraph:
-        """Read this run's frozen topology, batching only the step details a reader selects."""
+        """Read this run's frozen topology, batching only the step details a reader selects.
+
+        A batch read that already answered this run's graph for the reader hands it back.
+        """
+        seeded = self._seeded("graph", actor)
+        if seeded is not None:
+            return cast(RunGraph, seeded)
         graphs = type(self).graphs_for(
             (self,), actor, step_fields=step_fields, map_fields=map_fields, related=related,
         )
@@ -384,7 +383,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         *,
         step_fields: frozenset[str] = frozenset(),
         map_fields: frozenset[str] = frozenset(),
-        related: Sequence[models.Prefetch] = (),
+        related: Callable[[], Sequence[models.Prefetch]] = tuple,
         writable: set[int] | None = None,
     ) -> dict[int, RunGraph]:
         """Read the reader's runs' frozen topologies with one statement per step table.
@@ -392,9 +391,11 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         A run the reader can no longer read gets no graph, so one lost run never
         fails the list; its own :meth:`graph` refuses it. ``step_fields`` and
         ``map_fields`` name the details selected on node rows and on their map item
-        rows; ``related`` prefetches the selected relations; ``writable`` reuses the
-        reader's already-read run write answers. Each selected detail costs at most
-        one statement per batch, never one per run or step.
+        rows; ``related`` builds the selected relations' prefetches when the graph is
+        read; ``writable`` reuses the reader's already-read run write answers. Each
+        selected detail costs at most one statement per batch, never one per run or
+        step. Each run is seeded with its graph and the reader facts the batch read,
+        so the run and its rows answer them without another read.
         """
         if not runs:
             return {}
@@ -411,7 +412,6 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         steps = cast(Any, cls._meta.get_field("step_runs").related_model.objects.with_actor(actor)).filter(
             run_id__in=list(by_id),
         )
-        subject = to_subject_ref(actor)
         rows: dict[int, dict[str, Any]] = {pk: {} for pk in by_id}
         items: dict[int, dict[str, list[Any]]] = {pk: {} for pk in by_id}
         if "map_steps" in step_fields:
@@ -423,9 +423,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 else:
                     rows[row.run_id][row.node_key] = row
             for run_id, nodes in rows.items():
-                for key, row in nodes.items():
-                    group = sorted(items[run_id].get(key, ()), key=lambda item: item.map_index)
-                    row._graph_map_steps = (subject, group)
+                by_id[run_id]._seed("map_steps", actor, {
+                    key: sorted(items[run_id].get(key, ()), key=lambda item: item.map_index) for key in nodes
+                })
         else:
             selected = step_fields
             for row in cls._graph_details(steps.nodes(), selected, related):
@@ -436,9 +436,8 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 row.run = by_id[run_id]
         if "can_retry" in selected:
             writable = cls._writable_for(runs, actor) if writable is None else writable
-            for run_id, graph_rows in members.items():
-                for row in graph_rows:
-                    row._graph_write_permission = (subject, run_id in writable)
+            for run_id, run in by_id.items():
+                run._seed("write", actor, run_id in writable)
             # Only rows past the retry state gate weigh their run's other failures.
             weighed = {
                 run_id for run_id, graph_rows in members.items()
@@ -451,9 +450,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 failures[run_id].append((pk, key))
             for run_id, found in failures.items():
                 definition = by_id[run_id].policy_version.definition
-                allowed = tuple((pk, key) for pk, key in found if definition.retry_allowed(key))
-                for row in members[run_id]:
-                    row._graph_unrouted_failures = allowed
+                by_id[run_id]._seed("unrouted_failures", actor, tuple(
+                    (pk, key) for pk, key in found if definition.retry_allowed(key)
+                ))
         counts: dict[tuple[int, str], list[StepRunStatusCount]] = {}
         attempts: dict[tuple[int, str], int] = {}
         # Item summaries exist only for map nodes; a graph without one skips the aggregate.
@@ -462,7 +461,10 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 key = (item["run_id"], item["node_key"])
                 counts.setdefault(key, []).append(StepRunStatusCount(StepRunStatus(item["status"]), item["count"]))
                 attempts[key] = attempts.get(key, 0) + item["attempts"]
-        return {pk: run._graph_from(rows[pk], counts, attempts) for pk, run in by_id.items()}
+        graphs = {pk: run._graph_from(rows[pk], counts, attempts) for pk, run in by_id.items()}
+        for pk, graph in graphs.items():
+            by_id[pk]._seed("graph", actor, graph)
+        return graphs
 
     def _graph_from(
         self,
@@ -489,11 +491,14 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         )
 
     @staticmethod
-    def _graph_details(rows: Any, fields: frozenset[str], related: Sequence[models.Prefetch]) -> Any:
+    def _graph_details(
+        rows: Any, fields: frozenset[str], related: Callable[[], Sequence[models.Prefetch]],
+    ) -> Any:
         """Read the selected effect marker and relations in the step rows' own batch."""
         if "requires_duplicate_acknowledgement" in fields:
             rows = rows.annotate(_effect_started=rows.model.effect_started_expression())
-        return rows.prefetch_related(*related) if related else rows
+        prefetches = related()
+        return rows.prefetch_related(*prefetches) if prefetches else rows
 
     @classmethod
     def _writable_for(cls, runs: Sequence[WorkflowRun], actor: Any) -> set[int]:
@@ -513,12 +518,11 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         for the whole batch.
         """
         writable = cls._writable_for(runs, actor)
-        subject = to_subject_ref(actor) if actor is not None else None
         open_work = cls._open_owned_work(tuple(run for run in runs if run.pk in writable))
         for run in runs:
-            run.__dict__["_graph_write_permission"] = (subject, run.pk in writable)
+            run._seed("write", actor, run.pk in writable)
             if run.pk in writable:
-                run.__dict__["_graph_open_owned_work"] = run.pk in open_work
+                run._seed("open_work", actor, run.pk in open_work)
         return writable
 
     @classmethod
@@ -561,8 +565,35 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         return open_runs
 
     def can_cancel(self, actor: Any) -> bool:
-        """A writer may cancel active execution or clean up a terminal run's open rows."""
-        return _write_access(self.__dict__.get("_graph_write_permission"), self, actor) and self._has_open_owned_work
+        """A writer may cancel active execution or clean up a terminal run's open rows.
+
+        Cancellation owns open rows throughout the tree, even below final descendants.
+        """
+        if not self._write_access(actor):
+            return False
+        seeded = self._seeded("open_work", actor)
+        return self.pk in type(self)._open_owned_work((self,)) if seeded is None else bool(seeded)
+
+    def _write_access(self, actor: Any) -> bool:
+        """The reader's run write answer: a batch read's seed, else the run's policy."""
+        seeded = self._seeded("write", actor)
+        return bool(self.with_actor(actor).has_access("write")) if seeded is None else bool(seeded)
+
+    def _seed(self, name: str, actor: Any, value: Any) -> None:
+        """Keep a batch read's answer ``name`` for ``actor`` on this request-scoped run row."""
+        if actor is not None:
+            self.__dict__.setdefault("_reader_seeds", {})[name] = (to_subject_ref(actor), value)
+
+    def _seeded(self, name: str, actor: Any) -> Any:
+        """A batch read's answer ``name`` seeded for ``actor``, or ``None`` when there is none.
+
+        A seed serves only the reader it was read for; any other actor, or an
+        unseeded row, asks the owning rule again.
+        """
+        seed = self.__dict__.get("_reader_seeds", {}).get(name)
+        if seed is None or actor is None or seed[0] != to_subject_ref(actor):
+            return None
+        return seed[1]
 
     def check_await(self, observer: Any, *, expects: str) -> None:
         """Require an observed run to match the pinned contract without a self-wait."""
@@ -573,16 +604,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         if self.pk == observer.pk:
             raise ValidationError("A run cannot await itself.")
 
-    @property
-    def _has_open_owned_work(self) -> bool:
-        """Cancellation owns open rows throughout the tree, even below final descendants."""
-        if "_graph_open_owned_work" in self.__dict__:
-            return bool(self.__dict__["_graph_open_owned_work"])
-        return self.pk in type(self)._open_owned_work((self,))
-
     def can_reprocess(self, actor: Any) -> bool:
         """Reprocessing needs terminal execution, run write and workflow start access."""
-        if not self.is_terminal or not self.with_actor(actor).has_access("write"):
+        if not self.is_terminal or not self._write_access(actor):
             return False
         with system_context(reason="workflows.reprocess_policy"):
             workflow = self.policy_version.workflow
@@ -799,10 +823,10 @@ class StepRun(AngeeDataModel, concrete=True):
         return self.run.step_runs.for_map(self.run_id, self.node_key)
 
     def map_steps_for(self, actor: Any) -> Any:
-        """This map's item rows readable by ``actor``, reusing a graph read's batch."""
-        batched = self.__dict__.get("_graph_map_steps")
-        if batched is not None and actor is not None and batched[0] == to_subject_ref(actor):
-            return batched[1]
+        """This map's item rows readable by ``actor``, reusing its run's graph batch."""
+        groups = self.run._seeded("map_steps", actor)
+        if groups is not None and self.node_key in groups:
+            return groups[self.node_key]
         return self.map_rows().with_actor(actor).order_by("map_index")
 
     @property
@@ -882,18 +906,17 @@ class StepRun(AngeeDataModel, concrete=True):
 
     @property
     def retry_blocker(self) -> str | None:
-        """State-only retry eligibility, shared by the locked action and read surface.
+        """State-only retry eligibility, shared by the locked action and read surface."""
+        return self._retry_blocker(None)
 
-        A graph read seeds its run's retryable failures once for the rows that weigh them.
-        """
+    def _retry_blocker(self, failures: Sequence[tuple[int, str]] | None) -> str | None:
+        """Weigh the run's other unrouted failures, read here unless a graph batch already read them."""
         if not self.admits_in_place_retry:
             return "This step cannot be retried in place."
-        run = self.run
-        definition = run.policy_version.definition
-        failures = self.__dict__.get("_graph_unrouted_failures")
         if failures is None:
+            definition = self.run.policy_version.definition
             failures = tuple(
-                (row.pk, row.node_key) for row in run.step_runs.all() if definition.unrouted_failure([row])
+                (row.pk, row.node_key) for row in self.run.step_runs.all() if definition.unrouted_failure([row])
             )
         others = sorted(key for pk, key in failures if pk != self.pk)
         return f"Other unrouted failures remain: {', '.join(others)}." if others else None
@@ -901,13 +924,14 @@ class StepRun(AngeeDataModel, concrete=True):
     def can_retry(self, actor: Any) -> bool:
         """Expose retry eligibility without granting generic writes to engine rows.
 
-        A graph read seeds its run's write answer once for the reader; any other
-        actor, or an unseeded row, asks the run's policy directly.
+        A graph read seeds its run's write answer and retryable failures once for the
+        reader; any other actor, or an unseeded run, asks the run's policy directly.
         """
-        if not _write_access(self.__dict__.get("_graph_write_permission"), self.run, actor):
+        run = self.run
+        if not run._write_access(actor):
             return False
         with system_context(reason="workflows.retry_policy"):
-            return self.retry_blocker is None
+            return self._retry_blocker(run._seeded("unrouted_failures", actor)) is None
 
     class Meta:
         """Django options for node identity, fences and tick predicates."""

@@ -440,9 +440,11 @@ def test_drill_in_step_permission_queries_are_bounded(schema, execution):
     failed = last_run.graph(operator, step_fields=frozenset({"can_retry"})).nodes[-1].step_run
     assert failed is not None and failed.can_retry(operator)
     last_run.with_actor(starter).revoke_record_access("operator", operator)
-    assert not last_run.can_cancel(operator)
+    # The batch's answers belong to the run rows it read; a fresh read asks the policy again.
+    fresh = WorkflowRun.system_queryset().get(pk=last_run.pk)
+    assert not fresh.can_cancel(operator)
     unseeded = StepRun.system_queryset().get(pk=failed.pk)
-    unseeded.run = last_run
+    unseeded.run = fresh
     assert not unseeded.can_retry(operator)
 
 
