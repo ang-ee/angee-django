@@ -36,9 +36,9 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import (
     PublicID,
     optional_public_id,
+    public_id_field,
     require_instance_for_id,
     require_public_id,
-    to_public_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.related_counts import RelatedCount
@@ -123,11 +123,7 @@ class MarkdownPageType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["page_ptr_id"])
-    def page(self) -> strawberry.ID:
-        """Return the owning page's public id."""
-
-        return require_public_id(Page, cast(Any, self).page_ptr_id)
+    page = public_id_field("page_ptr")
 
     @strawberry_django.field(only=["body"])
     def excerpt(self) -> str:
@@ -238,11 +234,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
 
         return cast(str, cast(Any, self).kind)
 
-    @strawberry_django.field(only=["vault_id"])
-    def vault(self) -> strawberry.ID:
-        """Return the owning vault's public id without exposing the vault."""
-
-        return require_public_id(Vault, cast(Any, self).vault_id)
+    vault = public_id_field("vault")
 
     @strawberry_django.field(only=["vault_id"], annotate={"_vault_label": F("vault__name")})
     def vault_label(self) -> str | None:
@@ -255,11 +247,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         with system_context(reason="knowledge.graphql.vault_label"):
             return str(page.vault)
 
-    @strawberry_django.field(only=["parent_id"])
-    def parent(self) -> strawberry.ID | None:
-        """Return the parent page's public id, if the page has one."""
-
-        return to_public_id(Page, cast(Any, self).parent_id)
+    parent = public_id_field("parent", nullable=True)
 
     markdown: MarkdownPageType | None = actor_scoped_to_one("markdown")
 
@@ -315,17 +303,8 @@ class RecordBindingType(AngeeNode):
         page = cast(Any, self).page
         return page is not None and bool(page.has_access("write"))
 
-    @strawberry_django.field(only=["page_id"])
-    def page(self) -> PublicID | None:
-        """Return the bound page id, if this is a page binding."""
-
-        return to_public_id(Page, cast(Any, self).page_id)
-
-    @strawberry_django.field(only=["vault_id"])
-    def vault(self) -> PublicID | None:
-        """Return the bound vault id, if this is a vault binding."""
-
-        return to_public_id(Vault, cast(Any, self).vault_id)
+    page = public_id_field("page", nullable=True)
+    vault = public_id_field("vault", nullable=True)
 
     @strawberry_django.field(only=["content_type_id", "object_id"])
     def model_label(self) -> str:

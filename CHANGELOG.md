@@ -8,6 +8,16 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — scalar foreign-key public ids
+
+- `public_id_field("relation", nullable=False)` (`angee.graphql.ids`) projects a
+  primary-key foreign key as a `PublicID` from the row's stored key, without
+  loading or authorizing the target. `nullable` decides the GraphQL type; schema
+  build refuses any other field and an annotation that disagrees with it.
+  `actor_scoped_public_id` stays the owner when target readability must redact
+  the reference. The `knowledge`, `storage_integrate` and `dashboards` schemas
+  declare it in place of their hand-written resolvers.
+
 ## Unreleased — one page bound, reader batches and loading labels
 
 Consumer-facing renames and removals, each with its replacement.

@@ -12,7 +12,7 @@ from strawberry import auto
 
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target, session_user
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.ids import PublicID, require_public_id
+from angee.graphql.ids import PublicID, public_id_field
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
@@ -26,7 +26,6 @@ from angee.storage_integrate.mounts import (
 )
 
 Mount = apps.get_model("storage_integrate", "Mount")
-Drive = apps.get_model("storage", "Drive")
 Credential = apps.get_model("integrate", "Credential")
 strawberry.enum(cast(Any, MountMode))
 
@@ -58,12 +57,7 @@ class MountType(BridgeTypeMixin, AngeeNode):
     """Admin projection of an external storage Mount."""
 
     mode: auto
-
-    @strawberry_django.field(only=["drive_id"])
-    def drive(self) -> strawberry.ID:
-        """Return the dedicated drive's public id without exposing its backend."""
-
-        return require_public_id(Drive, cast(Any, self).drive_id)
+    drive = public_id_field("drive")
 
 
 _MOUNT_RESOURCE = hasura_model_resource(
