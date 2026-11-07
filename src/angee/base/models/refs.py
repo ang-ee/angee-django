@@ -22,7 +22,6 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.deletion import ProtectedError
-from django.db.models.functions import Cast
 from django.utils.text import capfirst
 from rebac import system_context
 from rebac.field_backing import canonical_model
@@ -49,14 +48,14 @@ class _RecordTargets(InstancePrefetch):
     Django's generic prefetch reads a type it has no queryset for through the
     target's base manager. Here every type is read through the reader's own read
     scope, so a hidden, missing or stale-typed target answers ``None`` and nothing
-    is read without a reader.
+    is read without a reader. Pointer ids are coerced to the target's primary key
+    type, so the read is a plain key lookup; an id the key cannot hold names no row.
     """
 
     def related(
         self, instances: list[Any], queryset: models.QuerySet[Any],
     ) -> tuple[list[models.Model], Callable[[models.Model], object], Callable[[Any], object]]:
         actor = self.reader(queryset)
-        key_field = queryset.model._meta.get_field(queryset.model.record_ref_field().fk_field)
         keys = {id(instance): instance.record_ref for instance in instances}
         wanted: dict[str, set[Any]] = {}
         for reference in keys.values():
@@ -66,10 +65,11 @@ class _RecordTargets(InstancePrefetch):
         sources: dict[int, tuple[str, str]] = {}
         if actor is not None:
             for model_label in sorted(wanted):
-                readable = require_rebac_queryset(apps.get_model(model_label), actor=actor).with_action("read")
-                # Compare in the pointer's own key type, as record-reference access does.
-                matched = readable.annotate(_angee_target_key=Cast("pk", output_field=key_field))
-                for target in matched.filter(_angee_target_key__in=wanted[model_label]):
+                model = apps.get_model(model_label)
+                pks = _target_pks(model, wanted[model_label])
+                if not pks:
+                    continue
+                for target in require_rebac_queryset(model, actor=actor).with_action("read").filter(pk__in=pks):
                     targets.append(target)
                     sources[id(target)] = (model_label, str(target.pk))
         return (
@@ -77,6 +77,20 @@ class _RecordTargets(InstancePrefetch):
             lambda target: sources[id(target)],
             lambda instance: (keys[id(instance)].model_label, str(keys[id(instance)].object_id)),
         )
+
+
+def _target_pks(model: type[models.Model], ids: set[Any]) -> set[Any]:
+    """The pointer ids ``model``'s primary key can hold, in its own type."""
+
+    pk = model._meta.pk
+    assert pk is not None
+    pks = set()
+    for value in ids:
+        try:
+            pks.add(pk.to_python(value))
+        except ValidationError:
+            continue
+    return pks
 
 
 class RecordRefMixin(RecordRefMergeContract):

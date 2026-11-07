@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -523,3 +524,11 @@ def test_concrete_child_of_a_loaded_parent_costs_one_query(record_ref_tables):
         assert found is not None and found.detail == "Child detail"
         assert found._state.db == parent._state.db
         assert len(queries) == 1
+
+
+def test_record_targets_read_pointer_ids_in_the_target_key_type() -> None:
+    """A pointer id is coerced to the target's primary key; one the key cannot hold names no row."""
+
+    user = get_user_model()
+    assert record_refs._target_pks(user, {"42", "7", "not-a-key", ""}) == {42, 7}
+    assert record_refs._target_pks(user, {"not-a-key"}) == set()
