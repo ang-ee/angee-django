@@ -30,11 +30,13 @@ from strawberry.types import get_object_definition
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import canonical_link_path
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.tags.models import Tag as TagModel
+from angee.tags.models import TagAssignmentQuerySet
 
 Tag = apps.get_model("tags", "Tag")
 TagAssignment = apps.get_model("tags", "TagAssignment")
@@ -88,15 +90,10 @@ def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
 
     actor = current_actor()
     field = cast(StrawberryDjangoField, info._field)
-    tags: models.QuerySet[TagModel] = (
-        Tag._base_manager.none() if actor is None else Tag.objects.with_actor(actor).with_action("read")
-    )
+    tags: models.QuerySet[TagModel] = require_rebac_queryset(Tag, actor=actor).with_action("read")
     tags = optimize(run_type_get_queryset(tags, field.django_type, info), info)
-    edges = (
-        TagAssignment._base_manager.none()
-        if actor is None
-        else TagAssignment.objects.with_actor(actor).with_action("read").by_tag()
-    ).prefetch_related(
+    assignments = cast("TagAssignmentQuerySet[Any]", require_rebac_queryset(TagAssignment, actor=actor))
+    edges = assignments.with_action("read").by_tag().prefetch_related(
         models.Prefetch("tag", queryset=tags),
     )
     links = canonical_link_path(field.origin_django_type.model) if field.origin_django_type else ()

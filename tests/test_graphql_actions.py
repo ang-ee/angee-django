@@ -427,7 +427,7 @@ def _grant(document: Document, relation: str, user: Any) -> None:
 def _info_for(user: Any) -> Any:
     """Return a Strawberry-Info-shaped stub carrying a request with ``user``."""
 
-    request = graphql_request(user, "/graphql/console/")
+    request = graphql_request(user)
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 

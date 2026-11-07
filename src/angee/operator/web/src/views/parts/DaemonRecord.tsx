@@ -9,7 +9,7 @@ export interface DaemonRecordProps<TSubject extends object> {
   record: TSubject | null;
   /** True while the first snapshot is still loading. */
   loading: boolean;
-  loadingMessage: string;
+  loadingLabel: string;
   /** The empty state when the route names a record the daemon does not have. */
   notFound: Pick<EmptyStateProps, "icon" | "title" | "description">;
   /** The record's kind, as the header eyebrow. */
@@ -27,12 +27,12 @@ export interface DaemonRecordProps<TSubject extends object> {
  * controls and no pager.
  */
 export function DaemonRecord<TSubject extends object>({
-  record, loading, loadingMessage, notFound, eyebrow, title, meta, verbs, children,
+  record, loading, loadingLabel, notFound, eyebrow, title, meta, verbs, children,
 }: DaemonRecordProps<TSubject>): ReactElement {
   return (
     <DetailSurface
       loading={loading}
-      loadingMessage={loadingMessage}
+      loadingLabel={loadingLabel}
       empty={record ? false : notFound}
       band={record ? { verbs: <RecordActionBar record={record as Row} actions={verbDescriptors(verbs)} menuPlacement="leading" /> } : undefined}
       density="compact"

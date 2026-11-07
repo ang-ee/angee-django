@@ -342,6 +342,18 @@ against the feed's live horizon. See [public feeds](../src/angee/posts/README.md
 into the outbound message's status, provider identity and retry schedule. See
 [the delivery owner](../src/angee/messaging/delivery.py).
 
+**Chatter** — a record's own conversation: the thread a `ThreadAttachment` with
+the `chatter` role binds to one record, read through that record's read
+(`messaging/thread#chatter_read`). A `source` attachment instead retains an
+existing conversation as evidence for a record and changes nothing about who
+reads it. See [the thread attachment owner](../src/angee/messaging/managers.py).
+
+**Messaging inbox** — a person's channel and direct conversations and their
+messages, outside every record's chatter, read under `read_inbox`
+(`ThreadQuerySet.inbox`, `MessageQuerySet.inbox`); `MessageInbox` owns its
+search, groups and pages. Distinct from the decisions **Inbox**. See
+[the inbox owner](../src/angee/messaging/inbox.py).
+
 **Workflow version** — an immutable published definition, including the
 normalized contracts of any child workflows it awaits. A run pins one version.
 

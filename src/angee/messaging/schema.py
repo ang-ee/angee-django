@@ -28,6 +28,7 @@ from strawberry import auto
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
+from angee.base.models.trash import TrashQuerySet
 from angee.base.prefetch import prefetched
 from angee.graphql.actions import (
     ActionResult,
@@ -1986,8 +1987,7 @@ def _notification_inbox_queryset(info: strawberry.Info) -> Any:
 
     del info
     return (
-        ThreadNotification.objects.with_action("read_inbox")
-        .exclude(message__is_trashed=True)
+        ThreadNotification.objects.with_action("read_inbox").filter(TrashQuerySet.untrashed_q("message__"))
     )
 
 
@@ -2309,7 +2309,7 @@ def _record_thread_payload(
     attachment_count = (
         apps.get_model("messaging", "Part")
         .objects.using(thread._state.db)
-        .filter(message__thread_id__in=thread.member_threads().values("pk"), message__is_trashed=False)
+        .filter(TrashQuerySet.untrashed_q("message__"), message__thread_id__in=thread.member_threads().values("pk"))
         .attachments()
         .count()
         if thread is not None

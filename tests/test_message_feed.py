@@ -71,7 +71,7 @@ def _query(
 ) -> Any:
     """Execute the real composed GraphQL field under its current request actor."""
 
-    request = graphql_request(owner, "/graphql/console/")
+    request = graphql_request(owner)
     return execute_schema(
         _schema(),
         f"""
@@ -350,7 +350,7 @@ def _revalidate(
 ) -> Any:
     """Read the complete survivor partition through the composed schema."""
 
-    request = graphql_request(owner, "/graphql/console/")
+    request = graphql_request(owner)
     return execute_schema(
         _schema(),
         f"""query Revalidate($root: ID!, $ids: [ID!]!, $search: String!) {{

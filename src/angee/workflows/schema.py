@@ -23,6 +23,7 @@ from strawberry_django.queryset import run_type_get_queryset
 from angee.base.implementations import resolve_all_impl_classes
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for
+from angee.base.permissions import require_rebac_queryset
 from angee.base.prefetch import prefetched
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import (
@@ -48,6 +49,7 @@ from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.provenance.evidence import readable_evidence
 from angee.workflows.definition import Body, Definition, Issue
+from angee.workflows.managers import StepRunQuerySet
 from angee.workflows.models import RunGraphNode
 from angee.workflows.states import RunOrigin, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
@@ -76,7 +78,7 @@ _RUN_LABEL = {"_workflow_name": F("version__workflow__name")}
 def _graph_step_runs(info: strawberry.Info) -> Prefetch:
     """Read the listed runs' declared node rows once, with what their selected step fields need."""
     actor = get_current_user(info)
-    rows = StepRun.objects.none() if actor is None else StepRun.objects.with_actor(actor).nodes()
+    rows = cast("StepRunQuerySet[Any]", require_rebac_queryset(StepRun, actor=actor)).nodes()
     return Prefetch(
         "step_runs", queryset=optimize(rows, info, store=OptimizerStore.with_hints(only=["run_id"])),
         to_attr="_graph_step_runs",

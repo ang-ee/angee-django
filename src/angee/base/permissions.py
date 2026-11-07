@@ -108,13 +108,15 @@ def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
     return backend().schema().get_definition(resource_type) if resource_type else None
 
 
-def effective_rebac_schema(app_config: AppConfig) -> Schema | None:
-    """Reuse one parsed bound declaration while its source identity is unchanged.
+def declared_rebac_schema(app_config: AppConfig) -> Schema | None:
+    """The declaration this AppConfig binds (a host's composed file, else the authored one), parsed once.
 
-    State lives only on this AppConfig's binding. Native path discovery still
-    observes missing files and declaration changes; nanosecond modification/change
-    times and inode identity invalidate same-path rewrites and atomic replacement.
-    Request policy never reads this startup snapshot.
+    The parse is reused while its source identity is unchanged. State lives only
+    on this AppConfig's binding. Native path discovery still observes missing files
+    and declaration changes; nanosecond modification/change times and inode identity
+    invalidate same-path rewrites and atomic replacement. Request policy reads
+    ``effective_rebac_definition`` (the synced store with its overrides), never this
+    startup snapshot.
     """
 
     declared_schema_path(app_config)
@@ -147,7 +149,7 @@ def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
         config = apps.get_app_config(model._meta.app_label)
     except LookupError:
         return None
-    schema = effective_rebac_schema(config)
+    schema = declared_rebac_schema(config)
     return schema.get_definition(resource_type) if schema is not None else None
 
 

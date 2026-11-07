@@ -116,4 +116,16 @@ describe("useBusyRun", () => {
     expect(settled).toBe(true);
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
+
+  test("settle titles a failure without a message with the caller's failure title", async () => {
+    const { result } = renderHook(() => useBusyRun(), { wrapper });
+
+    await act(async () => {
+      await result.current.settle(async () => {
+        throw null;
+      }, undefined, "Tags could not be saved");
+    });
+
+    expect(await screen.findAllByText("Tags could not be saved")).toHaveLength(1);
+  });
 });

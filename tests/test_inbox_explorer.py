@@ -700,7 +700,7 @@ def test_live_schema_projects_sections_and_independent_message():
             channel=channel,
             created_by=owner, sender=handle, status="synced", direction="inbound", sent_at=T0
         )
-    request = graphql_request(owner, "/graphql/console/")
+    request = graphql_request(owner)
     result = execute_schema(
         _schema(),
         """query($id: ID!) {
@@ -804,7 +804,7 @@ def test_result_page_loads_each_message_relation_once():
         messages { id title sender { id display_name } thread { id title { text } } channel { id display_name } }
       }
     }"""
-    request = graphql_request(owner, "/graphql/console/")
+    request = graphql_request(owner)
 
     def statements() -> int:
         with CaptureQueriesContext(connection) as captured:

@@ -40,7 +40,9 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.timestamps import update_fields_with_auto_now
+from angee.base.models.trash import TrashQuerySet
 from angee.integrate.models import IntegrationCreateMode
+from angee.messaging.managers import MessageQuerySet
 from angee.posts.backends import FeedBackend
 from angee.posts.managers import (
     FeedFollowManager,
@@ -480,13 +482,15 @@ class MessagePublic(Composable, extends="messaging.Message"):
             if handle_id is not None and sender_id == handle_id:
                 return True
             replies = type(message)._base_manager.filter(parent_id=message.pk, channel_id=channel_id)
-            active = models.Q(direction=message.Direction.OUTBOUND, status__in=message.ACTIVE_OUTBOUND_STATUSES)
+            active = TrashQuerySet.untrashed_q() & models.Q(
+                direction=message.Direction.OUTBOUND, status__in=message.ACTIVE_OUTBOUND_STATUSES,
+            )
             if handle_id is not None:
-                active |= models.Q(sender_id=handle_id, status__in=message.PUBLISHED_STATUSES)
+                active |= MessageQuerySet.published_q() & models.Q(sender_id=handle_id)
             possible = models.Q(direction=message.Direction.OUTBOUND) & (
                 models.Q(status__in=message.POSSIBLY_PUBLIC_STATUSES) | models.Q(delivery_possibly_accepted=True)
             )
-            return replies.filter((models.Q(is_trashed=False) & active) | possible).exists()
+            return replies.filter(active | possible).exists()
 
     def reply_to_comment(
         self,

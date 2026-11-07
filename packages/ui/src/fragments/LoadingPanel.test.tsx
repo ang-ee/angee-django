@@ -15,7 +15,7 @@ const SHAPES: readonly LoadingPanelProps[] = [
 
 describe("LoadingPanel", () => {
   test.each(SHAPES)("announces its label once and renders no visible loading copy: %o", (props) => {
-    const { container } = render(<LoadingPanel {...props} message="Loading folder" />);
+    const { container } = render(<LoadingPanel {...props} loadingLabel="Loading folder" />);
 
     const status = screen.getByRole("status");
     // The label lives only in the status's screen-reader text; nothing else carries copy.

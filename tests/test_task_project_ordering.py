@@ -38,7 +38,7 @@ class TaskProjectOrderingTests(WorkCase):
         from angee.graphql.schema import GraphQLSchemas
 
         user = user or self.owner
-        request = graphql_request(user, "/graphql/")
+        request = graphql_request(user)
         with actor_context(user):
             return GraphQLSchemas.from_discovery().build("public").execute_sync(
                 _MOVE,

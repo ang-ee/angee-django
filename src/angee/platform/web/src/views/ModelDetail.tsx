@@ -18,7 +18,7 @@ export function ModelDetail(): ReactElement {
     <DetailSurface
       publishBreadcrumbLabel
       loading={fetching && !model}
-      loadingMessage={t("detail.model.loading")}
+      loadingLabel={t("detail.model.loading")}
       empty={
         !model
           ? {

@@ -474,9 +474,7 @@ class MessageInbox:
         rows = self.matching(all_uses, InboxSearch(text=text, quoted=True))
         # A lazy page lets the GraphQL projection load the selected relations once.
         return InboxPage(
-            rows.with_title_text().order_by("_order_at" if oldest else "-_order_at", "pk")[
-                InboxPage.window(page, size)
-            ],
+            rows.with_title_text().chronological(oldest_first=oldest)[InboxPage.window(page, size)],
             rows.count(),
             all_uses.count(),
         )

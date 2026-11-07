@@ -15,8 +15,8 @@ from angee.base.hooks import check_hook
 type _Route = tuple[tuple[object, ...], ...]
 
 SERVING_TAG = "serving"
-"""Checks registered with this tag and ``deploy=True`` run for ``serve``, ``runserver`` and plain
-``check`` through the server's launcher, never for build or data commands such as ``makemigrations``."""
+"""Checks registered with this tag and ``deploy=True`` run only for the launcher's serving commands, never for build
+or data commands such as ``makemigrations``."""
 
 
 def _routes(pattern: URLPattern | URLResolver, prefix: _Route = ()) -> Iterator[_Route]:

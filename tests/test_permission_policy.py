@@ -16,9 +16,9 @@ from angee.base.permissions import (
     bind_rebac_schema,
     contextual_action_holds,
     declared_rebac_definition,
+    declared_rebac_schema,
     declared_schema_path,
     effective_rebac_definition,
-    effective_rebac_schema,
 )
 from angee.graphql.access import is_gated_read_axis
 
@@ -156,7 +156,7 @@ def test_startup_snapshot_needs_no_policy_backend(tmp_path, monkeypatch):
     def forbid_backend():
         raise AssertionError('startup queried policy backend')
     monkeypatch.setattr('angee.base.permissions.backend', forbid_backend)
-    assert effective_rebac_schema(config).get_definition('probe/record') is not None
+    assert declared_rebac_schema(config).get_definition('probe/record') is not None
 
 
 def test_schema_binding_retains_source_and_honors_a_new_authored_override(tmp_path):
@@ -174,17 +174,17 @@ def test_schema_binding_retains_source_and_honors_a_new_authored_override(tmp_pa
     assert declared_schema_path(config) == source
     bind_rebac_schema(config, generated)
     assert declared_schema_path(config) == source
-    assert effective_rebac_schema(config).get_definition("probe/compiled") is not None
+    assert declared_rebac_schema(config).get_definition("probe/compiled") is not None
     setattr(config, "rebac_schema", override)
-    overridden = effective_rebac_schema(config)
+    overridden = declared_rebac_schema(config)
     assert overridden.get_definition("probe/override") is not None
-    assert effective_rebac_schema(config) is overridden
+    assert declared_rebac_schema(config) is overridden
     assert declared_schema_path(config) == override
     bind_rebac_schema(config, generated)
     assert declared_schema_path(config) == override
-    assert effective_rebac_schema(config).get_definition("probe/compiled") is not None
+    assert declared_rebac_schema(config).get_definition("probe/compiled") is not None
     bind_rebac_schema(config, None)
-    assert effective_rebac_schema(config).get_definition("probe/override") is not None
+    assert declared_rebac_schema(config).get_definition("probe/override") is not None
 
 
 def test_field_declarations_reuse_one_native_parse_and_file_read(tmp_path, monkeypatch):
@@ -222,7 +222,7 @@ def test_bound_schema_invalidates_equal_size_rewrites_with_restored_mtime(tmp_pa
     path = tmp_path / "permissions.zed"
     path.write_text("definition probe/record { permission read = anonymous }")
     config = SimpleNamespace(path=str(tmp_path), rebac_schema=path)
-    first = effective_rebac_schema(config)
+    first = declared_rebac_schema(config)
     status = path.stat()
     replacement = path.with_suffix(".new") if atomic else path
     replacement.write_text("definition probe/record { permission edit = anonymous }")
@@ -231,7 +231,7 @@ def test_bound_schema_invalidates_equal_size_rewrites_with_restored_mtime(tmp_pa
         replacement.replace(path)
     assert path.stat().st_size == status.st_size
     assert path.stat().st_mtime_ns == status.st_mtime_ns
-    second = effective_rebac_schema(config)
+    second = declared_rebac_schema(config)
     assert second is not first
     assert [permission.name for permission in second.get_definition("probe/record").permissions] == ["edit"]
 
@@ -241,11 +241,11 @@ def test_missing_bound_schema_drops_its_parse_and_observes_restoration(tmp_path)
     text = "definition probe/record { permission read = anonymous }"
     path.write_text(text)
     config = SimpleNamespace(path=str(tmp_path), rebac_schema=path)
-    first = effective_rebac_schema(config)
+    first = declared_rebac_schema(config)
     path.unlink()
-    assert effective_rebac_schema(config) is None
+    assert declared_rebac_schema(config) is None
     path.write_text(text)
-    restored = effective_rebac_schema(config)
+    restored = declared_rebac_schema(config)
     assert restored is not first and restored.get_definition("probe/record") is not None
 
 
@@ -253,8 +253,8 @@ def test_explicit_schema_rebinding_releases_the_held_parse(tmp_path):
     path = tmp_path / "permissions.zed"
     path.write_text("definition probe/record { permission read = anonymous }")
     config = SimpleNamespace(path=str(tmp_path), rebac_schema=path)
-    first = effective_rebac_schema(config)
+    first = declared_rebac_schema(config)
     bind_rebac_schema(config, path)
-    second = effective_rebac_schema(config)
+    second = declared_rebac_schema(config)
     assert second is not first
-    assert effective_rebac_schema(config) is second
+    assert declared_rebac_schema(config) is second

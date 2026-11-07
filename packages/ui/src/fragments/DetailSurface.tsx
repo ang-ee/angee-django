@@ -35,7 +35,7 @@ export type DetailSurfaceProps = Omit<
     className?: string;
     empty?: DetailSurfaceEmptyState | null | false;
     loading?: boolean;
-    loadingMessage?: string;
+    loadingLabel?: string;
     metrics?: readonly MetricTileValue[];
     /** Publish this routed record's title into the current breadcrumb. */
     publishBreadcrumbLabel?: boolean;
@@ -83,7 +83,7 @@ export const DetailSurface = React.forwardRef<HTMLElement, DetailSurfaceProps>(
       icon,
       lead,
       loading = false,
-      loadingMessage,
+      loadingLabel,
       meta,
       metrics,
       publishBreadcrumbLabel = false,
@@ -101,7 +101,7 @@ export const DetailSurface = React.forwardRef<HTMLElement, DetailSurfaceProps>(
     );
 
     if (loading) {
-      return <DetailSurfaceSkeleton className={className} density={density} message={loadingMessage} />;
+      return <DetailSurfaceSkeleton className={className} density={density} loadingLabel={loadingLabel} />;
     }
     if (empty) {
       return <EmptyState fill {...empty} />;
@@ -136,11 +136,11 @@ DetailSurface.displayName = "DetailSurface";
 function DetailSurfaceSkeleton({
   className,
   density,
-  message,
+  loadingLabel,
 }: {
   className?: string;
   density?: RecordHeaderProps["density"];
-  message?: string;
+  loadingLabel?: string;
 }): React.ReactElement {
   const styles = detailSurfaceVariants();
   // The record header owns the pending title and the surface's one status; the rest is hidden geometry.
@@ -149,7 +149,7 @@ function DetailSurfaceSkeleton({
       <RecordHeader
         density={density}
         loading
-        loadingLabel={message}
+        loadingLabel={loadingLabel}
         title={null}
         extra={<SkeletonText lines={2} className="max-w-2xl" />}
         actions={<Skeleton className="h-btn-sm w-20" />}

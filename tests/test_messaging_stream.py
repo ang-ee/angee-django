@@ -6,7 +6,7 @@ from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests import test_messaging as messaging_models
-from tests.test_messaging_graphql import _platform_admin, _request, _schema
+from tests.test_messaging_graphql import _platform_admin, _schema
 
 
 def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tables):
@@ -31,7 +31,7 @@ def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tab
         }
         """,
             {"id": ticket.sqid},
-            request=_request(reader),
+            user=reader,
         )
     )["record_thread"]
 
@@ -58,7 +58,7 @@ def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tab
                 }
                 """,
                 {"id": ticket.sqid, "search": search, "kinds": [kinds]},
-                request=_request(reader),
+                user=reader,
             )
         )["record_thread"]["reply_count"]
 
@@ -77,7 +77,7 @@ def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tab
             }
             """,
             {"id": ticket.sqid},
-            request=_request(reader),
+            user=reader,
         )
     )["record_thread"]
     assert other_role == {"reply_count": 0, "message_result_count": 0}

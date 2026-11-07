@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import importlib
+from functools import partial
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.middleware import SessionMiddleware
-from django.http import HttpResponse
 from django.test import override_settings
 from rebac import (
     ObjectRef,
@@ -26,11 +24,14 @@ from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant, revoke
 
 from angee.graphql.data.metadata import _grantable_relations
-from angee.graphql.testing.documents import execute_schema, graphql_request
+from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
 from angee.projects.testing.models import Project
 from tests.conftest import addon_schema
 from tests.conftest import create_platform_admin as _platform_admin
+
+# IAM's verbs read and rotate the request session, so every operation here carries one.
+_execute = partial(execute_schema, session=True)
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -1004,32 +1005,6 @@ def _schema(name: str) -> Any:
     """Build one IAM-only GraphQL schema bucket."""
 
     return addon_schema(iam_schema.schemas, name)
-
-
-def _execute(
-    schema: Any,
-    query: str,
-    variables: dict[str, Any] | None = None,
-    *,
-    user: Any | None = None,
-    request: Any | None = None,
-) -> Any:
-    """Execute a GraphQL operation with a session-bearing request context."""
-
-    return execute_schema(
-        schema,
-        query,
-        variables,
-        request=request or _request(user or AnonymousUser()),
-    )
-
-
-def _request(user: Any) -> Any:
-    """Return a request with the configured native Django session backend."""
-
-    request = graphql_request(user, "/graphql/console/")
-    SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
-    return request
 
 
 def _type_block(sdl: str, type_name: str) -> str:

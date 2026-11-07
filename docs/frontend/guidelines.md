@@ -830,13 +830,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - State surfaces are shared fragments — never hand-roll an empty/loading/error
   block. The titled surfaces (`EmptyState`, `ErrorBanner`) take the one
   `{title, description, icon?, actions?}` vocabulary; the single-line ones keep
-  their own slot (`InlineEmpty` `label`, `LoadingPanel` `message`). For a
+  their own slot (`InlineEmpty` `label`, `LoadingPanel` `loadingLabel`). For a
   full-height empty panel pass `EmptyState fill` (it centers an intrinsic-size
   card) instead of wrapping it in a `grid place-content-center` div. Use the
   unboxed `LoadingPanel` only when the final geometry is unknowable; the router's
   code-split boundary knows only that a console page comes next and takes its
   neutral `shape="page"`. `LoadingPanel` renders a skeleton in every shape (its
-  `message` is the accessible label); visible "Loading…" text is never a loading
+  `loadingLabel` is the accessible label, as on every loading owner); visible "Loading…" text is never a loading
   state. A renderer that knows its final geometry owns a shape-preserving
   skeleton built from `Skeleton` and one `SkeletonStatus`; retain settled content
   during background refresh. The renderer owns loading/error so callers describe

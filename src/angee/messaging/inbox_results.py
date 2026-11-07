@@ -20,6 +20,7 @@ from angee.base.pagination import valid_page_size
 from angee.base.querysets import MergeableQuerySet
 from angee.messaging.inbox import InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroupPage, InboxGroups, InboxGroupScope
+from angee.messaging.managers import _MESSAGE_ORDER
 
 
 class InboxResultOptions(BaseModel):
@@ -207,12 +208,8 @@ class InboxResults:
                 _order_at__gte=datetime.combine(days[0], time.min, self.zone),
                 _order_at__lt=datetime.combine(days[-1] + timedelta(days=1), time.min, self.zone),
             )
-        order = F("_order_at").asc() if self.options.oldest else F("_order_at").desc()
-        kept = members.first_per_group(
-            "_bucket", order_by=[order, F("pk").asc()], limit=valid_page_size(leaf_size),
-        ).order_by(
-            "_order_at" if self.options.oldest else "-_order_at", "pk"
-        )
+        order = _MESSAGE_ORDER.ordering(oldest_first=self.options.oldest)
+        kept = members.first_per_group("_bucket", order_by=order, limit=valid_page_size(leaf_size)).order_by(*order)
         carried_rows: dict[Any, list[InboxResultRow]] = defaultdict(list)
         ids = []
         for bucket, pk, sqid, order_at in kept.values_list("_bucket", "pk", "sqid", "_order_at"):
@@ -228,11 +225,11 @@ class InboxResults:
         """Page distinct content first, then fetch one bounded source use per row."""
 
         activity = self.scoped(scope)
-        order = "_order_at" if self.options.oldest else "-_order_at"
         if not self.is_content:
             count = activity.count()
             selected = list(
-                activity.order_by(order, "pk").values_list("pk", "sqid", "_order_at")[InboxPage.window(page, size)]
+                activity.chronological(oldest_first=self.options.oldest)
+                .values_list("pk", "sqid", "_order_at")[InboxPage.window(page, size)]
             )
             return InboxPage(
                 [InboxResultRow(f"message:{sqid}", order_at, 1, 0, str(sqid)) for _, sqid, order_at in selected],

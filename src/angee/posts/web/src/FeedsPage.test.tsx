@@ -51,7 +51,7 @@ vi.mock("@angee/ui", async () => {
       pageMocks.listViews.push(props);
       return <section>{String(props.emptyContent ?? "")}</section>;
     },
-    LoadingPanel: ({ message }: { message?: string }) => <section>{message}</section>,
+    LoadingPanel: ({ loadingLabel }: { loadingLabel?: string }) => <section>{loadingLabel}</section>,
     MessageFeed: ({ children, label }: { children?: React.ReactNode; label?: string }) => (
       <ul aria-label={label}>{children}</ul>
     ),

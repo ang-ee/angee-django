@@ -115,7 +115,7 @@ class WorkCase(TransactionTestCase):
         from angee.graphql.schema import GraphQLSchemas
 
         user = user or self.owner
-        request = graphql_request(user, "/graphql/")
+        request = graphql_request(user)
         with actor_context(user):
             result = (
                 GraphQLSchemas.from_discovery()

@@ -114,7 +114,7 @@ export function FilePreviewFrame({
             {file ? (
               <FilePreview file={file} page={page} />
             ) : fetching ? (
-              <LoadingPanel message={t("loadingFile")} />
+              <LoadingPanel loadingLabel={t("loadingFile")} />
             ) : error ? (
               <ErrorBanner title={t("preview.loadError")} description={error.message} />
             ) : (

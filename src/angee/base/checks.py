@@ -11,7 +11,7 @@ from rebac.schema import FieldBinding, PermExpr, Schema
 from rebac.schema.parser import parse_zed
 
 from angee.base.models.ownership import OwnerMixin
-from angee.base.permissions import declared_rebac_definition, declared_schema_path, effective_rebac_schema
+from angee.base.permissions import declared_rebac_definition, declared_rebac_schema, declared_schema_path
 
 
 def check_rebac_caveats(
@@ -24,7 +24,7 @@ def check_rebac_caveats(
     configs = apps.get_app_configs() if app_configs is None else app_configs
     errors: list[checks.CheckMessage] = []
     for config in sorted(configs, key=lambda config: config.name):
-        schema = effective_rebac_schema(config)
+        schema = declared_rebac_schema(config)
         if schema is None:
             continue
         for definition in sorted(schema.definitions, key=lambda definition: definition.resource_type):
@@ -95,7 +95,7 @@ def check_sealed_permissions(
     configs = apps.get_app_configs() if app_configs is None else app_configs
     errors: list[checks.CheckMessage] = []
     for config in sorted(configs, key=lambda config: config.name):
-        schema = effective_rebac_schema(config)
+        schema = declared_rebac_schema(config)
         if schema is None:
             continue
         changed = sorted(

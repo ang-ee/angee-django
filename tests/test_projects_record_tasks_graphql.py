@@ -51,7 +51,7 @@ class RecordTaskGraphQLTests(WorkCase):
 
         from angee.graphql.schema import GraphQLSchemas
 
-        request = graphql_request(user, "/graphql/")
+        request = graphql_request(user)
         with actor_context(user):
             return GraphQLSchemas.from_discovery().build("console").execute_sync(
                 query, variable_values=variables, context_value=SimpleNamespace(request=request),

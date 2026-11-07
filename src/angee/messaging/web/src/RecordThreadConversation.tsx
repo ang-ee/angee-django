@@ -467,7 +467,7 @@ export function RecordThreadConversation({
       {/* Search and notification controls survive a new query's loading state. */}
       {header?.(chrome)}
       {threadQuery.isFetching && threadQuery.data === undefined ? (
-        <LoadingPanel message={t("chatter.loading")} />
+        <LoadingPanel loadingLabel={t("chatter.loading")} />
       ) : threadQuery.error || errorCode ? renderThreadError(errorCode, t) : <>
         {(stream ? Boolean(stream.search) : searchPlacement === "inline") ? <SearchInput
           value={search}

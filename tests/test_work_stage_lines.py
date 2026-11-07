@@ -30,7 +30,7 @@ class StageLinesTests(WorkCase):
         from angee.graphql.schema import GraphQLSchemas
 
         user = user or self.manager
-        request = graphql_request(user, "/graphql/")
+        request = graphql_request(user)
         with actor_context(user):
             return (
                 GraphQLSchemas.from_discovery()

@@ -288,7 +288,7 @@ class IntakeAccessCase(TransactionTestCase):
 
     def graphql(self, query, variables, *, user=None, bucket="public", error_code=None):
         user = user or self.admin
-        request = graphql_request(user, "/graphql/")
+        request = graphql_request(user)
         with actor_context(user):
             result = (
                 GraphQLSchemas.from_discovery()

@@ -1730,7 +1730,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
 
         message_model = apps.get_model("messaging", "Message")
         queryset = message_model._base_manager.using(thread._state.db).filter(
-            thread_id__in=thread.member_threads().values("pk"), is_trashed=False,
+            TrashQuerySet.untrashed_q(), thread_id__in=thread.member_threads().values("pk"),
         ).annotate(
             _order_at=MessageQuerySet.chronological_time()
         )
@@ -1768,7 +1768,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if target is None:
             target = (
                 message_model._base_manager.using(self.db).filter(
-                    thread_id__in=thread.member_threads().values("pk"), is_trashed=False,
+                    TrashQuerySet.untrashed_q(), thread_id__in=thread.member_threads().values("pk"),
                 )
                 .annotate(_order_at=MessageQuerySet.chronological_time())
                 .order_by(*_MESSAGE_ORDER.ordering())
@@ -1826,7 +1826,9 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if follower is None:
             return message_model._base_manager.none()
         queryset = (
-            message_model._base_manager.filter(thread_id__in=thread.member_threads().values("pk"), is_trashed=False)
+            message_model._base_manager.filter(
+                TrashQuerySet.untrashed_q(), thread_id__in=thread.member_threads().values("pk"),
+            )
             .annotate(_order_at=MessageQuerySet.chronological_time())
             .filter(follower.notification_preference.subscribed_subtype_q())
         )
@@ -2089,10 +2091,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         return (
             self.sudo(reason="messaging.notification.for_record")
             .for_attachment(attachment)
-            .filter(
-                user_id=resolved_user_id,
-            )
-            .exclude(message__is_trashed=True)
+            .filter(TrashQuerySet.untrashed_q("message__"), user_id=resolved_user_id)
         )
 
     def fanout_for_message(
@@ -2711,7 +2710,16 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             if kind == "message":
                 canonical |= queryset.untrashed().filter(sqid=value)
             queryset = canonical
-        return queryset.order_by(*_MESSAGE_ORDER.ordering())
+        return queryset.chronological()
+
+    def chronological(self, *, oldest_first: bool = False) -> Self:
+        """Order by the message feed's total chronology, ``_order_at`` then pk, newest first unless ``oldest_first``.
+
+        Every message page, keyset or offset, pages this one order; the queryset
+        carries ``_order_at`` (:meth:`for_feed`).
+        """
+
+        return self.order_by(*_MESSAGE_ORDER.ordering(oldest_first=oldest_first))
 
     @staticmethod
     def _feed_search(search: str) -> str:

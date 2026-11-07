@@ -381,6 +381,7 @@ class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], 
         """A visible tree root has no readable parent in the same trash state."""
 
         actor = relation_actor(self)
+        # Scoping needs the reader; an expression inspected without one reads no parent.
         parents = self.none() if actor is None else self.with_actor(actor).filter(is_trashed=removed).scoped()
         return ~models.Exists(parents.filter(pk=models.OuterRef("parent_id")))
 

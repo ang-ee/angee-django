@@ -28,7 +28,7 @@ class BlankCountryGroupsTests(TransactionTestCase):
 
         schema = GraphQLSchemas.from_discovery().build("blank_choices")
         resources = {item.model_label: item for item in schema.angee_resources}
-        request = graphql_request(reader, "/graphql/blank_choices/")
+        request = graphql_request(reader)
         for model, name, field in (
             (Party, "billing_parties", "tax_country"),
             (Address, "country_addresses", "country"),

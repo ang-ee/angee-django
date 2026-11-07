@@ -128,7 +128,7 @@ export function PeoplePage(): React.ReactElement {
         <section className="flex min-h-0 flex-col">
           <PaneLabel>{t("people.circles.heading")}</PaneLabel>
           {workbench.isFetching && circles.length === 0 ? (
-            <LoadingPanel message={t("people.circles.loading")} density="inline" />
+            <LoadingPanel loadingLabel={t("people.circles.loading")} density="inline" />
           ) : (
             <TreeView<CircleTreeRow>
               rows={circles}
