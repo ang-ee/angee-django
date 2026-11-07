@@ -146,7 +146,11 @@ class InboxSelection:
 
 
 class MessageInbox:
-    """Query owner for personal inbox reads, composed from a MessageQuerySet."""
+    """Query owner for personal inbox reads, composed from a MessageQuerySet.
+
+    Its messages and threads are the querysets' ``inbox()`` populations, read under
+    ``read_inbox``; every count, group, search and page derives from them.
+    """
 
     def __init__(self, queryset: Any) -> None:
         self.actor = queryset.actor() or current_actor()

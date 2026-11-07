@@ -590,6 +590,12 @@ data through REBAC, never a queryset bypass.
   Consumer addons union their additional read arms into the resource owner's
   `read_granted` permission. The owning definition alone derives `read`, so its
   withholding and other final policy cannot be bypassed or copied by fragments.
+  An owner that reads for a narrower purpose names a second extension point:
+  [`messaging/thread`](../../src/angee/messaging/permissions.zed) takes grants for
+  any conversation in `read_granted` and a record's read of its own chatter in
+  `chatter_read`, and its inbox checks `read_inbox`, which skips the chatter arms.
+  `messaging.E003` ([`check_derived_reads`](../../src/angee/messaging/checks.py))
+  refuses a fragment arm on a thread or message `read` or `read_inbox`.
 - **One user identity for authorization and attribution.** Every person and
   agent acts as its own `AUTH_USER_MODEL` row. Workflows also act as their linked
   `kind=service` user for trigger admission and triggered runs; source-declared

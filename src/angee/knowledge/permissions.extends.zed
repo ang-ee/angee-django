@@ -1,6 +1,6 @@
 // Knowledge-owned arms contributed to upstream resource definitions.
 // @rebac_package: knowledge
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 // Pages carry tags: adding or removing one needs write on the page, and a page's
 // tags are visible to its readers.
@@ -20,5 +20,5 @@ definition messaging/thread_attachment {
 
 definition messaging/thread {
     relation record_page: knowledge/page // rebac:field={"path":"attachments__knowledge_page","filters":{"attachments__role":"chatter"}}
-    permission read_granted = record_page->read
+    permission chatter_read = record_page->read
 }

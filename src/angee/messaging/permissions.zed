@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 22
+// @rebac_schema_revision: 23
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -36,8 +36,18 @@ definition messaging/thread {
     // The identity rule asserts same_as statements, which need read and write on both copies.
     relation identity_role: provenance/role // rebac:const=messaging_identity_source
     permission identity_source = identity_role->effective_member
+    // Ordinary conversation access. Fragments union grants that hold for any
+    // conversation here (a bound project, a selected group).
     permission read_granted = channel->read + owner + editor + reader + identity_source + admin->member
-    permission read = read_granted
+    // What a record lends its own chatter thread. A record type whose readers read
+    // that thread directly unions its read here, through a relation filtered to the
+    // thread's chatter attachments. A composition term: check `read`, never this.
+    permission chatter_read = nil
+    // The inbox lists no record chatter, where `chatter_read` holds for nobody,
+    // so its read leaves the chatter arms out of the statement. Overrides that must
+    // govern both reads target `read_granted`.
+    permission read_inbox = read_granted
+    permission read = read_granted + chatter_read
     permission write  = channel->write + owner + editor + identity_source + admin->member
     permission share  = owner + editor + admin->member
     permission delete = owner + channel->delete + admin->member
@@ -64,8 +74,15 @@ definition messaging/message {
     relation identity_role: provenance/role // rebac:const=messaging_identity_source
     permission identity_source = identity_role->effective_member
     permission create = authenticated
-    permission read_granted = thread->read + channel->read + editor + reader
-    permission read = (read_granted - withheld) + channel->write + identity_source + admin->member
+    // Ordinary message grants; fragments union theirs here. The thread arm follows
+    // the read purpose: generic reads take the thread's `read`, inbox reads its
+    // `read_inbox`. Both withhold a trashed message alike.
+    permission read_granted = channel->read + editor + reader
+    // Who keeps reading a withheld message: its channel's managers, the identity
+    // rule and admins.
+    permission withheld_keeper = channel->write + identity_source + admin->member
+    permission read = ((thread->read + read_granted) - withheld) + withheld_keeper
+    permission read_inbox = ((thread->read_inbox + read_granted) - withheld) + withheld_keeper
     permission send_held = channel->write + admin->member
     permission write  = thread->write + channel->write + editor + identity_source + admin->member
     permission delete = thread->delete + channel->write + editor + admin->member

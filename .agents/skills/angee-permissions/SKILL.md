@@ -117,8 +117,8 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    }
 
    definition messaging/thread {
-       relation note_record: notes/note // rebac:field=…
-       permission read_granted = note_record->read   // the owner derives read from read_granted
+       relation note_record: notes/note // rebac:field={"path":"attachments__…","filters":{"attachments__role":"chatter"}}
+       permission chatter_read = note_record->read   // a record's own chatter; read_granted takes grants for any conversation
    }
    ```
    If your role must be elevated → union it into `iam/protected#member`; if it manages people → union into `auth/user#list`/account verbs (`tests/extcontrib/permissions.extends.zed`). If the model composes `TaggedModel` → declare the `target`-backed relation on `tags/tag_assignment` or `tags.E002` (`TagAssignment.check` in `src/angee/tags/models.py`) fails startup. Collisions (reused relation or newly introduced permission names), unknown targets, and native-invalid references raise `SchemaExtensionError` (`build.py`).
@@ -165,7 +165,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 - Caveated subjects or `with` contexts in any zed → `angee.E024` (`check_rebac_caveats` in `src/angee/base/checks.py`); use step 3.
 - A Python provider, `visible_to`, `is_superuser` branch or queryset filter as authorization → `docs/backend/guidelines.md#rebac` ("Visibility and access are REBAC-native, always", line 650).
 - Editing a framework addon's `permissions.zed` to name your role → `docs/backend/guidelines.md#rebac` (line 765); use `permissions.extends.zed`.
-- A fragment that declares a new non-gate permission → `_merge_definition` (`build.py`) raises. A `read` arm on a definition that owns `read_granted` (`messaging/thread`) bypasses its withholding → `docs/backend/guidelines.md#rebac` ("Permission fragments widen `read_granted`", line 503); union there.
+- A fragment that declares a new non-gate permission → `_merge_definition` (`build.py`) raises. A `read` arm on a definition that owns `read_granted` bypasses its withholding → `docs/backend/guidelines.md#rebac` ("Permission fragments widen `read_granted`"); union there. On `messaging/thread` a record's chatter arm goes to `chatter_read`, which the inbox's `read_inbox` skips; `messaging.E003` (`check_derived_reads` in `src/angee/messaging/checks.py`) refuses an arm on a thread or message `read` or `read_inbox`.
 - `#effective_member` inside a relation's allowed subjects → invalid schema; store the role and arrow (`docs/backend/guidelines.md#rebac`, "Relations constrain stored subjects", line 601).
 - Mirroring a column into tuples, or a remote backend → `docs/stack.md#backend` (local backend only).
 - A private share mutation, Django group M2M, or `auth.Permission` sync → `docs/backend/guidelines.md#rebac` ("Declare direct sharing once", line 553; "Membership has one store", line 609).

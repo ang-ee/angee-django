@@ -1749,7 +1749,8 @@ class _InboxWriteBackend(AngeeHasuraWriteBackend):
     Narrowing the write-target queryset to ``.inbox()`` makes the by-pk lookup miss
     a record-attached row, so the generic mutation reports it as not found while the
     inbox rows keep their update/delete surfaces. The ``.inbox()`` verb resolves
-    polymorphically on each model's queryset, so one backend serves both.
+    polymorphically on each model's queryset, so one backend serves both; it locates
+    the target under ``read_inbox``, and the row's own write or delete gate decides.
     """
 
     def write_target_queryset(self) -> Any:
