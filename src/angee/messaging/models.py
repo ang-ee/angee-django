@@ -53,7 +53,6 @@ from rebac import (
     SubjectRef,
     actor_context,
     current_actor,
-    database_context,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -368,7 +367,7 @@ class ThreadedModelMixin(models.Model):
 
     @contextmanager
     def _own_write_scope(self) -> Iterator[None]:
-        """Carry this saved row's database and actor into its chatter bookkeeping."""
+        """Carry this saved row's actor into its chatter bookkeeping."""
 
         scope: AbstractContextManager[None] = nullcontext()
         if isinstance(self, RebacMixin):
@@ -377,8 +376,7 @@ class ThreadedModelMixin(models.Model):
                 scope = system_context(reason="messaging.record_write")
             elif actor is not None and actor != current_actor():
                 scope = actor_context(actor)
-        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
-        with database_context(using), scope:
+        with scope:
             yield
 
     def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
@@ -690,7 +688,7 @@ class ThreadedModelMixin(models.Model):
         """
 
         using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             bound_actor = self.actor() if isinstance(self, RebacMixin) else None
             scope_actor = idempotency_actor or bound_actor or current_actor()
             attachment = self.message_thread_attachment(create=True)

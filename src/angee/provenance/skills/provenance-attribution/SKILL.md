@@ -68,7 +68,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
    Without a custom queryset the mixin's defaults already bind `objects` and `_angee_base` (`history.py:349-350`).
    Vary only `history_revert_permission` (default `write`) and `history_relations` for owned reverse-FK document parts
-   (`src/angee/projects/models.py:515`). **Owner rule:** the mixin owns capture, redaction-safe snapshots, revert
+   (`src/angee/projects/models.py:514`). **Owner rule:** the mixin owns capture, redaction-safe snapshots, revert
    admission and the table inventory; a model names only what varies ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives)).
 
 3. **Let migrations follow the swappable storage.** Django's `makemigrations` on the built runtime owns the history tables;

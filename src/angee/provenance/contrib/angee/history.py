@@ -16,7 +16,6 @@ from rebac import (
     PermissionDenied,
     RebacMixin,
     RebacTrackedMixin,
-    database_context,
     system_context,
 )
 from rebac.actors import is_sudo
@@ -334,24 +333,19 @@ class ModelHistory(CaptureHistory):
         return row.revert_subjects()
 
     def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:
-        """Keep global attribution storage resolvable in isolated model registries."""
+        """Rebuild snapshots with excluded columns as system bookkeeping."""
 
         extra = super().get_extra_fields(model, fields)
-        native_instance = extra["get_instance"]
+        native_instance = extra["instance"].fget
 
-        def get_instance(record: Any, *, using: str | None = None) -> Any:
+        def get_instance(record: Any) -> Any:
             # Native construction fills excluded columns (counters) from the stored
             # row through the default manager. That read rebuilds a snapshot for
             # replay, not a projection to the caller: a gated counter would refuse it.
-            alias = using if using is not None else record._state.db
-            with (
-                database_context(alias) if alias is not None else nullcontext(),
-                system_context(reason="angee.history.instance") if record._history_excluded_fields else nullcontext(),
-            ):
-                return native_instance(record, using=alias)
+            with system_context(reason="angee.history.instance") if record._history_excluded_fields else nullcontext():
+                return native_instance(record)
 
         extra["instance"] = property(get_instance)
-        extra["get_instance"] = get_instance
         return extra
 
 
