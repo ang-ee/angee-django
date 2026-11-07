@@ -257,7 +257,17 @@ class TrashQuerySet(CanonicalQuerySet[_TrashModelT]):
     def untrashed(self) -> Self:
         """Return rows outside the trash — the default surface's scope."""
 
-        return cast(Self, self.filter(**{TRASH_FLAG_FIELD: False}))
+        return cast(Self, self.filter(self.untrashed_q()))
+
+    @staticmethod
+    def untrashed_q(through: str = "") -> models.Q:
+        """Select rows outside the trash, or rows reaching one through the relation path ``through``.
+
+        ``through`` ends in ``__`` (``"message__"``): a child queryset filters on its
+        trashable parent's join without a separately scoped parent subquery.
+        """
+
+        return models.Q(**{f"{through}{TRASH_FLAG_FIELD}": False})
 
     def canonical(self) -> Self:
         """Operational rows are outside the trash; the merge scope composes on top.

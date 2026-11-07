@@ -156,6 +156,10 @@ definition messaging/part {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
+    // A part listed within inbox messages is read through the message action the
+    // inbox reads, so the listing authorizes each message once. Direct part grants
+    // stay on `read`: they never admit a part of an unreadable message here.
+    permission read_inbox = message->read_inbox
     permission read   = message->read + editor + reader + admin->member
     permission write  = message->write + editor + admin->member
     permission delete = message->delete + admin->member

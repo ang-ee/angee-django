@@ -2474,7 +2474,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         The caller's ``delete`` scope stays: only the population narrows.
         """
 
-        return self._without_record_chatter()
+        return self.filter(self.inbox_q())
 
     def due_deliveries(self, *, now: datetime) -> Self:
         """Due unclaimed holds/retries and lost dispatches, never an uncertain effect."""
@@ -2512,7 +2512,14 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
     def published(self) -> Self:
         """Retained messages published by a source or accepted outbound transport."""
 
-        return self.untrashed().filter(status__in=self.model.PUBLISHED_STATUSES)
+        return self.filter(self.published_q())
+
+    @staticmethod
+    def published_q(through: str = "") -> models.Q:
+        """Select :meth:`published` messages, or rows reaching one through the relation path ``through``."""
+
+        statuses = apps.get_model("messaging", "Message").PUBLISHED_STATUSES
+        return TrashQuerySet.untrashed_q(through) & models.Q(**{f"{through}status__in": statuses})
 
     def counted_in_thread(self) -> Self:
         """Use the model's retained-row predicate for reads and recounts."""
@@ -2588,15 +2595,22 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         caller's; a verb that needs another selects it after this one.
         """
 
-        return self._without_record_chatter().with_action("read_inbox")
+        return self.filter(self.inbox_q()).with_action("read_inbox")
 
-    def _without_record_chatter(self) -> Self:
+    @staticmethod
+    def inbox_q(through: str = "") -> models.Q:
+        """Select :meth:`inbox` messages, or rows reaching one through the relation path ``through``.
+
+        A part filters ``inbox_q("message__")`` on its message's join, so its own
+        actor-scoped read is the only authorization of that message.
+        """
+
         # The same structural anti-join as ``ThreadQuerySet.inbox``. A message
         # without a thread has no survivor id, so it matches no redirect group.
         thread_model = apps.get_model("messaging", "Thread")
         chatter = thread_model._base_manager.filter(attachments__role="chatter").survivor_ids()
-        attached = chatter.filter(survivor=self.survivor_id("thread__", ref=models.OuterRef))
-        return self.alias(_record_attached=models.Exists(attached)).filter(_record_attached=False)
+        attached = chatter.filter(survivor=MergeableQuerySet.survivor_id(f"{through}thread__", ref=models.OuterRef))
+        return ~models.Q(models.Exists(attached))
 
     def automated_sender_ids(self) -> models.QuerySet[Any]:
         """Return the senders whose every message here is automated mail.
@@ -4498,14 +4512,14 @@ class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):
     """Chainable read scopes for message body parts."""
 
     def inbox(self) -> Self:
-        """Return inbox messages' parts — the part mirror of ``MessageQuerySet.inbox``.
+        """Return the parts of ``MessageQuerySet.inbox`` messages.
 
         Record chatter surfaces only through the record-gated payloads; a part
-        whose message's thread is record-attached stays off the generic surface
-        (a thread-less provider event has no chatter attachment).
+        whose message's thread is in a record chatter redirect group stays off the
+        generic surface (a thread-less provider event has no chatter attachment).
         """
 
-        return self.exclude(message__thread__attachments__role="chatter")
+        return self.filter(MessageQuerySet.inbox_q("message__"))
 
     def fragment_uses(self, fragment: Any) -> Self:
         """Return this actor's readable parts referencing the shared fragment."""
