@@ -51,6 +51,66 @@ assert resolve("/health/ready").url_name == "angee-server-readiness"
 """)
 
 
+PROFILING_HOST = """
+from django.conf import settings
+settings.configure(
+    INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "angee.server", "silk"],
+    ROOT_URLCONF="angee.server.urls", SECRET_KEY="profiling", DEBUG={debug!r},
+    ANGEE_PROFILING_ALLOW_PRODUCTION={allow!r}, ANGEE_PROFILING_PERMISSION="operator.truth",
+)
+import django
+django.setup()
+from django.core.checks import Tags, run_checks
+from django.urls import resolve
+"""
+
+
+@pytest.mark.parametrize(
+    ("debug", "allow", "refused"),
+    [(True, False, False), (False, False, True), (False, True, False), (False, "true", True)],
+)
+def test_rooted_silk_mounts_its_ui_and_refuses_production_by_default(debug, allow, refused):
+    """Silk's UI joins the server URLconf; E002 refuses DEBUG off unless the override is the boolean True."""
+    expected = ["angee.server.E002"] if refused else []
+    run(PROFILING_HOST.format(debug=debug, allow=allow) + f"""
+assert resolve("/profiling/").view_name == "silk:summary"
+assert resolve("/profiling/requests/").namespaces == ["silk"]
+assert resolve("/health/ready").url_name == "angee-server-readiness"
+assert run_checks(tags=[Tags.urls]) == []
+errors = [error.id for error in run_checks(tags=[Tags.security]) if error.id.startswith("angee.")]
+assert errors == {expected!r}, errors
+""")
+
+
+def test_profiling_is_unmounted_and_unchecked_without_silk():
+    run("""
+from django.conf import settings
+settings.configure(INSTALLED_APPS=["angee.server"], ROOT_URLCONF="angee.server.urls", SECRET_KEY="quiet", DEBUG=False)
+import django
+django.setup()
+from django.core.checks import Tags, run_checks
+from django.urls import Resolver404, resolve
+try:
+    resolve("/profiling/")
+except Resolver404:
+    pass
+else:
+    raise AssertionError("/profiling/ resolved without silk")
+assert [error for error in run_checks(tags=[Tags.security]) if error.id.startswith("angee.")] == []
+""")
+
+
+def test_profiling_access_follows_only_the_declared_hook(settings):
+    """No hook refuses everyone; a declared predicate decides alone."""
+    from angee.server.autoconfig import profiling_permitted
+
+    settings.ANGEE_PROFILING_PERMISSION = ""
+    assert profiling_permitted(1) is False
+    settings.ANGEE_PROFILING_PERMISSION = "operator.truth"
+    assert profiling_permitted(1) is True
+    assert profiling_permitted(0) is False
+
+
 def test_enabled_framework_urls_share_the_server_urlconf(monkeypatch):
     """Addon urls modules resolve beside readiness; an ordinary app's urls.py never opts in."""
     configs = [
