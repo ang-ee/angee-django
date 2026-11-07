@@ -30,7 +30,6 @@ export const enMessagingMessages: Record<string, string> = {
   "messages.discarded_one": "Discarded one held draft.",
   "messages.discarded_other": "Discarded {count} held drafts.",
   "messages.selectionLimit": "Select at most {count} held drafts.",
-  "messages.selectionLoading": "Loading the action selection limit.",
   "messages.selectionError": "Could not load the action selection limit. Refresh to try again.",
   "messages.selectionUnavailable": "Select readable held drafts with permission to send or discard them.",
   // RecordChatterPane — Activity's shared record composer and conversation chrome.
@@ -123,7 +122,6 @@ export const enMessagingMessages: Record<string, string> = {
   "composer.note": "Note",
   "composer.cancelReply": "Cancel reply",
   "composer.addRecipient": "Add recipient",
-  "composer.loadingRecipients": "Loading recipients",
   "composer.noRecipients": "No recipients",
   "composer.followRecipients": "Follow",
   "composer.suggested": "Suggested",

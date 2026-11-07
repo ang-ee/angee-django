@@ -1,7 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata } from "@angee/metadata";
-import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, ResourcePaneFooter, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionToken, useActionResultMutation, useChatter, useContainer, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone } from "@angee/ui";
+import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, PaneRow, PaneRows, PaneRowsSkeleton, PaneToolbar, RecordActionBar, RecordReference, ResourcePaneFooter, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionToken, useActionResultMutation, useChatter, useContainer, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone } from "@angee/ui";
 import { useEffect, useMemo, useRef, useState, createElement, type ComponentType, type ReactElement, type ReactNode } from "react";
 
 import {
@@ -100,7 +100,7 @@ export function RecordHistoryTimeline({
   }
   if (history === null) {
     return query.isLoading
-      ? <LoadingPanel message={t("history.loading")} density="inline" />
+      ? <PaneRowsSkeleton className="px-2 py-1" label={t("history.loading")} />
       : <ErrorBanner title={t("history.unavailable")} description={null} />;
   }
   if (history.total === 0) {

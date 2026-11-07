@@ -1,6 +1,6 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, StatusBadge, useEnumOptions, useRouteHref,
+  AbsoluteTime, ErrorBanner, PaneRow, PaneRows, PaneRowsSkeleton, RecordReferenceRow, StatusBadge, useEnumOptions, useRouteHref,
   useResourceRecordHrefLookup, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
@@ -78,7 +78,7 @@ function RunRecordsGroup({ context, label }: { context: ChatterViewContext; labe
   const references = records.map(({ model, id }) => ({ model, id }));
   return <>{label()}<li>
     {query.error ? <ErrorBanner description={query.error.message} />
-      : !query.data ? <SkeletonStatus label={t("related.loading")} className="space-y-2 p-2"><Skeleton className="h-8" /><Skeleton className="h-8" /></SkeletonStatus>
+      : !query.data ? <PaneRowsSkeleton label={t("related.loading")} rowCount={2} />
         : <PaneRows>{records.map((record) => <li key={`${record.model}:${record.id}`}>
           <RecordReferenceRow model={record.model} id={record.id} references={references}
             icon={record.role === "source" ? "file" : "link"}
@@ -104,7 +104,7 @@ function RunDecisionsGroup({ context, label }: { context: ChatterViewContext; la
   const steps = query.data?.steprun?.flatMap((step) => step.decision ? [{ ...step, decision: step.decision }] : []) ?? [];
   return <>{label()}<li>
     {query.error ? <ErrorBanner description={query.error.message} />
-      : !query.data ? <SkeletonStatus label={t("related.loading")} className="space-y-2 p-2"><Skeleton className="h-8" /></SkeletonStatus>
+      : !query.data ? <PaneRowsSkeleton label={t("related.loading")} rowCount={1} />
         : <PaneRows>{steps.map((step) => <li key={step.id}>
           <PaneRow icon="check" tone={step.decision.is_open ? "warning" : "success"} needsMe={step.decision.is_open}
             title={step.decision.kind_label}
@@ -152,7 +152,7 @@ function RecordRunsGroup({ context, label }: { context: ChatterViewContext; labe
   const runs = [...(query.data?.record_timeline.records.flatMap((entry) => entry.runs) ?? [])].reverse();
   return <>{label()}<li>
     {query.error ? <ErrorBanner description={query.error.message} />
-      : !query.data ? <SkeletonStatus label={t("related.loading")} className="space-y-2 p-2"><Skeleton className="h-8" /></SkeletonStatus>
+      : !query.data ? <PaneRowsSkeleton label={t("related.loading")} rowCount={1} />
         : <PaneRows>{runs.map((run) => <li key={run.id}>
           <PaneRow icon="workflow" title={run.version?.workflow?.display_name ?? run.display_name}
             detail={run.outcome_label || undefined}
@@ -189,7 +189,7 @@ function DecisionRunGroup({ context, label }: { context: ChatterViewContext; lab
   const steps = query.data?.steprun.flatMap((step) => step.run ? [{ ...step, run: step.run }] : []) ?? [];
   return <>{label()}<li>
     {query.error ? <ErrorBanner description={query.error.message} />
-      : !query.data ? <SkeletonStatus label={t("related.loading")} className="space-y-2 p-2"><Skeleton className="h-8" /></SkeletonStatus>
+      : !query.data ? <PaneRowsSkeleton label={t("related.loading")} rowCount={1} />
         : <PaneRows>{steps.map((step) => <li key={step.id}>
           <PaneRow icon="workflow" title={step.run.version?.workflow?.display_name ?? step.run.display_name}
             detail={step.is_mapped ? t("timeline.mappedStep", { label: step.node_label, index: step.map_index + 1 }) : step.node_label}

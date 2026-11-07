@@ -66,7 +66,7 @@ concern and for consumers of any contract the feature changes.
    ## Owner map — <feature>
    | fact | owner (symbol, module) | composes / extends | applicability quoted from |
    | hidden after pay | ArchiveMixin, base.models.trash | composes | `ArchiveMixin` docstring, src/angee/base/models/trash.py |
-   | line items | HasuraLines + RowLockMixin | composes | frontend:1527-1540 |
+   | line items | HasuraLines + RowLockMixin | composes | frontend:1924-1955 |
    Level: consumer addon `<name>` · Dependency: none new · Names: swept `<words>`
    Thin caller: <each dispatching entrypoint (resolver, command, route, page) → the owner holding the rule it calls>
    Debt: <rot met in the affected owners and callers and what removes it at its source, or the exact migration/authorization blocker>

@@ -23,6 +23,7 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_BASE, PORTALED_CONTROL_LAYER } from "./popover";
 import { sectionEyebrowVariants } from "./section-eyebrow";
+import { Skeleton } from "./skeleton";
 import { widgetControlSurface, widgetControlPresentationProps, type WidgetControlSurfaceProps } from "./widget-control";
 
 /**
@@ -428,6 +429,11 @@ export type SelectProps = Omit<
     "aria-describedby"?: string;
     "aria-invalid"?: React.AriaAttributes["aria-invalid"];
     triggerRef?: React.Ref<HTMLButtonElement>;
+    /**
+     * Its options are still loading: the trigger is disabled and busy, and a skeleton
+     * line holds the value's place. The accessible name stays; no loading copy shows.
+     */
+    loading?: boolean;
     onValueChange?: (
       value: string,
       eventDetails: SelectRootChangeEventDetails,
@@ -454,6 +460,8 @@ export const Select = function Select({
   "aria-invalid": ariaInvalid,
   id,
   triggerRef,
+  loading = false,
+  disabled,
   onValueChange,
   ...props
 }: SelectProps) {
@@ -486,6 +494,7 @@ export const Select = function Select({
       defaultValue={defaultValue}
       onValueChange={handleValueChange}
       readOnly={readOnly}
+      disabled={disabled || loading}
       {...props}
     >
       <SelectTrigger
@@ -500,10 +509,13 @@ export const Select = function Select({
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy}
         aria-describedby={ariaDescribedBy}
+        aria-busy={loading || undefined}
       >
-        <SelectValue>
-          {(selected) => selectedLabel(selected, labels, placeholder)}
-        </SelectValue>
+        {loading ? <Skeleton shape="text" size="sm" className="w-1/2" /> : (
+          <SelectValue>
+            {(selected) => selectedLabel(selected, labels, placeholder)}
+          </SelectValue>
+        )}
         <SelectIcon />
       </SelectTrigger>
       <SelectPortal>

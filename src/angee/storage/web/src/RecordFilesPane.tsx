@@ -1,6 +1,6 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  ErrorBanner, FilePickerButton, Glyph, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, RelationPicker, Skeleton, SkeletonStatus, UploadDropTarget,
+  ErrorBanner, FilePickerButton, Glyph, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, PaneRowsSkeleton, RelationPicker, Skeleton, SkeletonStatus, UploadDropTarget,
   formatSize, useResourceRecordHrefLookup, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent,
   type RelatedGroupLabel,
 } from "@angee/ui";
@@ -79,7 +79,7 @@ function RecordFilesGroup({ context, label }: { context: ChatterViewContext; lab
     </PaneLabelPopover>)}
     <li>
       {!recordFiles ? filesQuery.error ? <ErrorBanner description={filesQuery.error.message} /> :
-        <SkeletonStatus label={t("record.loading")} className="space-y-2 p-2"><Skeleton className="h-8" /><Skeleton className="h-8" /></SkeletonStatus> :
+        <PaneRowsSkeleton label={t("record.loading")} rowCount={2} /> :
         <UploadDropTarget className="flex min-h-0 flex-col" disabled={!canUpload} overlay={t("upload.dropOverlay")} onFiles={startUpload}>
           {recordFiles.attachments.length ? <PaneRows>
             {recordFiles.attachments.map((edge) => <li key={edge.id}>

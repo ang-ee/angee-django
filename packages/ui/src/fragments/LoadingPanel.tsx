@@ -3,26 +3,26 @@ import * as React from "react";
 import { useUiT } from "../i18n";
 import { ControlBand } from "../layouts/ControlBand";
 import { cn } from "../lib/cn";
-import { Skeleton, SkeletonStatus } from "../ui/skeleton";
-import { Spinner } from "../ui/spinner";
+import { Skeleton, SkeletonStatus, SkeletonText } from "../ui/skeleton";
 import { Table, TableBody, TableCell, TableRow } from "../ui/table";
-import { textRoleVariants } from "../ui/text";
 
 export interface LoadingPanelProps {
+  /** The accessible pending label; it is announced, never rendered as visible text. */
   message?: string;
-  /** Size of the centred status; the page shape fills its region. */
+  /** Line count and height of the status skeleton; the page shape fills its region. */
   density?: "page" | "inline";
   /**
-   * `status` centres a spinner for a region whose final layout is unknowable.
-   * `page` is the neutral shape of a console page whose route is loading: an
-   * empty control band row over placeholder rows.
+   * `status` draws neutral skeleton lines for a region whose final layout is
+   * unknowable. `page` is the neutral shape of a console page whose route is
+   * loading: an empty control band row over placeholder rows.
    */
   shape?: "status" | "page";
 }
 
 const PAGE_ROW_WIDTHS = ["w-2/3", "w-1/2", "w-3/4", "w-2/5", "w-3/5", "w-1/2"] as const;
 
-/** Unboxed pending status for boundaries that cannot know the final layout; the router's page fallback takes the page shape.
+/** Unboxed pending skeleton for boundaries that cannot know the final layout; the router's page fallback takes the page shape.
+ * Every shape is a skeleton: visible loading copy is never a loading state.
  * @kind fragment
  */
 export function LoadingPanel({
@@ -54,23 +54,8 @@ export function LoadingPanel({
   }
 
   return (
-    <SkeletonStatus
-      label={label}
-      className={cn(
-        "grid place-content-center",
-        inline ? "min-h-16 p-3" : "h-full min-h-32 p-8",
-      )}
-    >
-      <span
-        aria-hidden="true"
-        className={cn(
-          textRoleVariants({ role: "meta" }),
-          "inline-flex items-center gap-2",
-        )}
-      >
-        <Spinner size="sm" tone="muted" />
-        {label}
-      </span>
+    <SkeletonStatus label={label} className={cn("w-full", inline ? "p-3" : "h-full min-h-32 p-8")}>
+      {inline ? <SkeletonText lines={2} /> : <SkeletonText lines={3} size="md" className="max-w-2xl" />}
     </SkeletonStatus>
   );
 }

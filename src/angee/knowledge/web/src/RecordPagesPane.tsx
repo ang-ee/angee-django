@@ -1,7 +1,7 @@
 import { ResourceQuery, useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Button, ErrorBanner, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, RecordReferenceRow, RelationPicker, Skeleton, SkeletonStatus, SkeletonText,
+  Button, ErrorBanner, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, PaneRowsSkeleton, RecordReferenceRow, RelationPicker,
   errorMessage, useAuthoredResourceMutation, useRelatedGroups, useRouteHref, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent,
   type RelatedGroupLabel,
 } from "@angee/ui";
@@ -114,9 +114,7 @@ function RecordPagesGroup({ context, role, label }: { context: ChatterViewContex
         onClick={() => void changeBinding(pageToBind, false)}>{t("record.bind")}</Button>
     </PaneLabelPopover>)}
     <li>
-      {query.isPending && !query.data ? <SkeletonStatus label={t("record.loading")} className="p-2">
-        <SkeletonText lines={2} size="lg" />
-      </SkeletonStatus> : query.error && !query.data ? <ErrorBanner description={errorMessage(query.error, t("record.loadError"))} /> :
+      {query.isPending && !query.data ? <PaneRowsSkeleton label={t("record.loading")} rowCount={2} /> : query.error && !query.data ? <ErrorBanner description={errorMessage(query.error, t("record.loadError"))} /> :
         <div className="flex min-h-0 flex-col">
           {unbindState.error ? <ErrorBanner description={errorMessage(unbindState.error, t("record.writeError"))} /> : null}
           {bindings?.length ? <PaneRows>
@@ -173,7 +171,7 @@ function PageBacklinks({ context }: { context: ChatterViewContext }): ReactEleme
   const routeHref = useRouteHref();
   const query = usePageDetail(context);
   const backlinks = query.data?.pages_by_pk?.backlinks ?? [];
-  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton size="lg" /></SkeletonStatus>;
+  if (query.isPending && !query.data) return <PaneRowsSkeleton label={t("page.loading")} rowCount={1} />;
   if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
   return <PaneRows>
     {backlinks.map((backlink) => {
@@ -191,7 +189,7 @@ function PageBoundTo({ context }: { context: ChatterViewContext }): ReactElement
   const bindings = query.data?.page_record_bindings.map((binding) => ({
     key: binding.id, model: binding.model_label, id: binding.record_id, role: binding.role,
   })) ?? [];
-  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton size="lg" /></SkeletonStatus>;
+  if (query.isPending && !query.data) return <PaneRowsSkeleton label={t("page.loading")} rowCount={1} />;
   if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
   return <PaneRows>
     {bindings.map((binding) => <li key={binding.key}>

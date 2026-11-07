@@ -594,7 +594,7 @@ export const enUiMessages: Record<string, string> = {
   "form.linesChanged":
     "These lines changed on the server. Discard local changes to load the saved lines before saving again.",
   "form.record": "Record",
-  "form.recordUnavailable": "Record unavailable",
+  "record.unavailable": "Record unavailable",
   "form.required": "This field is required.",
   "form.restricted": "Restricted",
   "form.invalidValue": "Enter a valid value.",
