@@ -45,8 +45,7 @@ query NexusInboxResults(
     count
     message_count
     rows {
-      id latest count part_count
-      message { ...InboxMessageFields }
+      id latest count part_count message_id
       part { ...MessagePartFields }
       file {
         id filename url size_bytes
@@ -54,6 +53,7 @@ query NexusInboxResults(
       }
       fragment { id text }
     }
+    messages { ...InboxMessageFields }
   }
 }
 
@@ -198,7 +198,7 @@ query AngeeCurrentUser($refs: [String!]!) {
 
 # The rows each read returns, so a read that loses its rows cannot pass under its ceiling.
 ROWS = {
-    "inbox": lambda data: data["inbox_results"]["message_count"],
+    "inbox": lambda data: len(data["inbox_results"]["messages"]),
     "transcript": lambda data: len(data["thread_message_feed"]["messages"]),
     "person": lambda data: len(data["people_by_pk"]["handles"]) + len(data["people_by_pk"]["addresses"]),
     "projects": lambda data: data["projects_aggregate"]["aggregate"]["count"],
