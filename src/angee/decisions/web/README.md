@@ -4,7 +4,14 @@
 alternatives and their changes. One alternative uses radio buttons; a proposal
 with `multiple` uses checkboxes. The card submits chosen keys and the observed
 revision and `values={record_public_id: {field: value}}` through the decision mutation.
-A closed card names the selected alternatives and supplied values from `verdict_values`.
+A closed card names the reviewer, answer time, selected alternatives and supplied
+values from `verdict_values`.
+On a successful Decide, a readable returned answer updates its exact query
+cache entry, so the card closes before related reads finish. An unreadable
+answer leaves Confirm locked at the submitted revision until the card receives
+a newer state. A later read at the same or a newer revision supplies the
+authoritative card state. Only a locally accepted answer moves focus to the
+closed summary.
 
 The inbox uses the resource owner's list, filter and routing components.
 The workflow owner's `RecordTimeline` embeds the same card beside a record or

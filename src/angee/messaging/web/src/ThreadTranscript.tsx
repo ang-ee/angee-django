@@ -173,6 +173,7 @@ function TranscriptBody({
     count: messages.length,
     getItemKey: (index) => messages[index]!.id,
     anchorTo: conversation ? "end" : "start",
+    followOnAppend: conversation,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
     // Seed a viewport so rows window before the scroll element measures (also lets
