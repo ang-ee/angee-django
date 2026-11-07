@@ -10,7 +10,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db.models import F, Prefetch, prefetch_related_objects
+from django.db.models import F, Prefetch
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
@@ -21,6 +21,7 @@ from strawberry_django.utils.requests import get_request
 from angee.base.fields.identity import SqidField
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.locks import StaleRevisionError
+from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, session_user
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata
@@ -212,22 +213,18 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     def ancestors(self, info: strawberry.Info) -> list[PageType]:
         """Readable ancestors in path order; hidden containers contribute no label."""
 
-        if not hasattr(self, "_knowledge_ancestors"):
-            prefetch_related_objects([cast("PageModel", self)], _ancestors_prefetch(info))
-        return cast("list[PageType]", cast(Any, self)._knowledge_ancestors)
+        return cast("list[PageType]", prefetched(cast("PageModel", self), _ancestors_prefetch(info)))
 
     @strawberry_django.field(only=["id"], prefetch_related=[_wikilinks_prefetch])
     def wikilinks(self, info: strawberry.Info) -> list[WikilinkType]:
         """Project the index owner's resolution under the current target read scope."""
 
-        if not hasattr(self, "_knowledge_wikilinks"):
-            prefetch_related_objects([cast("PageModel", self)], _wikilinks_prefetch(info))
         return [
             WikilinkType(
                 title=link.target_text,
                 page=require_public_id(Page, link.target_page.pk) if link.target_page is not None else None,
             )
-            for link in cast(Any, self)._knowledge_wikilinks
+            for link in prefetched(cast("PageModel", self), _wikilinks_prefetch(info))
         ]
 
     @strawberry_django.field(only=["id", "markdown__kind"], prefetch_related=["markdown"])

@@ -231,6 +231,13 @@ Use these owners instead of maintaining another contract in an addon:
   the fields its model's `__str__` actually reads. Test narrow selections at
   multiple row counts; selecting the underlying field elsewhere can hide a
   deferred-field N+1.
+- **Batch per reader, answer per row.** A relation the owner computes (targets
+  read per referenced type, a reader's facts for a run list) is an
+  [`InstancePrefetch`](../../src/angee/base/prefetch.py) hinted through a native
+  `Prefetch(..., to_attr=...)`; a row's per-reader answers live in a
+  `ReaderMemo`, never seeded without an actor or under sudo. A resolver reads
+  the hint's attribute through `prefetched(row, hint)`, so a row loaded another
+  way reads its own value through the same prefetch.
 - Model-backed `hasura_model_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
   that Angee exposes but does not own, pass an explicit sqid public identity

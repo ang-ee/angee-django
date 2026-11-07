@@ -19,7 +19,6 @@ from django.utils.functional import cached_property
 from django_compose.models import Composable
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
-from rebac.relation_loading import relation_actor
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
@@ -32,6 +31,7 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.permissions import require_rebac_queryset
+from angee.base.prefetch import InstancePrefetch, ReaderMemo
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.graphql.schema import GraphQLSchemas
@@ -104,45 +104,45 @@ class RunGraph:
     edges: tuple[RunGraphEdge, ...]
 
 
-class _ReaderBatch:
-    """Answer one reader's facts for a whole run list through Django's native instance-prefetch protocol.
+_READER = ReaderMemo("_workflows_reader_answers")
+"""A run row's answers from one reader's batch read (graph, write, open work)."""
 
-    The named batch classmethod seeds every listed run for the reader the supplied
-    queryset names; each run's own method then answers from its seed. Only the
-    prefetch's ``to_attr`` marker is attached.
+
+class _ReaderBatch(InstancePrefetch):
+    """Answer one reader's facts for a whole run list through Django's native instance prefetch.
+
+    The named batch classmethod remembers each listed run's answer for the reader
+    the hint's queryset names; each run's own method then answers from its memo. Only
+    the prefetch's ``to_attr`` marker is attached; a list read without a reader is
+    left to answer per run.
     """
 
     def __init__(self, batch: str) -> None:
         self.batch = batch
 
-    def get_prefetch_querysets(
-        self, instances: list[Any], querysets: list[models.QuerySet[Any]] | None = None,
-    ) -> tuple[list[Any], Callable[[Any], object], Callable[[Any], object], bool, str, bool]:
-        """Seed the listed runs once; a list read without a reader is left to answer per run."""
-        if querysets is None or len(querysets) != 1:
-            raise ValueError("A run batch prefetch requires the reader's queryset and to_attr.")
-        actor = relation_actor(querysets[0])
+    def related(
+        self, instances: list[Any], queryset: models.QuerySet[Any], actor: Any,
+    ) -> tuple[list[Any], Callable[[Any], object], Callable[[Any], object]]:
+        del queryset
         if actor is not None and instances:
             getattr(type(instances[0]), self.batch)(instances, actor)
-        return [], id, lambda run: run.pk, True, self.batch, False
+        return [], id, lambda run: run.pk
 
 
-class _PolicyVersions:
-    """Batch a run list's pinned versions through Django's native instance-prefetch protocol.
+class _PolicyVersions(InstancePrefetch):
+    """Batch a run list's pinned versions, matched on each run's pinned ID, in one statement.
 
     Prefetching through this attribute rather than the ``version`` relation keeps
     Django's traversal free: a run whose ``policy_version`` is already loaded is
     skipped without reading its relation.
     """
 
-    def get_prefetch_querysets(
-        self, instances: list[Any], querysets: list[models.QuerySet[Any]] | None = None,
-    ) -> tuple[models.QuerySet[Any], Callable[[Any], object], Callable[[Any], object], bool, str, bool]:
-        """Read the listed runs' versions in one statement, matched on each run's pinned ID."""
-        if querysets is None or len(querysets) != 1:
-            raise ValueError("A policy version prefetch requires the version queryset and to_attr.")
-        versions = querysets[0].filter(pk__in={run.version_id for run in instances})
-        return versions, lambda version: version.pk, lambda run: run.version_id, True, "_policy_versions", False
+    def related(
+        self, instances: list[Any], queryset: models.QuerySet[Any], actor: Any,
+    ) -> tuple[models.QuerySet[Any], Callable[[Any], object], Callable[[Any], object]]:
+        del actor
+        versions = queryset.filter(pk__in={run.version_id for run in instances})
+        return versions, lambda version: version.pk, lambda run: run.version_id
 
 
 class _JSONArrayLength(models.Func):
@@ -418,9 +418,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
         A run list that already read its topologies for the reader hands this run its own.
         """
-        seeded = self._seeded("graph", actor)
-        if seeded is not None:
-            return cast(RunGraph, seeded)
+        remembered = _READER.get(self, "graph", actor)
+        if remembered is not None:
+            return cast(RunGraph, remembered)
         return type(self).graphs_for((self,), actor).get(self.pk)
 
     @classmethod
@@ -429,8 +429,8 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
         A run the reader can no longer read gets no graph, so one lost run never
         fails the list. Node rows are read narrow, without payload; the step details
-        a reader selects load through the run's ``graph_step_runs``. Each run is seeded
-        with its graph, so its own :meth:`graph` answers it without another read.
+        a reader selects load through the run's ``graph_step_runs``. Each run remembers
+        its graph for the reader, so its own :meth:`graph` answers it without another read.
         """
         if not runs:
             return {}
@@ -462,7 +462,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 attempts[key] = attempts.get(key, 0) + item["attempts"]
         graphs = {pk: run._graph_from(rows[pk], counts, attempts) for pk, run in by_id.items()}
         for pk, graph in graphs.items():
-            by_id[pk]._seed("graph", actor, graph)
+            _READER.remember(by_id[pk], "graph", actor, graph)
         return graphs
 
     @classmethod
@@ -521,7 +521,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
     @classmethod
     def prepare_cancel(cls, runs: Sequence[WorkflowRun], actor: Any) -> None:
-        """Seed request-scoped run rows with the reader's cancel facts.
+        """Remember the reader's cancel facts on request-scoped run rows.
 
         One write read and one level-by-level open-work walk answer ``can_cancel``
         for the whole batch.
@@ -529,9 +529,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         writable = cls._writable_for(runs, actor)
         open_work = cls._open_owned_work(tuple(run for run in runs if run.pk in writable))
         for run in runs:
-            run._seed("write", actor, run.pk in writable)
+            _READER.remember(run, "write", actor, run.pk in writable)
             if run.pk in writable:
-                run._seed("open_work", actor, run.pk in open_work)
+                _READER.remember(run, "open_work", actor, run.pk in open_work)
 
     @classmethod
     def _open_owned_work(cls, runs: Sequence[WorkflowRun]) -> set[int]:
@@ -581,29 +581,13 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         """
         if not self._write_access(actor):
             return False
-        seeded = self._seeded("open_work", actor)
-        return self.pk in type(self)._open_owned_work((self,)) if seeded is None else bool(seeded)
+        remembered = _READER.get(self, "open_work", actor)
+        return self.pk in type(self)._open_owned_work((self,)) if remembered is None else bool(remembered)
 
     def _write_access(self, actor: Any) -> bool:
-        """The reader's run write answer: a batch read's seed, else the run's policy."""
-        seeded = self._seeded("write", actor)
-        return bool(self.with_actor(actor).has_access("write")) if seeded is None else bool(seeded)
-
-    def _seed(self, name: str, actor: Any, value: Any) -> None:
-        """Keep a batch read's answer ``name`` for ``actor`` on this request-scoped run row."""
-        if actor is not None:
-            self.__dict__.setdefault("_reader_seeds", {})[name] = (to_subject_ref(actor), value)
-
-    def _seeded(self, name: str, actor: Any) -> Any:
-        """A batch read's answer ``name`` seeded for ``actor``, or ``None`` when there is none.
-
-        A seed serves only the reader it was read for; any other actor, or an
-        unseeded row, asks the owning rule again.
-        """
-        seed = self.__dict__.get("_reader_seeds", {}).get(name)
-        if seed is None or actor is None or seed[0] != to_subject_ref(actor):
-            return None
-        return seed[1]
+        """The reader's run write answer: a batch read's, else the run's policy."""
+        remembered = _READER.get(self, "write", actor)
+        return bool(self.with_actor(actor).has_access("write")) if remembered is None else bool(remembered)
 
     def check_await(self, observer: Any, *, expects: str) -> None:
         """Require an observed run to match the pinned contract without a self-wait."""

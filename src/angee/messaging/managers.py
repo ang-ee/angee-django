@@ -71,6 +71,7 @@ from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.permissions import actor_user_id, require_rebac_queryset
+from angee.base.prefetch import ReaderMemo
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
@@ -1031,7 +1032,8 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
             self.for_channel(channel).delete()
 
 
-_READABLE_ATTACHMENTS = "_messaging_readable_attachments"
+_READABLE_ATTACHMENTS = ReaderMemo("_messaging_readable_attachments")
+"""A record's readable thread attachments per role, for the reader that read them."""
 """The instance attribute holding a record's remembered readable thread edges."""
 
 
@@ -1083,29 +1085,28 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
 
         An admitted record implies only its own chatter role. Any other role, such
         as an attached ``source`` conversation, also requires the thread's read.
-        The edge is remembered on ``record`` per role and actor, so the reads of
-        one record payload resolve it once. An absent edge is not remembered (a
-        verb may create it next), and the verbs that bind or remove a record's
-        edges forget the record's remembered ones.
+        The edge is remembered on ``record`` per role for the reader (a
+        ``ReaderMemo``: never without an actor or under sudo), so the reads of one
+        record payload resolve it once. An absent edge is not remembered (a verb
+        may create it next), and the verbs that bind or remove a record's edges
+        forget the record's remembered ones.
         """
 
-        remembered = vars(record).setdefault(_READABLE_ATTACHMENTS, {})
-        key = (role, current_actor())
-        if (attachment := remembered.get(key)) is not None:
+        actor = current_actor()
+        if (attachment := _READABLE_ATTACHMENTS.get(record, role, actor)) is not None:
             return attachment
         attachment = self.for_record(record, role=role)
         own_role = role == self.model.AttachmentRole.CHATTER
         if attachment is not None and not own_role and not attachment.thread.has_access("read"):
             raise PermissionDenied("Reading this attachment requires thread read access.")
-        if attachment is not None:
-            remembered[key] = attachment
+        _READABLE_ATTACHMENTS.remember(record, role, actor, attachment)
         return attachment
 
     @staticmethod
     def forget_for_record(record: Any) -> None:
         """Drop the edges :meth:`readable_for_record` remembered on ``record``."""
 
-        vars(record).pop(_READABLE_ATTACHMENTS, None)
+        _READABLE_ATTACHMENTS.forget(record)
 
     def source_threads_for_record(self, record: Any) -> Any:
         """Return every source-conversation edge attached to ``record``."""

@@ -9,7 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db.models import F, Prefetch, prefetch_related_objects
+from django.db.models import F, Prefetch
 from django.db.models.lookups import IsNull
 from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_for_resource_type
@@ -22,6 +22,7 @@ from strawberry_django.queryset import run_type_get_queryset
 from angee.base.implementations import resolve_all_impl_classes
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for
+from angee.base.prefetch import prefetched
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import (
     ActionResult,
@@ -192,10 +193,7 @@ class WorkflowRunType(RecordReferenceNode):
         A run list reads every run's rows once, with what the selected step fields
         need; a run read another way reads its own rows the same way.
         """
-        run = cast(Any, self)
-        if not hasattr(run, "_graph_step_runs"):
-            prefetch_related_objects([run], _graph_step_runs(info))
-        return cast(list[StepRunType], run._graph_step_runs)
+        return cast(list[StepRunType], prefetched(cast(Any, self), _graph_step_runs(info)))
 
     @strawberry_django.field(only=["status", "stopped_at"], prefetch_related=[_run_cancel])
     def can_cancel(self, info: strawberry.Info) -> bool:

@@ -1,0 +1,54 @@
+"""Batch per reader, answer per row: the base prefetch adapter and reader memo."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from rebac import SubjectRef, actor_context, system_context
+
+from angee.base.prefetch import InstancePrefetch, ReaderMemo
+
+ALICE = SubjectRef.of("auth/user", "1")
+BOB = SubjectRef.of("auth/user", "2")
+
+
+def test_a_reader_memo_answers_only_the_reader_it_remembered() -> None:
+    memo, row = ReaderMemo("_test_answers"), SimpleNamespace()
+    memo.remember(row, "write", ALICE, False)
+    assert memo.get(row, "write", ALICE) is False
+    assert memo.get(row, "write", BOB) is None
+    assert memo.get(row, "write", None) is None
+    memo.forget(row)
+    assert memo.get(row, "write", ALICE) is None
+
+
+def test_a_reader_memo_never_remembers_without_an_actor_under_sudo_or_none() -> None:
+    memo, row = ReaderMemo("_test_answers"), SimpleNamespace()
+    memo.remember(row, "write", None, True)
+    memo.remember(row, "read", ALICE, None)
+    with system_context(reason="test.reader_memo"):
+        memo.remember(row, "graph", ALICE, True)
+    assert vars(row) == {}
+
+
+def test_instance_prefetch_owns_the_protocol_tuple_and_the_hint_reader() -> None:
+    seen: list[Any] = []
+
+    class Pairs(InstancePrefetch):
+        def related(self, instances: list[Any], queryset: Any, actor: Any) -> Any:
+            seen.append(actor)
+            return instances, id, id
+
+    class Owner:
+        pairs = Pairs()
+
+    rows = [object()]
+    with actor_context(ALICE):
+        related, row_key, instance_key, single, name, descriptor = Owner.pairs.get_prefetch_querysets(rows, [object()])
+    assert (related, single, name, descriptor) == (rows, True, "pairs", False)
+    assert row_key(rows[0]) == instance_key(rows[0])
+    assert seen == [ALICE]
+    with pytest.raises(ValueError, match="requires one queryset and to_attr"):
+        Owner.pairs.get_prefetch_querysets(rows, None)
