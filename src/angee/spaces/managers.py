@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Self
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import models, transaction
 from rebac import PermissionDenied, SubjectRef, check_new, current_actor, to_subject_ref
 from rebac.errors import MissingActorError
 from rebac.resources import model_resource_type
@@ -37,6 +37,19 @@ class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
         """Return accepted roster rows that have not been dismissed."""
 
         return self.filter(is_confirmed=True, is_dismissed=False)
+
+    def with_readable(self) -> Self:
+        """Annotate ``readable``: whether the ambient actor may read each membership.
+
+        A record that displays another group's roster admits its seats' labels
+        only; a seat's id and its holder's subject stay with ``readable`` rows.
+        """
+
+        actor = current_actor()
+        if actor is None:
+            return self.annotate(readable=models.Value(False))
+        readers = type(self)(model=self.model, using=self.db).with_actor(actor).scoped_for_aggregate()
+        return self.annotate(readable=models.Exists(readers.filter(pk=models.OuterRef("pk"))))
 
 
 _MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)

@@ -138,7 +138,7 @@ function Many2ManyChipsEdit({
   );
 }
 
-export function Many2ManyCellEdit({
+function Many2ManyCellEdit({
   value,
   onChange,
   field,

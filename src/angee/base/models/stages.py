@@ -4,13 +4,13 @@ Lifecycles whose vocabulary belongs to code use
 :class:`angee.base.models.transitions.StateTransitions`.  A pipeline whose names and
 ordering belong to users composes :class:`Stage` into an addon-owned concrete
 stage model instead.  The concrete model supplies only its container relation
-and optional category field; records compose :class:`StagedModelMixin` and
+and any addon-owned category field; records compose :class:`StagedModelMixin` and
 declare the matching container and stage foreign keys.
 """
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Self, cast
+from typing import ClassVar, Self, cast
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
@@ -38,15 +38,12 @@ class Stage(models.Model):
     """Abstract base for one user-named stage in a container-scoped pipeline.
 
     A concrete stage model sets :attr:`container_field_name` to its owning
-    foreign key (for example ``"queue"``).  If it stores a closed semantic
-    category, it also sets :attr:`category_field_name`; consumers read that
-    value through :meth:`get_category` rather than assuming a field name. The
-    concrete model declares a unique constraint on its container and position;
-    omitted positions append through the shared fractional-rank field.
+    foreign key (for example ``"queue"``).  The concrete model declares a
+    unique constraint on its container and position; omitted positions append
+    through the shared fractional-rank field.
     """
 
     container_field_name: ClassVar[str] = ""
-    category_field_name: ClassVar[str] = ""
     default_stage_field_name: ClassVar[str] = "default_stage"
 
     name = models.CharField(max_length=160)
@@ -116,19 +113,6 @@ class Stage(models.Model):
         """
 
         return stages.first()
-
-    def get_category(self) -> Any | None:
-        """Return this stage's addon-owned category value, if one is declared."""
-
-        if not self.category_field_name:
-            return None
-        try:
-            self._meta.get_field(self.category_field_name)
-        except FieldDoesNotExist as error:
-            raise ImproperlyConfigured(
-                f"{self._meta.label}.category_field_name names unknown field {self.category_field_name!r}."
-            ) from error
-        return getattr(self, self.category_field_name)
 
 
 class StagedModelMixin[StageT: Stage = Stage](models.Model):

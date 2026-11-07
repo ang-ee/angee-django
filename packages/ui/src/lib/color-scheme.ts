@@ -2,11 +2,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { ColorScheme, ColorSchemePreference } from "../theme/runtime.mjs";
 export type { ColorScheme, ColorSchemePreference } from "../theme/runtime.mjs";
 
-/**
- * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
- */
-export const COLOR_SCHEME_STORAGE_KEY = "angee:color-scheme";
+const COLOR_SCHEME_STORAGE_KEY = "angee:color-scheme";
 /**
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
@@ -45,11 +41,7 @@ export function setColorSchemePreference(value: ColorSchemePreference): void {
   applyColorSchemePreference(value);
   if (typeof window !== "undefined") window.dispatchEvent(new Event(`${COLOR_SCHEME_CHANGE_EVENT}:applied`));
 }
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function applyColorSchemePreference(value: ColorSchemePreference, target?: Document): ColorScheme {
+function applyColorSchemePreference(value: ColorSchemePreference, target?: Document): ColorScheme {
   const resolved = resolveColorSchemePreference(value);
   if (typeof document !== "undefined") {
     const root = (target ?? document).documentElement;
@@ -58,16 +50,8 @@ export function applyColorSchemePreference(value: ColorSchemePreference, target?
   }
   return resolved;
 }
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function resolveColorSchemePreference(value: ColorSchemePreference): ColorScheme { return value === "system" ? systemColorScheme() : value; }
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function systemColorScheme(): ColorScheme { return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
+function resolveColorSchemePreference(value: ColorSchemePreference): ColorScheme { return value === "system" ? systemColorScheme() : value; }
+function systemColorScheme(): ColorScheme { return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
 /**
  * @owner AppearanceProvider
  */

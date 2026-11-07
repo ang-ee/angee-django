@@ -163,7 +163,7 @@ class AgentRuntime(ImplBase):
         return {
             **endpoint,
             "protocol_version": self.chat_protocol_version,
-            "model_handle": agent.service_model_handle(),
+            "model_handle": agent.readable_model_handle(current_actor()),
         }
 
     def session_runner(self) -> SessionRunner:

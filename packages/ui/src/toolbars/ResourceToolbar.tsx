@@ -265,7 +265,7 @@ export type ResourcePagerProps = Pick<
 > & Pick<PagerProps, "disabled" | "labelElement"> & { chrome?: Pick<ResourceToolbarChrome, "pager"> };
 
 /** The resource pager, placed by the toolbar or by the pane's list body. */
-export function ResourceToolbarPager({ pager, pagerSubject, pagerTotalUnit, pagerPageSizeOptions,
+function ResourceToolbarPager({ pager, pagerSubject, pagerTotalUnit, pagerPageSizeOptions,
   pagerMaxPageSize, onPageChange, onPageSizeChange, disabled, labelElement }: ResourcePagerProps): ReactElement {
   return <Pager {...pager} subject={pagerSubject} unit={pagerTotalUnit}
     pageSizeOptions={pagerPageSizeOptions} maxPageSize={pagerMaxPageSize}

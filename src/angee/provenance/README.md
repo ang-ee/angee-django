@@ -49,7 +49,7 @@ Strict mode refuses a captured write without an open boundary
 | HTTP request | one per request, sync or async, failed on status ≥ 400 or a GraphQL `errors` result | [`ChangesetMiddleware`](middleware.py), the [native GraphQL operation extension](graphql.py) |
 | WebSocket connection (GraphQL subscriptions, agent ACP) | one per ASGI connection scope | [`ChangesetScopeMiddleware`](middleware.py) via the [GraphQL Channels contribution](../graphql/asgi.py) |
 | Celery task | one per task run, `task.<name>` | [`angee.provenance.tasks.Task`](tasks.py) |
-| Management command | one per command, `manage.<command>`; `serve`, `runserver` and `test` hand it to their requests, connections, tasks and tests | the native launcher's `COMPOSE_COMMAND_CONTEXT`, contributed by [provenance](contrib/angee/context.py) |
+| Management command | one per command, `manage.<command>`; `serve`, `runserver` and `test` hand it to their requests, connections, tasks and tests | the server launcher's `ANGEE_SERVER_COMMAND_CONTEXT`, contributed by [provenance](contrib/angee/context.py) |
 | Bridge live session | one per session run, in the task or the spawned child | [`run_bridge_session_job`](../integrate/session_runner.py) |
 | Separate logical writes | `fresh=True` for merge, revert, seed and MCP tool calls | their owners |
 | Test | one per test, `pytest` | the `captured_changeset` fixture of the [`angee.provenance.testing.fixtures`](testing/fixtures.py) plugin provenance test hosts load explicitly |
@@ -65,8 +65,8 @@ boundary's outcome. An entrypoint that owns the whole process (a management
 command, a test) opens its boundary with `process=True`, so a plain thread or
 pool it starts without copying the context writes under it too, in its own row;
 concurrent entrypoints (requests, connections, tasks) never publish one, and their
-threads carry the context explicitly. Management command attribution is contributed through `COMPOSE_COMMAND_CONTEXT`.
-The rendered `manage.py` calls `django_compose.management.execute`, which enters
+threads carry the context explicitly. Management command attribution is contributed through `ANGEE_SERVER_COMMAND_CONTEXT`.
+The rendered `manage.py` calls `angee.server.management.execute`, which enters
 those hooks after setup. Re-render an obsolete entrypoint from the project template.
 
 `Changeset.revert()` restores the state before each row's first write, refusing
@@ -85,9 +85,9 @@ its normal outbox/precondition policy.
 first (`RecordHistoryType { total, entries: [HistoryEntryType!]! }`), resolved through the record's own
 `read` gate: a hidden or unknown record reads as `null`, and a model without
 native history or a REBAC resource type is refused. `HistoryAttribution` is the
-shared interface for detailed entries and the compact `HistorySummaryType` lines
-used by Activity; the web `HistoryEntrySummary` component renders that compact
-shape. Each `HistoryEntryType` carries the changeset's attribution (`actor` as
+attribution interface `HistoryEntryType` implements; the web
+`HistoryEntrySummaryFields` fragment selects it. Each `HistoryEntryType` carries
+the changeset's attribution (`actor` as
 the public SubjectRef, `actor_model`/`actor_id` as the same public reference,
 `source_kind`), `action`, `activity`, `change_reason`,
 times, `outcome`, the field deltas simple-history's `diff_against` computes

@@ -152,7 +152,7 @@ class HistoryMergeType:
 
 @strawberry.interface
 class HistoryAttribution:
-    """Changeset attribution shared by compact and detailed record history."""
+    """Changeset attribution carried by every record history entry."""
 
     id: PublicID
     actor: str | None
@@ -165,19 +165,6 @@ class HistoryAttribution:
     occurred_at: datetime
     recorded_at: datetime
     outcome: ChangesetContract.Outcome | None
-
-
-@strawberry.type
-class HistorySummaryType(HistoryAttribution):
-    """One compact changeset line, without field or revert projection work."""
-
-    @classmethod
-    def from_changesets(cls, changesets: Iterable[Any]) -> list[HistorySummaryType]:
-        """Project a page while resolving each distinct actor once."""
-
-        page = list(changesets)
-        actors = _actor_projections(page)
-        return [cls(**_attribution(row, *actors.get(row.actor_ref, (None, None)))) for row in page]
 
 
 @strawberry.type
@@ -342,9 +329,9 @@ class RecordHistory:
                 self.statement_scopes[model] = scope
 
     def changesets(self) -> models.QuerySet[Any]:
-        """The record's changesets, newest first; ordering is the changeset owner's."""
+        """The record's closed changesets, newest first; ordering is the changeset owner's."""
 
-        return Changeset.objects.sudo(reason="provenance.record_history").touching(self.record)
+        return Changeset.objects.sudo(reason="provenance.record_history").closed_for_record(self.record)
 
     def entries(self, changesets: Iterable[Any]) -> list[HistoryEntryType]:
         """Project an already bounded window, also used by the combined Comments feed."""

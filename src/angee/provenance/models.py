@@ -25,7 +25,6 @@ from rebac import (
     app_settings,
     backend,
     current_actor,
-    database_context,
     is_anonymous_actor,
     system_context,
     to_object_ref,
@@ -247,16 +246,18 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         return self.pk in record.revertable_changesets((self,), actor=actor)
 
     def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, tuple[SubjectRef, ...]]:
-        """Promise the actor tuple that this owner persists immediately after insert."""
+        """Promise the actor tuple that this owner persists immediately after insert.
 
+        The subject is parsed from the stored actor reference, so no read uses ``using``.
+        """
+
+        del using
         if not self.actor_ref:
             return {}
         actor = SubjectRef.parse(self.actor_ref)
         if is_anonymous_actor(actor):
             return {}
-        alias = using or self._state.db or router.db_for_write(type(self), instance=self)
-        with database_context(alias):
-            definition = backend().schema().get_definition(model_resource_type(type(self)) or "")
+        definition = backend().schema().get_definition(model_resource_type(type(self)) or "")
         if definition is None:
             return {}
         return {
@@ -277,7 +278,6 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
         recording = inserting and current_changeset() is self
         with (
-            database_context(alias),
             transaction.atomic(using=alias),
             system_context(reason="changeset.record") if recording else nullcontext(),
         ):
@@ -382,7 +382,6 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         if self.state != self.State.CLOSED or self.outcome != self.Outcome.SUCCESS:
             raise ValidationError("Only a successfully closed changeset can be reverted.")
         with (
-            database_context(using),
             actor_context(actor) if actor is not None else nullcontext(),
             transaction.atomic(using=using),
             changeset(fresh=True, activity="revert", origin=self, using=using),

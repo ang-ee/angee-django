@@ -126,17 +126,20 @@ jobs:
           uv run pytest -q -n auto --dist loadfile --durations=25
           --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }}
 
-  # The PostgreSQL selection is split the same way: every worker flushes the
+  # The PostgreSQL selection is balanced over its own timing map
+  # (.test_durations_postgres, least_duration): every worker flushes the
   # whole schema between transactional tests, so one job no longer fits.
+  # CI runs 1.9-2.6x the local timings the map records, so six groups under
+  # the SQLite shards' 60-minute limit keep the margin the map cannot predict.
   uv-postgres:
-    name: uv postgres ${{ matrix.group }}/3
+    name: uv postgres ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3]
+        group: [1, 2, 3, 4, 5, 6]
     services:
       postgres:
         image: postgres:17
@@ -164,16 +167,18 @@ jobs:
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -tAc "SHOW max_locks_per_transaction"
-      - name: Verify workflow, decision and agent session contracts execute on PostgreSQL
+      - name: Verify PostgreSQL contracts execute without skips
+        # Every PostgreSQL-only contract (row and advisory locks, MVCC reads,
+        # two-writer campaigns, vendor branches by node id) with the workflow,
+        # decision and agent-session selection, in six duration-balanced groups.
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
-        # Review concurrency includes simultaneous all seats, a requester-less
-        # first seat, and recovery after a settlement signal skips a busy run.
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
         run: |
-          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=workflow-concurrency.xml \
-            --splits 3 --group ${{ matrix.group }} \
+          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=postgresql-contracts.xml \
+            --splits 6 --group ${{ matrix.group }} --splitting-algorithm least_duration \
+            --durations-path .test_durations_postgres \
             tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
             tests/test_workflows_runtime.py tests/test_workflows_install.py \
             tests/test_workflows_subject.py tests/test_workflows_publication.py \
@@ -197,13 +202,33 @@ jobs:
             tests/test_workflows_parties.py \
             tests/test_composed_note_workflow.py \
             tests/test_extraction_steps.py tests/test_extraction_decisions.py \
+            tests/test_extraction_models.py::test_competing_revision_requests_allocate_exactly_one_successor \
             tests/test_composed_extraction_workflow.py \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
             tests/test_framework_integration.py \
-            tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py
-          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
+            tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py \
+            tests/test_base_row_lock.py \
+            tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \
+            tests/test_hierarchy.py tests/test_iam_concurrency_campaign.py \
+            tests/test_iam_graphql.py tests/test_intake_access_decision.py \
+            tests/test_integrate_streams.py \
+            tests/test_knowledge_clone_concurrency_campaign.py tests/test_knowledge_search.py \
+            tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_secondary_locks_and_rollback \
+            tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
+            tests/test_optimistic_lock.py \
+            tests/test_ownership_seams.py tests/test_proposals_campaign_queries.py \
+            tests/test_proposals_concurrency.py tests/test_sequence.py \
+            tests/test_spaces_concurrency_campaign.py tests/test_stage_fractional_transition.py \
+            tests/test_storage.py tests/test_storage_upload_campaign.py \
+            tests/test_system_queryset.py::test_system_queryset_emits_for_update_on_postgresql \
+            tests/test_task_locks.py tests/test_task_project_ordering.py \
+            tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \
+            tests/test_projects_wave3_campaign.py tests/test_timeline_concurrency.py \
+            tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
+            tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
+          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("postgresql-contracts.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
 
   # One verdict under the check name pull requests and callers already know:
   # a failed, cancelled or timed-out shard fails it.
@@ -358,7 +383,7 @@ jobs:
           path.write_text(yaml.safe_dump(workspace, sort_keys=False))
           # Native uv reads each collection's pyproject and workspace sources.
           subprocess.run([
-              "uv", "add", "--editable",
+              "uv", "add", "--editable", "--no-workspace",
               *(str(Path("workspaces/src") / source["path"]) for source in sources),
           ], check=True)
           PY

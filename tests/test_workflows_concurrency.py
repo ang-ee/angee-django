@@ -30,7 +30,7 @@ from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, Workf
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, StepMode
-from angee.workflows.testing.drivers import decide, load_workflow, run_until
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_user, vault_for
 from tests.workflow_steps import Echo, document
@@ -115,7 +115,7 @@ def test_t1_duplicate_database_delivery_executes_one_body(execution, register_st
 
 def test_concurrent_answer_continuations_admit_only_one_replacement_question(execution, register_step):
     """A follow-up shares the DATABASE claim lock; duplicate deliveries cannot ask twice."""
-    actor, _sent = execution
+    actor, sent = execution
     subject = vault_for(actor)
     entered, release = Event(), Event()
 
@@ -147,6 +147,7 @@ def test_concurrent_answer_continuations_admit_only_one_replacement_question(exe
     step = row(run)
     first = Decision.system_queryset().get(pk=step.decision_id)
     decide(first, actor=actor, chosen=["approve"])
+    assert deliver_decision_wakes(sent, first.pk) == [1]
     with ThreadPoolExecutor(max_workers=2) as pool:
         first_delivery = pool.submit(in_connection, runner.execute, step.pk)
         assert entered.wait(10)
@@ -163,6 +164,7 @@ def test_concurrent_answer_continuations_admit_only_one_replacement_question(exe
     assert row(run).status == StepRunStatus.WAITING
     assert run in first.requesting_records()
     decide(second, actor=actor, chosen=["approve"])
+    assert deliver_decision_wakes(sent, second.pk) == [1]
     run_until(run)
     assert run.status == RunStatus.SUCCEEDED and run.output == {"prior": ["approve"]}
 

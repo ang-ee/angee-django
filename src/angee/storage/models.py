@@ -410,10 +410,10 @@ class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
     def create_in_drive(self, *, drive_id: str, name: str, parent_id: str = "", description: str = "") -> FolderT:
         """Create a real folder after checking ``write`` on its drive.
 
-        The drive-write check is the create gate — a per-row REBAC ``create``
-        cannot evaluate a not-yet-inserted row — so the insert rides
-        per-instance ``sudo`` while the ambient actor stamps ``created_by``.
-        Mirrors :meth:`FileManager.draft`.
+        The drive-write check is this factory's create gate. Its existing
+        per-instance ``sudo`` covers cross-row validation and insertion,
+        while the ambient actor stamps ``created_by``. Mirrors
+        :meth:`FileManager.draft`.
         """
 
         drive_model = self.model.drive.field.related_model
@@ -433,11 +433,11 @@ class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
         folder = self.model(
             drive_id=drive.pk, parent_id=parent.pk if parent is not None else None, name=name, description=description
         )
+        folder.sudo(reason="storage.folder.create")
         try:
             folder.full_clean()
         except ValidationError as error:
             raise exceptions.UploadError(f"invalid folder request: {error}") from error
-        folder.sudo(reason="storage.folder.create")
         folder.save()
         if actor is not None:
             folder.with_actor(actor)
@@ -814,11 +814,12 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                 upload_state=UploadState.DRAFT,
                 visibility=visibility,
             )
+            row.sudo(reason="storage.file.draft")
             try:
                 row.full_clean()
             except ValidationError as error:
                 raise exceptions.UploadError(f"invalid file request: {error}") from error
-            row.sudo(reason="storage.file.draft").save()
+            row.save()
             if target is not None:
                 self._attach_record(attachments, row, target)
                 # After the edge authorized the record, so the arm reveals nothing.

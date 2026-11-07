@@ -667,26 +667,6 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
         ):
             raise ValidationError("The correction parent has another retained fact authority.")
 
-    def identity_preserving_pipeline_successor(self, authority: Any, successor: Any, *, actor: Any) -> Any:
-        """Validate a later unreviewed revision preserving source and fact identity."""
-        if actor is None or not (authority).with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to retained evidence and its sources is required.")
-        if actor is None or not (successor).with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to retained evidence and its sources is required.")
-        if (
-            authority.outcome["kind"] != ExtractionStatus.SUCCEEDED
-            or successor.outcome["kind"] != ExtractionStatus.SUCCEEDED
-            or successor.revision <= authority.revision
-            or authority.lineage_id != successor.lineage_id
-            or authority.schema_digest != successor.schema_digest
-            or authority.document_map != successor.document_map
-            or successor.corrections
-            or authority.retired_identities
-            or successor.retired_identities
-        ):
-            raise ValidationError("The successor changed retained identity or authority.")
-        return successor
-
     def _correction_records(self, decision: Any, *, actor: Any, binding: CorrectionBinding) -> tuple[Any, Any]:
         """Check the caller-owned authority and revision parent against concern links."""
         if any(
