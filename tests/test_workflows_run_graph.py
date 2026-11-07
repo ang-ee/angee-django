@@ -163,7 +163,7 @@ def test_graph_requires_a_reader_and_uses_actor_scoped_step_resources(schema, ex
 
 
 def test_run_list_graphs_leave_out_only_a_run_the_reader_lost(execution):
-    """A run lost between the list read and the graph read fails only its own graph."""
+    """A run lost between the list read and the graph read gets no graph; the others still do."""
     actor, _ = execution
     reader = create_user("graph-list-reader")
     workflow = load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor)
@@ -176,8 +176,7 @@ def test_run_list_graphs_leave_out_only_a_run_the_reader_lost(execution):
     graphs = WorkflowRun.graphs_for(list(listed.values()), reader)
     assert set(graphs) == {kept.pk}
     assert [node.node.key for node in graphs[kept.pk].nodes] == ["entry"]
-    with pytest.raises(PermissionDenied, match="requires a reader"):
-        listed[lost.pk].graph(reader)
+    assert listed[lost.pk].graph(reader) is None
 
 
 def test_graph_survives_removing_a_published_step_implementation(schema, execution, settings):
@@ -437,7 +436,9 @@ def test_drill_in_step_permission_queries_are_bounded(schema, execution):
     operator = create_user("drill-in-operator")
     last_run.with_actor(starter).grant_record_access("operator", operator)
     assert last_run.can_cancel(operator)
-    failed = last_run.graph(operator, step_fields=frozenset({"can_retry"})).nodes[-1].step_run
+    graph = last_run.graph(operator, step_fields=frozenset({"can_retry"}))
+    assert graph is not None
+    failed = graph.nodes[-1].step_run
     assert failed is not None and failed.can_retry(operator)
     last_run.with_actor(starter).revoke_record_access("operator", operator)
     # The batch's answers belong to the run rows it read; a fresh read asks the policy again.

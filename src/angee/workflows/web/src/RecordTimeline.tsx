@@ -15,11 +15,11 @@ export type TimelineSelection = DocumentType<typeof RecordTimelineDocument>["rec
 export type TimelineData = TimelineSelection["records"];
 export type TimelineDecision = TimelineData[number]["decisions"][number];
 type TimelineRun = TimelineData[number]["runs"][number];
-type TimelineStep = NonNullable<TimelineRun["graph"]["nodes"][number]["step_run"]>;
+type TimelineStep = NonNullable<NonNullable<TimelineRun["graph"]>["nodes"][number]["step_run"]>;
 type MappedStep = TimelineStep["map_steps"][number];
 export interface TimelineNote { tone: string; message: string }
 const EMPTY_TIMELINE: TimelineData = [];
-const runSteps = (run: TimelineRun) => run.graph.nodes.flatMap(({ step_run }) => step_run ? [step_run, ...step_run.map_steps] : []);
+const runSteps = (run: TimelineRun) => (run.graph?.nodes ?? []).flatMap(({ step_run }) => step_run ? [step_run, ...step_run.map_steps] : []);
 
 /** One input: a record or a selection. The contributing surface chooses placement. */
 export function RecordTimeline({ record, runId }: RecordTimelineProps): ReactElement {
@@ -210,7 +210,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
   const resolveTone = useStatusTone();
   const originOptions = useEnumOptions(RUN_MODEL, "origin");
   const [expanded, setExpanded] = useState(false);
-  const ordered = [...run.graph.nodes].filter((node) => !node.key.endsWith(".body")).sort((a, b) => a.rank - b.rank);
+  const ordered = [...(run.graph?.nodes ?? [])].filter((node) => !node.key.endsWith(".body")).sort((a, b) => a.rank - b.rank);
   const done = ordered.filter((node) => node.plan === "done");
   const current = ordered.filter((node) => node.plan === "current");
   const routine = (node: typeof ordered[number]) => !node.step_run?.decision && !node.step_run?.notes.length

@@ -7,7 +7,7 @@ import { toneColorVar } from "@angee/ui/lib/tones";
 import type { WorkflowRunGraphDocument } from "./documents.console";
 import { formatStepPage } from "./step-page";
 
-export type RunGraphData = NonNullable<DocumentType<typeof WorkflowRunGraphDocument>["workflowrun_by_pk"]>["graph"];
+export type RunGraphData = NonNullable<NonNullable<DocumentType<typeof WorkflowRunGraphDocument>["workflowrun_by_pk"]>["graph"]>;
 export type RunGraphNode = RunGraphData["nodes"][number];
 
 const current = (node: RunGraphNode) => ["ready", "running", "waiting"].includes(optionToken(node.step_run?.status));

@@ -3,7 +3,7 @@ import type { TimelineData, TimelineSelection } from "./RecordTimeline";
 
 export type TimelineState = "decision" | "clean" | "error" | "run" | "stopped" | "interrupted" | "set" | "empty" | "unknown";
 type Run = TimelineData[number]["runs"][number];
-type Node = Run["graph"]["nodes"][number];
+type Node = NonNullable<Run["graph"]>["nodes"][number];
 const at = "2026-10-03T10:00:00Z";
 
 /** Neutral fixtures over the generated read, including long history and branches. */

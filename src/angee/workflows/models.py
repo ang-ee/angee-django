@@ -360,20 +360,18 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         step_fields: frozenset[str] = frozenset(),
         map_fields: frozenset[str] = frozenset(),
         related: Callable[[], Sequence[models.Prefetch]] = tuple,
-    ) -> RunGraph:
-        """Read this run's frozen topology, batching only the step details a reader selects.
+    ) -> RunGraph | None:
+        """Read this run's frozen topology; ``None`` once the reader can no longer read the run.
 
-        A batch read that already answered this run's graph for the reader hands it back.
+        Only the step details a reader selects are batched. A batch read that
+        already answered this run's graph for the reader hands it back.
         """
         seeded = self._seeded("graph", actor)
         if seeded is not None:
             return cast(RunGraph, seeded)
-        graphs = type(self).graphs_for(
+        return type(self).graphs_for(
             (self,), actor, step_fields=step_fields, map_fields=map_fields, related=related,
-        )
-        if self.pk not in graphs:
-            raise PermissionDenied("A run graph requires a reader.")
-        return graphs[self.pk]
+        ).get(self.pk)
 
     @classmethod
     def graphs_for(
@@ -389,7 +387,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         """Read the reader's runs' frozen topologies with one statement per step table.
 
         A run the reader can no longer read gets no graph, so one lost run never
-        fails the list; its own :meth:`graph` refuses it. ``step_fields`` and
+        fails the list; its own :meth:`graph` answers ``None``. ``step_fields`` and
         ``map_fields`` name the details selected on node rows and on their map item
         rows; ``related`` builds the selected relations' prefetches when the graph is
         read; ``writable`` reuses the reader's already-read run write answers. Each

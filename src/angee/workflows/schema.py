@@ -210,14 +210,16 @@ class WorkflowRunType(RecordReferenceNode):
     stopped_at: auto
 
     @strawberry_django.field(only=["version_id", "status", "stopped_at"], prefetch_related=[_RUN_POLICY_VERSION])
-    def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
+    def graph(self, info: strawberry.Info) -> WorkflowRunGraph | None:
         """Read one run's bounded graph, batching each selected step detail once per graph.
 
         A run list that already read its graphs as one batch hands each run its own.
+        Null when the reader can no longer read the run, for example once it was
+        unshared after the list was read; the rest of the list still resolves.
         """
         actor = get_current_user(info)
         steps = _selected(info.selected_fields, "graph", "nodes", "step_run")
-        return cast(WorkflowRunGraph, cast(Any, self).graph(actor, **_graph_details(actor, steps)))
+        return cast("WorkflowRunGraph | None", cast(Any, self).graph(actor, **_graph_details(actor, steps)))
 
     @strawberry_django.field(only=["status", "stopped_at"])
     def can_cancel(self, info: strawberry.Info) -> bool:
