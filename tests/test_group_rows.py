@@ -12,6 +12,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, system_context, to_object_ref, write_relationships
 from strawberry import auto
 
+from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeDataModel
 from angee.base.pagination import MAX_PAGE_SIZE
 from angee.graphql.data.hasura import _bucket_value, hasura_model_resource
@@ -36,6 +37,25 @@ class DatedGroupThing(AngeeDataModel):
         """Django model options for the test model."""
 
         app_label = "tests"
+
+class StatusGroupThing(AngeeDataModel):
+    """A row with an enum column beside plain and relation axes, whose groups carry rows."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+
+    sqid_prefix = "sgt_"
+
+    name = models.CharField(max_length=32)
+    status = StateField(choices_enum=Status, default=Status.OPEN)
+    parent = models.ForeignKey(ResourceParent, null=True, on_delete=models.CASCADE, related_name="+")
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+
 
 CHILD_GROUPS = """
 query ChildGroups($where: group_children_bool_exp, $limit: Int!) {
@@ -348,3 +368,60 @@ def test_a_boolean_bucket_is_never_the_number_it_hashes_as() -> None:
     assert len({_bucket_value(True), _bucket_value(1), _bucket_value(False), _bucket_value(0)}) == 4
     assert _bucket_value(1) == _bucket_value(1) and _bucket_value(True) == _bucket_value(True)
     assert _bucket_value({"b": 1, "a": 2}) == _bucket_value({"a": 2, "b": 1})
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("group_by", "key", "expected"),
+    [
+        # The enum drill: its partition key is the very column the rows also select.
+        ("[{field: STATUS}]", "status", {"OPEN": [("a1", "OPEN"), ("b1", "OPEN")], "CLOSED": [("a2", "CLOSED")]}),
+        # A plain drill beside the enum column the rows select.
+        ("[{field: NAME}]", "name", {"a1": [("a1", "OPEN")], "a2": [("a2", "CLOSED")], "b1": [("b1", "OPEN")]}),
+        # A relation drill with its riding label.
+        (
+            "[{field: PARENT}, {field: PARENT__NAME}]", "parent__name",
+            {"alpha": [("a1", "OPEN"), ("a2", "CLOSED")], "beta": [("b1", "OPEN")]},
+        ),
+    ],
+)
+def test_group_rows_read_every_column_through_its_own_field(group_by: str, key: str, expected: Any) -> None:
+    """A partition key equal to a selected column never shifts the row's values onto another field's converter."""
+
+    @strawberry_django.type(StatusGroupThing)
+    class StatusGroupThingType(AngeeNode):
+        name: auto
+        status: auto
+
+    resource = hasura_model_resource(
+        StatusGroupThingType,
+        model=StatusGroupThing,
+        name="status_group_things",
+        filterable=["id", "name", "status", "parent"],
+        sortable=["name", "status"],
+        aggregatable=["id"],
+        groupable=["status", "name", "parent"],
+        get_queryset=lambda info: StatusGroupThing.objects.all(),
+        insert=False,
+        update=False,
+        delete=False,
+    )
+    schema = _schema(resource, StatusGroupThingType)
+    with model_tables((ResourceParent, StatusGroupThing)):
+        with system_context(reason="test.group_rows.columns.seed"):
+            alpha, beta = (ResourceParent.objects.create(name=name) for name in ("alpha", "beta"))
+            StatusGroupThing.objects.create(name="a1", parent=alpha)
+            StatusGroupThing.objects.create(name="a2", parent=alpha, status=StatusGroupThing.Status.CLOSED)
+            StatusGroupThing.objects.create(name="b1", parent=beta)
+
+        with system_context(reason="test.group_rows.columns.read"):
+            data = result_data(execute_schema(schema, """
+                query { status_group_things_groups(group_by: %s) {
+                  key { %s }
+                  rows(limit: 5, order_by: [{name: asc}]) { name status }
+                } }
+            """ % (group_by, key)))
+    assert {
+        group["key"][key]: [(row["name"], row["status"]) for row in group["rows"]]
+        for group in data["status_group_things_groups"]
+    } == expected
