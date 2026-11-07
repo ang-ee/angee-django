@@ -193,13 +193,24 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
     """Resolve a statement page's evidence and asserting principals by model, remembered for ``actor``.
 
     Each row then answers ``readable_evidence``, ``readable_evidence_records`` and
-    ``readable_asserting_source`` for that reader from this batch.
+    ``readable_asserting_source`` for that reader from this batch. Under sudo nothing
+    is remembered, and each row reads its own answer for the reader it is asked for.
     """
+
+    for row, records, source in _readable_statement_reads(rows, actor):
+        _READABLE.remember(row, "evidence_records", actor, records)
+        _READABLE.remember(row, "asserting_source", actor, source)
+
+
+def _readable_statement_reads(
+    rows: Sequence[Any], actor: Any,
+) -> list[tuple[Any, tuple[tuple[EvidenceReference, models.Model], ...], models.Model | None]]:
+    """Each row's readable origins with their rows and its readable asserting principal, read by model for ``actor``."""
 
     evidence_by_row: list[tuple[Any, tuple[EvidenceReference, ...]]] = []
     refs: list[EvidenceReference] = []
     sources_by_model: dict[tuple[type[models.Model], str], set[str]] = defaultdict(set)
-    sources_by_row: list[tuple[Any, tuple[type[models.Model], str, str] | None]] = []
+    sources_by_row: list[tuple[type[models.Model], str, str] | None] = []
     for row in rows:
         evidence = tuple(
             EvidenceReference.model_validate(value) for value in row.evidence[: Statement.EVIDENCE_LIMIT]
@@ -209,24 +220,15 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
         source = SubjectRef.parse(row.asserted_by)
         resolved = model_for_subject_type(source.subject_type)
         if resolved is None:
-            sources_by_row.append((row, None))
+            sources_by_row.append(None)
             continue
         model, id_attr = resolved
         sources_by_model[(model, id_attr)].add(source.subject_id)
-        sources_by_row.append((row, (model, id_attr, source.subject_id)))
+        sources_by_row.append((model, id_attr, source.subject_id))
 
-    evidence_records = readable_evidence_records(refs, actor)
     readable_evidence = {
-        (ref.model.lower(), ref.id, ref.pointer): record for ref, record in evidence_records
+        (ref.model.lower(), ref.id, ref.pointer): record for ref, record in readable_evidence_records(refs, actor)
     }
-    for row, evidence in evidence_by_row:
-        records = tuple(
-            (ref, readable_evidence[ref.model.lower(), ref.id, ref.pointer])
-            for ref in evidence
-            if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
-        )
-        _READABLE.remember(row, "evidence_records", actor, records)
-
     readable_sources: dict[tuple[type[models.Model], str, str], models.Model] = {}
     for (model, id_attr), sources in sources_by_model.items():
         visible = (
@@ -237,8 +239,18 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
         readable_sources.update({
             (model, id_attr, str(getattr(row, id_attr))): row for row in visible
         })
-    for row, source_key in sources_by_row:
-        _READABLE.remember(row, "asserting_source", actor, readable_sources.get(source_key) if source_key else None)
+    return [
+        (
+            row,
+            tuple(
+                (ref, readable_evidence[ref.model.lower(), ref.id, ref.pointer])
+                for ref in evidence
+                if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
+            ),
+            readable_sources.get(source_key) if source_key else None,
+        )
+        for (row, evidence), source_key in zip(evidence_by_row, sources_by_row, strict=True)
+    ]
 
 
 _StatementManagerBase = AngeeManager.from_queryset(StatementQuerySet)
@@ -1287,19 +1299,37 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         return FactAuthority.SOURCE
 
     def readable_asserting_source(self, actor: Any) -> SubjectRef | None:
-        """Return the asserting principal only when ``for_reader(actor)`` admitted it."""
+        """Return the asserting principal only when ``actor`` may read it."""
 
         return SubjectRef.parse(self.asserted_by) if self.readable_asserting_record(actor) is not None else None
 
     def readable_asserting_record(self, actor: Any) -> models.Model | None:
-        """The asserting principal's row when ``for_reader(actor)`` read this statement's page and admitted it."""
+        """The asserting principal's row when ``actor`` may read it."""
 
-        return _READABLE.get(self, "asserting_source", actor)
+        return self._readable_statement_read(actor)[1]
 
     def readable_evidence_records(self, actor: Any) -> tuple[tuple[Any, models.Model], ...]:
-        """The readable origins and their rows ``for_reader(actor)`` read for this statement's page."""
+        """The readable origins and their rows for ``actor``."""
 
-        return _READABLE.get(self, "evidence_records", actor) or ()
+        return self._readable_statement_read(actor)[0]
+
+    def _readable_statement_read(
+        self, actor: Any,
+    ) -> tuple[tuple[tuple[EvidenceReference, models.Model], ...], models.Model | None]:
+        """This statement's readable origins and asserting principal: its page's batch for ``actor``, else read now.
+
+        A batch remembers both answers together, so a remembered origin tuple means
+        an absent principal is unreadable. A miss (another reader, a row read alone,
+        or sudo, under which nothing is remembered) reads the answer for ``actor``.
+        """
+
+        records = _READABLE.get(self, "evidence_records", actor)
+        if records is not None:
+            return records, _READABLE.get(self, "asserting_source", actor)
+        [(_row, records, source)] = _readable_statement_reads([self], actor)
+        _READABLE.remember(self, "evidence_records", actor, records)
+        _READABLE.remember(self, "asserting_source", actor, source)
+        return records, source
 
     @property
     def is_confirmed(self) -> bool:

@@ -81,7 +81,9 @@ class ReaderMemo:
     other actor asks the owning rule again. Nothing is remembered without an actor,
     under sudo (whose answers bypass the reader's policy) or as ``None``, which
     :meth:`get` returns for a row with no answer; nor is anything answered under
-    sudo, so an elevated read asks the owning rule as it would without a memo.
+    sudo. ``None`` is therefore a miss, never an empty answer: every owner reading
+    a memo answers a miss from its rule, so an elevated or unbatched read returns
+    what the reader's batch would have.
     """
 
     def __init__(self, attribute: str) -> None:
