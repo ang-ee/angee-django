@@ -1568,6 +1568,13 @@ open fresh evaluator scopes for authorization and change-feed reads.
   in ordinary `manage.py check` and commands requesting the default system checks.
   ASGI WebSocket routing at application boot and the `schema` command also demand
   schema construction; MCP's resource-tool check validates its console contract.
+  The same addon's `angee.graphql.E003` check refuses a process-local Channels layer
+  when a Celery broker is configured: `enqueue_task` sends through `send_task`,
+  which Celery never runs eagerly, so a broker means a worker's broadcasts need
+  Redis to reach web subscribers even with `DEBUG=True`. A host without a Celery
+  broker may use the in-memory layer in DEBUG. Set `CHANNEL_REDIS_URL` in project
+  settings, or use the stack's `REDIS_URL` or Redis broker URL. The
+  `ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER` escape is for isolated tests.
   Bare app population and `manage.py --help` stay build-free. Writer-only processes that call `django.setup()` without running
   checks deliberately retain lazy construction: their first observable partial
   update builds the required schemas synchronously, including inside an open
@@ -2053,7 +2060,8 @@ bridge advisory lock as polling and delivery settlement.
 - **Reviews retain one current decision per step.**
   [`DecisionStep`](../../src/angee/workflows/decision_steps.py) asks through
   `ctx.ask(request, state=...)`; `StepRun.decision` retains the question.
-  The answer wakes the step after commit, with a tick sweep for missed delivery.
+  The answer enqueues `workflows.wake_decisions` after commit; the worker wakes the
+  step, and the tick recovers failed or skipped wakes.
   A continuation may ask again after an answer when its reviewed facts changed;
   the previous question remains a native execution record associated with its run.
   Open questions cannot be replaced. Check the owning record's revision before
