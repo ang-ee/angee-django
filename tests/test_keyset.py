@@ -5,10 +5,12 @@ from uuid import uuid4
 
 import pytest
 from django.core import signing
+from django.core.exceptions import BadRequest
 from django.db import models
 from rebac import SubjectRef
 
-from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
+from angee.base.exceptions import classify_error
+from angee.base.pagination import MAX_PAGE_SIZE, InvalidKeysetCursor, KeysetOrder, clamp_page_size, valid_page_size
 from tests.test_system_queryset import SystemQueryThing, system_query_tables  # noqa: F401
 
 
@@ -92,3 +94,18 @@ def test_one_declaration_orders_newest_or_oldest_first() -> None:
     assert composed.ordering() == ("-_at", "_kind", "-_key")
     assert composed.ordering(oldest_first=True) == ("_at", "-_kind", "_key")
     assert KeysetOrder("created_at").ordering("u_", oldest_first=True) == ("u_created_at", "u_pk")
+
+
+def test_one_page_bound_clamps_first_pages_and_refuses_explicit_sizes() -> None:
+    """A first page clamps into the bound; an explicit size outside it is the client's error."""
+
+    assert [clamp_page_size(size) for size in (-3, 0, 1, MAX_PAGE_SIZE, MAX_PAGE_SIZE + 1)] == [
+        1, 1, 1, MAX_PAGE_SIZE, MAX_PAGE_SIZE,
+    ]
+    assert valid_page_size(1) == 1 and valid_page_size(MAX_PAGE_SIZE) == MAX_PAGE_SIZE
+    for size in (0, MAX_PAGE_SIZE + 1):
+        with pytest.raises(BadRequest) as refused:
+            valid_page_size(size)
+        refusal = classify_error(refused.value)
+        assert refusal.code == "BAD_USER_INPUT"
+        assert refusal.message == f"Page size must be between 1 and {MAX_PAGE_SIZE}."

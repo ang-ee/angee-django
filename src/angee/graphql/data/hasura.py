@@ -17,7 +17,7 @@ import strawberry
 import strawberry_django
 from asgiref.sync import sync_to_async
 from django.conf import settings
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.core.exceptions import BadRequest, FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.expressions import BaseExpression, Combinable, CombinedExpression
 from django.db.models.fields.reverse_related import ForeignObjectRel
@@ -64,7 +64,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for, public_id_of
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.refs import RecordRefMixin
-from angee.base.pagination import MAX_PAGE_SIZE
+from angee.base.pagination import MAX_PAGE_SIZE, valid_page_size
 from angee.base.permissions import declared_rebac_definition, require_rebac_queryset
 from angee.base.querysets import AngeeQuerySet, row_lock_paths
 from angee.graphql.access import assert_no_gated_read_fields
@@ -107,7 +107,6 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
-from graphql import GraphQLError
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
@@ -1389,24 +1388,17 @@ def group_rows_field(
 ) -> GroupField:
     """Declare ``<res>_group.rows``: every group's first page from one read per groups page.
 
-    ``limit`` is the client's declared per-group page size, required and bounded
-    by ``MAX_PAGE_SIZE``, as is the groups page that selects rows; either bound
-    refuses the client's request as ``BAD_USER_INPUT``. ``order_by`` is the list
-    root's own ordering.
+    ``limit`` is the client's declared per-group page size, required and refused
+    outside the page bound (``valid_page_size``); a groups page wider than
+    ``MAX_PAGE_SIZE`` that selects rows is refused the same way, before its rows
+    statement. ``order_by`` is the list root's own ordering.
     ``resolve(batch, limit)`` returns one page per group in ``batch.groups`` order.
     """
 
     def pages(batch: GroupFieldBatch) -> Sequence[Sequence[Any]]:
-        limit = batch.arguments["limit"]
-        if not 1 <= limit <= MAX_PAGE_SIZE:
-            raise GraphQLError(
-                f"Group rows limit must be between 1 and {MAX_PAGE_SIZE}.", extensions={"code": "BAD_USER_INPUT"},
-            )
+        limit = valid_page_size(batch.arguments["limit"])
         if len(batch.groups) > MAX_PAGE_SIZE:
-            raise GraphQLError(
-                f"Group rows carry at most {MAX_PAGE_SIZE} groups; page the groups with a limit.",
-                extensions={"code": "BAD_USER_INPUT"},
-            )
+            raise BadRequest(f"Group rows carry at most {MAX_PAGE_SIZE} groups; page the groups with a limit.")
         return resolve(batch, limit) if batch.groups else []
 
     return GroupField(
@@ -1683,6 +1675,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``context_fields`` declares the readable fields whose native widgets render
     the compact record-header facts line.
 
+    The list root and aggregate nodes return at most ``MAX_PAGE_SIZE`` rows a page
+    (upstream ``max_rows``): a larger or missing ``limit`` is clamped, aggregate
+    math stays unpaged.
+
     A groupable resource's ``<res>_group`` carries ``rows(limit, order_by)``:
     each group's first page read through the list root's own scoped read, filter
     and ordering, keyed by each group's drill and windowed by
@@ -1943,6 +1939,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         write_backend=resource_write_backend,
         id_decode=id_decode,
         id_column=id_column,
+        max_rows=MAX_PAGE_SIZE,
     )
     if contributed_filters:
         resource.types.append(_resource_filter_projection(

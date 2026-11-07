@@ -19,7 +19,7 @@ from typing import Any, cast
 
 import strawberry
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import BadRequest, ValidationError
 from django.db import models
 from rebac import SubjectRef, current_actor
 from rebac.field_visibility import redacted_fields
@@ -30,6 +30,7 @@ from strawberry.scalars import JSON
 from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
+from angee.base.pagination import valid_page_size
 from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
@@ -57,7 +58,6 @@ from angee.provenance.statements import (
 Changeset = changeset_model()
 
 HISTORY_LIMIT_DEFAULT = 25
-HISTORY_LIMIT_MAX = 100
 
 # The nested choices keep their owner's names on the wire; a bare ``Action`` would collide.
 strawberry.enum(cast(Any, ChangesetContract.Action), name="ChangesetAction")
@@ -653,8 +653,9 @@ class RecordHistory:
 
 
 def _validate_page(limit: int, offset: int) -> None:
-    if not 1 <= limit <= HISTORY_LIMIT_MAX or offset < 0:
-        raise ValidationError(f"History requires a limit from 1 to {HISTORY_LIMIT_MAX} and a nonnegative offset.")
+    valid_page_size(limit)
+    if offset < 0:
+        raise BadRequest("History requires a nonnegative offset.")
 
 
 @strawberry.type

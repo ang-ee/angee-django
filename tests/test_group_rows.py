@@ -124,7 +124,8 @@ def test_group_rows_follow_the_where_and_respect_the_declared_limit() -> None:
             for limit in (0, MAX_PAGE_SIZE + 1):
                 result = execute_schema(schema, CHILD_GROUPS, {"limit": limit})
                 assert result.errors is not None
-                assert "Group rows limit must be between 1" in str(result.errors[0])
+                assert f"Page size must be between 1 and {MAX_PAGE_SIZE}" in str(result.errors[0])
+                assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
 
 
 @pytest.mark.django_db(transaction=True)

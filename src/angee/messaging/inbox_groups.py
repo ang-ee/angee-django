@@ -27,6 +27,7 @@ from django.db.models.functions import Coalesce
 from pydantic import BaseModel, ConfigDict
 
 from angee.base.expressions import WindowSum
+from angee.base.pagination import valid_page_size
 from angee.messaging.inbox import InboxPage
 
 
@@ -80,7 +81,7 @@ class InboxGroupPage:
         which one ranked window over the headers' buckets cannot page.
         """
 
-        size = InboxPage.valid_size(leaf_size)
+        size = valid_page_size(leaf_size)
         pages = [page(InboxGroupScope(axis=axis, value=row.value), size) for row in self.rows]
         rows = [replace(row, rows=carried.rows) for row, carried in zip(self.rows, pages, strict=True)]
         return replace(self, rows=rows), pages

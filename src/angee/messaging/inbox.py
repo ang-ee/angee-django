@@ -14,13 +14,14 @@ from typing import Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.apps import apps
+from django.core.exceptions import BadRequest
 from django.db import connections
 from django.db.models import Count, Exists, OuterRef, Q, Subquery
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
-from angee.base.pagination import MAX_PAGE_SIZE
+from angee.base.pagination import valid_page_size
 from angee.base.permissions import actor_user_id, contextual_action_holds
 
 
@@ -109,20 +110,16 @@ class InboxPage:
     messages: Any = None
 
     @staticmethod
-    def valid_size(size: int) -> int:
-        """Return ``size`` when it is a page size records and group headers admit."""
-
-        if not 1 <= size <= MAX_PAGE_SIZE:
-            raise ValueError(f"Page size must be between 1 and {MAX_PAGE_SIZE}.")
-        return size
-
-    @staticmethod
     def window(page: int, size: int) -> slice:
-        """Validate the bounded offset page shared by records and group headers."""
+        """The bounded offset page shared by records and group headers.
+
+        A page before the first, or a size outside the page bound (``valid_page_size``),
+        is the client's error: clamping it would move every later page.
+        """
 
         if page < 1:
-            raise ValueError("Page must be positive.")
-        return slice((page - 1) * InboxPage.valid_size(size), page * size)
+            raise BadRequest("Page must be positive.")
+        return slice((page - 1) * valid_page_size(size), page * size)
 
 
 @dataclass(frozen=True)

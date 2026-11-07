@@ -16,6 +16,7 @@ from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery,
 from django.db.models.functions import Cast, TruncDate
 from pydantic import BaseModel, ConfigDict, Field
 
+from angee.base.pagination import valid_page_size
 from angee.base.querysets import MergeableQuerySet
 from angee.messaging.inbox import InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroupPage, InboxGroups, InboxGroupScope
@@ -208,7 +209,7 @@ class InboxResults:
             )
         order = F("_order_at").asc() if self.options.oldest else F("_order_at").desc()
         kept = members.first_per_group(
-            "_bucket", order_by=[order, F("pk").asc()], limit=InboxPage.valid_size(leaf_size),
+            "_bucket", order_by=[order, F("pk").asc()], limit=valid_page_size(leaf_size),
         ).order_by(
             "_order_at" if self.options.oldest else "-_order_at", "pk"
         )

@@ -15,6 +15,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 
+from angee.base.pagination import clamp_page_size
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.hasura import (
@@ -150,7 +151,7 @@ class DecisionQuery:
             Decision.objects.with_actor(actor)
             .for_records(record)
             .exclude(answered_at=None)
-            .order_by("-answered_at", "-pk")[: max(1, min(limit, 100))]
+            .order_by("-answered_at", "-pk")[: clamp_page_size(limit)]
         )
         return list(optimize(DecisionType.get_queryset(queryset, info), info))
 

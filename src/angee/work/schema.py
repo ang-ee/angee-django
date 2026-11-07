@@ -15,6 +15,7 @@ from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
 from angee.base.identity import public_subject_ref
+from angee.base.pagination import clamp_page_size
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -333,7 +334,7 @@ class WorkRemovedTaskQuery:
             if owner is None:
                 return []
             scope[name] = owner
-        rows = list(Task.removed_for(user, **scope)[: max(1, min(limit, 100))])
+        rows = list(Task.removed_for(user, **scope)[: clamp_page_size(limit)])
         labels = user_display_labels(
             (row.trashed_by_id for row in rows),
             request=get_request(info),

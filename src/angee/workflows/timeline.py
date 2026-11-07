@@ -10,6 +10,7 @@ from django.apps import apps
 from django.db import models
 from rebac import GenericTarget, generic_target, system_context
 
+from angee.base.pagination import clamp_page_size
 from angee.graphql.relations import with_record_reference_access
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
@@ -118,7 +119,7 @@ class TimelineSelection:
     def __init__(self, records: Sequence[models.Model], actor: Any, *, run_limit: int = RECORD_RUN_LIMIT) -> None:
         self.records = records
         self.actor = actor
-        self.run_limit = max(1, min(run_limit, 100))
+        self.run_limit = clamp_page_size(run_limit)
         self.targets = tuple(dict.fromkeys(generic_target(record) for record in records))
 
     @cached_property

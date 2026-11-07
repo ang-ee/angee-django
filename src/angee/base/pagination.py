@@ -1,4 +1,4 @@
-"""Signed timestamp/primary-key cuts for Django querysets."""
+"""The page bound and signed timestamp/primary-key cuts for Django querysets."""
 
 from __future__ import annotations
 
@@ -10,12 +10,37 @@ from datetime import datetime
 from typing import Any
 
 from django.core import signing
-from django.core.exceptions import ValidationError
+from django.core.exceptions import BadRequest, ValidationError
 from django.db import models
 from django.utils import timezone
 
 MAX_PAGE_SIZE = 100
-"""Largest page one read returns, records or group headers alike; refine's ``MAX_PAGE_SIZE`` mirrors it."""
+"""Largest page one read returns, records or group headers alike; refine's ``MAX_PAGE_SIZE`` mirrors it.
+
+A read that returns a first page clamps the size it is asked for: a model list
+root caps its page here (upstream ``max_rows``), and a first-N read passes its
+argument through :func:`clamp_page_size`. A read whose client pages by an explicit
+size (offset pages, a group's declared page) refuses a size outside
+``1..MAX_PAGE_SIZE`` through :func:`valid_page_size`, since clamping would move every later page.
+"""
+
+
+def clamp_page_size(size: int) -> int:
+    """Return ``size`` clamped into ``1..MAX_PAGE_SIZE`` for a read that returns its first page."""
+
+    return max(1, min(int(size), MAX_PAGE_SIZE))
+
+
+def valid_page_size(size: int) -> int:
+    """Return ``size`` when one page admits it, else refuse it as the client's error.
+
+    Django's ``BadRequest`` reaches clients as ``BAD_USER_INPUT`` with this message
+    (``angee.base.exceptions.classify_error``).
+    """
+
+    if not 1 <= size <= MAX_PAGE_SIZE:
+        raise BadRequest(f"Page size must be between 1 and {MAX_PAGE_SIZE}.")
+    return size
 
 
 class InvalidKeysetCursor(ValueError):
