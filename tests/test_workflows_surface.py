@@ -38,8 +38,7 @@ EXPECTED_VERBS = {
     "extraction.Extraction.manager": (
         "authorized_document_sources inference_authority_base "
         "inference_candidate_selectors inference_current_head latest_succeeded_identity_authority "
-        "prepare_correction_binding prepare_pages retain_result reused_inference "
-        "reviewed_correction_authority revise_from_decision"
+        "prepare_pages retain_result reused_inference"
     ),
     "extraction.Extraction.queryset": "validate_insert",
     "extraction.ExtractionLineage.queryset": "validate_insert",
@@ -245,7 +244,7 @@ def test_evidence_owner_surface() -> None:
     decision = apps.get_model("decisions", "Decision")
     assert issubclass(run_evidence, RecordRefMixin)
     assert issubclass(extraction_source, DerivedFrom)
-    assert callable(extraction.fact_correction) and callable(extraction.fact_authority)
+    assert callable(extraction.fact_authority)
     assert issubclass(DecisionFact, EvidenceFact)
     assert issubclass(DecisionRecordReference, EvidenceReference)
     assert issubclass(DecisionRequest, BaseModel)

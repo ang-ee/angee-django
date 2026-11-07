@@ -201,7 +201,8 @@ jobs:
             tests/test_workflows_watches.py tests/test_workflows_watch_concurrency.py \
             tests/test_workflows_parties.py \
             tests/test_composed_note_workflow.py \
-            tests/test_extraction_steps.py tests/test_extraction_decisions.py \
+            tests/test_extraction_steps.py \
+            tests/test_extraction_models.py::test_extraction_rejects_targets_outside_file_and_message \
             tests/test_extraction_models.py::test_competing_revision_requests_allocate_exactly_one_successor \
             tests/test_composed_extraction_workflow.py \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \

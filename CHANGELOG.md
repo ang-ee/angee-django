@@ -8,6 +8,28 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — dead subsystems removed with their schema
+
+Each removal below changes composed models. A project removes the storage in its
+own native migration history. No framework addon or consumer reads these facts.
+
+- **Extraction correction.** The decision-backed correction writer and
+  everything only it fed are removed: `ExtractionManager.prepare_correction_binding`,
+  `revise_from_decision` and `reviewed_correction_authority`, `CorrectionBinding`,
+  `CorrectionRef`, the outcome's `corrections` list with its readers
+  (`Extraction.corrections`, `fact_correction`, `retained_corrections`,
+  `reviewed_facts`), the helpers only the correction path read
+  (`Extraction.reference` with its `ExtractionRef` value, `failed_at_inference`
+  and `pointers.fact_pointers`), and the `Extraction.correction_decision`
+  foreign key.
+  Nothing called the writer, so no revision holds a correction; retained
+  outcomes may still carry an empty `corrections` list that nothing reads.
+  `Extraction.fact_authority` reports `source` or `unverified`. A project
+  composing `angee.extraction` removes the column with
+  `RemoveField(model_name="extraction", name="correction_decision")` in its
+  `extraction` history; the drop guard admits the autodetected removal while
+  the column is null on every row.
+
 ## Unreleased — jj workspace slots in the templates
 
 - The `src` workspace template takes `slot_mode` (`worktree`, the default, or
