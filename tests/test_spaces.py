@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -27,7 +28,7 @@ from angee.base.build import (
 )
 from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.messaging.testing.models import Party, Person, Thread
+from angee.messaging.testing.models import Fragment, Party, Person, Thread
 from angee.projects.testing.models import Queue
 from angee.spaces.testing.models import Group, Membership
 from tests import test_messaging_graphql
@@ -640,6 +641,44 @@ def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
         denied.visibility = Thread.Visibility.RESTRICTED
         with pytest.raises(PermissionDenied):
             denied.save(update_fields=["visibility", "updated_at"])
+
+
+def test_narrow_space_thread_labels_have_constant_queries(spaces_tables: None) -> None:
+    """A narrow space-thread page loads its label fields with the page, never per row."""
+
+    del spaces_tables
+    member, person = _person_for("spaces-label-member")
+    at = datetime(2026, 9, 1, tzinfo=UTC)
+    with system_context(reason="spaces thread label seed"):
+        group = Group.objects.create(name="Labels", slug="labels")
+        Membership.objects.create(group=group, party=person).confirm()
+        rows = []
+        for index in range(25):
+            thread = Thread.objects.create(
+                modality=Thread.Modality.GROUP,
+                last_message_at=at - timedelta(minutes=index),
+                title=None if index == 1 else Fragment.objects.upsert(text=f"Group thread {index:02}"),
+            )
+            thread.groups.add(group)
+            rows.append(thread)
+        expected = [{"id": str(row.sqid), "display_name": str(row)} for row in rows]
+        assert expected[1]["display_name"] == f"thread:{rows[1].sqid}"
+
+    schema = _schema()
+    query = """
+        query Labels($limit: Int!) {
+          space_threads(limit: $limit, order_by: [{last_message_at: desc}]) { id display_name }
+        }
+    """
+    # Measured warm: the first read resolves the policy's content types once per process.
+    result_data(execute_schema(schema, query, {"limit": 1}, user=member))
+    counts = []
+    for size in (1, 25):
+        with CaptureQueriesContext(connection) as captured:
+            payload = result_data(execute_schema(schema, query, {"limit": size}, user=member))
+        assert payload["space_threads"] == expected[:size]
+        counts.append(len(captured))
+    assert counts[0] == counts[1], f"Narrow space-thread labels must not refetch deferred fields per row: {counts}"
 
 
 def _vault_scope_pks(actor: Any, action: str) -> tuple[set[Any], list[str]]:
