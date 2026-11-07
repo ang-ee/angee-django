@@ -6,7 +6,8 @@ import { INBOX_MODELS, type InboxNavigation } from "./state";
 import { useNexusT } from "../i18n";
 
 /** Nexus declares route ancestry; the shell owns its breadcrumb presentation. Returns the
- *  selection's label, undefined while it loads; until then its crumb names its destination. */
+ *  selection's label and whether its read is pending; until the label arrives its crumb names
+ *  its destination. */
 export function useInboxBreadcrumbs(navigation: InboxNavigation, record?: {
   message?: string;
   resultsHref?: string;
@@ -19,6 +20,7 @@ export function useInboxBreadcrumbs(navigation: InboxNavigation, record?: {
   });
   const selectionLabel = selected ? query.data?.inbox_selection?.label
     ?? (query.error ? t("inbox.selectionUnavailable") : undefined) : undefined;
+  const selectionLoading = selected && !query.data && !query.error;
   const conversationId = record?.conversation?.id;
   const conversationLabel = record?.conversation?.label;
   const messageLabel = record?.message;
@@ -34,5 +36,5 @@ export function useInboxBreadcrumbs(navigation: InboxNavigation, record?: {
     return trail;
   }, [navigation, selected, selectionLabel, conversationId, conversationLabel, messageLabel, resultsHref, t]);
   useBreadcrumbTrail(items);
-  return selectionLabel;
+  return { label: selectionLabel, loading: selectionLoading };
 }

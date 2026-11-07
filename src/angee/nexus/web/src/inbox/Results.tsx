@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { senderDisplayName } from "@angee/parties";
 import { isStatusUpdate, MessagePaneRow, useMessageChannelLabel } from "@angee/messaging";
 import {
-  AbsoluteTime, Button, Dialog, Glyph, ListView, PaneRow, PreviewPane, RecordHeader, Select, SkeletonStatus, SkeletonText,
+  AbsoluteTime, Button, Dialog, Glyph, ListView, PaneRow, PreviewPane, RecordHeader, Select,
   optionLabel, useEnumOptions, useResourceView,
 } from "@angee/ui";
 import type { GroupLabelContext } from "@angee/ui/views/resource-view-types";
@@ -20,7 +20,7 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
   const view = useResourceView();
   const selected = Boolean(navigation.sender || navigation.circle);
   const updates = statusCoverage(view.state.filter);
-  const selectionLabel = useInboxBreadcrumbs(navigation);
+  const selection = useInboxBreadcrumbs(navigation);
   const group = view.state.groupStack[0];
   const lens = resultLensForGroup(navigation.lens, group);
   const groupField = group?.field ?? "";
@@ -29,8 +29,8 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
   const columns = useMemo(() => [{ field: "latest", header: t("inbox.latest") }], [t]);
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={t("inbox.results")}>
-      <RecordHeader density="compact" title={selected
-        ? selectionLabel ?? <SkeletonStatus label={t("inbox.loading")} className="py-0.5"><SkeletonText lines={1} size="md" lineClassName="w-40" /></SkeletonStatus>
+      <RecordHeader density="compact" loading={selection.loading} loadingMessage={t("inbox.loading")} title={selected
+        ? selection.label
         : t(updates.only ? "inbox.allUpdates" : updates.includes ? "inbox.allActivity" : "inbox.anyKind")}
         meta={updates.only ? t("inbox.updatesHint") : selected ? t("inbox.selectionHint") : t("inbox.coverageHint", { timezone })}
         actions={selected ? <Button size="iconSm" variant="ghost" aria-label={t("inbox.clearSelection")}

@@ -1,4 +1,4 @@
-import { CommandBand, Page, PageBody, RecordHeader, SkeletonStatus, SkeletonText, useBreadcrumbLeafLabel, useRouteHref, useRouteParam } from "@angee/ui";
+import { CommandBand, Page, PageBody, RecordHeader, useBreadcrumbLeafLabel, useRouteHref, useRouteParam } from "@angee/ui";
 import * as React from "react";
 import { useRoundComparisonData } from "../comparison-data";
 import { RoundComparisonBody } from "../comparison-body";
@@ -19,9 +19,8 @@ export function RoundComparisonPage(): React.ReactElement {
     <Page>
       <CommandBand verbs={data.round ? <RoundCloseControls roundId={id} round={data.round} /> : null} />
       <RecordHeader density="compact" headingLevel={1} crumbs={t("comparison.eyebrow")}
-        title={roundName ?? <SkeletonStatus label={t("comparison.loading")} className="py-0.5">
-          <SkeletonText lines={1} size="md" lineClassName="w-48" />
-        </SkeletonStatus>} description={t("comparison.description")} />
+        title={roundName} loading={!data.round && !data.error} loadingMessage={t("comparison.loading")}
+        description={t("comparison.description")} />
       <PageBody gutter="none">
         <RoundComparisonBody data={data} proposalHref={(proposalId) =>
           routeHref("proposals.proposals.record", { id: proposalId })} />

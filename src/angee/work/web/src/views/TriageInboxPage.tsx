@@ -38,7 +38,8 @@ export function TriageInboxPage(): React.ReactElement {
     <QueueRecordPage
       eyebrow={t("queue.eyebrow.triage")}
       title={name}
-      loadingLabel={t("queue.loading")}
+      loading={loading}
+      loadingMessage={t("queue.loading")}
       description={t("triage.description")}
       verbs={<QueueSettingsLink queueId={queueId} />}
     >

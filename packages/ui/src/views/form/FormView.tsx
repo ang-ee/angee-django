@@ -310,7 +310,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       ? <Tabs.Panel key={pane.id} value={pane.id} keepMounted={keepMounted} className={paneClass}>{content}</Tabs.Panel>
       : <div key={pane.id} className={paneClass}>{content}</div>;
   });
-  const formTitle = awaitingRecord ? t("form.loading") : typeof title === "function" ? title(recordToolbarContext) : title;
+  const formTitle = awaitingRecord ? undefined : typeof title === "function" ? title(recordToolbarContext) : title;
   const formEyebrow = awaitingRecord ? undefined : typeof eyebrow === "function" ? eyebrow(recordToolbarContext) : eyebrow;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
   // A declared context line replaces the generic subtitle even when it says nothing for this record.

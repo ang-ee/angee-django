@@ -1,11 +1,13 @@
 import * as React from "react";
 
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { type Tone } from "../lib/tones";
 import { PageHeader, type PageHeaderProps } from "../page";
 import { Chip } from "../ui/chip";
 import { IconTile } from "../ui/icon-tile";
+import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { textRoleVariants } from "../ui/text";
 
 /**
@@ -18,6 +20,8 @@ export const recordHeaderVariants = tv({
     titleRow: "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1",
     // The title keeps a readable width; its adornments and status wrap below it.
     title: cn(textRoleVariants({ role: "display" }), "min-w-0 flex-[1_1_16rem] leading-tight [overflow-wrap:anywhere]"),
+    // The pending title: one skeleton line on the title role's box.
+    titleSkeleton: "h-7 w-2/3",
     meta: cn(textRoleVariants({ role: "meta" }), "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"),
     description: cn(textRoleVariants({ role: "description" }), "max-w-prose leading-relaxed"),
     actions: "flex shrink-0 flex-wrap items-center justify-end gap-2",
@@ -25,7 +29,7 @@ export const recordHeaderVariants = tv({
   variants: {
     // A compact header (a sticky band) titles in the title role; the page header in display.
     density: {
-      compact: { title: textRoleVariants({ role: "title" }) },
+      compact: { title: textRoleVariants({ role: "title" }), titleSkeleton: "h-5 w-1/2" },
       comfortable: { title: "" },
     },
   },
@@ -61,6 +65,12 @@ export type RecordHeaderProps = Omit<
     /** A lifecycle badge, or the record's own status control (a statusbar). */
     status?: RecordHeaderStatus | React.ReactElement;
     title: React.ReactNode;
+    /**
+     * The read that names the record is pending: the title is a skeleton line sized by
+     * `density` that announces `loadingMessage`; every other slot renders as given.
+     */
+    loading?: boolean;
+    loadingMessage?: string;
     type?: React.ReactNode;
   };
 
@@ -80,6 +90,8 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
       icon,
       lead,
       extra,
+      loading = false,
+      loadingMessage,
       meta,
       status,
       sticky = false,
@@ -90,6 +102,7 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
     },
     ref,
   ) {
+    const t = useUiT();
     const styles = recordHeaderVariants({ density });
     // `headingLevel: null` renders the title row without a heading: an editable title is a field.
     const Heading = (headingLevel === null ? "div" : `h${headingLevel}`) as RecordHeaderHeadingTag;
@@ -107,7 +120,13 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
           {lead ? <div>{lead}</div> : null}
           <div className={styles.titleRow()} data-record-title-row="true">
             {icon ? <IconTile icon={icon} size="lg" tone="brand" /> : null}
-            <Heading className={styles.title()}>{title}</Heading>
+            <Heading className={styles.title()}>
+              {loading ? (
+                <SkeletonStatus label={loadingMessage ?? t("loading.default")}>
+                  <Skeleton shape="text" className={styles.titleSkeleton()} />
+                </SkeletonStatus>
+              ) : title}
+            </Heading>
             {titleAdornments}
             {type ? <Chip>{type}</Chip> : null}
             {status ? (
