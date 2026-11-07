@@ -8,6 +8,32 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — one page bound, reader batches and loading labels
+
+Consumer-facing renames and removals, each with its replacement.
+
+- GraphQL: `WorkflowRunType.graph_steps` is `graph_step_runs`; clients select
+  the new field.
+- `require_rebac_queryset(model, actor=None)` reads nothing, whatever the
+  ambient actor or system context. Omit `actor` for REBAC's ambient scope; pass
+  an actor to pin it.
+- `ThreadedModelMixin.thread_attachment_role` is deleted; read
+  `ThreadAttachment.AttachmentRole.CHATTER`.
+- A related container declares `relatedCount: { models }` (was `count: { id,
+  models }`); its container id is the server related count id.
+- Loading owners take `loadingLabel`: `RecordHeader`, `Combobox.Status`,
+  `PaneRowsSkeleton` and `SkeletonStatus` (was `label`), `DetailSurface` and
+  `MetricStrip` (was `loadingMessage`), and `LoadingPanel` (was `message`).
+- `useStorageActionRun` is deleted; storage verbs settle through
+  `useBusyRun().settle(action, fallback, failureTitle?)`.
+- `GROUP_ROWS_MAX_LIMIT` is deleted; `angee.base.pagination.MAX_PAGE_SIZE` is the
+  one page bound. Model list roots clamp to it; an explicit page size outside it
+  (group rows' `limit`, inbox pages, provenance history) is refused as
+  `BAD_USER_INPUT` through `valid_page_size`.
+- `angee.graphql.E003` (the in-memory channel layer beside a Celery broker) runs
+  only for the serving commands (`serve`, `runserver`, plain `check`) through
+  `SERVING_TAG`; build and data commands no longer meet it.
+
 ## Unreleased — the inbox reads conversations without record chatter
 
 - `messaging/thread` has two read extension points. `read_granted` takes grants
@@ -64,10 +90,11 @@ own native migration history. No framework addon or consumer reads these facts.
   `failure_type`, `failure_reason`, the `ix_thread_notification_pending` and
   `ix_thread_notification_failed` partial indexes,
   `ThreadNotificationManager.mark_failed`, `mark_failed_for_message` and
-  `error_count_for_record`, and the queryset's `delivery_errors`. GraphQL drops
-  the three fields from both notification types and the `thread_notifications`
-  filter, and the record chatter state drops `message_has_error` and
-  `message_has_error_counter`; clients stop selecting them. A project composing
+  `error_count_for_record`, and the queryset's `delivery_errors` with its
+  `DELIVERY_ERROR_STATUSES`. GraphQL drops the three fields from both
+  notification types and the `notification_status` filter field on
+  `thread_notifications`, and the record chatter state drops `message_has_error`
+  and `message_has_error_counter`; clients stop selecting them. A project composing
   `angee.messaging` removes the two indexes and three columns (`RemoveIndex` and
   `RemoveField` on `messaging.threadnotification`); the drop guard admits the
   autodetected removal while every row holds `ready` and empty failure text.
