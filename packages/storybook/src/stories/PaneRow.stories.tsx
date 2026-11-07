@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
-import { PaneLabel, PaneLabelAction, PaneRow, PaneRows, ScopeChip } from "@angee/ui";
+import { PaneLabel, PaneLabelAction, PaneRow, PaneRows, PaneRowsSkeleton, ScopeChip } from "@angee/ui";
 
 /**
  * The pane line anatomy every side pane shares: glyph · title · detail · meta,
@@ -10,7 +10,7 @@ import { PaneLabel, PaneLabelAction, PaneRow, PaneRows, ScopeChip } from "@angee
 const meta = {
   title: "Communication/PaneRow",
   component: PaneRow,
-  parameters: { layout: "padded", owner: [PaneRow, PaneRows, PaneLabel, PaneLabelAction, ScopeChip] },
+  parameters: { layout: "padded", owner: [PaneRow, PaneRows, PaneRowsSkeleton, PaneLabel, PaneLabelAction, ScopeChip] },
 } satisfies Meta<typeof PaneRow>;
 
 export default meta;
@@ -33,6 +33,15 @@ export const Default: Story = {
         <li><PaneRow icon="activity" tone="muted" title="Amount corrected" detail="€ 412.00 → € 418.60" meta="16:05" sub="admin" href="#change" verb="Open" /></li>
         <li><PaneRow icon="file" title="A row with no destination is static" sub="no link, no button" /></li>
       </PaneRows>
+    </div>
+  ),
+};
+
+/** A pane list's first page while it loads: the rows' geometry under one status, no loading copy. */
+export const Loading: Story = {
+  render: () => (
+    <div className="w-[26rem] rounded-6 border border-border-subtle bg-sheet">
+      <PaneRowsSkeleton className="px-2 py-1" label="Loading the timeline" rowCount={3} />
     </div>
   ),
 };
