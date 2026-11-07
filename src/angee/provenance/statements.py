@@ -192,14 +192,35 @@ _READABLE = ReaderMemo("_provenance_readable_statement")
 def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
     """Resolve a statement page's evidence and asserting principals by model, remembered for ``actor``.
 
-    Each row then answers ``readable_evidence``, ``readable_evidence_records`` and
-    ``readable_asserting_source`` for that reader from this batch. Under sudo nothing
-    is remembered, and each row reads its own answer for the reader it is asked for.
+    ``rows`` are live statements or their historical versions. Each row then answers
+    :func:`readable_statement_read` for that reader from this batch. Under sudo
+    nothing is remembered, and each row reads its own answer for the reader it is
+    asked for.
     """
 
     for row, records, source in _readable_statement_reads(rows, actor):
         _READABLE.remember(row, "evidence_records", actor, records)
         _READABLE.remember(row, "asserting_source", actor, source)
+
+
+def readable_statement_read(
+    row: Any, actor: Any,
+) -> tuple[tuple[tuple[EvidenceReference, models.Model], ...], models.Model | None]:
+    """A statement row's readable origins and asserting principal: its page's batch for ``actor``, else read now.
+
+    ``row`` is a live statement or a historical version. A batch remembers both
+    answers together, so a remembered origin tuple means an absent principal is
+    unreadable. A miss (another reader, a row read alone, or sudo, under which
+    nothing is remembered) reads the answer for ``actor``.
+    """
+
+    records = _READABLE.get(row, "evidence_records", actor)
+    if records is not None:
+        return records, _READABLE.get(row, "asserting_source", actor)
+    [(_row, records, source)] = _readable_statement_reads([row], actor)
+    _READABLE.remember(row, "evidence_records", actor, records)
+    _READABLE.remember(row, "asserting_source", actor, source)
+    return records, source
 
 
 def _readable_statement_reads(
@@ -1306,30 +1327,12 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
     def readable_asserting_record(self, actor: Any) -> models.Model | None:
         """The asserting principal's row when ``actor`` may read it."""
 
-        return self._readable_statement_read(actor)[1]
+        return readable_statement_read(self, actor)[1]
 
     def readable_evidence_records(self, actor: Any) -> tuple[tuple[Any, models.Model], ...]:
         """The readable origins and their rows for ``actor``."""
 
-        return self._readable_statement_read(actor)[0]
-
-    def _readable_statement_read(
-        self, actor: Any,
-    ) -> tuple[tuple[tuple[EvidenceReference, models.Model], ...], models.Model | None]:
-        """This statement's readable origins and asserting principal: its page's batch for ``actor``, else read now.
-
-        A batch remembers both answers together, so a remembered origin tuple means
-        an absent principal is unreadable. A miss (another reader, a row read alone,
-        or sudo, under which nothing is remembered) reads the answer for ``actor``.
-        """
-
-        records = _READABLE.get(self, "evidence_records", actor)
-        if records is not None:
-            return records, _READABLE.get(self, "asserting_source", actor)
-        [(_row, records, source)] = _readable_statement_reads([self], actor)
-        _READABLE.remember(self, "evidence_records", actor, records)
-        _READABLE.remember(self, "asserting_source", actor, source)
-        return records, source
+        return readable_statement_read(self, actor)[0]
 
     @property
     def is_confirmed(self) -> bool:
