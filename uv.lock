@@ -2777,15 +2777,15 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.31.0"
+version = "0.31.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "django-cte" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/54/ca3f295085954bcd6842889e77451e9be150bbf14ef6128a77744d3147ae/django_zed_rebac-0.31.0.tar.gz", hash = "sha256:f6059b5ad9e5e423c2c8d123b8a786353addddc70cdd477ffe4ea2e5198640da", size = 624098, upload-time = "2026-11-06T23:46:48.703Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/69/4e14b6ed83e21cd0302356b6f61f00dc2c57260d3d554e5ea56873f05a37/django_zed_rebac-0.31.1.tar.gz", hash = "sha256:7105e37f1326714c12c8dbb8f5767188f53a11e5c7fcf5cf65b16fe8ab987211", size = 626636, upload-time = "2026-11-07T02:17:30.295Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/a5/ec580ba3c9d2fad7aaffa326d75d65cee8dda7ae09c0210ad8248fbc2f64/django_zed_rebac-0.31.0-py3-none-any.whl", hash = "sha256:ff54a35c5f35947fdcac4486fa07ba40b61d94e48cccc2502dc2133c0581d873", size = 316095, upload-time = "2026-11-06T23:46:47.275Z" },
+    { url = "https://files.pythonhosted.org/packages/77/55/fdb1543347b2cfbdd25944f9448eece26aad79595ecae0723efd44431020/django_zed_rebac-0.31.1-py3-none-any.whl", hash = "sha256:94b0b568b355eba7dc20673684f293edb022774679da177a4a59a08665331840", size = 316996, upload-time = "2026-11-07T02:17:29.026Z" },
 ]
 
 [package.optional-dependencies]
