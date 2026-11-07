@@ -206,17 +206,18 @@ ROWS = {
 }
 
 # (actor, document): rows, statement ceiling, SQL ceiling in KB. Measured on the SQLite
-# composed host; a platform admin reads both actors' messages and projects.
+# composed host; a platform admin reads both actors' messages and projects. Statement
+# ceilings were measured with REBAC 0.31.1, SQL ceilings with REBAC 0.30.
 BUDGETS = {
-    ("admin", "inbox"): (18, 125, 267),
-    ("admin", "transcript"): (3, 35, 85),
-    ("admin", "person"): (2, 29, 50),
-    ("admin", "projects"): (6, 15, 24),
+    ("admin", "inbox"): (18, 11, 267),
+    ("admin", "transcript"): (3, 29, 85),
+    ("admin", "person"): (2, 18, 50),
+    ("admin", "projects"): (6, 8, 24),
     ("admin", "identity"): (1, 1, 2),
-    ("member", "inbox"): (9, 221, 2341),
-    ("member", "transcript"): (3, 229, 2684),
-    ("member", "person"): (2, 174, 1037),
-    ("member", "projects"): (3, 89, 539),
+    ("member", "inbox"): (9, 11, 2341),
+    ("member", "transcript"): (3, 29, 2684),
+    ("member", "person"): (2, 18, 1037),
+    ("member", "projects"): (3, 8, 539),
     ("member", "identity"): (1, 1, 2),
 }
 

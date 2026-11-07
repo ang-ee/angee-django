@@ -60,7 +60,7 @@ _SOURCE = (
     "_timeline_needs", "_timeline_fold_type", "_timeline_fold_pk",
 )
 # One shape for the statement's three row sets: a page entry, a kind total, a folded child group.
-_RESULT = {
+_RESULT: dict[str, models.Field[Any, Any]] = {
     "row": models.CharField(), "kind": models.CharField(), "at": models.DateTimeField(),
     "pk": models.BigIntegerField(), "needs": models.BooleanField(), "type": models.IntegerField(),
     "count": models.IntegerField(), "waiting": models.IntegerField(),
@@ -199,7 +199,9 @@ class Timeline:
                   type=models.F("_timeline_fold_type"), count=models.F("_timeline_count")),
             all=True,
         ).order_by(*_ORDER.ordering(prefix="_result_")))
-        selected, counts, children_of = [], {}, {}
+        selected: list[dict[str, Any]] = []
+        counts: dict[str, tuple[int, int]] = {}
+        children_of: dict[tuple[int, int], list[KindCount]] = {}
         for row in statement:
             if row["_result_row"] == "entry":
                 selected.append(row)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, TypedDict
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
@@ -16,6 +16,8 @@ from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.querysets import AngeeQuerySet
 
 if TYPE_CHECKING:
+    from django_stubs_ext import WithAnnotations
+
     from angee.spaces.models import Group, Membership
 
 
@@ -30,6 +32,10 @@ class GroupManager[GroupT: Group](_GroupManagerBase[GroupT]):
     """Keep a stable import identity for shared group tree managers."""
 
 
+class _MembershipCanRead(TypedDict):
+    can_read: bool
+
+
 class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
     """Canonical roster selections shared by admission and the team audience."""
 
@@ -38,7 +44,7 @@ class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
 
         return self.filter(is_confirmed=True, is_dismissed=False)
 
-    def with_can_read(self) -> Self:
+    def with_can_read(self) -> MembershipQuerySet[WithAnnotations[MembershipT, _MembershipCanRead]]:
         """Annotate ``can_read``: whether the ambient actor may read each membership.
 
         A record that displays another group's roster admits its seats' labels

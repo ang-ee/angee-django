@@ -653,6 +653,6 @@ def test_an_unsaved_fold_changeset_still_honors_its_native_write_router(monkeypa
     monkeypatch.setattr(router, "db_for_write", route)
     with system_context(reason="test routed fold refusal"), changeset(fresh=True):
         assert current_changeset()._state.db is None
-        with pytest.raises(ValidationError, match="share the database"):
+        with pytest.raises(ValidationError, match="routed to one database"):
             survivor.fold([merged])
         assert set(MergeReferenceNode._base_manager.values_list("pk", flat=True)) == {survivor.pk, merged.pk}

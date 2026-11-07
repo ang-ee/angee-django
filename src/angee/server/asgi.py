@@ -76,10 +76,10 @@ class _Application:
         owners[key] = owner
 
     async def __call__(self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
-        kind = scope["type"]
-        if kind == "lifespan":
+        # The scope's own type tag narrows it to the HTTP scope that carries paths.
+        if scope["type"] == "lifespan":
             await self._lifespan(receive, send)
-        elif kind == "http":
+        elif scope["type"] == "http":
             root = scope.get("root_path", "")
             relative = scope["path"].removeprefix(root)
             for prefix in self.prefixes:
@@ -89,10 +89,10 @@ class _Application:
                     await self.mounts[prefix](mounted, receive, send)
                     return
             await self.http(scope, receive, send)
-        elif kind in self.protocols:
-            await self.protocols[kind](scope, receive, send)
+        elif scope["type"] in self.protocols:
+            await self.protocols[scope["type"]](scope, receive, send)
         else:
-            raise ValueError(f"Unsupported ASGI scope type: {kind!r}")
+            raise ValueError(f"Unsupported ASGI scope type: {scope['type']!r}")
 
     async def _lifespan(self, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
         if (await receive())["type"] != "lifespan.startup":

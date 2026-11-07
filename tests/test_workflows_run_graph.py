@@ -13,7 +13,7 @@ from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, vault_for
 from tests.test_workflows_children import child_graph as child_graph
@@ -572,7 +572,7 @@ def test_graph_prefetches_real_decision_and_child_relations(schema, review, chil
 
 def test_drill_in_decision_steps_read_their_decisions_once(schema, review):
     """Asked decisions join the step batch; their card details stay with the decisions owner."""
-    actor, people, _, question = review
+    actor, people, sent, question = review
     query = """query($id: String!) { workflowrun_by_pk(id: $id) {
       graph_steps { records { id record_model record_id } decision { id kind_label } }
     } }"""
@@ -583,8 +583,9 @@ def test_drill_in_decision_steps_read_their_decisions_once(schema, review):
         run = start_run(workflow, actor=actor, subject=question.review_subject)
         for index in range(size):
             run_until(run)
-            decide(StepRun.system_queryset().get(run=run, node_key=f"node_{index}").decision,
-                   actor=people[0], chosen=["approve"])
+            asked = StepRun.system_queryset().get(run=run, node_key=f"node_{index}").decision
+            decide(asked, actor=people[0], chosen=["approve"])
+            assert deliver_decision_wakes(sent, asked.pk) == [1]
         run_until(run)
         with CaptureQueriesContext(connection) as queries:
             steps = result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))[

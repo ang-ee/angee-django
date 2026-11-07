@@ -93,6 +93,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "scheduled_at",
         "is_held",
         "is_original_post",
+        "metadata_mailbox",
     }
     assert {name for name, field in metadata.query.fields.items() if field.sort} == {
         "thread_title",
@@ -148,8 +149,10 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert mailbox_dimension["server"]["input"] == "METADATA__MAILBOX"
     assert mailbox_dimension["server"]["key"] == "metadata__mailbox"
     assert mailbox_dimension["kind"] == "json"
-    # The source does not declare metadata filterable: this axis is a summary.
-    assert mailbox_dimension["drill"] is None
+    # The provider metadata document is not filterable; the axis drills by exact
+    # match through the one path filter Message declares.
+    drill = mailbox_dimension["drill"]
+    assert (drill["kind"], drill["field"], drill["valueKey"]) == ("value", "metadata_mailbox", "metadata__mailbox")
     assert message["updateFields"] == []
     status_field = {field["name"]: field for field in message["fields"]}["status"]
     assert message["query"]["fields"]["status"]["filter"] is not None
@@ -677,7 +680,8 @@ def test_handle_party_batches_one_related_model_query(
         if query["sql"].lstrip().upper().startswith("SELECT")
         and f'FROM "{messaging_models.Party._meta.db_table}"' in query["sql"]
     ]
-    assert len(party_selects) == 1, party_selects
+    # One read of the parties, and REBAC's one decision of their gated fields over the fetched ids.
+    assert len(party_selects) == 2, party_selects
 
 
 def test_handle_party_regates_sudo_loaded_parent(

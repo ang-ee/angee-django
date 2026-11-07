@@ -1066,7 +1066,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         )
         if (
             attachment is not None
-            and role == record.thread_attachment_role
+            and role == self.model.AttachmentRole.CHATTER
             and attachment.thread.merged_into_id is not None
         ):
             thread = attachment.thread.canonical()
@@ -1094,7 +1094,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         if (attachment := remembered.get(key)) is not None:
             return attachment
         attachment = self.for_record(record, role=role)
-        own_role = role == record.thread_attachment_role
+        own_role = role == self.model.AttachmentRole.CHATTER
         if attachment is not None and not own_role and not attachment.thread.has_access("read"):
             raise PermissionDenied("Reading this attachment requires thread read access.")
         if attachment is not None:

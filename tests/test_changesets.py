@@ -130,8 +130,11 @@ def test_a_thread_a_command_starts_writes_under_the_command_boundary(monkeypatch
 
 def test_a_write_without_a_boundary_names_the_manage_py_remedy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["/srv/app/manage.py", "seed_lorem_notes"])
-    with pytest.raises(ChangesetRequired, match=r"manage\.py must call angee\.server\.management\.execute\(\)"):
+    remedy = r"manage\.py must run commands through the project's command wrapper"
+    with pytest.raises(ChangesetRequired, match=remedy) as error:
         write()
+    # Provenance names the remedy, not a serving addon's import path.
+    assert "angee.server" not in str(error.value)
     monkeypatch.setattr(sys, "argv", ["celery", "worker"])
     with pytest.raises(ChangesetRequired) as error:
         write()

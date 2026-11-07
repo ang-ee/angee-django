@@ -15,7 +15,7 @@ from typing import Any, ClassVar, Self
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.utils.text import slugify
 from django_compose.models import Composable
 from rebac import PermissionDenied, current_actor
@@ -91,7 +91,7 @@ class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel, con
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the group with a unique slug."""
 
-        with transaction.atomic():
+        with transaction.atomic(using=kwargs.get("using") or router.db_for_write(type(self), instance=self)):
             if not self.slug:
                 self.slug = self._available_slug()
                 update_fields = kwargs.get("update_fields")

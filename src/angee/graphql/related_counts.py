@@ -120,7 +120,7 @@ def count_related(record: models.Model, declarations: Sequence[RelatedCount]) ->
         return counts
     expressions = {f"group_{index}": _count(declaration, record) for index, declaration in enumerate(applicable)}
     # The record was just read under the actor; its row only hosts the subqueries.
-    host = models.QuerySet(model=type(record), using=record._state.db).filter(pk=record.pk)
+    host = models.QuerySet[models.Model](model=type(record), using=record._state.db).filter(pk=record.pk)
     row = host.values(**expressions).get()
     counts.update({declaration.id: int(row[f"group_{index}"]) for index, declaration in enumerate(applicable)})
     return counts

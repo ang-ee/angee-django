@@ -78,9 +78,10 @@ with CaptureQueriesContext(connections['default']) as default_queries:
         reviewer = create_user('reviewer')
         record = ChatterDoc.objects.create(title='Placed record')
         write_relationships([RelationshipTuple(to_object_ref(record), 'writer', to_subject_ref(user))])
-    vault = vault_for(user, name='Placed vault')
-    with actor_context(user):
-        page = Page.objects.create_in(vault, title='Placed page')
+    with changeset(fresh=True):
+        vault = vault_for(user, name='Placed vault')
+        with actor_context(user):
+            page = Page.objects.create_in(vault, title='Placed page')
     with system_context(reason='tests.placement.operation'), actor_context(user), changeset(fresh=True):
         task = Task.objects.schedule(record, title='Placed task', assignee=user, activity_type='call')
         message = record.message_system_post(body='Placed note', message_type=None, subtype_key='note')
@@ -105,7 +106,7 @@ with CaptureQueriesContext(connections['default']) as default_queries:
         answered = Decision.objects.decide(question, actor=reviewer, chosen=['complete'], revision=question.revision)
     assert answered.verdict == ['complete']
     # Delete.
-    with system_context(reason='tests.placement.delete'):
+    with system_context(reason='tests.placement.delete'), changeset(fresh=True):
         record.delete()
     assert not ChatterDoc._base_manager.filter(pk=record.pk).exists()
 for row in (user, reviewer, record, vault, page, task, message, question, answered):
