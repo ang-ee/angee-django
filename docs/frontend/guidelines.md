@@ -834,10 +834,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   card) instead of wrapping it in a `grid place-content-center` div. Use the
   unboxed `LoadingPanel` only when the final geometry is unknowable; the router's
   code-split boundary knows only that a console page comes next and takes its
-  neutral `shape="page"`. A renderer that knows its final geometry owns a
-  shape-preserving skeleton built from `Skeleton` and one `SkeletonStatus`; retain
-  settled content during background refresh. The renderer owns loading/error so
-  callers describe only the happy path (cf. `preview/builtins.tsx` `FileText`).
+  neutral `shape="page"`. `LoadingPanel` renders a skeleton in every shape (its
+  `message` is the accessible label); visible "Loading…" text is never a loading
+  state. A renderer that knows its final geometry owns a shape-preserving
+  skeleton built from `Skeleton` and one `SkeletonStatus`; retain settled content
+  during background refresh. The renderer owns loading/error so callers describe
+  only the happy path (cf. `preview/builtins.tsx` `FileText`).
 - Forms are declarative even when they branch: a `<Field showWhen={(values) => …}>`
   predicate (mirroring `Action.visibleWhen`) drives a discriminated form — a `kind`
   select that swaps the body — and a hidden field is never submitted. Reach for a
