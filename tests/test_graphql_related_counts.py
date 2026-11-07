@@ -89,6 +89,12 @@ def test_an_unreadable_record_has_no_counts(schema, referenced):
     assert counts(schema, outsider, decisions[0], "decisions.concerns") == []
 
 
+def count_and_reads(captured):
+    """A read's statements that count, and the others."""
+    statements = [query["sql"] for query in captured.captured_queries]
+    return [sql for sql in statements if "COUNT(" in sql], [sql for sql in statements if "COUNT(" not in sql]
+
+
 def test_every_applicable_group_shares_one_count_statement(schema, referenced):
     owner, _outsider, _records, decisions = referenced
     # Measured warm, as document budgets are: Django caches each content type on first use.
@@ -97,7 +103,13 @@ def test_every_applicable_group_shares_one_count_statement(schema, referenced):
         counts(schema, owner, decisions[0], "decisions.concerns")
     with CaptureQueriesContext(connection) as two:
         counts(schema, owner, decisions[0], "decisions.concerns", "decisions.decisions")
-    assert len(two) == len(one)
+    (one_count,), one_reads = count_and_reads(one)
+    (two_count,), two_reads = count_and_reads(two)
+    assert (one_count.count("COUNT("), two_count.count("COUNT(")) == (1, 2)
+    # The second group reads nothing the first did not. REBAC 0.30 revalidates the
+    # decided rows a scope reuses once per scope, so its scope may repeat that probe.
+    assert set(two_reads) == set(one_reads)
+    assert len(two_reads) - len(one_reads) <= 1
 
 
 def test_an_unknown_group_is_a_request_error(schema, referenced):
