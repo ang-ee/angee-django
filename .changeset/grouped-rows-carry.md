@@ -1,6 +1,6 @@
 ---
-"@angee/refine": patch
-"@angee/ui": patch
+"@angee/refine": minor
+"@angee/ui": major
 ---
 
 A grouped page is one request: the leaf groups read carries each group's first

@@ -1,6 +1,6 @@
 ---
-"@angee/ui": minor
-"@angee/metadata": minor
+"@angee/ui": major
+"@angee/metadata": major
 ---
 
 A record form's own fields are always its sheet: there is no Overview tab, and labelled

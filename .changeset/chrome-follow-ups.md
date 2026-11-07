@@ -1,5 +1,5 @@
 ---
-"@angee/ui": patch
+"@angee/ui": minor
 "@angee/app": patch
 ---
 

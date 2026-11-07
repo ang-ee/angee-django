@@ -11,7 +11,5 @@ contribution IDs. `ChatterTabId` is an open string, and the `?chatterTab=` alias
 `chatter.activity`, `messaging.activity`, `chatter.history` and
 `messaging.history` are gone.
 Also breaking: `PageBody` renders a `div` by default (the console layout owns the one
-`main` landmark; pass `as="main"` on a standalone page), `decisionAttentionColumn` is
-`attentionColumn`, `RecordFieldMarkButton`, `recordCommentsTab`, `recordCarriesThreads`,
-`ChatterTabContent.aliases` and `MessageRow.tracking` are removed, and `RevisionsTab`
-leaves ahead of the 0.4.0 window it was promised.
+`main` landmark; pass `as="main"` on a standalone page), and `RecordFieldMarkButton`,
+`ChatterTabContent.aliases` and `MessageRow.tracking` are removed.

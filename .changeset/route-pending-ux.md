@@ -1,6 +1,6 @@
 ---
 "@angee/app": minor
-"@angee/ui": minor
+"@angee/ui": major
 ---
 
 Loading the next page: hovering, focusing or touching an in-app link preloads

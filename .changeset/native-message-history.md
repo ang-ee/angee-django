@@ -1,5 +1,5 @@
 ---
-"@angee/refine": minor
+"@angee/refine": major
 "@angee/app": patch
 ---
 

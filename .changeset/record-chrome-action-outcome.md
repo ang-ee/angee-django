@@ -1,5 +1,5 @@
 ---
-"@angee/ui": patch
+"@angee/ui": minor
 ---
 
 Add `useActionOutcomeMutation` and `useRecordChromeActionOutcome`, the un-settled

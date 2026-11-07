@@ -1,5 +1,5 @@
 ---
-"@angee/ui": minor
+"@angee/ui": major
 ---
 
 The shell owns every aside. The Chatter in the console's secondary pane owns its

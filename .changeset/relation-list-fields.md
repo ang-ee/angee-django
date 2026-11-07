@@ -1,6 +1,6 @@
 ---
 "@angee/metadata": minor
-"@angee/ui": minor
+"@angee/ui": major
 ---
 
 A to-many relation field defaults to the `many2many` relation multi-select instead of

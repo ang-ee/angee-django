@@ -8,7 +8,7 @@ own home, brand and theme.
 
 - **App roots** gain `home` (a route name inside the root), `brand`
   (`{ name, mark }`, defaulting to the root's label and icon) and `theme` (an
-  installed theme id) as menu fields, in the dict and the legacy list. They
+  installed theme id) as menu fields. They
   layer like any menu field; an included app drops them.
 - **`ANGEE_UI.shell`** is `{ brand?, theme?, apps?: { <name>: { rail, brand?,
   theme?, home? } }, hosts?: { <hostname>: <root id | apps name> } }`. The
