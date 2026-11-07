@@ -26,6 +26,7 @@ export function QueueBoardPage(): React.ReactElement {
       title={name}
       loading={!queue.data && !queue.error}
       loadingMessage={t("queue.loading")}
+      unavailable={!queue.data?.work_queues_by_pk}
       description={t("board.description")}
       verbs={<QueueSettingsLink queueId={queueId} />}
       gutter="none"

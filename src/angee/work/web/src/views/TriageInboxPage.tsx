@@ -40,6 +40,7 @@ export function TriageInboxPage(): React.ReactElement {
       title={name}
       loading={loading}
       loadingMessage={t("queue.loading")}
+      unavailable={!queue.data?.work_queues_by_pk}
       description={t("triage.description")}
       verbs={<QueueSettingsLink queueId={queueId} />}
     >

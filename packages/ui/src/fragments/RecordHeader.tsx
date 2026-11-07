@@ -71,6 +71,11 @@ export type RecordHeaderProps = Omit<
      */
     loading?: boolean;
     loadingMessage?: string;
+    /**
+     * The read that names the record failed or found nothing: the title reads "Record
+     * unavailable" while the caller shows its error surface. `loading` wins while pending.
+     */
+    unavailable?: boolean;
     type?: React.ReactNode;
   };
 
@@ -92,6 +97,7 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
       extra,
       loading = false,
       loadingMessage,
+      unavailable = false,
       meta,
       status,
       sticky = false,
@@ -125,7 +131,7 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
                 <SkeletonStatus label={loadingMessage ?? t("loading.default")}>
                   <Skeleton shape="text" className={styles.titleSkeleton()} />
                 </SkeletonStatus>
-              ) : title}
+              ) : unavailable ? t("record.unavailable") : title}
             </Heading>
             {titleAdornments}
             {type ? <Chip>{type}</Chip> : null}

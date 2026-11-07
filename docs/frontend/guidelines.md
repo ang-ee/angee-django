@@ -839,7 +839,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   state. A renderer that knows its final geometry owns a shape-preserving
   skeleton built from `Skeleton` and one `SkeletonStatus`; retain settled content
   during background refresh. The renderer owns loading/error so callers describe
-  only the happy path (cf. `preview/builtins.tsx` `FileText`). `RecordHeader` owns a record's pending title (`loading`, `loadingMessage`): a page passes its read's state, never a title skeleton of its own. A control owns its pending state: `Select loading` and `Combobox.Status loading` while options load, `Button loading` for a pending verb; never loading copy in a placeholder or a reason.
+  only the happy path (cf. `preview/builtins.tsx` `FileText`). `RecordHeader` owns a record's pending and unavailable title (`loading`, `loadingMessage`, `unavailable`): a page passes its read's state, never a title skeleton or a failed-read title of its own, and a failed read ends the skeleton beside the page's error surface. A control owns its pending state: `Select loading` and `Combobox.Status loading` while options load, `Button loading` for a pending verb; never loading copy in a placeholder or a reason.
 - Forms are declarative even when they branch: a `<Field showWhen={(values) => …}>`
   predicate (mirroring `Action.visibleWhen`) drives a discriminated form — a `kind`
   select that swaps the body — and a hidden field is never submitted. Reach for a

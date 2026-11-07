@@ -27,6 +27,7 @@ export function CycleBoardPage(): React.ReactElement {
       title={cycleFacts?.name}
       loading={!cycle.data && !cycle.error}
       loadingMessage={t("cycle.loading")}
+      unavailable={!cycleFacts}
       description={t("cycle.board.description")}
       verbs={cycleFacts ? (
         <CycleCloseControl

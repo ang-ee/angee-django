@@ -36,6 +36,16 @@ describe("RecordHeader", () => {
     expect(screen.getByRole("status").textContent).toBe("Loading…");
   });
 
+  test("an unavailable record reads the owner's title, and a pending read still wins", () => {
+    const { rerender } = render(<RecordHeader unavailable title={undefined} />);
+    expect(screen.getByRole("heading", { level: 1, name: "Record unavailable" })).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+
+    rerender(<RecordHeader loading unavailable loadingMessage="Loading queue…" title={undefined} />);
+    expect(screen.getByRole("status").textContent).toBe("Loading queue…");
+    expect(screen.queryByText("Record unavailable")).toBeNull();
+  });
+
   test("a settled title renders without a status", () => {
     render(<RecordHeader title="Engineering" />);
 

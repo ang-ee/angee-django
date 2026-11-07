@@ -227,7 +227,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     if (loadError) return <ErrorBanner title={t("form.loadFailed")}
       description={errorMessage(loadError, t("form.loadFailed"))}
       actions={<Button type="button" size="sm" onClick={() => void reload()}>{t("collection.retry")}</Button>} />;
-    return <EmptyState icon="lock" title={t("form.recordUnavailable")} className="min-h-64 p-8" />;
+    return <EmptyState icon="lock" title={t("record.unavailable")} className="min-h-64 p-8" />;
   }
   const toolbarStartNode =
     typeof toolbarStart === "function"

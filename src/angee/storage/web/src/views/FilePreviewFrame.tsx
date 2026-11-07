@@ -106,9 +106,10 @@ export function FilePreviewFrame({
         <RecordHeader
           headingLevel={1}
           crumbs={crumbs}
-          title={file ? file.title || file.filename : error ? t("preview.loadError") : t("file.notFoundTitle")}
+          title={file ? file.title || file.filename : undefined}
           loading={!file && fetching}
           loadingMessage={t("loadingFile")}
+          unavailable={!file}
           meta={facts}
           status={file?.is_trashed ? { label: t("file.inTrash"), tone: "warning" } : undefined}
         />
