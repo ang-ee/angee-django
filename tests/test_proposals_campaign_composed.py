@@ -192,10 +192,13 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
                 task.validate_visibility("inherited")
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
             # Auditing the two task scopes and the message scope adds three
-            # INSERTs; the publication check itself remains one SELECT.
+            # INSERTs; the publication check itself remains one SELECT, whose
+            # embedded scopes are audited when it executes.
             self.assertEqual(len(queries), 4, queries.captured_queries)
-            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in q["sql"] for q in queries[:3]))
-            self.assertIn("EXISTS", queries[3]["sql"].upper())
+            audit = 'INSERT INTO "rebac_permissionauditevent"'
+            self.assertEqual(sum(audit in q["sql"] for q in queries), 3)
+            [select] = [q["sql"] for q in queries if audit not in q["sql"]]
+            self.assertIn("EXISTS", select.upper())
         before = self.Task._base_manager.filter(pk=task.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):
