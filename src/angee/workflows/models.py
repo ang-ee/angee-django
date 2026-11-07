@@ -127,6 +127,24 @@ class _ReaderBatch:
         return [], id, lambda run: run.pk, True, self.batch, False
 
 
+class _PolicyVersions:
+    """Batch a run list's pinned versions through Django's native instance-prefetch protocol.
+
+    Prefetching through this attribute rather than the ``version`` relation keeps
+    Django's traversal free: a run whose ``policy_version`` is already loaded is
+    skipped without reading its relation.
+    """
+
+    def get_prefetch_querysets(
+        self, instances: list[Any], querysets: list[models.QuerySet[Any]] | None = None,
+    ) -> tuple[models.QuerySet[Any], Callable[[Any], object], Callable[[Any], object], bool, str, bool]:
+        """Read the listed runs' versions in one statement, matched on each run's pinned ID."""
+        if querysets is None or len(querysets) != 1:
+            raise ValueError("A policy version prefetch requires the version queryset and to_attr.")
+        versions = querysets[0].filter(pk__in={run.version_id for run in instances})
+        return versions, lambda version: version.pk, lambda run: run.version_id, True, "_policy_versions", False
+
+
 class _JSONArrayLength(models.Func):
     """Length of a JSON array; other JSON values have no admitted items."""
 
@@ -318,6 +336,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
     _reader_graphs = _ReaderBatch("graphs_for")
     _reader_cancel = _ReaderBatch("prepare_cancel")
+    _policy_versions = _PolicyVersions()
 
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """Invalidate the records this execution has worked on."""
@@ -340,15 +359,16 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         return self.policy_version.definition.run_outcome_label(self.outcome) if self.outcome else ""
 
     @classmethod
-    def policy_version_prefetch(cls, path: str = "version") -> models.Prefetch:
-        """Batch the pinned version :attr:`policy_version` reads, along ``path`` from the rows being read.
+    def policy_version_prefetch(cls, prefix: str = "") -> models.Prefetch:
+        """Batch the pinned version :attr:`policy_version` reads of the runs ``prefix`` reaches (``"run__"``).
 
-        A row whose version is already loaded reads nothing more.
+        A run whose version is already loaded reads nothing more.
         """
         version = cls._meta.get_field("version").related_model
         assert version is not None
         return models.Prefetch(
-            path, queryset=cast(Any, version).system_queryset().only("document"), to_attr="policy_version",
+            f"{prefix}_policy_versions", queryset=cast(Any, version).system_queryset().only("document"),
+            to_attr="policy_version",
         )
 
     @cached_property

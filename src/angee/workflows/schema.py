@@ -67,7 +67,7 @@ Decision = apps.get_model("decisions", "Decision")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 _RUN_POLICY_VERSION = WorkflowRun.policy_version_prefetch()
-_STEP_POLICY_VERSION = WorkflowRun.policy_version_prefetch("run__version")
+_STEP_POLICY_VERSION = WorkflowRun.policy_version_prefetch("run__")
 _RUN_LABEL = {"_workflow_name": F("version__workflow__name")}
 
 
