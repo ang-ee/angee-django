@@ -50,9 +50,10 @@ jobs:
           remote-repository-name: cla-signatures
           path-to-signatures: signatures/v1/cla.json
           branch: main
-          # Maintainers and bots are covered outside the pull request flow:
+          # Maintainers and bots are covered outside the pull request flow
+          # (`angee` is the operator's workspace-sync merge identity, angee@example.invalid):
           # employees by employment agreement, corporations by CLA-CORPORATE.md.
-          allowlist: ayushin,dependabot[bot],renovate[bot]
+          allowlist: ayushin,angee,dependabot[bot],renovate[bot]
           custom-notsigned-prcomment: >-
             Thanks for your contribution. Before we can merge it, please sign the
             [Angee Contributor License Agreement](https://github.com/ang-ee/angee-django/blob/main/CLA.md).
