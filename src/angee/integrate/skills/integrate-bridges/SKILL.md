@@ -185,7 +185,7 @@ session exits within one wake on stop, shutdown and lost lock.
 
 - [Integrate pitfalls](references/pitfalls.md)
 - [Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
-- [Integrate README](../../README.md), [Stack: backend](../../../../../docs/stack.md#backend) rows 101-112
+- [Integrate README](../../README.md), [Stack: backend](../../../../../docs/stack.md#backend): the authlib, httpx2 and provider SDK rows
 - Skills: `angee-addon`, `angee-models` (the donor row), `jobs-tasks` (queues, budgets), `angee-resources` (the vendor row), `angee-tests`, `slice`
 
 ## Sources

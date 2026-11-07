@@ -43,7 +43,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 - Statement declarations with donors and links: `Party` in `src/angee/parties/models.py`; the `UserSource` donor
   (`src/angee/provenance/contrib/iam/models.py`) as the pattern for principals in addons that must not depend on provenance.
 - Upstream: django-simple-history (`diff_against`, `bulk_history_create`), `rebac` `actor_context`/`system_context`, Celery `DjangoTask`
-  — [Stack](../../../../../docs/stack.md#backend) rows 67, 76, 79.
+  — [Stack](../../../../../docs/stack.md#backend): the django-simple-history, django-zed-rebac and Celery rows.
 
 ## Steps
 

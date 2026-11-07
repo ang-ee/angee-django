@@ -40,7 +40,7 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 - `angee.iam.service_users.sync_service_user` — already called by `Agent.save` (`models.py`); `deactivate_service_user` on delete (`deactivate_agent_service_user` in `signals.py`).
 - `integrate.Credential` and `integrate_vcs.Source`/`Template` for secrets, skill sources and workspace templates.
 - `workflows_agents` steps `start_conversation`/`close_conversation` (`src/angee/workflows_agents/steps.py`) when a workflow needs a turn.
-- Upstream: pydantic-ai (`Model`, toolsets, `UsageLimits`), `agent-client-protocol` SDK, FastMCP — [Stack](../../../../../docs/stack.md#backend) rows 66, 96, 98.
+- Upstream: pydantic-ai (`Model`, toolsets, `UsageLimits`), `agent-client-protocol` SDK, FastMCP — [Stack](../../../../../docs/stack.md#backend): the pydantic-ai-slim, agent-client-protocol and FastMCP rows.
 
 ## Steps
 

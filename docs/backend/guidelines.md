@@ -246,7 +246,8 @@ Use these owners instead of maintaining another contract in an addon:
   a consumer's guessed field name. Keep output values distinct from comparison
   input domains. A server group axis declares the filter its drill uses, or the
   schema build fails; only an extraction part (a weekday, a month number) is
-  summary-only.
+  summary-only, and a JSON bucket that drills by containment is unavailable on a
+  backend without JSON containment.
   Extend native lookup seams for database operators; never advertise an operator
   that the exposed comparison input or executor cannot accept.
 - Vendor SDK clients are details. Keep SDK request/response quirks in the
