@@ -1005,11 +1005,10 @@ def record_edges() -> tuple[RecordEdge, ...]:
     and the steps whose readable decision or run the run and decision pages list.
     """
 
-    decisions = apps.get_model("decisions", "Decision")
     return (
         RecordEdge("workflows.runs", lambda record: WorkflowRun.objects.about(record)),
         RecordEdge("workflows.decisions", lambda run: StepRun.objects.filter(
-            run=run, decision_id__in=decisions.objects.all().scoped().values("pk"),
+            run=run, decision_id__in=Decision.objects.all().scoped().values("pk"),
         ), target="workflows.WorkflowRun"),
         RecordEdge("workflows.run", lambda decision: StepRun.objects.filter(
             decision=decision, run_id__in=WorkflowRun.objects.all().scoped().values("pk"),
