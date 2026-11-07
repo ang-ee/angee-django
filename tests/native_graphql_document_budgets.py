@@ -214,8 +214,15 @@ BUDGETS = {
     ("admin", "projects"): (6, 15, 24),
     ("admin", "identity"): (1, 1, 2),
     ("member", "inbox"): (9, 123, 900),
-    ("member", "transcript"): (3, 229, 2514),
-    ("member", "person"): (2, 174, 1037),
+    # The feed reads its messages under ``read_inbox`` and the reply-parent fields read
+    # ``read`` through the relation guard, so REBAC 0.30 decides the ``read`` graph's
+    # subject sets a second time: 21 statements more than one ``read`` graph, for 174 KB
+    # less SQL. Stage 2b accepts that trade; sharing decided sets across actions is upstream.
+    ("member", "transcript"): (3, 250, 2514),
+    # REBAC 0.30 wraps a union that names a permission (``thread#read = read_granted +
+    # chatter_read``, the message read's ``read_granted``) in one more re-selection, about
+    # 140 B per thread and 144 B per message read graph; 0.30.2's splice brings it back under 1037 KB.
+    ("member", "person"): (2, 174, 1039),
     ("member", "projects"): (3, 89, 539),
     ("member", "identity"): (1, 1, 2),
 }
