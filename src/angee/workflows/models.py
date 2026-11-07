@@ -425,9 +425,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
             return {}
         listed = list(by_id.values())
         models.prefetch_related_objects(listed, cls.policy_version_prefetch())
-        steps = cast(Any, cls._meta.get_field("step_runs").related_model.objects.with_actor(actor)).filter(
-            run_id__in=list(by_id),
-        )
+        step_model = cls._meta.get_field("step_runs").related_model
+        assert step_model is not None and issubclass(step_model, StepRun)
+        steps = step_model.objects.with_actor(actor).filter(run_id__in=list(by_id))
         rows: dict[int, dict[str, Any]] = {pk: {} for pk in by_id}
         for row in steps.nodes().graph_rows():
             row.run = by_id[row.run_id]
@@ -538,8 +538,10 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                     seen.add(child_id)
                     frontier.add(child_id)
         if seen:
+            step_model = cls._meta.get_field("step_runs").related_model
+            assert step_model is not None and issubclass(step_model, StepRun)
             open_ids.update(
-                cls._meta.get_field("step_runs").related_model.system_queryset().filter(run_id__in=seen)
+                step_model.system_queryset().filter(run_id__in=seen)
                 .exclude(status__in=StepRunStatus.terminal_values()).values_list("run_id", flat=True)
             )
         for run_id in open_ids:

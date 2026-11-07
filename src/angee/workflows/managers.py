@@ -434,14 +434,16 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         if operations is not None:
             links = links.filter(operation__in=operations)
         subjects: QuerySet[WorkflowRun, Mapping[str, object]] = self.filter(subject_filter).values("pk")
-        link_runs = links.values("run_id")
+        link_runs: QuerySet[StepRecord, Mapping[str, object]] = links.values("run_id")
         if limit is not None:
             subjects = self.filter(subject_filter).first_per_group(
                 "subject_content_type_id", "subject_object_id", order_by=["-created_at", "-pk"], limit=limit,
             ).values("pk")
-            link_runs = links.values("content_type_id", "object_id", "run_id").annotate(
+            # django-stubs types values() as the base QuerySet; Django keeps StepRecord's queryset class.
+            per_run = cast("AngeeQuerySet[StepRecord]", links.values("content_type_id", "object_id", "run_id").annotate(
                 _created=Max("run__created_at"),
-            ).first_per_group(
+            ))
+            link_runs = per_run.first_per_group(
                 "content_type_id", "object_id", order_by=[F("_created").desc(), F("run_id").desc()], limit=limit,
             ).values("run_id")
         if not ancestors:
