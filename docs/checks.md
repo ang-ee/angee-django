@@ -459,9 +459,12 @@ the local measurements, so use the map for relative group balance and check
 actual CI wall times against the 60-minute limit.
 
 Separate structural and downstream tiers are not implemented. Separate workflows
-enforce private-path exclusion and other repository policies. Executable jobs in
-the reusable workflow own timeouts; GitHub's reusable-workflow caller syntax does
-not accept `timeout-minutes`.
+enforce private-path exclusion and other repository policies. The
+[release workflow](../.github/workflows/release.yml) runs on pushes to `main`,
+but every step is skipped until the repository has an `NPM_TOKEN` secret, so its
+green run versions and publishes nothing ([Changesets](../.changeset/README.md)).
+Executable jobs in the reusable workflow own timeouts; GitHub's reusable-workflow
+caller syntax does not accept `timeout-minutes`.
 
 Consumer repositories call the same reusable checks with `uv-enabled: false`,
 `pnpm-enabled: false`, and `stack-enabled: true`. Their caller owns the explicit
