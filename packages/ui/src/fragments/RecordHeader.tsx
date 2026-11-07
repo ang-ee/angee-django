@@ -67,10 +67,10 @@ export type RecordHeaderProps = Omit<
     title: React.ReactNode;
     /**
      * The read that names the record is pending: the title is a skeleton line sized by
-     * `density` that announces `loadingMessage`; every other slot renders as given.
+     * `density` that announces `loadingLabel`; every other slot renders as given.
      */
     loading?: boolean;
-    loadingMessage?: string;
+    loadingLabel?: string;
     /**
      * The read that names the record failed or found nothing: the title reads "Record
      * unavailable" while the caller shows its error surface. `loading` wins while pending.
@@ -96,7 +96,7 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
       lead,
       extra,
       loading = false,
-      loadingMessage,
+      loadingLabel,
       unavailable = false,
       meta,
       status,
@@ -128,7 +128,7 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
             {icon ? <IconTile icon={icon} size="lg" tone="brand" /> : null}
             <Heading className={styles.title()}>
               {loading ? (
-                <SkeletonStatus label={loadingMessage ?? t("loading.default")}>
+                <SkeletonStatus loadingLabel={loadingLabel ?? t("loading.default")}>
                   <Skeleton shape="text" className={styles.titleSkeleton()} />
                 </SkeletonStatus>
               ) : unavailable ? t("record.unavailable") : title}

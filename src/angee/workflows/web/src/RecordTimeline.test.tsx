@@ -161,7 +161,7 @@ test("question grouping distinguishes kinds that share a label", async () => {
 
 test("an unknown note tone renders with the information treatment", async () => {
   const data = timelineFixture();
-  data.records[0]!.runs[0]!.graph_steps.find((step) => step.id === "wsr_review")!.notes.push({ message: "A new note tone", tone: "future_tone" });
+  data.records[0]!.runs[0]!.graph_step_runs.find((step) => step.id === "wsr_review")!.notes.push({ message: "A new note tone", tone: "future_tone" });
   render(<TimelineStory data={data} />);
   const note = await screen.findByText("A new note tone");
   expect(note.closest('[role="status"]')?.classList.contains("bg-info-soft")).toBe(true);

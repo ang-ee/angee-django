@@ -295,7 +295,7 @@ export const MetricStrip = React.forwardRef<HTMLDivElement, MetricStripProps>(
         </Card>
       ));
       return loadingMessage
-        ? <SkeletonStatus label={loadingMessage} className={cn(styles.root(), className)}>{tiles}</SkeletonStatus>
+        ? <SkeletonStatus loadingLabel={loadingMessage} className={cn(styles.root(), className)}>{tiles}</SkeletonStatus>
         : <div aria-hidden="true" className={cn(styles.root(), className)}>{tiles}</div>;
     }
 

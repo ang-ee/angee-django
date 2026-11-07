@@ -4,11 +4,10 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import ProtectedError
-from django.test import RequestFactory
 from django.utils import timezone
 from rebac import actor_context, system_context
 
-from angee.graphql.testing.documents import execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_transcript import InboxTranscript
 from angee.messaging.testing.models import (
@@ -103,8 +102,7 @@ def test_copy_anchor_cannot_widen_current_search_thread_or_read_scope(retained_f
 
 def test_copy_anchor_and_match_navigation_share_the_merged_transcript(retained_feed_copy):
     left, right, reader = retained_feed_copy
-    request = RequestFactory().post("/graphql/console/")
-    request.user = reader
+    request = graphql_request(reader, "/graphql/console/")
     result = result_data(execute_schema(
         _schema(),
         """query($thread: ID!, $id: ID!, $anchor: String!) {

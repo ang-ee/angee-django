@@ -114,7 +114,7 @@ export function States() {
     <U.InlineEmpty label="No matching records" />
     <U.LoadingPanel message="Loading records" />
     <U.LazyBoundary pending={<U.LoadingPanel />}><U.Chip>Loaded content</U.Chip></U.LazyBoundary>
-    <U.SkeletonStatus label="Loading" /><U.SkeletonText />
+    <U.SkeletonStatus loadingLabel="Loading" /><U.SkeletonText />
   </div>;
 }
 export function Facts() {

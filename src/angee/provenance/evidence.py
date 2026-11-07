@@ -78,7 +78,7 @@ def _readable(
         found = instances_from_public_ids(
             model,
             ids,
-            queryset=require_rebac_queryset(model).with_actor(actor).with_action(permission),
+            queryset=require_rebac_queryset(model, actor=actor).with_action(permission),
         )
         resolved.update(
             (

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict
 from angee.base.expressions import WindowSum
 from angee.messaging.inbox import InboxCoverage, InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroup, InboxGroupPage, InboxGroups, InboxGroupScope
+from angee.messaging.managers import _MESSAGE_ORDER
 
 
 @dataclass(frozen=True)
@@ -281,14 +282,8 @@ class InboxNavigator(MessageInbox):
         header = self.groups(axis).page(page=page, size=size)
         if leaf_size < 1:
             return header
-        InboxPage.window(1, leaf_size)
-        return replace(
-            header,
-            rows=[
-                replace(row, rows=self.page(scope=InboxGroupScope(axis=axis, value=row.value), size=leaf_size).rows)
-                for row in header.rows
-            ],
-        )
+        carried, _ = header.carry(axis, leaf_size, lambda scope, size: self.page(scope=scope, size=size))
+        return carried
 
     def page(
         self, *, scope: InboxGroupScope | None = None, parent: str | None = None, page: int = 1, size: int = 25
@@ -440,9 +435,9 @@ class InboxMembershipGroups:
         return self.objects.annotate(
             _records=Coalesce(Subquery(aggregate.values("records")[:1]), Value(0)),
             _messages=Coalesce(Subquery(aggregate.values("messages")[:1]), Value(0)),
-            _latest=Subquery(activity.order_by("-_order_at", "-pk").values("_order_at")[:1]),
-            _first=Subquery(activity.order_by("_order_at", "pk").values("_order_at")[:1]),
-            _preview=Subquery(activity.order_by("-_order_at", "-pk").values("preview")[:1]),
+            _latest=Subquery(activity.order_by(*_MESSAGE_ORDER.ordering()).values("_order_at")[:1]),
+            _first=Subquery(activity.order_by(*_MESSAGE_ORDER.ordering(oldest_first=True)).values("_order_at")[:1]),
+            _preview=Subquery(activity.order_by(*_MESSAGE_ORDER.ordering()).values("preview")[:1]),
         )
 
     def page(self, *, page: int = 1, size: int = 25) -> InboxGroupPage:

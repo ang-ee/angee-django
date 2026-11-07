@@ -96,7 +96,7 @@ function TaskAccessGroup(): ReactElement {
   const query = useAuthoredQuery(TaskAccessNeedsDocument, { task: recordId }, {
     models: [NEED_MODEL, "decisions.Decision"],
   });
-  if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
+  if (query.isFetching && !query.data) return <SkeletonStatus loadingLabel={t("access.label")}>
     <LoadingPanel density="inline" />
   </SkeletonStatus>;
   if (query.error) return <ErrorBanner description={t("access.error")} />;

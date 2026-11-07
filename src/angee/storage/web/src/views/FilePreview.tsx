@@ -35,7 +35,7 @@ export function FileRecordPreview({ id, page }: { id: string; page?: number | nu
   const query = useAuthoredQuery(StorageFileById, { id }, { models: ["storage.File"] });
   const file = query.data?.files_by_pk;
   if (query.error) return <ErrorBanner title={t("preview.loadError")} description={query.error.message} />;
-  if (!file) return query.isFetching ? <SkeletonStatus label={t("loadingFile")} className="space-y-3 p-3">
+  if (!file) return query.isFetching ? <SkeletonStatus loadingLabel={t("loadingFile")} className="space-y-3 p-3">
     <Skeleton className="h-6 w-2/3" /><Skeleton className="h-40" />
   </SkeletonStatus> : <EmptyState icon="file" title={t("file.notFoundTitle")} />;
   // The record page's header already names the file; the tab is the preview alone.

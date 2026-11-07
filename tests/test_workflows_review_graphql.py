@@ -142,7 +142,7 @@ def test_record_timeline_reads_the_asking_run_and_its_question(schema, linked_de
     query = """query($records: [TimelineRecordInput!]!) {
       record_timeline(records: $records) { open_decision_count records {
         record_model record_id decisions { id } runs { id graph { nodes { key plan step_run_id } }
-          graph_steps { id hold decision { id is_open } records { operation record_model record_id } } }
+          graph_step_runs { id hold decision { id is_open } records { operation record_model record_id } } }
       } }
     }"""
     inputs = {"records": [{"model": link.record_model_label, "id": link.record_public_id}]}

@@ -38,14 +38,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useBusyRun: vi.fn((onChanged?: () => void) => ({
-      busy: false,
-      run: async <T,>(task: () => Promise<T>) => {
-        const result = await task();
-        onChanged?.();
-        return result;
-      },
-    })),
     // Restore rides the shared trash owner; the test records the ids it is asked for.
     useTrashRecord: vi.fn(() => ({
       available: true,

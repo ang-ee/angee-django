@@ -26,7 +26,7 @@ export function CycleBoardPage(): React.ReactElement {
       eyebrow={queueFacts?.name ? t("cycle.eyebrow", { queue: queueFacts.name }) : t("cycle.eyebrowBare")}
       title={cycleFacts?.name}
       loading={!cycle.data && !cycle.error}
-      loadingMessage={t("cycle.loading")}
+      loadingLabel={t("cycle.loading")}
       unavailable={!cycleFacts}
       description={t("cycle.board.description")}
       verbs={cycleFacts ? (

@@ -37,7 +37,7 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                     raise ValidationError("The record for a chosen action is missing or inaccessible.")
                 target_model = actions.target_model(reference)
                 record = (
-                    require_rebac_queryset(target_model).with_actor(actor).for_write()
+                    require_rebac_queryset(target_model, actor=actor).for_write()
                     .filter(pk=reference.pk).select_for_update(of=row_lock_paths(target_model)).get()
                 )
                 try:

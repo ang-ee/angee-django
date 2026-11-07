@@ -14,6 +14,9 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
+MAX_PAGE_SIZE = 100
+"""Largest page one read returns, records or group headers alike; refine's ``MAX_PAGE_SIZE`` mirrors it."""
+
 
 class InvalidKeysetCursor(ValueError):
     """A cursor cannot be decoded in the current query's signing scope."""
@@ -88,14 +91,16 @@ class KeysetOrder:
 
         return self._cut(position, older=False, prefix=prefix)
 
-    def ordering(self, prefix: str = "") -> tuple[str, ...]:
-        """The native ``order_by`` terms of this total ordering, newest first.
+    def ordering(self, prefix: str = "", *, oldest_first: bool = False) -> tuple[str, ...]:
+        """The native ``order_by`` terms of this total ordering, newest first unless ``oldest_first``.
 
         ``prefix`` names the columns as a projection that prefixes them does (a
         union's result columns), so one declaration orders and cuts every stage.
         """
 
-        return tuple(f"-{name}" if descending else name for name, descending in self._columns(prefix))
+        return tuple(
+            f"-{name}" if descending != oldest_first else name for name, descending in self._columns(prefix)
+        )
 
     def position(self, row: models.Model) -> tuple[Any, ...]:
         """Read the exact tuple declared by the caller's SQL ordering."""

@@ -10,7 +10,6 @@ import strawberry
 from django.contrib.auth.models import AnonymousUser, Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
-from django.test import RequestFactory
 from graphql import GraphQLError
 from rebac import (
     PermissionDenied,
@@ -36,6 +35,7 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.schema import AngeeSchema
+from angee.graphql.testing.documents import graphql_request
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import create_user
 from tests.linesdemo.models import Document
@@ -427,8 +427,7 @@ def _grant(document: Document, relation: str, user: Any) -> None:
 def _info_for(user: Any) -> Any:
     """Return a Strawberry-Info-shaped stub carrying a request with ``user``."""
 
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user
+    request = graphql_request(user, "/graphql/console/")
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 

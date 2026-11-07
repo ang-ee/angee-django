@@ -182,8 +182,8 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
 
     def first_per_group(
         self,
-        *partition_by: str | models.Expression,
-        order_by: Sequence[str | models.Expression],
+        *partition_by: str | models.Expression | models.F,
+        order_by: Sequence[str | models.Expression | models.F],
         limit: int,
     ) -> Self:
         """Keep the first ``limit`` rows of each group, ranked by one SQL window.
@@ -310,12 +310,12 @@ class AngeeQuerySet(
         if around is not None and before_cursor is None and after_cursor is None:
             # Bound the first window around an already authorized record. The
             # domain resolves a message/date; this owner only handles tuple order.
-            newer = list(self.filter(order.after(order.position(around))).order_by(order.field, "pk")[: limit // 2])
+            oldest_first = order.ordering(oldest_first=True)
+            newer = list(self.filter(order.after(order.position(around))).order_by(*oldest_first)[: limit // 2])
             upper = order.position(newer[-1] if newer else around)
             window = window.exclude(order.after(upper))
         ascending = after_cursor is not None
-        ordering = (order.field, "pk") if ascending else order.ordering()
-        selected = list(window.order_by(*ordering)[: limit + 1])
+        selected = list(window.order_by(*order.ordering(oldest_first=ascending))[: limit + 1])
         has_more = len(selected) > limit
         rows = selected[:limit]
         if ascending:

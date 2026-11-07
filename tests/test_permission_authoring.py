@@ -17,9 +17,7 @@ def test_tags_initial_migration_can_be_authored_without_rebac_tables(tmp_path: P
         "INSTALLED_APPS: ['angee.tags']\n"
         f"COMPOSE_OUTPUT_DIR: {str(tmp_path / 'runtime')!r}\n"
         "COMPOSE_OUTPUT_MODULE: runtime\n"
-        "DATABASES:\n  default:\n    ENGINE: django.db.backends.sqlite3\n    NAME: ':memory:'\n"
-        # An isolated test host, like tests/settings.py and the composed test host.
-        "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER: true\n",
+        "DATABASES:\n  default:\n    ENGINE: django.db.backends.sqlite3\n    NAME: ':memory:'\n",
     )
     template = source / "templates/projects/web/template"
     (tmp_path / "settings.py").write_text((template / "settings.py").read_text())

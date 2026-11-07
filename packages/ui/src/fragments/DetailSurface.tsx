@@ -149,7 +149,7 @@ function DetailSurfaceSkeleton({
       <RecordHeader
         density={density}
         loading
-        loadingMessage={message}
+        loadingLabel={message}
         title={null}
         extra={<SkeletonText lines={2} className="max-w-2xl" />}
         actions={<Skeleton className="h-btn-sm w-20" />}

@@ -43,7 +43,6 @@ def run_records(run: Any) -> list[RecordIdentity]:
 
     if run.subject_content_type_id and run.subject_object_id:
         add(run.subject_content_type_id, run.subject_object_id)
-    # A related manager reads as the run's pinned actor; the caller's audited system context owns this read.
     evidence = apps.get_model("workflows", "StepRecord").objects.filter(run_id=run.pk)
     for content_type_id, object_id in evidence.order_by().values_list("content_type_id", "object_id").distinct():
         add(content_type_id, object_id)

@@ -26,7 +26,7 @@ pytestmark = pytest.mark.usefixtures("workflow_step_classes")
 GRAPH = """query($id: String!) {
   workflowrun_by_pk(id: $id) {
     id version { id }
-    graph_steps {
+    graph_step_runs {
       id status waiting_kind wait_reason outcome outcome_label failure_reason
       attempt page_index map_total map_settled created_at updated_at deadline_at wake_at
     }
@@ -42,8 +42,8 @@ GRAPH = """query($id: String!) {
 
 
 def graph_nodes(run):
-    """A read run's graph nodes, each joined with the step row it names in ``graph_steps``."""
-    steps = {step["id"]: step for step in run["graph_steps"]}
+    """A read run's graph nodes, each joined with the step row it names in ``graph_step_runs``."""
+    steps = {step["id"]: step for step in run["graph_step_runs"]}
     return [{**node, "step_run": steps.get(node["step_run_id"])} for node in run["graph"]["nodes"]]
 
 
@@ -165,7 +165,7 @@ def test_graph_requires_a_reader_and_uses_actor_scoped_step_resources(schema, ex
     document = GRAPH.replace("id status waiting_kind", "id input attempts { id } status waiting_kind")
     result = execute_schema(schema, document, {"id": run.sqid}, user=actor)
     assert result.errors is None
-    assert result.data["workflowrun_by_pk"]["graph_steps"][0]["attempts"] == []
+    assert result.data["workflowrun_by_pk"]["graph_step_runs"][0]["attempts"] == []
     hidden = execute_schema(schema, document, {"id": run.sqid}, user=create_user("graph-outsider"))
     assert hidden.errors is None and hidden.data["workflowrun_by_pk"] is None
 
@@ -198,10 +198,10 @@ def test_graph_survives_removing_a_published_step_implementation(schema, executi
     assert node["step_run"]["status"] == "READY"
     # The batched effect marker answers before the missing implementation is consulted.
     detail = execute_schema(schema, """query($id: String!) { workflowrun_by_pk(id: $id) {
-      graph_steps { status requires_duplicate_acknowledgement }
+      graph_step_runs { status requires_duplicate_acknowledgement }
     } }""", {"id": run.sqid}, user=actor)
     assert detail.errors is None
-    assert detail.data["workflowrun_by_pk"]["graph_steps"][0] == {
+    assert detail.data["workflowrun_by_pk"]["graph_step_runs"][0] == {
         "status": "READY", "requires_duplicate_acknowledgement": False,
     }
 
@@ -227,13 +227,13 @@ def test_removed_step_answers_the_fail_closed_effect_default(schema, execution, 
     assert runner.execute(step.pk)
     StepAttempt.system_queryset().filter(step_run=step).update(effect_started_at=Now())
     query = """query($id: String!) { workflowrun_by_pk(id: $id) {
-      graph_steps { requires_duplicate_acknowledgement }
+      graph_step_runs { requires_duplicate_acknowledgement }
     } }"""
 
     def acknowledgement():
         result = execute_schema(schema, query, {"id": run.sqid}, user=actor)
         assert result.errors is None
-        return result.data["workflowrun_by_pk"]["graph_steps"][0]["requires_duplicate_acknowledgement"]
+        return result.data["workflowrun_by_pk"]["graph_step_runs"][0]["requires_duplicate_acknowledgement"]
 
     assert acknowledgement() is False
     assert not StepRun.system_queryset().get(pk=step.pk).requires_duplicate_acknowledgement
@@ -365,7 +365,7 @@ def test_non_map_input_items_are_not_interpreted_as_admitted_arrays(schema, exec
         "entry": {"step": "text_items", "input": {"items": {"value": "plain text"}}},
     }}, actor=actor)
     run = start_run(workflow, actor=actor)
-    assert read_graph(schema, run, actor)["graph_steps"][0]["map_total"] == 0
+    assert read_graph(schema, run, actor)["graph_step_runs"][0]["map_total"] == 0
 
 
 def test_map_graph_summarizes_partial_progress_without_a_page_sample(schema, execution, settings):
@@ -384,10 +384,10 @@ def test_map_graph_summarizes_partial_progress_without_a_page_sample(schema, exe
     assert node["item_counts"] == [{"status": "READY", "count": 1}, {"status": "SUCCEEDED", "count": 1}]
     assert node["item_attempts"] == 1
     detail = result_data(execute_schema(schema, """query($id: String!) {
-      workflowrun_by_pk(id: $id) { graph_steps {
+      workflowrun_by_pk(id: $id) { graph_step_runs {
         map_steps { id map_index can_retry requires_duplicate_acknowledgement }
       } }
-    }""", {"id": run.sqid}, user=actor))["workflowrun_by_pk"]["graph_steps"][0]
+    }""", {"id": run.sqid}, user=actor))["workflowrun_by_pk"]["graph_step_runs"][0]
     assert [item["map_index"] for item in detail["map_steps"]] == [0, 1]
     assert all(not item["can_retry"] and not item["requires_duplicate_acknowledgement"] for item in detail["map_steps"])
 
@@ -407,7 +407,7 @@ def test_drill_in_step_permission_queries_are_bounded(schema, execution):
     record = vault_for(starter)
     query = """query($records: [TimelineRecordInput!]!) {
       record_timeline(records: $records, run_limit: 1) { records { runs {
-        id can_cancel graph { nodes { key step_run_id } } graph_steps {
+        id can_cancel graph { nodes { key step_run_id } } graph_step_runs {
           id status hold outcome_label failure_reason wait_reason
           can_retry requires_duplicate_acknowledgement
           awaited_run { id } child_runs { id } records { id }
@@ -438,9 +438,9 @@ def test_drill_in_step_permission_queries_are_bounded(schema, execution):
     reader = create_user("drill-in-reader")
     last_run.with_actor(starter).grant_record_access("reader", reader)
     denied = result_data(execute_schema(schema, """query($id: String!) {
-      workflowrun_by_pk(id: $id) { graph_steps { can_retry } }
+      workflowrun_by_pk(id: $id) { graph_step_runs { can_retry } }
     }""", {"id": last_run.sqid}, user=reader))["workflowrun_by_pk"]
-    assert [step["can_retry"] for step in denied["graph_steps"]] == [False] * 6
+    assert [step["can_retry"] for step in denied["graph_step_runs"]] == [False] * 6
     operator = create_user("drill-in-operator")
     last_run.with_actor(starter).grant_record_access("operator", operator)
     assert last_run.can_cancel(operator)
@@ -449,6 +449,8 @@ def test_drill_in_step_permission_queries_are_bounded(schema, execution):
     failed = graph.nodes[-1].step_run
     assert failed is not None and failed.can_retry(operator)
     last_run.with_actor(starter).revoke_record_access("operator", operator)
+    # The graph read remembered only the graph, so the read row asks the write policy again.
+    assert not last_run.can_cancel(operator)
     # The batch's answers belong to the run rows it read; a fresh read asks the policy again.
     fresh = WorkflowRun.system_queryset().get(pk=last_run.pk)
     assert not fresh.can_cancel(operator)
@@ -476,7 +478,7 @@ def test_drill_in_record_reference_queries_are_bounded(schema, execution, regist
     register_step(RecordEcho)
     query = """query($records: [TimelineRecordInput!]!) {
       record_timeline(records: $records, run_limit: 1) { records { runs {
-        id status can_cancel graph { nodes { key plan step_run_id } } graph_steps {
+        id status can_cancel graph { nodes { key plan step_run_id } } graph_step_runs {
           id status hold outcome_label failure_reason wait_reason
           can_retry requires_duplicate_acknowledgement
           awaited_run { id display_name } child_runs { id display_name }
@@ -521,7 +523,7 @@ def test_drill_in_map_record_reference_queries_are_bounded(schema, execution, re
 
     register_step(RecordItem)
     query = """query($id: String!) { workflowrun_by_pk(id: $id) {
-      graph_steps { map_steps { id records { id record_model record_id } } }
+      graph_step_runs { map_steps { id records { id record_model record_id } } }
     } }"""
     counts = []
     for size in (2, 6):
@@ -534,7 +536,7 @@ def test_drill_in_map_record_reference_queries_are_bounded(schema, execution, re
         with CaptureQueriesContext(connection) as queries:
             steps = result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))[
                 "workflowrun_by_pk"
-            ]["graph_steps"]
+            ]["graph_step_runs"]
         counts.append(len(queries))
         rows = steps[0]["map_steps"]
         assert [len(item["records"]) for item in rows] == [2] * size
@@ -547,11 +549,11 @@ def test_graph_prefetches_real_decision_and_child_relations(schema, review, chil
     actor, _, _, _ = review
     decision_run, decision_step = start_review(review)
     decision = result_data(execute_schema(schema, """query($id: String!) {
-      workflowrun_by_pk(id: $id) { graph_steps { decision {
+      workflowrun_by_pk(id: $id) { graph_step_runs { decision {
         id permissions records { id record_model record_id }
         requester { display_name } assignees { display_name } answered_by { display_name }
       } } }
-    }""", {"id": decision_run.sqid}, user=actor))["workflowrun_by_pk"]["graph_steps"][0]["decision"]
+    }""", {"id": decision_run.sqid}, user=actor))["workflowrun_by_pk"]["graph_step_runs"][0]["decision"]
     assert decision["id"] and decision["records"] and decision["assignees"]
     assert decision["records"][0]["record_model"] and decision["records"][0]["record_id"]
     assert decision_step.decision_id
@@ -560,10 +562,10 @@ def test_graph_prefetches_real_decision_and_child_relations(schema, review, chil
     parent, _ = build()
     run_until(parent)
     steps = result_data(execute_schema(schema, """query($id: String!) {
-      workflowrun_by_pk(id: $id) { graph_steps {
+      workflowrun_by_pk(id: $id) { graph_step_runs {
         id awaited_run { id display_name } child_runs { id display_name status }
       } }
-    }""", {"id": parent.sqid}, user=child_actor))["workflowrun_by_pk"]["graph_steps"]
+    }""", {"id": parent.sqid}, user=child_actor))["workflowrun_by_pk"]["graph_step_runs"]
     awaited = [step["awaited_run"] for step in steps if step["awaited_run"]]
     children = [run for step in steps for run in step["child_runs"]]
     assert awaited and children and admitted
@@ -574,7 +576,7 @@ def test_drill_in_decision_steps_read_their_decisions_once(schema, review):
     """Asked decisions join the step batch; their card details stay with the decisions owner."""
     actor, people, sent, question = review
     query = """query($id: String!) { workflowrun_by_pk(id: $id) {
-      graph_steps { records { id record_model record_id } decision { id kind_label } }
+      graph_step_runs { records { id record_model record_id } decision { id kind_label } }
     } }"""
     counts = []
     for size in (2, 6):
@@ -590,7 +592,7 @@ def test_drill_in_decision_steps_read_their_decisions_once(schema, review):
         with CaptureQueriesContext(connection) as queries:
             steps = result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))[
                 "workflowrun_by_pk"
-            ]["graph_steps"]
+            ]["graph_step_runs"]
         counts.append(len(queries))
         assert len(steps) == size
         assert all(step["decision"] and step["records"] for step in steps)
@@ -610,16 +612,16 @@ def test_drill_in_map_item_decisions_are_prefetched(schema, review, settings):
         run_until(run)
         with CaptureQueriesContext(connection) as queries:
             items = result_data(execute_schema(schema, """query($id: String!) {
-              workflowrun_by_pk(id: $id) { graph_steps { map_steps {
+              workflowrun_by_pk(id: $id) { graph_step_runs { map_steps {
                 id records { id record_model record_id } decision { id }
               } } }
-            }""", {"id": run.sqid}, user=actor))["workflowrun_by_pk"]["graph_steps"][0]["map_steps"]
+            }""", {"id": run.sqid}, user=actor))["workflowrun_by_pk"]["graph_step_runs"][0]["map_steps"]
         counts.append(len(queries))
         assert len(items) == size and all(item["records"] and item["decision"] for item in items)
     assert counts[0] == counts[1], counts
     cards = result_data(execute_schema(schema, """query($id: String!) {
-      workflowrun_by_pk(id: $id) { graph_steps { map_steps {
+      workflowrun_by_pk(id: $id) { graph_step_runs { map_steps {
         decision { id records { id record_model record_id } assignees { display_name } }
       } } }
-    }""", {"id": run.sqid}, user=actor))["workflowrun_by_pk"]["graph_steps"][0]["map_steps"]
+    }""", {"id": run.sqid}, user=actor))["workflowrun_by_pk"]["graph_step_runs"][0]["map_steps"]
     assert all(item["decision"]["records"] and item["decision"]["assignees"] for item in cards)

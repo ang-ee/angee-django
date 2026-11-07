@@ -33,7 +33,7 @@ def timeline(schema, actor, records):
     return result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!) {
       record_timeline(records:$records) { open_decision_count records { record_id
         decisions { id } runs { id parent_step { id run { id } } graph { nodes { key plan step_run_id } }
-          graph_steps { id hold notes { tone message } records { operation record_id } child_runs { id } } } } }
+          graph_step_runs { id hold notes { tone message } records { operation record_id } child_runs { id } } } } }
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
         "record_timeline"
     ]
@@ -46,7 +46,7 @@ RUN_GRAPHS = """query($records:[TimelineRecordInput!]!, $limit:Int!) {
       edges { source outcome target taken }
       nodes { key plan item_counts { status count } item_attempts step_run_id }
     }
-    graph_steps {
+    graph_step_runs {
       id status hold outcome_label failure_reason wait_reason attempt page_index map_total map_settled
       can_retry requires_duplicate_acknowledgement
       awaited_run { id display_name status } child_runs { id display_name status }
@@ -89,6 +89,35 @@ def test_record_timeline_run_graphs_cost_the_same_for_one_or_five_runs(schema, r
         run_until(run)
     for query in (RUN_GRAPHS, RUN_GRAPHS.replace(" can_retry", "")):
         measure(query, cancelable=False)
+
+
+def test_record_timeline_reads_its_runs_once_for_one_or_five_records(schema, review):
+    """Every record of a selection shares one run read, not one per record."""
+    actor = review[0]
+    workflow = load_workflow({"nodes": {"review": {"step": "question"}}}, actor=actor)
+    records = [vault_for(actor, name=f"Timeline record {index}") for index in range(5)]
+    for record in records:
+        run_until(WorkflowRun.objects.start(workflow, actor=actor, subject=record))
+    with_runs = """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records: $records) { records { record_id runs { id graph_step_runs { id } } } }
+    }"""
+    without_runs = """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records: $records) { records { record_id } }
+    }"""
+
+    def statements(document, selected):
+        variables = {"records": [{"model": record._meta.label, "id": record.sqid} for record in selected]}
+        execute_schema(schema, document, variables, user=actor)
+        with CaptureQueriesContext(connection) as queries:
+            data = result_data(execute_schema(schema, document, variables, user=actor))
+        return len(queries), data["record_timeline"]["records"]
+
+    costs = []
+    for selected in (records[:1], records):
+        read, rows = statements(with_runs, selected)
+        assert [len(row["runs"]) for row in rows] == [1] * len(selected)
+        costs.append(read - statements(without_runs, selected)[0])
+    assert costs[0] == costs[1], costs
 
 
 @pytest.mark.parametrize("operation,canceled", [("read", False), ("created", True), ("changed", True)])
@@ -253,7 +282,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
       record_timeline(records: $records) { records { decisions { id } runs {
         id subject_model subject_id trigger_event { record_model record_id trigger { display_name } }
         graph { nodes { key rank step_run_id } }
-        graph_steps { id hold records { record_model record_id }
+        graph_step_runs { id hold records { record_model record_id }
           decision { id is_open records { record_model record_id } } }
       } } }
     }"""

@@ -4,9 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
-from django.test import RequestFactory
 from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import graphql_request
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -30,8 +30,7 @@ class StageLinesTests(WorkCase):
         from angee.graphql.schema import GraphQLSchemas
 
         user = user or self.manager
-        request = RequestFactory().post("/graphql/")
-        request.user = user
+        request = graphql_request(user, "/graphql/")
         with actor_context(user):
             return (
                 GraphQLSchemas.from_discovery()

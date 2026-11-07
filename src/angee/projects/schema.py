@@ -11,7 +11,7 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db.models import Prefetch, prefetch_related_objects
+from django.db.models import Prefetch
 from graphql import GraphQLError
 from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
@@ -22,6 +22,7 @@ from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
 from strawberry_django.utils.gql_compat import get_field_arguments
 
+from angee.base.prefetch import prefetched
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data.hasura import (
@@ -392,9 +393,7 @@ class TaskProjectionMixin:
         reference = row.record_ref
         if not reference.public_id:
             return None
-        if not hasattr(row, "_projects_subject"):
-            prefetch_related_objects([row], _subject_targets(info))
-        target = row._projects_subject
+        target = prefetched(row, _subject_targets(info))
         return RecordPointerType.from_reference(reference, label=str(target) if target is not None else "")
 
     @strawberry_django.field(only=Task.visibility_audience_fields())

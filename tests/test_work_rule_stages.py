@@ -4,10 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
-from django.test import RequestFactory
 from rebac import actor_context, system_context
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import graphql_request
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -20,8 +20,7 @@ class RuleStageTests(WorkCase):
 
     def test_generated_update_refuses_rule_stage(self):
         task = self.task()
-        request = RequestFactory().post("/graphql/")
-        request.user = self.moderator
+        request = graphql_request(self.moderator, "/graphql/")
         with actor_context(self.moderator):
             result = (
                 GraphQLSchemas.from_discovery()

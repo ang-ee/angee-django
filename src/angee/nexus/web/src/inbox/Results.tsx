@@ -29,7 +29,7 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
   const columns = useMemo(() => [{ field: "latest", header: t("inbox.latest") }], [t]);
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={t("inbox.results")}>
-      <RecordHeader density="compact" loading={selection.loading} loadingMessage={t("inbox.loading")}
+      <RecordHeader density="compact" loading={selection.loading} loadingLabel={t("inbox.loading")}
         unavailable={selection.unavailable} title={selected
         ? selection.label
         : t(updates.only ? "inbox.allUpdates" : updates.includes ? "inbox.allActivity" : "inbox.anyKind")}

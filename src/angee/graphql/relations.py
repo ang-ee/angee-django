@@ -10,7 +10,6 @@ import strawberry_django
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from django.db.models import prefetch_related_objects
 from django.db.models.expressions import Combinable
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast
@@ -27,6 +26,7 @@ from strawberry_django.queryset import run_type_get_queryset
 from angee.base.models.base import record_display_label
 from angee.base.models.refs import RecordRefMixin
 from angee.base.permissions import require_rebac_queryset
+from angee.base.prefetch import prefetched
 from angee.base.refs import RecordRef
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
@@ -160,9 +160,7 @@ class RecordReferenceNode(AngeeNode):
         row = cast(Any, self)
         if current_actor() is None or not _record_readable(row):
             return None
-        if not hasattr(row, _REFERENCE_TARGET):
-            prefetch_related_objects([row], record_reference_targets(info))
-        target = getattr(row, _REFERENCE_TARGET)
+        target = prefetched(row, record_reference_targets(info))
         return record_display_label(target) if target is not None else None
 
 
@@ -359,13 +357,9 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
         if related_model is None:
             # A public-ID scalar has no nested model projection to optimize.
             return models.Prefetch(field_name)
-        actor = current_actor()
-        manager = require_rebac_queryset(related_model)
-        queryset: models.QuerySet[models.Model] = (
-            manager.none()
-            if actor is None
-            else manager.with_actor(actor).with_action("read")
-        )
+        queryset: models.QuerySet[models.Model] = require_rebac_queryset(
+            related_model, actor=current_actor(),
+        ).with_action("read")
         queryset = run_type_get_queryset(queryset, field.django_type, info)
         assert field.origin_django_type is not None
         relation = field.origin_django_type.model._meta.get_field(field_name)

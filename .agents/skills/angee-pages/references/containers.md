@@ -93,7 +93,7 @@ render(<AppRuntimeProvider runtime={{ containers }}><ResourceViewUtilities value
 Pass a `containerScope` when a `when` rule matters; stories mount the same runtime through `RoutedRuntimeFixture`. In the live app, developer mode's composition dialog and `createApp(...).explain.containers` show each layer's narrowing and every removed child ([developer mode](../../../../docs/frontend/guidelines.md#developer-mode)).
 
 <!--
-Sources: docs/frontend/guidelines.md:1447-1892; packages/app/README.md; packages/ui/src/runtime/containers.ts;
+Sources: docs/frontend/guidelines.md#containers; packages/app/README.md; packages/ui/src/runtime/containers.ts;
 packages/ui/src/runtime/contracts.ts; packages/ui/src/lib/container-outlet.tsx; packages/app/src/containers.ts;
 packages/app/src/testing.tsx; src/angee/{work,projects,timeline,tags}/web/src/index.tsx; src/angee/tags/web/src/views/TagsPage.tsx;
 examples/src/example/notes/web/src/index.tsx.

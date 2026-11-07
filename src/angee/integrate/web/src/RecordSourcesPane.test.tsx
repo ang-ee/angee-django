@@ -3,6 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { MAX_PAGE_SIZE } from "@angee/refine";
 import { AppRuntimeProvider, CHATTER_CONTAINERS, RelatedCountProbe, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn() }));
@@ -79,6 +80,7 @@ test("the Sources group counts and lists each source as a row linking to its out
   expect(mocks.query).toHaveBeenCalledWith(RecordSourcesDocument, {
     modelLabel: "example.Note",
     recordId: "nte_1",
+    limit: MAX_PAGE_SIZE,
   }, {
     enabled: true,
     models: ["integrate.RecordLink"],

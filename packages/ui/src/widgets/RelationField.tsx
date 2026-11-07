@@ -158,7 +158,7 @@ export function RelationField({
       </Combobox.Trigger>
       <Combobox.Popup align="start" className="min-w-56 p-0" initialFocus={searchRef}>
         <Combobox.Search ref={searchRef} placeholder={searchPlaceholder ?? t("relation.searchPlaceholder")} />
-        <Combobox.Status loading={Boolean(searchState?.pending)} loadingMessage={t("relation.loading")} />
+        <Combobox.Status loading={Boolean(searchState?.pending)} loadingLabel={t("relation.loading")} />
         {searchState?.error ? <div role="alert" className="p-3 text-13 text-danger-text">
           {searchState.error}
           {searchState.retry ? <Button size="sm" variant="ghost" onClick={searchState.retry}>

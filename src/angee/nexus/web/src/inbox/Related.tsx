@@ -48,7 +48,7 @@ export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }
                 <Dialog.Body><PreviewPane file={file} /></Dialog.Body>
               </Dialog.Content></Dialog.Portal>
             </Dialog.Root> : target?.label ?? (query.error ? null
-              : <SkeletonStatus label={t("inbox.loading")} className="py-0.5"><SkeletonText lines={1} lineClassName="w-32" /></SkeletonStatus>)}
+              : <SkeletonStatus loadingLabel={t("inbox.loading")} className="py-0.5"><SkeletonText lines={1} lineClassName="w-32" /></SkeletonStatus>)}
           </PaneLabel>
           {file ? <li><div role="region" aria-label={t("inbox.filePreview")} className="h-96 overflow-hidden rounded-6 border border-border-subtle">
             <PreviewPane file={file} />

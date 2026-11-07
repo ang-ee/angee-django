@@ -47,7 +47,7 @@ from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
 from angee.graphql.events import ChangePayload
 from angee.graphql.schema import AngeeSchema
-from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import execute_schema, graphql_request
 from angee.graphql.testing.documents import result_data as _data
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
@@ -2192,8 +2192,7 @@ def _sdl_block(sdl: str, header: str) -> str:
 def _request(user: Any) -> Any:
     """Return a request with the configured native Django session backend."""
 
-    request = RequestFactory().post("/graphql/public/")
-    request.user = user
+    request = graphql_request(user)
     SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
     return request
 

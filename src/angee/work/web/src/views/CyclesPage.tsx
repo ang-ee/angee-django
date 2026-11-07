@@ -31,7 +31,7 @@ export function CyclesPage(): React.ReactElement {
       eyebrow={t("queue.eyebrow.cycles")}
       title={name}
       loading={!queue.data && !queue.error}
-      loadingMessage={t("queue.loading")}
+      loadingLabel={t("queue.loading")}
       unavailable={!queue.data?.work_queues_by_pk}
       description={t("cycle.description")}
       verbs={<QueueSettingsLink queueId={queueId} />}

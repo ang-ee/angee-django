@@ -249,11 +249,12 @@ export interface RelatedGroupContent {
   edge?: { model: string };
   label: ReactNode;
   /**
-   * The group's related count (`related_counts`, by the group id its owner
-   * declares beside the row read it counts) for the badge and its label, and
-   * the models whose changes recount it.
+   * The group's related count for the badge and its label: `related_counts`
+   * reads the server group named by this group's container id, which its owner
+   * declares beside the row read it counts; `models` are the models whose
+   * changes recount it.
    */
-  count?: { id: string; models: readonly string[] };
+  relatedCount?: { models: readonly string[] };
   /**
    * Row-derived count while the Links panel is mounted, from the group's own row
    * read: the count of a group without a related count, or of one whose rows

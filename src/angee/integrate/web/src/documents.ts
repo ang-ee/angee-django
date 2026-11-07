@@ -76,12 +76,13 @@ export const IntegrationSyncStream = graphql(`
   }
 `);
 
-/** Remote identities attached to one readable record. */
+/** Remote identities attached to one readable record, up to the page bound its related count stops at. */
 export const RecordSourcesDocument = graphql(`
-  query IntegrateRecordSources($modelLabel: String!, $recordId: String!) {
+  query IntegrateRecordSources($modelLabel: String!, $recordId: String!, $limit: Int!) {
     record_links(
       where: { model_label: { _eq: $modelLabel }, record_id: { _eq: $recordId } }
       order_by: [{ updated_at: desc }]
+      limit: $limit
     ) {
       id
       external_key

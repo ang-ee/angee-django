@@ -139,7 +139,7 @@ assert [error for error in run_checks(tags=[Tags.security]) if error.id.startswi
 
 def test_profiling_access_follows_only_the_declared_hook(settings):
     """No hook refuses everyone; a declared predicate decides alone."""
-    from angee.server.autoconfig import profiling_permitted
+    from angee.server.profiling import profiling_permitted
 
     settings.ANGEE_PROFILING_PERMISSION = ""
     assert profiling_permitted(1) is False

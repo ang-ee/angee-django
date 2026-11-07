@@ -11,7 +11,6 @@ import pytest
 import strawberry
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
@@ -26,7 +25,7 @@ import tests.test_agents_graphql  # noqa: F401 -- register related models before
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import execute_schema, graphql_request
 from angee.graphql.testing.documents import result_data as _data
 from angee.messaging.testing.models import Channel
 from tests import test_messaging as messaging_models
@@ -2906,8 +2905,7 @@ def _storage_drive(tmp_path: Path, *, owner: Any) -> Any:
 def _request(user: Any) -> Any:
     """Return a console-shaped POST request bound to ``user``."""
 
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user
+    request = graphql_request(user, "/graphql/console/")
     return request
 
 

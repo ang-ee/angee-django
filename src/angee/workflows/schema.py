@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import partial
 from typing import Any, cast
 
@@ -9,7 +10,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db.models import F, Prefetch, prefetch_related_objects
+from django.db.models import F, Prefetch
 from django.db.models.lookups import IsNull
 from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_for_resource_type
@@ -22,6 +23,7 @@ from strawberry_django.queryset import run_type_get_queryset
 from angee.base.implementations import resolve_all_impl_classes
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for
+from angee.base.prefetch import prefetched
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import (
     ActionResult,
@@ -71,13 +73,13 @@ _STEP_POLICY_VERSION = WorkflowRun.policy_version_prefetch("run__")
 _RUN_LABEL = {"_workflow_name": F("version__workflow__name")}
 
 
-def _graph_steps(info: strawberry.Info) -> Prefetch:
+def _graph_step_runs(info: strawberry.Info) -> Prefetch:
     """Read the listed runs' declared node rows once, with what their selected step fields need."""
     actor = get_current_user(info)
     rows = StepRun.objects.none() if actor is None else StepRun.objects.with_actor(actor).nodes()
     return Prefetch(
         "step_runs", queryset=optimize(rows, info, store=OptimizerStore.with_hints(only=["run_id"])),
-        to_attr="_graph_steps",
+        to_attr="_graph_step_runs",
     )
 
 
@@ -149,7 +151,7 @@ class WorkflowRunType(RecordReferenceNode):
     run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
     origin: RunOrigin
-    @strawberry_django.field(only=["input", "version_id"])
+    @strawberry_django.field(only=["input", "version_id"], prefetch_related=[_RUN_POLICY_VERSION])
     def input(self, info: strawberry.Info) -> JSON | None:
         """Keep non-reference input and check each source's declared model read policy.
 
@@ -177,7 +179,7 @@ class WorkflowRunType(RecordReferenceNode):
         only=["version_id", "status", "stopped_at"], prefetch_related=[_RUN_POLICY_VERSION, _run_graphs],
     )
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph | None:
-        """Read the run's bounded topology; its nodes name their step rows in ``graph_steps``.
+        """Read the run's bounded topology; its nodes name their step rows in ``graph_step_runs``.
 
         A run list reads every run's topology once. Null when the reader can no
         longer read the run, for example once it was unshared after the list was
@@ -185,17 +187,14 @@ class WorkflowRunType(RecordReferenceNode):
         """
         return cast("WorkflowRunGraph | None", cast(Any, self).graph(get_current_user(info)))
 
-    @strawberry_django.field(prefetch_related=[_graph_steps])
-    def graph_steps(self, info: strawberry.Info) -> list[StepRunType]:
+    @strawberry_django.field(prefetch_related=[_graph_step_runs])
+    def graph_step_runs(self, info: strawberry.Info) -> list[StepRunType]:
         """The run's declared node rows, which its graph's nodes name by ``step_run_id``.
 
         A run list reads every run's rows once, with what the selected step fields
         need; a run read another way reads its own rows the same way.
         """
-        run = cast(Any, self)
-        if not hasattr(run, "_graph_steps"):
-            prefetch_related_objects([run], _graph_steps(info))
-        return cast(list[StepRunType], run._graph_steps)
+        return cast(list[StepRunType], prefetched(cast(Any, self), _graph_step_runs(info)))
 
     @strawberry_django.field(only=["status", "stopped_at"], prefetch_related=[_run_cancel])
     def can_cancel(self, info: strawberry.Info) -> bool:
@@ -348,7 +347,7 @@ class WorkflowRunGraphNode:
 
     @strawberry.field
     def step_run_id(self) -> PublicID | None:
-        """Name this node's step row among the run's ``graph_steps``; null before the node ran."""
+        """Name this node's step row among the run's ``graph_step_runs``; null before the node ran."""
         row = cast(RunGraphNode, self).step_run
         return optional_public_id(row.sqid if row is not None else None)
 
@@ -933,25 +932,42 @@ class TimelineRecordInput:
     id: PublicID
 
 
+@dataclass
+class _TimelineRuns:
+    """Every record's runs in one timeline selection, read once by the first ``runs`` resolve."""
+
+    run_ids: tuple[int, ...]
+    rows: dict[int, Any] | None = None
+
+    def read(self, info: strawberry.Info) -> dict[int, Any]:
+        """The selection's runs oldest first; the native optimizer loads the selected fields once."""
+        if self.rows is None:
+            rows = WorkflowRun.objects.with_actor(get_current_user(info)).filter(pk__in=self.run_ids)
+            optimized = run_type_get_queryset(rows.order_by("created_at", "pk"), WorkflowRunType, info)
+            self.rows = {run.pk: run for run in optimized}
+        return self.rows
+
+
 @strawberry.type
 class RecordTimelineType:
     record_model: str
     record_id: PublicID
     decisions: list[DecisionType]
     run_ids: strawberry.Private[tuple[int, ...]]
+    selection_runs: strawberry.Private[_TimelineRuns]
 
     @strawberry.field
     def runs(self, info: strawberry.Info) -> list[WorkflowRunType]:
         """The record's runs and their readable ancestors, oldest first.
 
-        One read of the run model list, so the native optimizer loads the selected
-        run fields, including each run's ``graph_steps``, once for the whole list.
+        Every record of the selection shares one read of the run model list, so the
+        native optimizer loads the selected run fields, including each run's
+        ``graph_step_runs``, once for the whole selection.
         """
         if not self.run_ids:
             return []
-        rows = WorkflowRun.objects.with_actor(get_current_user(info)).filter(pk__in=self.run_ids)
-        optimized = run_type_get_queryset(rows.order_by("created_at", "pk"), WorkflowRunType, info)
-        return cast(list[WorkflowRunType], optimized)
+        own = set(self.run_ids)
+        return [run for pk, run in self.selection_runs.read(info).items() if pk in own]
 
 
 @strawberry.type
@@ -979,6 +995,7 @@ class RecordTimelineQuery:
             concerned.append(record)
         selection = TimelineSelection(concerned, actor, run_limit=run_limit)
         runs = list(selection.runs) if include_runs else []
+        selection_runs = _TimelineRuns(tuple(run.pk for run in runs))
         result = []
         for target, selected_runs, decisions in selection.entries(runs):
             canonical = target.content_type.model_class()
@@ -988,6 +1005,7 @@ class RecordTimelineQuery:
                 record_id=PublicID(public_id_for(canonical, target.object_id)),
                 decisions=decisions,
                 run_ids=tuple(run.pk for run in selected_runs),
+                selection_runs=selection_runs,
             ))
         return RecordTimelineSelectionType(
             records=result,

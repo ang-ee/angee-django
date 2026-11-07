@@ -19,7 +19,7 @@ export function RoundComparisonPage(): React.ReactElement {
     <Page>
       <CommandBand verbs={data.round ? <RoundCloseControls roundId={id} round={data.round} /> : null} />
       <RecordHeader density="compact" headingLevel={1} crumbs={t("comparison.eyebrow")}
-        title={roundName} loading={!data.round && !data.error} loadingMessage={t("comparison.loading")}
+        title={roundName} loading={!data.round && !data.error} loadingLabel={t("comparison.loading")}
         unavailable={!data.round}
         description={t("comparison.description")} />
       <PageBody gutter="none">

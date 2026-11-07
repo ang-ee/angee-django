@@ -230,10 +230,13 @@ export function runGraphFixture(step: StepRun = stepRunFixture()): RunGraphData 
 }
 
 /** The authored read a joined graph fixture answers: a topology naming its steps by id, and the run's step rows. */
-export function runGraphReadFixture(graph: RunGraphData) {
+/** The run read's shape for a joined graph: nodes name their step rows by id, listed once in `graph_step_runs`. */
+export function runGraphReadFixture<N extends { step_run: S | null }, S extends { id: string }, E>(
+  graph: { nodes: readonly N[]; edges: readonly E[] },
+) {
   return {
     graph: { nodes: graph.nodes.map(({ step_run, ...node }) => ({ ...node, step_run_id: step_run?.id ?? null })), edges: graph.edges },
-    graph_steps: graph.nodes.flatMap(({ step_run }) => step_run ? [step_run] : []),
+    graph_step_runs: graph.nodes.flatMap(({ step_run }) => step_run ? [step_run] : []),
   };
 }
 

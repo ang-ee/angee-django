@@ -104,7 +104,7 @@ export function FilePreviewFrame({
           crumbs={crumbs}
           title={file ? file.title || file.filename : undefined}
           loading={!file && fetching}
-          loadingMessage={t("loadingFile")}
+          loadingLabel={t("loadingFile")}
           unavailable={!file}
           meta={facts}
           status={file?.is_trashed ? { label: t("file.inTrash"), tone: "warning" } : undefined}

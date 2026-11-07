@@ -1,7 +1,7 @@
 import { type Row } from "@angee/metadata";
 import {
   useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
-import { useDeleteWithPreview, useTrashRecord } from "@angee/ui";
+import { useBusyRun, useDeleteWithPreview, useTrashRecord } from "@angee/ui";
 import {
   refineResourceName,
   useModelMetadata,
@@ -10,7 +10,6 @@ import type {
   DataResourceMetadata,
 } from "@angee/metadata";
 
-import { useStorageActionRun } from "./use-action-run";
 
 export interface FileActions {
   busy: boolean;
@@ -29,7 +28,7 @@ export interface FileActions {
 /**
  * The single-file lifecycle verbs (trash, restore, move) over the shared record
  * soft-delete verbs. Every verb resolves whether it completed and settles its
- * failures through `useStorageActionRun`, the verbs' one error surface. Renames
+ * failures through `useBusyRun`'s `settle`, the verbs' one error surface. Renames
  * go through the record form's own update. Resource caches invalidate in the
  * owners; `onChanged` lets a caller refresh a separate authored view.
  */
@@ -46,7 +45,7 @@ export function useFileActions(
     dataProviderName: resource?.schemaName,
     invalidates: ["list", "many", "detail"],
   });
-  const { busy, settle } = useStorageActionRun(onChanged);
+  const { busy, settle } = useBusyRun(onChanged);
 
   return {
     busy,
@@ -54,18 +53,18 @@ export function useFileActions(
       settle(async () => {
         requireFileResource(resource);
         return deleteWithPreview.remove(id, { errorNotification: false });
-      }),
+      }, false),
     restore: (id) =>
       settle(async () => {
         requireFileResource(resource);
         return trashRecord.restore(id);
-      }),
+      }, false),
     move: (id, folder) =>
       settle(async () => {
         requireFileResource(resource);
         await updateFile.mutateAsync({ id, values: { folder }, errorNotification: false });
         return true;
-      }),
+      }, false),
     trashMany: (ids) =>
       settle(async () => {
         for (const id of ids) {
@@ -73,7 +72,7 @@ export function useFileActions(
           if (!(await deleteWithPreview.remove(id, { errorNotification: false }))) return false;
         }
         return true;
-      }),
+      }, false),
     restoreMany: (ids) =>
       settle(async () => {
         requireFileResource(resource);
@@ -81,7 +80,7 @@ export function useFileActions(
           if (!(await trashRecord.restore(id))) return false;
         }
         return true;
-      }),
+      }, false),
   };
 }
 

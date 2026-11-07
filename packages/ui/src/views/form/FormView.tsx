@@ -250,7 +250,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     lineFooter: lineFooter && !awaitingRecord ? () => lineFooter(recordToolbarContext) : undefined,
   };
   const sheetBody = awaitingRecord ? (
-    <SkeletonStatus label={t("form.loading")} className="grid gap-4 py-5">
+    <SkeletonStatus loadingLabel={t("form.loading")} className="grid gap-4 py-5">
       <Skeleton shape="text" className="h-6 w-2/3" />
       <Skeleton className="h-32 w-full" />
     </SkeletonStatus>

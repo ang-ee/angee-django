@@ -1,14 +1,14 @@
 import type { StatementReferenceProps } from "@angee/provenance";
-import { useAuthoredQuery } from "@angee/refine";
+import { MAX_PAGE_SIZE, useAuthoredQuery } from "@angee/refine";
 import {
   ErrorBanner,
   RecordReference,
   NavLink,
   useResourceRecordHrefLookup,
   InlineEmpty,
-  LoadingPanel,
   PaneRow,
   PaneRows,
+  PaneRowsSkeleton,
   StatusBadge,
   formatDateTime,
   type ChatterViewContext,
@@ -26,7 +26,7 @@ export const RECORD_SOURCES_GROUP_ID = "integrate.sources";
 function useRecordSources(context: ChatterViewContext) {
   const modelLabel = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
   const recordId = context.view.kind === "record" ? context.view.sqid ?? "" : "";
-  return useAuthoredQuery(RecordSourcesDocument, { modelLabel, recordId }, {
+  return useAuthoredQuery(RecordSourcesDocument, { modelLabel, recordId, limit: MAX_PAGE_SIZE }, {
     enabled: Boolean(modelLabel && recordId),
     models: [RECORD_LINK_MODEL],
     records: [{ model: modelLabel, id: recordId }],
@@ -39,7 +39,7 @@ export const recordSourcesGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enIntegrateMessages["sources.title"]!,
     edge: { model: RECORD_LINK_MODEL },
-    count: { id: RECORD_SOURCES_GROUP_ID, models: [RECORD_LINK_MODEL] },
+    relatedCount: { models: [RECORD_LINK_MODEL] },
     render: (context, label) => <>{label()}<li><RecordSourcesPane context={context} /></li></>,
   },
 };
@@ -52,7 +52,7 @@ export function RecordSourcesPane({ context }: { context: ChatterViewContext }):
   const recordHref = useResourceRecordHrefLookup();
 
   if (query.error) return <ErrorBanner description={query.error.message} />;
-  if (query.isLoading) return <LoadingPanel message={t("sources.loading")} density="inline" />;
+  if (query.isLoading) return <PaneRowsSkeleton loadingLabel={t("sources.loading")} rowCount={1} />;
   if (rows.length === 0) return <InlineEmpty icon="link" label={t("sources.empty")} />;
 
   return <PaneRows>

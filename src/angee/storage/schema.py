@@ -9,7 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db.models import Prefetch, prefetch_related_objects
+from django.db.models import Prefetch
 from django.urls import reverse
 from graphql import GraphQLError
 from rebac import ObjectRef, PermissionDenied, generic_target, system_context
@@ -21,6 +21,7 @@ from strawberry_django.optimizer import optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
+from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -124,9 +125,7 @@ class FolderType(AngeeNode):
     def ancestors(self, info: strawberry.Info) -> list[FolderType]:
         """Readable ancestors in path order; hidden parents contribute no label."""
 
-        if not hasattr(self, "_storage_ancestors"):
-            prefetch_related_objects([cast(FolderModel, self)], _folder_ancestors_prefetch(info))
-        return cast(list[FolderType], cast(Any, self)._storage_ancestors)
+        return cast(list[FolderType], prefetched(cast(FolderModel, self), _folder_ancestors_prefetch(info)))
 
 
 @strawberry_django.type(File)

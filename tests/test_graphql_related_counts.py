@@ -14,8 +14,7 @@ import angee.workflows.testing.models  # noqa: F401 -- register related models b
 from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_decision
 from angee.graphql import records
-from angee.graphql.apps import check_settings
-from angee.graphql.related_counts import RelatedCount, count_related, declared_related_counts
+from angee.graphql.related_counts import RelatedCount, check_related_counts, count_related, declared_related_counts
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import Backend, Drive, File, Page, addon_schema, create_user, vault_for
 
@@ -120,14 +119,14 @@ def test_two_providers_claiming_one_group_fail_manage_py_check(settings):
     settings.ANGEE_GRAPHQL_RELATED_COUNTS = DECISION_COUNTS * 2
     with pytest.raises(ImproperlyConfigured, match="decisions.decisions"):
         declared_related_counts()
-    [error] = check_settings()
+    [error] = check_related_counts()
     assert error.id == "angee.graphql.E004"
     assert "decisions.decisions" in error.msg
 
 
 def test_an_unknown_target_model_fails_manage_py_check(settings):
     settings.ANGEE_GRAPHQL_RELATED_COUNTS = ["tests.test_graphql_related_counts.misdeclared_target"]
-    [error] = check_settings()
+    [error] = check_related_counts()
     assert error.id == "angee.graphql.E004"
     assert "missing.Model" in error.msg
 

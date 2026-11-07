@@ -8,12 +8,11 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.base.models.identity import public_id_of
-from angee.graphql.testing.documents import execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.messaging.testing.models import Channel, Handle, Message, Party, Person
 from tests.conftest import File, make_integration
 from tests.test_nexus import _schema
@@ -37,8 +36,7 @@ def test_message_lists_the_inbox_navigator_and_same_as_pairs_batch_their_avatars
     owner = get_user_model().objects.create_user(username="sender-avatar-owner")
     channel = make_integration(owner.username, model=Channel, owner=owner)
     schema = _schema()
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
+    request = graphql_request(owner, "/graphql/console/")
     shown: dict[str, str] = {}
 
     def seed(start: int, count: int) -> None:

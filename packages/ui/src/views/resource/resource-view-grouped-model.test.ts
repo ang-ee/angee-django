@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import type { UseAngeeGroupByResult } from "@angee/refine";
+import { MAX_PAGE_SIZE, type UseAngeeGroupByResult } from "@angee/refine";
 import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { enUiMessages } from "../../i18n";
@@ -389,6 +389,12 @@ test("the leaf groups read carries each group's first page; only later pages are
   });
   expect(second.carriedLeaves.size).toBe(0);
   expect(second.leafScopes).toMatchObject([{ key: header.bucketKey, page: 2, pageSize: 3 }]);
+});
+
+test("a declared leaf page size larger than the server's page bound is clamped to it", () => {
+  const leafParams = params({ groupStack: [{ field: "status" }], leafPageSize: MAX_PAGE_SIZE + 400 });
+  const initial = buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS, leafParams);
+  expect(initial.groupScopes[0]).toMatchObject({ leafPageSize: MAX_PAGE_SIZE, query: { rows: { limit: MAX_PAGE_SIZE } } });
 });
 
 test("a first page the groups read did not carry is an error, not a per-group request", () => {

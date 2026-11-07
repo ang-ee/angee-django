@@ -25,7 +25,7 @@ export function QueueBoardPage(): React.ReactElement {
       eyebrow={t("queue.eyebrow.board")}
       title={name}
       loading={!queue.data && !queue.error}
-      loadingMessage={t("queue.loading")}
+      loadingLabel={t("queue.loading")}
       unavailable={!queue.data?.work_queues_by_pk}
       description={t("board.description")}
       verbs={<QueueSettingsLink queueId={queueId} />}

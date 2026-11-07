@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -70,6 +70,20 @@ class InboxGroupPage:
     record_count: int
     message_count: int
     messages: Any = None
+
+    def carry(
+        self, axis: str, leaf_size: int, page: Callable[[InboxGroupScope, int], InboxPage],
+    ) -> tuple[InboxGroupPage, list[InboxPage]]:
+        """Give each header its first page, read by ``page(scope, leaf_size)`` per header.
+
+        For rows that aggregate inside their bucket (distinct content, identities),
+        which one ranked window over the headers' buckets cannot page.
+        """
+
+        size = InboxPage.valid_size(leaf_size)
+        pages = [page(InboxGroupScope(axis=axis, value=row.value), size) for row in self.rows]
+        rows = [replace(row, rows=carried.rows) for row, carried in zip(self.rows, pages, strict=True)]
+        return replace(self, rows=rows), pages
 
 
 class InboxGroups:

@@ -37,7 +37,7 @@ export const recordFilesGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: "Files",
     edge: { model: FILE_ATTACHMENT_MODEL },
-    count: { id: "storage.files", models: ATTACHMENT_MODELS },
+    relatedCount: { models: ATTACHMENT_MODELS },
     useVerb: useRecordFilesVerb,
     render: (context, label) => <RecordFilesGroup key={context.view.sqid} context={context} label={label} />,
   },
@@ -66,7 +66,7 @@ function RecordFilesGroup({ context, label }: { context: ChatterViewContext; lab
 
   return <>
     {label(<PaneLabelPopover icon="plus" label={t("upload.button")}>
-      {initialDrives.fetching ? <SkeletonStatus label={t("record.loadingDrives")}><Skeleton className="h-7" /></SkeletonStatus> : null}
+      {initialDrives.fetching ? <SkeletonStatus loadingLabel={t("record.loadingDrives")}><Skeleton className="h-7" /></SkeletonStatus> : null}
       {initialDrives.error ? <ErrorBanner description={initialDrives.error} /> : null}
       {!initialDrives.fetching && !initialDrives.error && !selectedDriveId
         ? <InlineEmpty icon="drive" label={t("drives.emptyDescription")} /> : null}
@@ -79,7 +79,7 @@ function RecordFilesGroup({ context, label }: { context: ChatterViewContext; lab
     </PaneLabelPopover>)}
     <li>
       {!recordFiles ? filesQuery.error ? <ErrorBanner description={filesQuery.error.message} /> :
-        <PaneRowsSkeleton label={t("record.loading")} rowCount={2} /> :
+        <PaneRowsSkeleton loadingLabel={t("record.loading")} rowCount={2} /> :
         <UploadDropTarget className="flex min-h-0 flex-col" disabled={!canUpload} overlay={t("upload.dropOverlay")} onFiles={startUpload}>
           {recordFiles.attachments.length ? <PaneRows>
             {recordFiles.attachments.map((edge) => <li key={edge.id}>
