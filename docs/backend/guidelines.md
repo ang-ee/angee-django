@@ -830,6 +830,13 @@ data through REBAC, never a queryset bypass.
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
   callers continue under the original actor, never the elevated one.
+- **System work reads an actor-bound row's relations through
+  `<related>.system_context(reason=...)`.** Since REBAC 0.31 a related manager
+  keeps its source instance's actor even inside `system_context`. That actor comes
+  from `with_actor()`, `require_access()` or a fetch under an ambient actor. So
+  system work on a row that a factory or an authorization check bound reads
+  `run.step_runs.system_context(reason="workflows.advance")`, never `run.step_runs`;
+  [`Runner.advance`](../../src/angee/workflows/runner.py) is the reference.
 - **Elevated destructive work keeps its dependents' authorization.** A verb that
   checks the public `delete` permission itself and then runs the owned
   destructive work under `system_context` (storage's soft delete, messaging's

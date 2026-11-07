@@ -40,8 +40,9 @@ live in code docstrings.
   sudo pin) instead of the ambient actor, and `iterator()` streams chunk by
   chunk. A row list loaded for one actor and reused under another actor's
   context returns the first actor's relations; load the rows for that actor.
-  Inside `system_context()`, read the relation of an actor-pinned instance
-  through the model's manager, as operator step retry does.
+  That actor survives `system_context()`, so system work on an actor-bound row
+  reads its relations through `<related>.system_context(reason=...)`, as
+  workflow advancement and operator step retry do.
 - An embedded `sudo()` or `system_context()` queryset is audited when its
   enclosing statement executes, so its audit row follows that statement.
 - GraphQL permission projections (`permissions_field`, `held_permissions`,

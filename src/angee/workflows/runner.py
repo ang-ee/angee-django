@@ -108,7 +108,9 @@ class Runner:
         escapes to roll back the transaction. Planning has its own savepoint so
         a bad plan cannot poison the transaction recording the durable failure.
         """
-        step_runs = run.step_runs
+        # The caller's run may carry a requester's pin, which its related manager keeps
+        # inside system_context; settling and planning always act elevated.
+        step_runs = run.step_runs.system_context(reason="workflows.advance")
         with system_context(reason="workflows.advance"):
             terminal = run.is_terminal
             if terminal and settlement is None:
