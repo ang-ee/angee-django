@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Iterator, cast
@@ -756,6 +757,33 @@ def test_operator_schema_writes_the_live_sdl_into_the_runtime(monkeypatch, setti
 
     assert (tmp_path / "schemas" / "external" / "operator.graphql").read_text() == "type Query { ping: String }\n"
     assert committed.read_bytes() == before
+
+
+def test_operator_schema_rewrites_the_runtime_sdl_only_when_it_changed(monkeypatch, settings, tmp_path) -> None:
+    """An unchanged SDL keeps the file frontend codegen watches; a changed SDL republishes it."""
+
+    settings.COMPOSE_OUTPUT_DIR = tmp_path
+    stub = SimpleNamespace(
+        admin_bearer="token", server_base="http://operator", introspect_sdl=lambda: "type Query { ping: String }",
+    )
+    monkeypatch.setattr(operator_schema_command.OperatorDaemon, "from_settings", classmethod(lambda cls: stub))
+    target = tmp_path / "schemas" / "external" / "operator.graphql"
+
+    def export() -> str:
+        output = StringIO()
+        call_command("operator_schema", retries=1, stdout=output)
+        return output.getvalue()
+
+    assert "unchanged" not in export()
+    written = target.stat()
+
+    assert "operator schema unchanged" in export()
+    assert (target.stat().st_ino, target.stat().st_mtime_ns) == (written.st_ino, written.st_mtime_ns)
+
+    stub.introspect_sdl = lambda: "type Query { pong: String }"
+    assert "unchanged" not in export()
+    assert target.stat().st_ino != written.st_ino
+    assert target.read_text() == "type Query { pong: String }\n"
 
 
 def test_connection_cache_lifetime_uses_issued_expiry_instead_of_requested_ttl(settings, monkeypatch):
