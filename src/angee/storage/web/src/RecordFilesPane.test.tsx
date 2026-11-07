@@ -35,7 +35,7 @@ vi.mock("./data/use-drive-picker", () => ({
 
 import { recordFilesGroup } from "./RecordFilesPane";
 import { StorageRecordFiles } from "./data/documents";
-import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
+import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedCountProbe, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
 
 const context: ChatterViewContext = {
   pathname: "/records/rec_1", params: { id: "rec_1" },
@@ -49,10 +49,18 @@ function FilesGroup() {
   </AppRuntimeProvider>;
 }
 
+/** The Files edge count and the record's file rows answer their own reads. */
+function reads(attachments: readonly object[]) {
+  sdk.query.mockImplementation((_document: unknown, variables?: { edges?: string[] }) => variables?.edges
+    ? { data: { record_edge_counts: [{ edge: "storage.files", count: attachments.length }] }, isPending: false }
+    : { data: { record_files: { can_upload: true, attachments } }, isPending: false });
+}
+
 beforeEach(() => {
-  sdk.query.mockReset().mockImplementation(() => ({ data: { record_files: { can_upload: true, attachments: [
-      { id: "fat_1", label: "", file: { id: "fil_1", filename: "guide.pdf", title: "Guide", size_bytes: 2048, created_by_label: "River" } },
-    ] } }, isPending: false }));
+  sdk.query.mockReset();
+  reads([
+    { id: "fat_1", label: "", file: { id: "fil_1", filename: "guide.pdf", title: "Guide", size_bytes: 2048, created_by_label: "River" } },
+  ]);
   sdk.preview = { viewAs: null, pending: false };
   sdk.upload.mockReset();
   sdk.navigate.mockReset();
@@ -60,7 +68,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-test("the group shares the actor-scoped attachment count and each row links to its file page", () => {
+test("the group counts its declared edge and each row links to its file page", () => {
   render(<FilesGroup />);
   expect(screen.getByText("Files").closest("li")?.textContent).toContain("Files· 1");
   expect(sdk.query).toHaveBeenCalledWith(StorageRecordFiles, {
@@ -73,11 +81,19 @@ test("the group shares the actor-scoped attachment count and each row links to i
   expect(sdk.navigate).toHaveBeenCalledWith("/storage/fil_1");
 });
 
+test("the Files badge counts its declared edge without requesting attachment rows", () => {
+  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
+    "related#groups": { "storage.files": recordFilesGroup },
+  }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
+  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "example.Record", id: "rec_1", edges: ["storage.files"] }, expect.anything());
+  expect(sdk.query).not.toHaveBeenCalledWith(StorageRecordFiles, expect.anything(), expect.anything());
+});
+
 test("the label picker and row drop target share one upload owner, with progress after the popover closes", async () => {
   sdk.query.mockImplementation(() => ({ data: undefined, isPending: true }));
   const view = render(<FilesGroup />);
   expect(screen.getByRole("status").textContent).toContain("Loading attached files");
-  sdk.query.mockImplementation(() => ({ data: { record_files: { can_upload: true, attachments: [] } }, isPending: false }));
+  reads([]);
   view.rerender(<FilesGroup />);
   const trigger = screen.getByRole("button", { name: "Upload" });
   expect(trigger.closest("li")?.textContent).toContain("Files");

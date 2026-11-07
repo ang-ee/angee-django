@@ -489,11 +489,16 @@ class MessageInbox:
                 )
         return result
 
-    def related(self, target: str, *, text: str = "", page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
-        """Distinct readable message uses, independent of coverage and sender scope."""
+    def uses(self, target: str) -> Any:
+        """Distinct readable messages using one target, independent of coverage and sender scope."""
 
         parts = self.target_parts(target)
-        all_uses = self.messages.filter(pk__in=Subquery(parts.order_by().values("message_id")))
+        return self.messages.filter(pk__in=Subquery(parts.order_by().values("message_id")))
+
+    def related(self, target: str, *, text: str = "", page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
+        """Page one target's message uses; the total counts them before the text search."""
+
+        all_uses = self.uses(target)
         rows = self.matching(all_uses, InboxSearch(text=text, quoted=True))
         return InboxPage(
             list(rows.order_by("_order_at" if oldest else "-_order_at", "pk")[InboxPage.window(page, size)]),

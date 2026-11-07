@@ -27,10 +27,7 @@ export const decisionConcernsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: enDecisionsMessages["related.concerns"]!,
-    useCount: (context) => {
-      const query = useDecisionRead(recordId(context));
-      return query.data ? query.data.decisions_by_pk?.records.filter((record) => record.record_model && record.record_id).length ?? 0 : undefined;
-    },
+    countEdge: { id: "decisions.concerns", models: DECISION_MODELS },
     render: (context, label) => <DecisionConcernsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -81,10 +78,7 @@ export const recordDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enDecisionsMessages["related.decisions"]!,
     when: concernsRecords,
-    useCount: (context) => {
-      const query = useRecordDecisions(context);
-      return query.data ? recordDecisions(query.data).length : undefined;
-    },
+    countEdge: { id: "decisions.decisions", models: DECISION_MODELS },
     render: (context, label) => <RecordDecisionsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };

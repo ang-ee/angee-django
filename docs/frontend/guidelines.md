@@ -1706,7 +1706,16 @@ with neither rows nor a verb is absent, not empty.
 Mount count hooks in independent keyed readers. Route and permission changes
 can change the eligible groups while the aside stays mounted; aggregating hooks
 in a loop changes their order. The [Related count owner](../../packages/ui/src/communication/RelatedPane.tsx)
-sums the results published by each group reader.
+sums the results once every eligible group has published a count. A group
+counts through `countEdge`: the id of the record edge its addon declares beside
+the row read it counts (a [`RecordEdge`](../../src/angee/graphql/edges.py)
+appended to `ANGEE_GRAPHQL_RECORD_EDGES`), and the models whose changes recount
+it. One `record_edge_counts` read counts every eligible group's edge in one
+statement, for the badge and the pane labels alike; no rows load for a count. A
+group without an edge, or one whose rows partition its edge, counts its rows
+with `usePaneCount` while the Links panel is mounted, and a badge beside such a
+group waits until then. A collapsed aside mounts no probes and no panels until
+first expanded, then retains visited panels.
 
 Each `related#groups` child (or `<model>#groups` for one model's pages) is one
 group of the framework's Links tab, declared by the addon that owns the edge.
@@ -1721,7 +1730,8 @@ interface RelatedGroupContent {
   when?: (context: ChatterViewContext) => boolean;
   edge?: { model: string };
   label: ReactNode;
-  useCount?: (context: ChatterViewContext) => number | undefined;
+  countEdge?: { id: string; models: readonly string[] };
+  usePaneCount?: (context: ChatterViewContext) => number | undefined;
   useVerb?: (context: ChatterViewContext) => boolean;
   render: (context: ChatterViewContext, label: (action?: ReactNode) => ReactNode) => ReactNode;
 }

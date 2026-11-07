@@ -17,7 +17,7 @@ import { InboxConversation } from "./Conversation";
 import { InboxConnections, InboxMessage, InboxRelatedTarget, InboxTranscriptMatches } from "./documents";
 import { InboxMessageReader } from "./MessageReader";
 import { InboxRelatedPane } from "./Related";
-import { FileMessages, useFileMessageCount } from "./FileMessages";
+import { FileMessages } from "./FileMessages";
 import type { InboxNavigation, InboxScope } from "./state";
 
 const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://inbox-files", providerNames: [] });
@@ -162,7 +162,7 @@ test("repeated parts of one target keep the server's distinct message count", as
   expect(inbox.navigation.connect).toHaveBeenCalledWith("file:file-2", "message-1");
 });
 
-test("Files backlinks count readable message uses and link to their exact part with the file pinned", async () => {
+test("Files backlinks link readable message uses to their exact part with the file pinned", async () => {
   const inbox = fixture([], true);
   const context: ChatterViewContext = {
     pathname: "/storage/file-2", params: { id: "file-2" },
@@ -170,15 +170,13 @@ test("Files backlinks count readable message uses and link to their exact part w
     view: { kind: "record", type: "storage/file", sqid: "file-2" },
   };
   function Messages() {
-    const count = useFileMessageCount(context);
-    return <><span>Related messages: {count}</span><FileMessages context={context} /></>;
+    return <FileMessages context={context} />;
   }
   const root = createRootRoute({ component: Messages });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(<ShellPageTestProviders runtime={{ routeHref: createRouteHref([{ name: "nexus.inbox", path: "/nexus/inbox" }]) }}>
     <ToastProvider><RouterProvider router={router} /></ToastProvider>
   </ShellPageTestProviders>, { wrapper: inbox.wrapper });
-  await screen.findByText("Related messages: 1");
   const link = await screen.findByRole("link", { name: /Renewal/ });
   const target = new URL(link.getAttribute("href")!, "https://example.test");
   expect(target.pathname).toBe("/nexus/inbox");

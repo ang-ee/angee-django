@@ -63,7 +63,7 @@ export const runRecordsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: enWorkflowsMessages["related.records"]!,
-    useCount: (context) => {
+    usePaneCount: (context) => {
       const query = useRunRelated(recordId(context));
       return query.data ? runRecords(query.data).length : undefined;
     },
@@ -92,7 +92,7 @@ export const runDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.decisions"]!,
-    useCount: (context) => useRunRelated(recordId(context)).data?.steprun?.filter((step) => step.decision).length,
+    countEdge: { id: "workflows.decisions", models: RELATED_MODELS },
     render: (context, label) => <RunDecisionsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -138,10 +138,7 @@ export const recordRunsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enWorkflowsMessages["related.runs"]!,
     when: hasRuns,
-    useCount: (context) => {
-      const query = useRecordRuns(context);
-      return query.data ? query.data.record_timeline.records.flatMap((entry) => entry.runs).length : undefined;
-    },
+    countEdge: { id: "workflows.runs", models: RUN_MODELS },
     render: (context, label) => <RecordRunsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -179,7 +176,7 @@ export const decisionRunGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.run"]!,
-    useCount: (context) => useDecisionSteps(recordId(context)).data?.steprun.filter((step) => step.run).length,
+    countEdge: { id: "workflows.run", models: [DECISION_MODEL, STEP_RUN_MODEL] },
     render: (context, label) => <DecisionRunGroup key={context.view.sqid} context={context} label={label} />,
   },
 };

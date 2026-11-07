@@ -1663,7 +1663,11 @@ some types derives that set from the schema through
 `RecordRefMixin.declared_target_models` (`declares_target` for one type)
 instead of listing it again. Resource metadata projects the inverse as
 `recordEdges`, so a surface listing one edge applies only to the record types
-that can carry it; a resolver does not re-decide that per request. Each
+that can carry it; a resolver does not re-decide that per request. A related
+group counts that same read: its addon declares a
+[`RecordEdge`](../../src/angee/graphql/edges.py) in
+`ANGEE_GRAPHQL_RECORD_EDGES`, and `record_edge_counts` counts every requested
+edge on a readable record in one statement. Each
 edge's own `permissions.zed` states its rule:
 [storage](../../src/angee/storage/permissions.zed),
 [knowledge](../../src/angee/knowledge/permissions.zed),

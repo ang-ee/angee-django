@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { AppRuntimeProvider, CHATTER_CONTAINERS, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
+import { AppRuntimeProvider, CHATTER_CONTAINERS, RelatedCountProbe, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 
@@ -29,7 +29,11 @@ const context: ChatterViewContext = {
 };
 
 beforeEach(() => {
-  mocks.query.mockReset().mockReturnValue({
+  mocks.query.mockReset().mockImplementation((_document: unknown, variables?: { edges?: string[] }) => variables?.edges ? {
+    data: { record_edge_counts: [{ edge: "integrate.sources", count: 1 }] },
+    error: null,
+    isLoading: false,
+  } : {
     data: { record_links: [{
       id: "rlk_1",
       external_key: "account.move:42",
@@ -52,10 +56,25 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+const containers = containersFromChildren(CHATTER_CONTAINERS, {
+  "related#groups": { "integrate.sources": recordSourcesGroup },
+});
+
+test("the Sources badge counts its declared edge before the pane opens, without reading rows", () => {
+  const onCount = vi.fn();
+  render(<AppRuntimeProvider runtime={{ containers }}>
+    <RelatedCountProbe id="related" context={context} onCount={onCount} />
+  </AppRuntimeProvider>);
+
+  expect(mocks.query).not.toHaveBeenCalledWith(RecordSourcesDocument, expect.anything(), expect.anything());
+  expect(mocks.query).toHaveBeenCalledWith(expect.anything(), {
+    model: "accounting.Bill", id: "bil_1", edges: ["integrate.sources"],
+  }, { enabled: true, models: ["integrate.RecordLink"] });
+  expect(onCount).toHaveBeenLastCalledWith("related", 1);
+});
+
 test("the Sources group counts and lists each source as a row linking to its outbound URL", () => {
-  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { "integrate.sources": recordSourcesGroup },
-  }) }}><RelatedPane context={context} /></AppRuntimeProvider>);
+  render(<AppRuntimeProvider runtime={{ containers }}><RelatedPane context={context} /></AppRuntimeProvider>);
 
   expect(mocks.query).toHaveBeenCalledWith(RecordSourcesDocument, {
     modelLabel: "accounting.Bill",

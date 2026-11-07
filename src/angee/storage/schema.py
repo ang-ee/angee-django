@@ -25,6 +25,7 @@ from angee.graphql.actions import ActionResult, action_guard, resolve_action_tar
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
+from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import (
     PublicID,
     instance_for_id,
@@ -209,7 +210,7 @@ class StorageQuery:
         source = instance_for_id(File, file)
         if source is None:
             return []
-        return list(with_record_reference_access(source.attachments.select_related("file")))
+        return list(_file_attachments(source))
 
     @strawberry.field(name="record_files")
     def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
@@ -587,6 +588,26 @@ _SHARED_TYPES = [
     *_FOLDER_RESOURCE.types,
     *_FILE_RESOURCE.types,
 ]
+
+
+def _file_attachments(file: Any) -> Any:
+    """One file's edges with their targets' current read policy."""
+
+    return with_record_reference_access(file.attachments.select_related("file"))
+
+
+def record_edges() -> tuple[RecordEdge, ...]:
+    """A record's files and the readable records a file is attached to, as their groups list them."""
+
+    return (
+        RecordEdge("storage.files", FileAttachment._default_manager.for_record),
+        RecordEdge(
+            "storage.attached-to",
+            lambda file: _file_attachments(file).filter(_angee_record_readable=True),
+            target="storage.File",
+        ),
+    )
+
 
 schemas = {
     "public": {

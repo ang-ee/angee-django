@@ -167,7 +167,8 @@ export function ChatterProvider({
       }
       // Same-value state updates bail out, so the Workbench may republish its
       // controller every render (its identity changes each tick) without looping.
-      setControllerCollapsed(controller ? controller.collapsed : null);
+      if (!controller) setControllerCollapsed(null);
+      else if (controller.ready !== false) setControllerCollapsed(controller.collapsed);
     },
     [],
   );

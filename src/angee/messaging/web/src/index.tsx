@@ -11,7 +11,7 @@ import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import type { RecordThreadConversationProps } from "./RecordThreadConversation";
 import { RecordChatterPane } from "./RecordChatterPane";
 import { FollowRecordChrome } from "./FollowRecordChrome";
-import { RecordConversationsGroup, useRecordConversationsCount } from "./RecordConversationsGroup";
+import { RecordConversationsGroup } from "./RecordConversationsGroup";
 import { RecordConversationPane } from "./RecordConversationPane";
 import { THREAD_ATTACHMENT_MODEL, THREAD_CHATTER_EDGE } from "./documents";
 
@@ -148,7 +148,7 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
       "messaging.conversations": { sequence: 40, content: {
         label: "Conversations",
         edge: { model: THREAD_ATTACHMENT_MODEL },
-        useCount: useRecordConversationsCount,
+        countEdge: { id: "messaging.conversations", models: [THREAD_ATTACHMENT_MODEL, "messaging.Thread"] },
         render: (context, label) => <>{label()}<li><RecordConversationsGroup context={context} /></li></>,
       } },
     },

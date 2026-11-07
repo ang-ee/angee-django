@@ -24,17 +24,18 @@ import {
   type ComposedContainers,
   type ContainerChild,
   type ContainerRule,
+  type RelatedGroupContent,
 } from "../runtime";
 import { Chatter, useChatterPresentation } from "./Chatter";
 import { CHATTER_CONTAINERS } from "./chatter-containers";
-import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
+import { ChatterProvider, useChatter, useChatterContent, type ChatterContent } from "./chatter-context";
 
 afterEach(() => cleanup());
 
 const NOTE_RECORD: ChatterRoute = { name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" };
 const NOTE_LIST: ChatterRoute = { name: "notes.all", path: "/records", viewType: "notes/note", modelLabel: "notes.Note" };
 
-type Tabs = Readonly<Record<string, ContainerChild<ChatterTabContent>>>;
+type Tabs = Readonly<Record<string, ContainerChild<ChatterTabContent | RelatedGroupContent>>>;
 
 /**
  * Addon-owned example tabs plus extra children and per-layer narrowing rules.
@@ -61,6 +62,7 @@ function aside(
 
 const tab = (content: ChatterTabContent, sequence?: number): ContainerChild<ChatterTabContent> =>
   ({ content, ...(sequence !== undefined ? { sequence } : {}) });
+const group = (content: RelatedGroupContent): ContainerChild<RelatedGroupContent> => ({ content });
 
 const onRoute = (...routes: string[]) => ({ apps: [], routes });
 
@@ -203,6 +205,74 @@ describe("Chatter", () => {
     expect(commentsTab.textContent).not.toContain("2");
   });
 
+  test("collapsed chatter mounts no count probe until the badge is visible", async () => {
+    const count = vi.fn(() => 4);
+    function Expand() {
+      const { setCollapsed } = useChatter();
+      return <button onClick={() => setCollapsed(false)}>Expand aside</button>;
+    }
+    renderChatter({ containers: aside({ "record#aside": {
+      "notes.counted": tab({ label: "Counted", useCount: count, render: () => <span>Counted rows</span> }),
+    } }, { examples: false }) }, { defaultCollapsed: true, defaultTab: "notes.counted", children: <Expand /> });
+    expect(await screen.findByRole("tab", { name: "Counted" })).toBeTruthy();
+    expect(count).not.toHaveBeenCalled();
+    expect(screen.queryByText("Counted rows")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand aside" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Counted\s*4/ })).toBeTruthy());
+  });
+
+  test("a collapsed Links tab does not mount its related group probe", async () => {
+    const count = vi.fn(() => 2);
+    function Expand() {
+      const { setCollapsed } = useChatter();
+      return <button onClick={() => setCollapsed(false)}>Expand links</button>;
+    }
+    renderChatter({ containers: aside({ "related#groups": {
+      files: group({ label: "Files", usePaneCount: count, render: () => null }),
+    } }, { examples: false }) }, { defaultCollapsed: true, defaultTab: "related", children: <Expand /> });
+    expect(await screen.findByRole("tab", { name: "Links" })).toBeTruthy();
+    expect(count).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Expand links" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Links\s*2/ })).toBeTruthy());
+  });
+
+  test("a visited Links panel keeps its row-counted badge after switching tabs", async () => {
+    const rows = vi.fn(() => 2);
+    renderChatter({ containers: aside({ "related#groups": {
+      counted: group({ label: "Counted", usePaneCount: rows,
+        render: (_, label) => <>{label()}<li>Counted rows</li></> }),
+      lazy: group({ label: "Lazy", usePaneCount: () => 3,
+        render: (_, label) => <>{label()}<li>Lazy rows</li></> }),
+    } }) }, { defaultTab: "notes.comments" });
+    expect(await screen.findByRole("tab", { name: "Links" })).toBeTruthy();
+    expect(rows).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "Links" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Links\s*5/ })).toBeTruthy());
+    expect(rows).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "Comments" }));
+    expect(screen.getByRole("tab", { name: /Links\s*5/ })).toBeTruthy();
+  });
+
+  test("a visited panel keeps its draft through collapse and expansion", async () => {
+    function Draft() {
+      const [body, setBody] = React.useState("");
+      return <input aria-label="Draft" value={body} onChange={(event) => setBody(event.target.value)} />;
+    }
+    function Toggle() {
+      const { collapsed, setCollapsed } = useChatter();
+      return <button onClick={() => setCollapsed(!collapsed)}>{collapsed ? "Expand aside" : "Collapse aside"}</button>;
+    }
+    renderChatter({ containers: aside({ "record#aside": {
+      "notes.draft": tab({ label: "Draft", render: () => <Draft /> }),
+    } }, { examples: false }) }, { defaultTab: "notes.draft", children: <Toggle /> });
+    const input = await screen.findByRole("textbox", { name: "Draft" }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Unsent comment" } });
+    fireEvent.click(screen.getByRole("button", { name: "Collapse aside" }));
+    expect(input.isConnected).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Expand aside" }));
+    expect((screen.getByRole("textbox", { name: "Draft" }) as HTMLInputElement).value).toBe("Unsent comment");
+  });
+
   test("a declared Related count overrides the framework's group aggregation", async () => {
     renderChatter({ containers: aside({
       "record#aside": { related: tab({ label: "Related", useCount: () => 9, render: () => <span>Related content</span> }) },
@@ -280,7 +350,7 @@ type TestRuntime = Partial<AppRuntime>;
 
 function renderChatter(
   runtime: TestRuntime,
-  { record = true, recordId = "rec_1", search = "", defaultTab = "agents", children }: { record?: boolean; recordId?: string; search?: string; defaultTab?: string; children?: React.ReactNode } = {},
+  { record = true, recordId = "rec_1", search = "", defaultTab = "agents", defaultCollapsed = false, children }: { record?: boolean; recordId?: string; search?: string; defaultTab?: string; defaultCollapsed?: boolean; children?: React.ReactNode } = {},
 ): void {
   function VisibilityProbe() { return <span>{useChatterPresentation().visible ? "Aside available" : "Aside hidden"}</span>; }
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -289,7 +359,7 @@ function renderChatter(
     path: record ? "/records/$id" : "/records",
     component: () => (
       <AppRuntimeProvider runtime={{ icons: baseIcons, chatterRoutes: [record ? NOTE_RECORD : NOTE_LIST], ...runtime }}>
-        <ChatterProvider defaultTab={defaultTab}>
+        <ChatterProvider defaultTab={defaultTab} defaultCollapsed={defaultCollapsed}>
           <VisibilityProbe />
           {children}
           <Chatter />

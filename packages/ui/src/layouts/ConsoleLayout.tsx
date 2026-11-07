@@ -42,7 +42,7 @@ export interface ConsoleLayoutProps {
  * @kind page
  */
 export function ConsoleLayout(props: ConsoleLayoutProps): React.ReactElement {
-  return <ChromePlaceProvider><ChatterProvider><BreadcrumbLabelProvider>
+  return <ChromePlaceProvider><ChatterProvider defaultCollapsed><BreadcrumbLabelProvider>
     <RecordFieldMarksProvider><ConsoleLayoutBody {...props} /></RecordFieldMarksProvider>
   </BreadcrumbLabelProvider></ChatterProvider></ChromePlaceProvider>;
 }

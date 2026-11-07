@@ -6,11 +6,6 @@ import { useRecordSourceThreads } from "./useRecordSourceThreads";
 
 const THREAD_MODEL = "messaging.Thread";
 
-/** The Related group's count: the conversations this record came from. */
-export function useRecordConversationsCount(context: ChatterViewContext): number | undefined {
-  return useRecordSourceThreads(context).data?.record_source_threads.length;
-}
-
 /** The conversations the record came from (source-role thread attachments), each a row to its thread. */
 export function RecordConversationsGroup({ context }: { context: ChatterViewContext }): React.ReactElement | null {
   const t = useMessagingT();

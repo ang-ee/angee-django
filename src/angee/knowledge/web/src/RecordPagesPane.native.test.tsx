@@ -22,7 +22,7 @@ const context: ChatterViewContext = {
 function Count() {
   const [count, setCount] = useState<number>();
   const publish = useCallback((_: string, next: number | undefined) => setCount(next), []);
-  return <><RelatedCountProbe id="related" context={context} onCount={publish} /><span>Related {count}</span></>;
+  return <><RelatedCountProbe id="related" context={context} onCount={publish} includePaneCounts /><span>Related {count}</span></>;
 }
 
 test("generic and role groups share one unfiltered request across counts, presence and rows", async () => {
