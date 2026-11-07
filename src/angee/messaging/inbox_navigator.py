@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict
 from angee.base.expressions import WindowSum
 from angee.messaging.inbox import InboxCoverage, InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroup, InboxGroupPage, InboxGroups, InboxGroupScope
-from angee.messaging.managers import _MESSAGE_ORDER
+from angee.messaging.managers import MESSAGE_ORDER
 
 
 @dataclass(frozen=True)
@@ -435,9 +435,9 @@ class InboxMembershipGroups:
         return self.objects.annotate(
             _records=Coalesce(Subquery(aggregate.values("records")[:1]), Value(0)),
             _messages=Coalesce(Subquery(aggregate.values("messages")[:1]), Value(0)),
-            _latest=Subquery(activity.order_by(*_MESSAGE_ORDER.ordering()).values("_order_at")[:1]),
-            _first=Subquery(activity.order_by(*_MESSAGE_ORDER.ordering(oldest_first=True)).values("_order_at")[:1]),
-            _preview=Subquery(activity.order_by(*_MESSAGE_ORDER.ordering()).values("preview")[:1]),
+            _latest=Subquery(activity.order_by(*MESSAGE_ORDER.ordering()).values("_order_at")[:1]),
+            _first=Subquery(activity.order_by(*MESSAGE_ORDER.ordering(oldest_first=True)).values("_order_at")[:1]),
+            _preview=Subquery(activity.order_by(*MESSAGE_ORDER.ordering()).values("preview")[:1]),
         )
 
     def page(self, *, page: int = 1, size: int = 25) -> InboxGroupPage:

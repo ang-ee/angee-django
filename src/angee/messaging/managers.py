@@ -479,7 +479,8 @@ def _message_search_query(term: str) -> models.Q:
 # at a page boundary. These express the keyset comparison against an `(at, pk)` anchor.
 
 
-_MESSAGE_ORDER = KeysetOrder("_order_at")
+MESSAGE_ORDER = KeysetOrder("_order_at")
+"""Messages' total chronology, ``_order_at`` then pk: every message page, keyset or offset, pages it."""
 
 
 class _MessageChronology(TypedDict):
@@ -1735,8 +1736,8 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             _order_at=MessageQuerySet.chronological_time()
         )
         if history_before is not None:
-            queryset = queryset.filter(_MESSAGE_ORDER.before(history_before.chronological_key))
-        latest = queryset.order_by(*_MESSAGE_ORDER.ordering()).first()
+            queryset = queryset.filter(MESSAGE_ORDER.before(history_before.chronological_key))
+        latest = queryset.order_by(*MESSAGE_ORDER.ordering()).first()
         if latest is None:
             return
         follower.last_read_message = latest
@@ -1771,7 +1772,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                     TrashQuerySet.untrashed_q(), thread_id__in=thread.member_threads().values("pk"),
                 )
                 .annotate(_order_at=MessageQuerySet.chronological_time())
-                .order_by(*_MESSAGE_ORDER.ordering())
+                .order_by(*MESSAGE_ORDER.ordering())
                 .first()
             )
         if target is None:
@@ -1835,7 +1836,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if follower.last_read_message is None:
             return queryset
         anchor = follower.last_read_message.chronological_key
-        return queryset.filter(_MESSAGE_ORDER.after(anchor))
+        return queryset.filter(MESSAGE_ORDER.after(anchor))
 
     def unread_count_for_record(
         self,
@@ -2507,7 +2508,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             NotificationPreference.subscribed_row_q(
                 notification_policy="_follow_policy", subtype_keys="_follow_subtypes",
             ),
-            models.Q(_read_pk__isnull=True) | _MESSAGE_ORDER.after((models.F("_read_at"), models.F("_read_pk"))),
+            models.Q(_read_pk__isnull=True) | MESSAGE_ORDER.after((models.F("_read_at"), models.F("_read_pk"))),
         )
 
     def explorer(self) -> MessageInbox:
@@ -2719,7 +2720,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         carries ``_order_at`` (:meth:`for_feed`).
         """
 
-        return self.order_by(*_MESSAGE_ORDER.ordering(oldest_first=oldest_first))
+        return self.order_by(*MESSAGE_ORDER.ordering(oldest_first=oldest_first))
 
     @staticmethod
     def _feed_search(search: str) -> str:
@@ -2762,7 +2763,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
                     ZoneInfo(zone) if zone else timezone.get_current_timezone(),
                 )
                 around = (
-                    queryset.filter(_order_at__gte=instant).order_by(*_MESSAGE_ORDER.ordering(oldest_first=True)).first()
+                    queryset.filter(_order_at__gte=instant).order_by(*MESSAGE_ORDER.ordering(oldest_first=True)).first()
                     or queryset.first()
                 )
             else:
@@ -2771,7 +2772,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
                 raise ValueError("Message unavailable in this conversation.")
         try:
             page = queryset.keyset_page(
-                order=_MESSAGE_ORDER,
+                order=MESSAGE_ORDER,
                 cursor_scope=(scope, search, all_copies),
                 cursor_salt="angee.messaging.feed.v1",
                 before_cursor=before_cursor,
@@ -3395,8 +3396,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         count = int(queryset.count())
         # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
         # return the page chronological ascending so the client renders it verbatim.
-        ascending = _MESSAGE_ORDER.ordering(oldest_first=True)
-        descending = _MESSAGE_ORDER.ordering()
+        ascending = MESSAGE_ORDER.ordering(oldest_first=True)
+        descending = MESSAGE_ORDER.ordering()
         if around not in (None, ""):
             anchor = self._record_message_anchor(queryset, around)
             if anchor is None:
@@ -3404,19 +3405,19 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             before_limit = max(1, limit // 2)
             after_limit = max(0, limit - before_limit)
             page = [
-                *queryset.filter(_MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
-                *queryset.filter(_MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
+                *queryset.filter(MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
+                *queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
             ]
         elif before not in (None, ""):
             anchor = self._record_message_anchor(queryset, before)
             if anchor is None:
                 return [], count
-            page = list(queryset.filter(_MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
+            page = list(queryset.filter(MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
         elif after not in (None, ""):
             anchor = self._record_message_anchor(queryset, after)
             if anchor is None:
                 return [], count
-            page = list(queryset.filter(_MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
+            page = list(queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
         else:
             page = list(queryset.order_by(*descending)[:limit])
         return sorted(page, key=lambda message: message.chronological_key), count
@@ -3431,8 +3432,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             return False
         edge = messages[-1] if newer else messages[0]
         scope = self.record_scope(record, role=role, search=search, message_types=message_types)
-        boundary = (_MESSAGE_ORDER.after(edge.chronological_key) if newer
-                    else _MESSAGE_ORDER.before(edge.chronological_key))
+        boundary = (MESSAGE_ORDER.after(edge.chronological_key) if newer
+                    else MESSAGE_ORDER.before(edge.chronological_key))
         return bool(scope.filter(boundary).exists())
 
     def _record_message_anchor(self, queryset: Any, value: Any) -> tuple[Any, Any] | None:

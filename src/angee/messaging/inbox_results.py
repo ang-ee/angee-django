@@ -20,7 +20,7 @@ from angee.base.pagination import valid_page_size
 from angee.base.querysets import MergeableQuerySet
 from angee.messaging.inbox import InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroupPage, InboxGroups, InboxGroupScope
-from angee.messaging.managers import _MESSAGE_ORDER
+from angee.messaging.managers import MESSAGE_ORDER
 
 
 class InboxResultOptions(BaseModel):
@@ -208,7 +208,7 @@ class InboxResults:
                 _order_at__gte=datetime.combine(days[0], time.min, self.zone),
                 _order_at__lt=datetime.combine(days[-1] + timedelta(days=1), time.min, self.zone),
             )
-        order = _MESSAGE_ORDER.ordering(oldest_first=self.options.oldest)
+        order = MESSAGE_ORDER.ordering(oldest_first=self.options.oldest)
         kept = members.first_per_group("_bucket", order_by=order, limit=valid_page_size(leaf_size)).order_by(*order)
         carried_rows: dict[Any, list[InboxResultRow]] = defaultdict(list)
         ids = []
