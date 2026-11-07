@@ -36,7 +36,7 @@ class _TurnUpdateSink:
 
     turn: Any
     pending: list[dict[str, Any]] = field(default_factory=list)
-    last_flush: float = field(default_factory=monotonic)
+    last_flush: float = field(default_factory=lambda: monotonic())
 
     def __call__(self, update: dict[str, Any]) -> None:
         self.pending.append(dict(update))
