@@ -128,8 +128,8 @@ describe("IAM schema page", () => {
     sdkMocks.schema.isFetching = true;
     renderPage();
 
-    const status = screen.getByRole("status");
-    expect(within(status).getAllByText("Loading schema…")).toHaveLength(2);
+    // The pending explorer is a skeleton: its label is announced once, never shown as copy.
+    expect(screen.getByRole("status").textContent).toBe("Loading schema…");
     // No explorer/inspector is published, so the shell falls back to its own
     // primary/secondary content.
     expect(screen.getByTestId("shell-primary").childNodes).toHaveLength(0);
