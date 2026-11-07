@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,6 +28,7 @@ from graphql import (
     GraphQLSchema,
     GraphQLString,
 )
+from rebac.schema import parse_zed
 
 from angee.graphql.data.contracts import (
     DataQueryField,
@@ -43,6 +48,7 @@ from angee.mcp.resource_tools import (
     register_resource_tools,
     resource_tool_specs,
 )
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
 class ResourceToolProbe(models.Model):
@@ -57,6 +63,17 @@ class ResourceToolProbe(models.Model):
         app_label = "agents"
         managed = False
         verbose_name_plural = "probe records"
+
+
+PROBE_DECLARATION = parse_zed(
+    "definition tests/probe {\n"
+    "    relation owner: auth/user\n"
+    "    permission read = owner\n"
+    "    permission read__secret = owner\n"
+    "    permission read__optional_secret = owner\n"
+    "}\n"
+).get_definition("tests/probe")
+"""The probe's declared policy: both secrets are owner-gated reads."""
 
 
 class _FakeSchemas:
@@ -167,13 +184,10 @@ def _tool_map(server: FastMCP) -> dict[str, Any]:
 
 
 def test_generated_resource_names_projections_and_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Generation sorts resources and omits gated non-null/redaction-breaking leaves."""
+    """Generation sorts resources and omits declared gated non-null/redaction-breaking leaves."""
 
     schemas = _FakeSchemas((_resource("zeta"), _resource("alpha")))
-    monkeypatch.setattr(
-        "angee.mcp.resource_tools.gated_read_fields",
-        lambda model: frozenset({"secret", "optional_secret"}),
-    )
+    monkeypatch.setattr("angee.mcp.resource_tools.declared_rebac_definition", lambda model: PROBE_DECLARATION)
 
     specs, catalogue = resource_tool_specs(schemas)  # type: ignore[arg-type]
 
@@ -190,7 +204,6 @@ def test_generated_query_limits_and_search_mapping(monkeypatch: pytest.MonkeyPat
     """The compiler advertises/enforces <=50 and maps search to a Hasura where expression."""
 
     schemas = _FakeSchemas((_resource("probes"),))
-    monkeypatch.setattr("angee.mcp.resource_tools.gated_read_fields", lambda model: frozenset())
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     specs, _catalogue = resource_tool_specs(schemas)  # type: ignore[arg-type]
     server = FastMCP(name="resource-limit-test")
@@ -226,7 +239,6 @@ def test_resource_registrar_adds_honest_catalogue_and_readers(monkeypatch: pytes
     """The MCP addon's explicit registrar contributes catalogue plus generated tools."""
 
     schemas = _FakeSchemas((_resource("probes"),))
-    monkeypatch.setattr("angee.mcp.resource_tools.gated_read_fields", lambda model: frozenset())
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     server = FastMCP(name="resource-registration-test")
 
@@ -258,12 +270,11 @@ def test_mcp_conventional_module_owns_its_resource_tool_registrar() -> None:
     assert tool_registrar(apps.get_app_config("mcp")) is register
 
 
-def test_resource_without_detail_is_not_advertised(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resource_without_detail_is_not_advertised() -> None:
     """A metadata contribution without both read roots cannot promise a reader pair."""
 
     resource = replace(_resource("partial"), roots=DataResourceRoots(list_name="partial"))
     schemas = _FakeSchemas((resource,))
-    monkeypatch.setattr("angee.mcp.resource_tools.gated_read_fields", lambda model: frozenset())
 
     specs, catalogue = resource_tool_specs(schemas)  # type: ignore[arg-type]
 
@@ -271,12 +282,11 @@ def test_resource_without_detail_is_not_advertised(monkeypatch: pytest.MonkeyPat
     assert catalogue == ()
 
 
-def test_graphql_wire_root_is_normalized_only_for_tool_names(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_graphql_wire_root_is_normalized_only_for_tool_names() -> None:
     """Camel-case schema roots keep their operation but expose snake-safe grant ids."""
 
     resource = _resource("feedFollows")
     schemas = _FakeSchemas((resource,))
-    monkeypatch.setattr("angee.mcp.resource_tools.gated_read_fields", lambda model: frozenset())
 
     specs, catalogue = resource_tool_specs(schemas)  # type: ignore[arg-type]
 
@@ -297,3 +307,56 @@ def test_resource_tool_system_check_reports_console_schema_drift(monkeypatch: py
     assert len(errors) == 1
     assert errors[0].id == "angee.mcp.E001"
     assert "missing console root" in errors[0].msg
+
+
+def test_generated_tools_and_check_follow_the_declared_policy_without_a_database(django_db_blocker: Any) -> None:
+    """Tool shapes follow each model's composed declaration; neither generation nor E001 reads the database.
+
+    ``parties/party`` declares ``read__notes``, ``read__first_met_note`` and
+    ``read__handle_count``; the columns are non-null, so no generated projection names them.
+    """
+
+    with django_db_blocker.block():
+        specs, _catalogue = resource_tool_specs()
+        errors = check_resource_tool_specs()
+
+    assert errors == []
+    fields = {spec.name: spec.fields for spec in specs}
+    assert "display_name" in fields["read_parties"]
+    for name in ("query_parties", "read_parties"):
+        assert {"notes", "first_met_note", "handle_count"}.isdisjoint(fields[name])
+
+
+def test_resource_tool_check_passes_on_a_fresh_database(tmp_path: Path) -> None:
+    """Django's check passes on a composed host whose empty database holds no synced policy."""
+
+    root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment.pop("DJANGO_SETTINGS_MODULE", None)
+    environment.pop("DATABASE_URL", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / "tests/composed_host.py"),
+            "--runtime-dir",
+            str(tmp_path / "runtime"),
+            "--app",
+            "angee.mcp",
+            "--app",
+            "angee.parties",
+            "--no-examples",
+            "--action",
+            "state",
+            "--output",
+            str(tmp_path / "state.py"),
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=COMPOSED_TEST_TIMEOUT,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"check failed on a fresh database:\n{result.stdout}\n{result.stderr}"
+    assert "angee.mcp.E001" not in result.stdout + result.stderr
