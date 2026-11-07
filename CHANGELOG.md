@@ -27,6 +27,15 @@ live in code docstrings.
   `read_inbox` is refused by the security check `messaging.E003`. Consumers move a
   chatter-filtered thread arm from `read_granted` to `chatter_read`; grants for any
   conversation stay on `read_granted`.
+- Operators re-sync the permission schema (`rebac sync`, which provision runs):
+  messaging revision 23 (it also adds `messaging/part#read_inbox`, through which
+  the inbox lists a part of a readable message), the projects fragment 9 and the
+  knowledge fragment 3; a source host also syncs the `tests.extcontrib` fragment 9.
+  Move every stored REBAC override on a thread or message `read` or `read_inbox`
+  to that definition's `read_granted`, which both reads take. While one remains,
+  or the store is not yet synced, the inbox reads threads, messages and their
+  parts under `read` (`contextual_action_holds`): correct, without the narrower
+  statement.
 
 ## Unreleased — dead subsystems removed with their schema
 

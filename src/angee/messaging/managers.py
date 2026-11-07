@@ -69,7 +69,7 @@ from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.permissions import actor_user_id, require_rebac_queryset
+from angee.base.permissions import actor_user_id, contextual_action_holds, require_rebac_queryset
 from angee.base.prefetch import ReaderMemo
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
@@ -662,6 +662,17 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
     )
 
 
+def _inbox_action(model: type[models.Model]) -> str:
+    """``read_inbox`` while the effective policy proves it stands in for ``read`` there, else ``read``.
+
+    An override on a thread or message ``read`` or ``read_inbox``, or a store not yet
+    synced to messaging's declaration, keeps the inbox on ``read``
+    (``contextual_action_holds``); overrides meant for both reads target ``read_granted``.
+    """
+
+    return "read_inbox" if contextual_action_holds(model, "read_inbox") else "read"
+
+
 class ThreadQuerySet[ThreadT: Thread](
     MergeableQuerySet[ThreadT], OwnerQuerySet[ThreadT], AngeeHistoryQuerySet[ThreadT],
 ):
@@ -675,8 +686,9 @@ class ThreadQuerySet[ThreadT: Thread](
         payload (gated on the parent record's read) and must never surface in the
         owner-scoped generic ``threads`` list, aggregate, or by-pk lookup.
         Without chatter, ``read_inbox`` admits exactly the readers ``read`` does
-        and compiles no record's read. The action replaces the caller's; a verb
-        that needs another selects it after this one.
+        and compiles no record's read; the inbox reads it while the effective policy
+        proves that (``_inbox_action``), else ``read``. The action replaces the
+        caller's; a verb that needs another selects it after this one.
         """
 
         # A structural anti-join inside the already authorized inbox queryset: the
@@ -687,7 +699,7 @@ class ThreadQuerySet[ThreadT: Thread](
         return (
             self.alias(_record_attached=models.Exists(attached))
             .filter(_record_attached=False)
-            .with_action("read_inbox")
+            .with_action(_inbox_action(self.model))
         )
 
     def for_channel(self, channel: Any) -> Self:
@@ -2506,11 +2518,12 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         ``messages`` list, aggregate, or by-pk lookup. A message with no thread (an
         ingested mail whose thread was merged away) is not record-attached and stays
         in the inbox. Without chatter, ``read_inbox`` admits exactly the readers
-        ``read`` does and compiles no record's read. The action replaces the
-        caller's; a verb that needs another selects it after this one.
+        ``read`` does and compiles no record's read; the inbox reads it while the
+        effective policy proves that (``_inbox_action``), else ``read``. The action
+        replaces the caller's; a verb that needs another selects it after this one.
         """
 
-        return self.filter(self.inbox_q()).with_action("read_inbox")
+        return self.filter(self.inbox_q()).with_action(_inbox_action(self.model))
 
     @staticmethod
     def inbox_q(through: str = "") -> models.Q:

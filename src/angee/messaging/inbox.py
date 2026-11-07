@@ -149,15 +149,16 @@ class MessageInbox:
     """Query owner for personal inbox reads, composed from a MessageQuerySet.
 
     The collection supplies the actor. :meth:`eligible` owns the base population,
-    for messages and for their parts, read under ``read_inbox``; every count, group,
-    search and page derives from it, and a result population narrows it
+    for messages and for their parts; messages read under the action
+    ``MessageQuerySet.inbox`` selects. Every count, group, search and page derives
+    from it, and a result population narrows it
     (:class:`~angee.messaging.inbox_results.InboxResults`) and stays distinct.
     """
 
     def __init__(self, queryset: Any) -> None:
         self.actor = queryset.actor() or current_actor()
         self.user_id = actor_user_id(self.actor)
-        self.messages = queryset.with_action("read_inbox").filter(self.eligible()).for_feed(all_copies=True)
+        self.messages = queryset.inbox().filter(self.listed()).for_feed(all_copies=True)
         self.handles = self.collection("parties", "Handle").with_sender_name()
         self.parties = self.collection("parties", "Party")
         self.threads = self.collection("messaging", "Thread").inbox()
@@ -174,12 +175,14 @@ class MessageInbox:
         read authorizes the message. The message queryset owns each predicate.
         """
 
+        return apps.get_model("messaging", "Message").objects.inbox_q(through) & MessageInbox.listed(through)
+
+    @staticmethod
+    def listed(through: str = "") -> Q:
+        """What the inbox lists of its population: published messages outside public threads."""
+
         messages = apps.get_model("messaging", "Message").objects
-        return (
-            messages.inbox_q(through)
-            & messages.published_q(through)
-            & ~Q(**{f"{through}thread__modality": "public_thread"})
-        )
+        return messages.published_q(through) & ~Q(**{f"{through}thread__modality": "public_thread"})
 
     def collection(self, app: str, model: str, *, action: str | None = None) -> Any:
         """Propagate the message collection actor to every joined read owner."""
@@ -197,8 +200,9 @@ class MessageInbox:
         joins the message without scoping it again. A narrower population (a result
         set whose canonical-copy and sender rules read the actor's own messages)
         still carries its own message scope. While the effective policy leaves that
-        implication unproved (an exclusion or override on the part's read), parts
-        keep their generic read inside the separately scoped eligible messages.
+        implication unproved (an exclusion or override on the part's read, or one on
+        the message or thread reads its arrow reaches), parts keep their generic read
+        inside the separately scoped eligible messages.
         """
 
         contextual = contextual_action_holds(apps.get_model("messaging", "Part"), "read_inbox")

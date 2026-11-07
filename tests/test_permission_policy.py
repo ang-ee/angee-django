@@ -47,25 +47,47 @@ def test_requests_use_synced_policy_without_reading_artifacts(monkeypatch):
     )
 
 
+def _policy(monkeypatch, effective: str, declared: str | None = None) -> None:
+    """Serve ``effective`` as the synced policy and ``declared`` (else the same) as each type's declaration."""
+
+    stated = parse_zed(declared if declared is not None else effective)
+    synced = parse_zed(effective)
+    monkeypatch.setattr('angee.base.permissions.backend', lambda: SimpleNamespace(schema=lambda: synced))
+    # Each resource type stands for its own model, whose declaration is ``stated``'s definition.
+    monkeypatch.setattr('angee.base.permissions.model_for_resource_type', lambda resource_type: resource_type)
+    monkeypatch.setattr('angee.base.permissions.declared_rebac_definition', stated.get_definition)
+
+
+_PARENT = (
+    "definition probe/parent {{\nrelation reader: auth/user\nrelation blocked: auth/user\n"
+    "permission read = {read}\npermission read_inbox = reader\n}}\n"
+)
+
+
 @pytest.mark.parametrize(
-    ("read", "read_inbox", "holds"),
+    ("read", "read_inbox", "parent_read", "holds"),
     [
-        ("parent->read + reader", "parent->read", True),
-        ("parent->read + (reader - blocked)", "parent->read", True),
-        # The parent owns its narrower action implying the read the arm names.
-        ("parent->read + reader", "parent->read_inbox", True),
+        ("parent->read + reader", "parent->read", "reader", True),
+        ("parent->read + (reader - blocked)", "parent->read", "reader", True),
+        # The parent's narrower action holds while the parent states it as declared.
+        ("parent->read + reader", "parent->read_inbox", "reader", True),
+        ("parent->read + reader", "parent->read_inbox", "reader & blocked", False),
+        # A parent override is irrelevant while the child reads the parent's own read.
+        ("parent->read + reader", "parent->read", "reader & blocked", True),
         # A tightening override, an exclusion, or a narrowed parent arm is unproved.
-        ("(parent->read + reader) & reader", "parent->read", False),
-        ("(parent->read + reader) - blocked", "parent->read", False),
-        ("(parent->read - blocked) + reader", "parent->read", False),
-        ("reader + blocked", "parent->read", False),
+        ("(parent->read + reader) & reader", "parent->read", "reader", False),
+        ("(parent->read + reader) - blocked", "parent->read", "reader", False),
+        ("(parent->read - blocked) + reader", "parent->read", "reader", False),
+        ("reader + blocked", "parent->read", "reader", False),
         # An extended contextual action admits rows of unreadable parents.
-        ("parent->read + reader", "parent->read + reader", False),
-        ("parent->read + reader", None, False),
+        ("parent->read + reader", "parent->read + reader", "reader", False),
+        ("parent->read + reader", None, "reader", False),
     ],
 )
 @isolate_apps()
-def test_contextual_action_holds_only_while_the_effective_policy_proves_it(monkeypatch, read, read_inbox, holds):
+def test_contextual_action_holds_only_while_the_effective_policy_proves_it(
+    monkeypatch, read, read_inbox, parent_read, holds,
+):
     class Record(models.Model, metaclass=RebacModelBase):
         class Meta:
             abstract = True
@@ -73,13 +95,57 @@ def test_contextual_action_holds_only_while_the_effective_policy_proves_it(monke
             rebac_resource_type = 'probe/record'
 
     contextual = f"permission read_inbox = {read_inbox}" if read_inbox else ""
-    schema = parse_zed(
-        "definition probe/parent {\nrelation reader: auth/user\npermission read = reader\n"
-        "permission read_inbox = reader\n}\n"
+    record = (
         "definition probe/record {\nrelation parent: probe/parent\nrelation reader: auth/user\n"
         f"relation blocked: auth/user\npermission read = {read}\n{contextual}\n}}"
     )
-    monkeypatch.setattr('angee.base.permissions.backend', lambda: SimpleNamespace(schema=lambda: schema))
+    _policy(monkeypatch, _PARENT.format(read=parent_read) + record, _PARENT.format(read="reader") + record)
+    assert contextual_action_holds(Record, "read_inbox") is holds
+
+
+def _purpose(read: str, read_inbox: str | None, read_granted: str) -> str:
+    contextual = f"permission read_inbox = {read_inbox}\n" if read_inbox else ""
+    return (
+        "definition probe/record {\nrelation parent: probe/parent\nrelation reader: auth/user\n"
+        "relation chatter: auth/user\nrelation blocked: auth/user\n"
+        f"permission read_granted = {read_granted}\npermission read = {read}\n{contextual}}}"
+    )
+
+
+_DECLARED = ("parent->read + read_granted + chatter", "parent->read_inbox + read_granted", "reader")
+
+
+@pytest.mark.parametrize(
+    ("synced", "parent_read", "holds"),
+    [
+        (_DECLARED, "reader", True),
+        # An override on either derived read, extending or tightening, leaves the purpose read unproved.
+        (("(parent->read + read_granted + chatter) & reader", *_DECLARED[1:]), "reader", False),
+        (("parent->read + read_granted + chatter + blocked", *_DECLARED[1:]), "reader", False),
+        ((_DECLARED[0], "(parent->read_inbox + read_granted) - blocked", _DECLARED[2]), "reader", False),
+        # One on the extension point both reads take keeps it.
+        ((*_DECLARED[:2], "reader & blocked"), "reader", True),
+        # The parent purpose read its arrow reaches must hold too.
+        (_DECLARED, "reader + blocked", False),
+        # A store not yet synced to the declaration states no purpose read.
+        ((_DECLARED[0], None, _DECLARED[2]), "reader", False),
+    ],
+)
+@isolate_apps()
+def test_a_purpose_read_holds_only_while_the_derived_reads_are_stated_as_declared(
+    monkeypatch, synced, parent_read, holds,
+):
+    class Record(models.Model, metaclass=RebacModelBase):
+        class Meta:
+            abstract = True
+            app_label = 'policy_probe'
+            rebac_resource_type = 'probe/record'
+
+    _policy(
+        monkeypatch,
+        _PARENT.format(read=parent_read) + _purpose(*synced),
+        _PARENT.format(read="reader") + _purpose(*_DECLARED),
+    )
     assert contextual_action_holds(Record, "read_inbox") is holds
 
 
