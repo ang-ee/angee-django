@@ -899,14 +899,17 @@ class StepRun(AngeeDataModel, concrete=True):
 
     @property
     def retry_blocker(self) -> str | None:
-        """State-only retry eligibility, shared by the locked action and read surface."""
+        """State-only retry eligibility, shared by the locked action and read surface.
+
+        Every unrouted failure of the run weighs, whoever asks: the run's step rows
+        are read elevated, never through the asker's scope.
+        """
         if not self.admits_in_place_retry:
             return "This step cannot be retried in place."
         run = self.run
         definition = run.policy_version.definition
-        failures = tuple(
-            (row.pk, row.node_key) for row in run.step_runs.all() if definition.unrouted_failure([row])
-        )
+        steps = run.step_runs.system_context(reason="workflows.retry_policy")
+        failures = tuple((row.pk, row.node_key) for row in steps if definition.unrouted_failure([row]))
         others = sorted(key for pk, key in failures if pk != self.pk)
         return f"Other unrouted failures remain: {', '.join(others)}." if others else None
 
@@ -918,8 +921,7 @@ class StepRun(AngeeDataModel, concrete=True):
         """
         if not self.admits_in_place_retry or not self.run._write_access(actor):
             return False
-        with system_context(reason="workflows.retry_policy"):
-            return self.retry_blocker is None
+        return self.retry_blocker is None
 
     class Meta:
         """Django options for node identity, fences and tick predicates."""

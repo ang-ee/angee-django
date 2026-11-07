@@ -57,7 +57,7 @@ with system_context(reason='test.iam.bootstrap'):
     assert created
     assert user._state.db == 'default'
     first_hash = user.password
-    command.handle(database='default', username='admin', email='admin@example.test', password='ignored-secret')
+    command.handle(username='admin', email='admin@example.test', password='ignored-secret')
     user.refresh_from_db()
     assert user.password == first_hash and user.check_password('initial-secret')
     assert backend().schema().get_definition('angee/role') is not None
@@ -77,7 +77,8 @@ config.compose_provision(context)
 assert calls == []
 settings.ANGEE_BOOTSTRAP_ADMIN_PASSWORD = 'explicit-secret'
 config.compose_provision(context)
-assert calls == [(('bootstrap_admin',), {'database': 'default'})]
+# The command writes through the default manager: the router places the admin.
+assert calls == [(('bootstrap_admin',), {})]
 '''
     result = subprocess.run(
         [sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[1],
