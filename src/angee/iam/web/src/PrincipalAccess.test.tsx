@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { render, renderHook, screen } from "@testing-library/react";
+import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listProps: [] as Record<string, unknown>[],
@@ -96,6 +96,7 @@ describe("principal access tab", () => {
     mocks.queryVariables = undefined;
     mocks.record = { assignment_subject: "auth/user:usr_alice" };
   });
+  afterEach(cleanup);
 
   test("offers the shared record tab", () => {
     expect(renderHook(() => usePrincipalAccessRecordTab()).result.current?.id).toBe("access");

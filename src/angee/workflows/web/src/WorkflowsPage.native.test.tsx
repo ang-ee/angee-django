@@ -33,13 +33,12 @@ test("versions and recent runs are filtered by the open workflow using native li
   await screen.findByText("usr_operator");
   fireEvent.click(screen.getByRole("tab", { name: "Recent runs" }));
   await screen.findAllByText("Failed");
-  for (const name of ["workflowversion", "workflowrun"]) {
-    const request = onRequest.mock.calls.find(([entry]) => entry.query.includes(`${name}(`))?.[0];
-    expect(request?.variables.where).toEqual({ _and: [
-      ...(name === "workflowrun" ? [{ status: { _eq: "failed" } }] : []),
-      { [name === "workflowrun" ? "version__workflow" : "workflow"]: { _eq: "wfl_review" } },
-    ] });
-  }
+  const versions = onRequest.mock.calls.find(([entry]) => entry.query.includes("workflowversion("))?.[0];
+  expect(versions?.variables.where).toEqual({ _and: [{ workflow: { _eq: "wfl_review" } }] });
+  // Recent runs group by status: the groups read is scoped to the workflow and carries each group's first page.
+  const runs = onRequest.mock.calls.find(([entry]) => entry.query.includes("workflowrun_groups") && entry.variables.with_rows === true)?.[0];
+  expect(runs?.variables.where).toEqual({ version__workflow: { _eq: "wfl_review" } });
+  expect(onRequest.mock.calls.some(([entry]) => entry.query.includes("workflowrun("))).toBe(false);
 });
 
 test("the workflow trigger tab uses its canonical scope and routes retained policies", async () => {
