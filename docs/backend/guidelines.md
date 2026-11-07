@@ -245,6 +245,10 @@ Use these owners instead of maintaining another contract in an addon:
   that Angee exposes but does not own, pass an explicit sqid public identity
   decoder to the resource instead of creating source-addon migration state. A
   raw primary-key compatibility path must be explicit and source-test-only.
+- A foreign key that its row discloses whatever the reader may see of the target
+  projects as [`public_id_field("relation", nullable=...)`](../../src/angee/graphql/ids.py),
+  the stored key without a target read; a reference that target readability must
+  redact projects as [`actor_scoped_public_id`](../../src/angee/graphql/relations.py).
 - Management commands stay thin. They parse CLI arguments, load settings/context,
   and call the owner. Command modules should not contain reusable business logic,
   import generated runtime models directly, or duplicate resource/composer/schema

@@ -8,6 +8,15 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — scalar foreign-key public ids
+
+- `public_id_field("relation", nullable=False)` (`angee.graphql.ids`) projects a
+  primary-key foreign key as a `PublicID` from the row's stored key, without
+  loading or authorizing the target; schema build refuses any other field, and
+  `actor_scoped_public_id` stays the owner when target readability must redact
+  the reference. Deferred: the hand-written equivalents in the `knowledge`,
+  `storage_integrate` and `dashboards` schemas move to it.
+
 ## Unreleased — one page bound, reader batches and loading labels
 
 Consumer-facing renames and removals, each with its replacement.
