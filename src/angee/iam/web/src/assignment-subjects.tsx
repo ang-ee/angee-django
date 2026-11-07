@@ -33,6 +33,8 @@ export interface AssignmentSubjectsResult {
   options: readonly AssignmentSubjectOption[];
   labels: ReadonlyMap<string, string>;
   isFetching: boolean;
+  /** The first read has not settled; a background refresh keeps the settled options. */
+  loading: boolean;
   error: unknown;
   truncated: boolean;
   refetch: () => unknown;
