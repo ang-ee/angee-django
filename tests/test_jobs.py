@@ -340,38 +340,3 @@ def test_celery_management_command_delegates_native_arguments_and_exit_status(
         Command().run_from_argv(["manage.py", "celery", *arguments])
     assert error.value.code == 7
     assert seen == [arguments]
-
-
-def test_enqueue_follows_selected_database_commit_and_rollback() -> None:
-    """A producer on a secondary database must not publish on the default commit."""
-
-    script = r'''
-from django.conf import settings
-settings.configure(
-    SECRET_KEY="selected-jobs", INSTALLED_APPS=[], CELERY_BROKER_URL="memory://",
-    DATABASES={alias: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
-               for alias in ("default", "producer")},
-)
-import django
-django.setup()
-from django.db import transaction
-from angee.jobs import enqueue
-sent = []
-enqueue.celery_app.send_task = lambda name, **options: sent.append((name, options["kwargs"]))
-with transaction.atomic(using="producer"):
-    with transaction.atomic(using="default"):
-        enqueue.enqueue_task("committed", kwargs={"id": 1}, using="producer")
-    assert sent == []
-    try:
-        with transaction.atomic(using="producer"):
-            enqueue.enqueue_task("rolled-back", kwargs={}, using="producer")
-            raise ValueError("rollback")
-    except ValueError:
-        pass
-    assert sent == []
-assert sent == [("committed", {"id": 1})]
-'''
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30, check=False,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr

@@ -1,10 +1,11 @@
+import { useAuthoredMutation } from "@angee/refine";
 import { useModelMetadata } from "@angee/metadata";
 import { Button, Glyph, errorMessage, useRecordChromeContext, useToast } from "@angee/ui";
 import * as React from "react";
 
-import { THREAD_CHATTER_EDGE } from "./documents";
+import { READ_MODELS, SetRecordFollowingDocument, THREAD_CHATTER_EDGE } from "./documents";
 import { useMessagingT } from "./i18n";
-import { useRecordFollowingQuery, useRecordFollowing } from "./useRecordThreadQuery";
+import { useRecordThreadQuery } from "./useRecordThreadQuery";
 
 /** Whether rows of `modelLabel` carry a chatter thread at all. */
 export function useCarriesChatter(modelLabel: string): boolean {
@@ -28,9 +29,12 @@ export function FollowRecordChrome(): React.ReactElement | null {
 function FollowToggle({ modelLabel, recordId }: { modelLabel: string; recordId: string }): React.ReactElement | null {
   const t = useMessagingT();
   const toast = useToast();
-  const variables = React.useMemo(() => ({ modelLabel, recordId }), [modelLabel, recordId]);
-  const query = useRecordFollowingQuery(variables);
-  const [setFollowing, state] = useRecordFollowing(modelLabel, recordId);
+  const variables = React.useMemo(() => ({ modelLabel, recordId, messageLimit: 1 }), [modelLabel, recordId]);
+  const query = useRecordThreadQuery(variables);
+  const [setFollowing, state] = useAuthoredMutation(SetRecordFollowingDocument, {
+    invalidateModels: READ_MODELS,
+    errorFrom: (data) => data?.set_record_following,
+  });
   const payload = query.data?.record_thread;
   if (!payload || payload.error_code) return null;
   const following = Boolean(payload.is_following);

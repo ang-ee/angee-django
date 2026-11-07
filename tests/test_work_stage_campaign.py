@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from rebac import actor_context, system_context
 
-from tests.work_campaign import HAND_VERBS, Queue, Stage, Task, hand_context, invoke, make_task, persisted_state
+from tests.work_campaign import HAND_VERBS, CreateTask, Queue, Stage, hand_context, invoke, make_task, persisted_state
 from tests.work_campaign import productivity_create_case as productivity_create_case
 from tests.work_campaign import work_case as work_case
 
@@ -40,7 +40,7 @@ def test_authored_stages_keep_seed_names_and_ordered_unstarted_fallback(work_cas
         queue.save(update_fields=["default_stage"])
         assert Stage.resolve_default(queue).pk == later.pk
         assert Stage.objects.get(queue=queue, category="triage").name == "Incoming"
-        assert Task.objects.create(title="Authored default", queue=queue).stage_id == later.pk
+        assert CreateTask.objects.create(title="Authored default", queue=queue).stage_id == later.pk
 
 
 @pytest.mark.parametrize("category", ["triage", "duplicate"])
@@ -122,7 +122,7 @@ def test_return_to_triage_requires_enabled_queue_and_triage_stage(work_case, que
 @pytest.mark.parametrize("adding", [False, True])
 def test_direct_triage_entry_names_the_owning_verb(work_case, adding):
     actor, queue = work_case
-    task = Task(title="New", queue=queue) if adding else make_task(queue)
+    task = CreateTask(title="New", queue=queue) if adding else make_task(queue)
     task.stage = Stage._base_manager.get(queue=queue, category="triage")
     diagnostic = "Use capture" if adding else "Use return_to_triage"
     with actor_context(actor), pytest.raises(ValidationError, match=diagnostic):
@@ -147,7 +147,7 @@ def test_start_in_second_started_stage_is_noop(work_case):
     actor, queue = work_case
     with system_context(reason="test.work.second_started"):
         second = Stage.objects.create(queue=queue, name="Second started", category="started", position=80)
-        task = Task.objects.create(title="Already working", queue=queue, stage=second)
+        task = CreateTask.objects.create(title="Already working", queue=queue, stage=second)
     before = persisted_state(task)
     with actor_context(actor):
         assert task.start() is task
@@ -252,8 +252,9 @@ def test_stage_policy_projects_distinct_board_and_manual_entry_populations(work_
 
 
 def test_stage_policy_graphql_filters_preserve_rule_lanes_but_refuse_manual_entry(work_case):
+    from angee.graphql.testing.documents import execute_schema
     from angee.work import schema as work_schema
-    from tests.conftest import addon_schema, execute_schema
+    from tests.conftest import addon_schema
     actor, queue = work_case
     with system_context(reason="test.work.stage_policy_schema"):
         automatic = Stage.objects.create(queue=queue, name="Rule lane", category="started", rule_owned=True)

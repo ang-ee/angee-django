@@ -67,7 +67,6 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         "aggregate": None,
         "groups": None,
         "groupsCount": None,
-        "groupedRows": None,
         "create": None,
         "update": None,
         "save": None,

@@ -1,10 +1,12 @@
-"""MCP mounts one native FastMCP StreamableHTTP server at ``/mcp``.
+"""MCP server — the generic seam that mounts one FastMCP server for the process.
 
-MCPConfig contributes its mount and lifespan through django-compose. The bearer
-verifier resolves the REBAC actor; generated resource readers and conventional
-``mcp_tools.register(server)`` contributions reuse the canonical GraphQL gates.
-Actor-only in-process tools declare that execution context in native Tool.meta.
+Mounts a single StreamableHTTP ASGI app at ``/mcp`` (via the ``http_mounts``
+seam in :mod:`angee.mcp.asgi`, which :mod:`angee.asgi` discovers and gives a
+lifespan), authenticates the bearer to a REBAC actor with a FastMCP token
+verifier, and authorizes each tool with rebac. It generates a bounded, read-only
+catalogue from the console GraphQL resource registry; other addons contribute
+curated tools by adding an ``mcp_tools.py`` with a ``register(server)`` callable
+(the conventional ``mcp_tools`` seam, inferred from the file; an ``pyproject.toml``
+``[tool.angee.mcp].tools`` entry overrides the dotted reference). The catalogue owner supplies
+the bearer→actor verifier through ``ANGEE_MCP_ACTOR_VERIFIER``.
 """
-
-RESOURCE_READER_TOOL_TAG = "angee:resource_reader"
-"""Native tool tag for generated resource-reader capabilities."""

@@ -17,13 +17,6 @@ export type JsonValue =
   | {
       [k: string]: JsonValue;
     };
-export type PropertyOrder = string[];
-export type Options = {
-  value: JsonValue;
-  label: string;
-  disabled?: boolean;
-  [k: string]: JsonValue | string | boolean | undefined;
-}[];
 /**
  * This interface was referenced by `undefined`'s JSON-Schema
  * via the `definition` "Filter".
@@ -91,7 +84,7 @@ export interface FormSpecWire {
   discriminator?: {
     propertyName: string;
   };
-  propertyOrder?: PropertyOrder;
+  propertyOrder?: string[];
   widget?: string;
   label?: string;
   addLabel?: string;
@@ -102,7 +95,12 @@ export interface FormSpecWire {
   omittable?: boolean;
   presenceRequired?: boolean;
   defaultValue?: JsonValue;
-  options?: Options;
+  options?: {
+    value: JsonValue;
+    label: string;
+    disabled?: boolean;
+    [k: string]: JsonValue | string | boolean | undefined;
+  }[];
   relation?: Relation;
   minLength?: number;
   maxLength?: number;
@@ -155,7 +153,7 @@ export interface Annotations {
   title?: string;
   description?: string;
   readOnly?: boolean;
-  propertyOrder?: PropertyOrder;
+  propertyOrder?: string[];
   widget?: string;
   label?: string;
   addLabel?: string;
@@ -166,7 +164,12 @@ export interface Annotations {
   omittable?: boolean;
   presenceRequired?: boolean;
   defaultValue?: JsonValue;
-  options?: Options;
+  options?: {
+    value: JsonValue;
+    label: string;
+    disabled?: boolean;
+    [k: string]: JsonValue | string | boolean | undefined;
+  }[];
   relation?: Relation;
   [k: string]: unknown;
 }

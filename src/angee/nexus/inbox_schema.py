@@ -1,13 +1,13 @@
 """Nexus explorer projections; personal-message query policy belongs to Messaging."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 import strawberry
 from django.apps import apps
+from rebac.graphql.strawberry_django import optimize
 
-from angee.base.exceptions import classify_error
-from angee.graphql.introspection import selected_field
+from angee.graphql.related_counts import RelatedCount
 from angee.integrate.schema import IntegrationType
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_groups import InboxGroupScope
@@ -69,16 +69,6 @@ class InboxResultInput:
         def to_pydantic(self) -> InboxResultOptions: ...
 
 
-@strawberry.input
-class InboxResultPageInput:
-    """One keyed leaf page in a result batch."""
-
-    key: str
-    scope: InboxGroupScopeInput | None = None
-    page: int = 1
-    size: int = 25
-
-
 @strawberry.type
 class InboxPage(Generic[Row]):
     """One typed projection for every server-paged explorer collection."""
@@ -86,6 +76,21 @@ class InboxPage(Generic[Row]):
     rows: list[Row]
     count: int
     message_count: int
+
+
+@strawberry.type
+class InboxPageWithMessages(Generic[Row]):
+    """A server page whose rows name messages by public ID; each message loads once.
+
+    ``messages`` is Messaging's readable queryset of the named messages, so the
+    native optimizer loads every relation the query selects in one read per
+    relation instead of one actor-scoped lookup per row.
+    """
+
+    rows: list[Row]
+    count: int
+    message_count: int
+    messages: list[MessageType]
 
 
 @strawberry.type
@@ -120,8 +125,8 @@ class InboxNavigatorRow:
 
 
 @strawberry.type
-class InboxGroup:
-    """A readable grouping key and counts inside that bucket."""
+class InboxGroup(Generic[Row]):
+    """A readable grouping key, counts inside that bucket, and its carried first page."""
 
     value: str | None
     label: str
@@ -131,28 +136,17 @@ class InboxGroup:
     platform: str
     account: str
     modality: str
+    rows: list[Row]
 
 
 @strawberry.type
-class InboxGroupPage:
+class InboxGroupPage(Generic[Row]):
     """Independent header page and distinct totals over its complete population."""
 
-    rows: list[InboxGroup]
+    rows: list[InboxGroup[Row]]
     count: int
     record_count: int
     message_count: int
-
-
-@strawberry.type
-class InboxConversation:
-    """One authorized logical conversation with at most three matching previews."""
-
-    id: str
-    thread: ThreadType | None
-    latest: datetime
-    matching_count: int
-    total_count: int
-    messages: list[MessageType]
 
 
 @strawberry.type
@@ -166,25 +160,23 @@ class InboxPartUse:
 
 @strawberry.type
 class InboxResultRow:
-    """One message, exact content target, or unavailable attachment use."""
+    """One message, exact content target, or unavailable attachment use; its page carries the message."""
 
     id: str
     latest: datetime
     count: int
     part_count: int
-    message: MessageType
+    message_id: strawberry.ID
     part: PartType | None
     file: FileType | None
     fragment: FragmentType | None
 
 
 @strawberry.type
-class InboxResultBatchPage:
-    """Preserve one independently paged result payload under the caller's key."""
+class InboxResultGroupPage(InboxGroupPage[InboxResultRow]):
+    """Result headers whose carried rows name messages; each message loads once."""
 
-    key: str
-    result: InboxPage[InboxResultRow] | None
-    error: str | None = None
+    messages: list[MessageType]
 
 
 @strawberry.type
@@ -204,26 +196,33 @@ class InboxRelatedTarget:
 
 @strawberry.type
 class InboxConnection:
-    """A typed use, participant, confirmed handle, or produced relation."""
+    """A typed use, participant, confirmed handle, or produced relation; its page carries the messages."""
 
     id: str
     label: str
     role: str
     provenance: str
     confidence: float | None
-    message: MessageType | None
+    message_id: strawberry.ID | None
     part: PartType | None
     handle: HandleType | None
-    src: MessageType | None
-    dst: MessageType | None
+    src_id: strawberry.ID | None
+    dst_id: strawberry.ID | None
 
 
 @strawberry.type
 class InboxMessage:
     """An independently readable message plus its current result membership."""
 
-    message: MessageType
+    selected: strawberry.Private[Any]
     matches: bool
+    uses: list[InboxPartUse]
+
+    @strawberry.field
+    def message(self, info: strawberry.Info) -> MessageType:
+        """Read the selected message once with every relation the query selects."""
+
+        return cast(MessageType, optimize(self.selected, info).get())
 
 
 @strawberry.type
@@ -247,21 +246,6 @@ class InboxTranscriptMatches:
     visible: list[str]
     previous: str | None
     next: str | None
-
-
-def _result_collection(
-    coverage: InboxCoverageInput | None, search: InboxSearchInput | None,
-    options: InboxResultInput | None, sender: str, circle: str,
-) -> InboxResults:
-    """Build the common authorized result population for both page transports."""
-
-    inbox = Message.objects.all().explorer()
-    rows = inbox.results(
-        coverage.to_pydantic() if coverage else InboxCoverage(),
-        search.to_pydantic() if search else InboxSearch(),
-        sender=sender, circle=circle,
-    )
-    return InboxResults(inbox, rows, options.to_pydantic() if options else InboxResultOptions())
 
 
 @strawberry.type
@@ -305,11 +289,11 @@ class NexusInboxQuery:
     @strawberry.field
     def inbox_connections(
         self, target: str, text: str = "", page: int = 1, size: int = 25, oldest: bool = False
-    ) -> InboxPage[InboxConnection]:
+    ) -> InboxPageWithMessages[InboxConnection]:
         """Page the target's declared row unit, without main scope or coverage."""
 
         return cast(
-            InboxPage[InboxConnection],
+            InboxPageWithMessages[InboxConnection],
             InboxRelated(Message.objects.all().explorer(), target).page(text=text, page=page, size=size, oldest=oldest),
         )
 
@@ -324,40 +308,21 @@ class NexusInboxQuery:
         scope: InboxGroupScopeInput | None = None,
         page: int = 1,
         size: int = 25,
-    ) -> InboxPage[InboxResultRow]:
+    ) -> InboxPageWithMessages[InboxResultRow]:
         """Page the chosen result unit inside the common matching-message population."""
 
-        result = _result_collection(coverage, search, options, sender, circle)
+        inbox = Message.objects.all().explorer()
+        rows = inbox.results(
+            coverage.to_pydantic() if coverage else InboxCoverage(),
+            search.to_pydantic() if search else InboxSearch(),
+            sender=sender,
+            circle=circle,
+        )
+        result = InboxResults(inbox, rows, options.to_pydantic() if options else InboxResultOptions())
         return cast(
-            InboxPage[InboxResultRow], result.page(scope=scope.to_pydantic() if scope else None, page=page, size=size)
+            InboxPageWithMessages[InboxResultRow],
+            result.page(scope=scope.to_pydantic() if scope else None, page=page, size=size),
         )
-
-    @strawberry.field
-    def inbox_results_batch(
-        self,
-        info: strawberry.Info,
-        pages: list[InboxResultPageInput],
-        coverage: InboxCoverageInput | None = None,
-        search: InboxSearchInput | None = None,
-        options: InboxResultInput | None = None,
-        sender: str = "",
-        circle: str = "",
-    ) -> list[InboxResultBatchPage]:
-        """Read independently paged result groups through one authorized population."""
-
-        if len(pages) > 100 or len({page.key for page in pages}) != len(pages):
-            raise ValueError("Choose at most 100 result pages with distinct keys.")
-        result = _result_collection(coverage, search, options, sender, circle)
-        reads = result.pages(
-            [(page.scope.to_pydantic() if page.scope else None, page.page, page.size) for page in pages],
-            include_channel=selected_field(info.selected_fields, "result.rows.message.channel"),
-        )
-        return [
-            InboxResultBatchPage(key=page.key, result=None, error=classify_error(read).message)
-            if isinstance(read, ValueError)
-            else InboxResultBatchPage(key=page.key, result=cast(InboxPage[InboxResultRow], read))
-            for page, read in zip(pages, reads, strict=True)
-        ]
 
     @strawberry.field
     def inbox_result_groups(
@@ -370,8 +335,9 @@ class NexusInboxQuery:
         circle: str = "",
         page: int = 1,
         size: int = 25,
-    ) -> InboxGroupPage:
-        """Page headers independently; totals count distinct rows across overlaps."""
+        leaf_size: int = 0,
+    ) -> InboxResultGroupPage:
+        """Page headers independently; with ``leaf_size`` each carries its first page of rows."""
 
         inbox = Message.objects.all().explorer()
         rows = inbox.results(
@@ -381,7 +347,7 @@ class NexusInboxQuery:
             circle=circle,
         )
         result = InboxResults(inbox, rows, options.to_pydantic() if options else InboxResultOptions())
-        return cast(InboxGroupPage, result.groups(axis).page(page=page, size=size))
+        return cast(InboxResultGroupPage, result.group_page(axis, page=page, size=size, leaf_size=leaf_size))
 
     @strawberry.field
     def inbox_navigator(
@@ -418,15 +384,19 @@ class NexusInboxQuery:
         options: InboxNavigatorInput | None = None,
         page: int = 1,
         size: int = 25,
-    ) -> InboxGroupPage:
-        """Page all applicable group headers before any member pages are loaded."""
+        leaf_size: int = 0,
+    ) -> InboxGroupPage[InboxNavigatorRow]:
+        """Page all applicable group headers; with ``leaf_size`` each carries its first identity page."""
 
         navigator = NexusInboxNavigator(
             Message.objects.all(),
             coverage.to_pydantic() if coverage else InboxCoverage(),
             options.to_pydantic() if options else NexusInboxNavigatorOptions(),
         )
-        return cast(InboxGroupPage, navigator.groups(axis).page(page=page, size=size))
+        return cast(
+            InboxGroupPage[InboxNavigatorRow],
+            navigator.group_page(axis, page=page, size=size, leaf_size=leaf_size),
+        )
 
     @strawberry.field
     def inbox_relation_kinds(self) -> list[str]:
@@ -475,31 +445,8 @@ class NexusInboxQuery:
         )
 
     @strawberry.field
-    def inbox_conversations(
-        self,
-        coverage: InboxCoverageInput | None = None,
-        search: InboxSearchInput | None = None,
-        sender: str = "",
-        circle: str = "",
-        page: int = 1,
-        size: int = 25,
-        oldest: bool = False,
-    ) -> InboxPage[InboxConversation]:
-        """Page conversation sections before fetching their bounded previews."""
-
-        inbox = Message.objects.all().explorer()
-        rows = inbox.results(
-            coverage.to_pydantic() if coverage else InboxCoverage(),
-            search.to_pydantic() if search else InboxSearch(),
-            sender=sender,
-            circle=circle,
-        )
-        return cast(InboxPage[InboxConversation], inbox.conversations(rows, page=page, size=size, oldest=oldest))
-
-    @strawberry.field
     def inbox_message(
         self,
-        info: strawberry.Info,
         id: strawberry.ID,
         coverage: InboxCoverageInput | None = None,
         search: InboxSearchInput | None = None,
@@ -509,22 +456,22 @@ class NexusInboxQuery:
         """Keep the selected message readable when coverage or sender changes."""
 
         inbox = Message.objects.all().explorer()
-        message, matches = inbox.selected_message(
-            str(id),
-            coverage.to_pydantic() if coverage else InboxCoverage(),
-            search.to_pydantic() if search else InboxSearch(),
-            sender=sender,
-            circle=circle,
-            include_title=selected_field(info.selected_fields, "message.title"),
+        message = inbox.message(str(id))
+        matches = (
+            inbox.results(
+                coverage.to_pydantic() if coverage else InboxCoverage(),
+                search.to_pydantic() if search else InboxSearch(),
+                sender=sender,
+                circle=circle,
+            )
+            .filter(pk=message.pk)
+            .exists()
         )
-        return InboxMessage(message=message, matches=matches)
-
-    @strawberry.field
-    def inbox_message_uses(self, id: strawberry.ID) -> list[InboxPartUse]:
-        """Count exact target uses only when the reader opens Related."""
-
-        uses = Message.objects.all().explorer().message_uses(str(id))
-        return cast(list[InboxPartUse], uses)
+        return InboxMessage(
+            selected=inbox.page_messages([message.pk]),
+            matches=matches,
+            uses=cast(list[InboxPartUse], inbox.part_uses(message)),
+        )
 
     @strawberry.field
     def inbox_related(
@@ -544,3 +491,15 @@ class NexusInboxQuery:
                 oldest=oldest,
             ),
         )
+
+
+def related_counts() -> tuple[RelatedCount, ...]:
+    """The readable messages using a file, as its Message backlinks group counts them."""
+
+    return (
+        RelatedCount(
+            "nexus.messages",
+            lambda file: Message.objects.all().explorer().uses(f"file:{file.sqid}"),
+            target="storage.File",
+        ),
+    )

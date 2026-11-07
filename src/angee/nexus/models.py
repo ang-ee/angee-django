@@ -27,13 +27,14 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from rebac import current_actor
 
-from angee.iam.models.base import ProtectedDataModel
-from angee.iam.permissions import actor_user_id, instance_actor
+from angee.base.models.base import AngeeDataModel
+from angee.base.permissions import actor_user_id
 from angee.nexus.managers import CadenceManager, TieManager
 
 
-class Tie(ProtectedDataModel, concrete=True):
+class Tie(AngeeDataModel, concrete=True):
     """A fully derived interaction edge between two canonically ordered parties."""
 
     sqid_prefix = "tie_"
@@ -144,7 +145,7 @@ class Tie(ProtectedDataModel, concrete=True):
         super().save(*args, **kwargs)
 
 
-class Cadence(ProtectedDataModel, concrete=True):
+class Cadence(AngeeDataModel, concrete=True):
     """One user's human-authored stay-in-touch intent for one party."""
 
     sqid_prefix = "cad_"
@@ -217,7 +218,7 @@ class Cadence(ProtectedDataModel, concrete=True):
 
         if self.user_id is not None:
             return
-        user_id = actor_user_id(instance_actor(self))
+        user_id = actor_user_id(self.actor() or current_actor())
         if user_id is None:
             raise ValidationError({"user": "An authenticated user is required."})
         user_model = type(self)._meta.get_field("user").related_model

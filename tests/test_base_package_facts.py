@@ -77,8 +77,7 @@ def test_composed_membership_uses_existing_closure(settings, monkeypatch):
     settings.COMPOSE_CLOSURE = enabled_apps(("angee.base",), group="angee.addons")
     monkeypatch.setattr(addons, "installed_components", lambda group: pytest.fail("repeated metadata scan"))
     assert addons.is_angee_addon(apps.get_app_config("base"))
-    # c7732c91a removed auth from base's closure; contenttypes remains its native dependency.
-    assert not addons.is_angee_addon(apps.get_app_config("contenttypes"))
+    assert not addons.is_angee_addon(apps.get_app_config("auth"))
 
 
 def test_graphql_discovery_scans_installed_metadata_once(monkeypatch):

@@ -15,7 +15,6 @@ from angee.decisions.testing.models import Decision
 from tests.conftest import create_user, vault_for
 
 pytestmark = [
-    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
@@ -72,11 +71,12 @@ def test_competing_assignees_cannot_replace_the_first_answer(composed_tables):
             Decision.system_queryset().select_for_update().get(pk=decision.pk)
             contender, pid = submit(
                 pool,
-                lambda: decision.decide(actor=reviewer, chosen=["reject"], revision=decision.revision
+                lambda: Decision.objects.decide(
+                    decision, actor=reviewer, chosen=["reject"], revision=decision.revision
                 ),
             )
             wait_for_lock(pid, contender)
-            decision.decide(actor=requester, chosen=["accept"], revision=decision.revision)
+            Decision.objects.decide(decision, actor=requester, chosen=["accept"], revision=decision.revision)
         with pytest.raises(StaleRevisionError):
             contender.result(timeout=10)
     retained = Decision.system_queryset().get(pk=decision.pk)

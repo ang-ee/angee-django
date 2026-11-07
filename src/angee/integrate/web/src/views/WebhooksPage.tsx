@@ -23,8 +23,8 @@ export function WebhooksPage(): React.ReactElement {
   const [rotateSecret] = useAuthoredMutation(RotateWebhookSecret, { transient: true });
   const revealSecret = useSecretReveal();
   const rotateById = React.useCallback<RecordActionRunner>(
-    async (id, context) => {
-      const result = await rotateSecret({ id }, { reconciliation: context.reconciliation });
+    async (id) => {
+      const result = await rotateSecret({ id });
       const outcome = result?.rotate_webhook_secret;
       if (outcome && !outcome.ok)
         throw new Error(t("webhooks.rotateFailed"));
@@ -49,6 +49,7 @@ export function WebhooksPage(): React.ReactElement {
         <Field name="target_url" title />
         <Field name="enabled" />
         <Group label={t("webhooks.filters")} columns={2}>
+          <Field name="event_kinds" widget="tagInput" />
           <Field name="impl_app_filter" widget="tagInput" />
           <Field name="integration_filter" />
         </Group>

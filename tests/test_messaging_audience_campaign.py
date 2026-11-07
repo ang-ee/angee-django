@@ -57,10 +57,7 @@ def test_inbox_delivery_always_creates_one_independently_acknowledged_row(audien
     assert notice.user_id == case.recipient.pk
     assert notice.notification_type == "inbox" and notice.read_at is None
     instant = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    with (
-        actor_context(case.recipient),
-        patch("angee.messaging.managers.notifications.timezone.now", return_value=instant),
-    ):
+    with actor_context(case.recipient), patch("angee.messaging.managers.timezone.now", return_value=instant):
         first = ThreadNotification.objects.mark_read(notice, case.recipient)
     with actor_context(case.recipient):
         second = ThreadNotification.objects.mark_read(notice, case.recipient)

@@ -23,56 +23,40 @@ def test_composition_context_reads_native_composed_and_ordinary_registries(setti
 
     root = Path(__file__).resolve().parents[1]
     env = {
-        name: value
-        for name, value in os.environ.items()
+        name: value for name, value in os.environ.items()
         if not name.startswith(("ANGEE_", "COMPOSE_")) and name not in {"DATABASE_URL", "DJANGO_SETTINGS_MODULE"}
     }
     # A direct context probe supplies the same import roots as native mypy_path.
     env["PYTHONPATH"] = os.pathsep.join((str(root / ".mypy_cache"), str(root)))
     result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "\n".join(
-                [
-                    # Initialize compiled mypy's import graph before importing its plugin API.
-                    "from mypy import api",
-                    "from django_compose.typing import CompositionContext",
-                    f"context = CompositionContext({settings_module!r})",
-                    "if context.django_settings_module == 'tests.typing_app.settings':",
-                    "    assert not context.apps_registry.is_installed('django_compose')",
-                    "    assert not hasattr(context.settings, 'COMPOSE_OUTPUT_DIR')",
-                    "    assert not context.composed",
-                    "    assert not context.static_names",
-                    "    assert not context.parents",
-                    "    assert not context.fields",
-                    "    assert not context.required_ancestors",
-                    "else:",
-                    "    assert context.apps_registry.is_installed('django_compose')",
-                    "    queue = context.apps_registry.get_model('work', 'Queue')",
-                    "    assert context.composed['angee.work.models.Queue'] is queue",
-                    "    assert context.get_model_class_by_fullname('angee.work.models.Queue') is queue",
-                    "    assert context.static_names[queue] == 'angee.work.models.Queue'",
-                    "    assert context.parents['angee.work.models.Queue'] == 'angee.spaces.models.Group'",
-                    "    from angee.integrate.models import Bridge, Integration",
-                    "    bridge = f'{Bridge.__module__}.{Bridge.__name__}'",
-                    "    integration = f'{Integration.__module__}.{Integration.__name__}'",
-                    "    assert context.parents[bridge] == integration",
-                ]
-            ),
-        ],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+        [sys.executable, "-c", "\n".join([
+            # Initialize compiled mypy's import graph before importing its plugin API.
+            "from mypy import api",
+            "from django_compose.typing import CompositionContext",
+            f"context = CompositionContext({settings_module!r})",
+            "if context.django_settings_module == 'tests.typing_app.settings':",
+            "    assert not context.apps_registry.is_installed('django_compose')",
+            "    assert not hasattr(context.settings, 'COMPOSE_OUTPUT_DIR')",
+            "    assert not context.composed",
+            "    assert not context.static_names",
+            "    assert not context.parents",
+            "    assert not context.fields",
+            "    assert not context.required_ancestors",
+            "else:",
+            "    assert context.apps_registry.is_installed('django_compose')",
+            "    queue = context.apps_registry.get_model('work', 'Queue')",
+            "    assert context.composed['angee.work.models.Queue'] is queue",
+            "    assert context.get_model_class_by_fullname('angee.work.models.Queue') is queue",
+            "    assert context.static_names[queue] == 'angee.work.models.Queue'",
+            "    assert context.parents['angee.work.models.Queue'] == 'angee.spaces.models.Group'",
+            "    assert context.parents['angee.integrate.models.Bridge'] == 'angee.integrate.models.Integration'",
+        ])], cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_abstract_self_fk_projection_has_the_same_unknown_pk_as_native_pk() -> None:
     with isolate_apps():
-
         class AbstractTree(models.Model):
             parent = models.ForeignKey("self", null=True, on_delete=models.PROTECT)
             count = models.IntegerField()
@@ -95,7 +79,6 @@ def test_abstract_self_fk_projection_has_the_same_unknown_pk_as_native_pk() -> N
 
 def test_concrete_self_fk_retains_native_relation_and_primary_key_metadata() -> None:
     with isolate_apps():
-
         class Tree(models.Model):
             parent = models.ForeignKey("self", null=True, on_delete=models.PROTECT)
             count = models.IntegerField()
@@ -110,34 +93,27 @@ def test_concrete_self_fk_retains_native_relation_and_primary_key_metadata() -> 
         assert context.get_primary_key_field(Tree) is Tree._meta.pk
 
 
+
+
+
+
 def test_system_queryset_preserves_configured_classes_and_scoped_locks() -> None:
     root = Path(__file__).resolve().parents[1]
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="tests.typing_app.settings")
     result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "\n".join(
-                [
-                    "import django; django.setup()",
-                    "from django.db.models import QuerySet",
-                    "from tests.typing_app.models import SystemRecord, SystemRecordQuerySet, PlainSystemRecord",
-                    "custom = SystemRecord.system_queryset(lock=('self',))",
-                    "assert type(custom) is SystemRecordQuerySet",
-                    "assert custom.query.select_for_update",
-                    "assert custom.query.select_for_update_of == ('self',)",
-                    "plain = PlainSystemRecord.system_queryset(lock=('self',))",
-                    "assert type(plain) is QuerySet",
-                    "assert plain.query.select_for_update",
-                    "assert plain.query.select_for_update_of == ('self',)",
-                ]
-            ),
-        ],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+        [sys.executable, "-c", "\n".join([
+            "import django; django.setup()",
+            "from django.db.models import QuerySet",
+            "from tests.typing_app.models import SystemRecord, SystemRecordQuerySet, PlainSystemRecord",
+            "custom = SystemRecord.system_queryset(lock=('self',))",
+            "assert type(custom) is SystemRecordQuerySet",
+            "assert custom.query.select_for_update",
+            "assert custom.query.select_for_update_of == ('self',)",
+            "plain = PlainSystemRecord.system_queryset(lock=('self',))",
+            "assert type(plain) is QuerySet",
+            "assert plain.query.select_for_update",
+            "assert plain.query.select_for_update_of == ('self',)",
+        ])], cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -225,8 +201,8 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "def system_row[RecordT: SystemRecord](model: type[RecordT]) -> RecordT:\n"
         "    assert_type(model.system_queryset(), SystemRecordQuerySet[RecordT])\n"
         "    return model.system_queryset().selected().get()\n"
-        "from angee.provenance.history import CaptureHistoryMixin\n"
-        "def history_write(record: CaptureHistoryMixin) -> None:\n"
+        "from angee.provenance.history import HistoryMixin\n"
+        "def history_write(record: HistoryMixin) -> None:\n"
         "    record.save_without_historical_record(force_update=False, using='default', update_fields=['name'])\n"
         "from angee.integrate.models import Bridge\n"
         "from angee.integrate.registry import models_with\n"
@@ -268,8 +244,8 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "SystemRecord.system_queryset().selected().missing_method()\n"
         "SystemRecord.system_queryset().get().count = {}\n"
         "PlainSystemRecord.system_queryset().selected()\n"
-        "from angee.provenance.history import CaptureHistoryMixin\n"
-        "def bad_history(record: CaptureHistoryMixin) -> None:\n"
+        "from angee.provenance.history import HistoryMixin\n"
+        "def bad_history(record: HistoryMixin) -> None:\n"
         "    record.save_without_historical_record(unknown=True)\n"
         "    record.save_without_historical_record(force_update='bad')\n"
     )
@@ -277,11 +253,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
     positive = subprocess.run(
         [*command, str(valid), str(root / "src/angee/base/managers.py")],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+        cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
     negative = subprocess.run([*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, check=False)
@@ -309,10 +281,6 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
     )
     disabled = subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(disabled_config), str(disabled_source)],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+        cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert disabled.returncode == 0, disabled.stdout + disabled.stderr

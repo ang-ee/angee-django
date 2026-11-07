@@ -381,10 +381,6 @@ export function relationSelectedOption(
   return { value: id, label: relationOptionLabel(row, labelField, id), ...relationOptionColor(row, colorField) };
 }
 
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
 function relationOptionsFromRows(
   rows: readonly Row[],
   labelField: string,

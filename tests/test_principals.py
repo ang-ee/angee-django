@@ -11,7 +11,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_subject_ref
 
 from angee.agents.testing.models import Agent
-from angee.iam.permissions import actor_user_id
+from angee.base.permissions import actor_user_id
 
 User = get_user_model()
 
@@ -97,7 +97,7 @@ def test_agent_full_save_without_name_change_does_not_touch_service_user(
     def unexpected_sync(agent: object) -> None:
         raise AssertionError("A no-op full save must not reconcile reader membership.")
 
-    monkeypatch.setattr("angee.agents.models.agents.sync_resource_reader_role", unexpected_sync)
+    monkeypatch.setattr("angee.agents.models.sync_resource_reader_role", unexpected_sync)
 
     user_table = User._meta.db_table
     with CaptureQueriesContext(connection) as captured:
@@ -115,10 +115,10 @@ def test_agent_create_rolls_back_when_service_user_sync_fails(
 
     owner = User.objects.create_user(username="principal-owner-rollback", email="principal-rollback@example.com")
 
-    def fail_sync(agent: object) -> object:
+    def fail_sync(agent: object, *, prefix: str) -> object:
         raise RuntimeError("sync failed")
 
-    monkeypatch.setattr(Agent, "sync_service_user", fail_sync)
+    monkeypatch.setattr("angee.agents.models.sync_service_user", fail_sync)
 
     with pytest.raises(RuntimeError, match="sync failed"):
         with system_context(reason="test.agent.service_user.rollback"):

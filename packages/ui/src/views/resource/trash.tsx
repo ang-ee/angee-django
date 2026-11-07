@@ -5,7 +5,7 @@ import {
   type CrudFilter,
   type HttpError,
 } from "@refinedev/core";
-import { extractActionOutcome, refineFieldsFromPaths, stableSerialize, type MutationExecutionOptions } from "@angee/refine";
+import { extractActionOutcome, refineFieldsFromPaths, stableSerialize } from "@angee/refine";
 import {
   holdsPermission,
   refineResourceName,
@@ -82,9 +82,9 @@ export interface UseTrashRecordResult {
   available: boolean;
   busy: boolean;
   /** Confirm, then move one record to the trash; resolves whether it moved. */
-  trash: (id: string, name?: string, execution?: MutationExecutionOptions) => Promise<boolean>;
+  trash: (id: string, name?: string) => Promise<boolean>;
   /** Take one record out of the trash; resolves whether it was restored. */
-  restore: (id: string, execution?: MutationExecutionOptions) => Promise<boolean>;
+  restore: (id: string) => Promise<boolean>;
 }
 
 /**
@@ -104,28 +104,26 @@ export function useTrashRecord(resource: DataResourceMetadata | null | undefined
     ...options,
     errorNotification: false,
     shouldInvalidate: (data) => data?.trash_record.ok === true,
-    records: (_data, variables) => resource ? [{ model: resource.modelLabel, id: variables.target_id }] : [],
   });
   const [restoreRecord, restoreState] = useAuthoredResourceMutation(RestoreRecord, {
     ...options,
     errorNotification: false,
     shouldInvalidate: (data) => data?.restore_record.ok === true,
-    records: (_data, variables) => resource ? [{ model: resource.modelLabel, id: variables.target_id }] : [],
   });
-  const trash = React.useCallback(async (id: string, name?: string, execution?: MutationExecutionOptions): Promise<boolean> => {
+  const trash = React.useCallback(async (id: string, name?: string): Promise<boolean> => {
     if (!targetType) return false;
     const answer = await askTrash(name);
     if (!answer) return false;
     const outcome = await settle(async () => extractActionOutcome(
-      await trashRecord({ target_type: targetType, target_id: id, reason: answer.reason }, execution),
+      await trashRecord({ target_type: targetType, target_id: id, reason: answer.reason }),
       "trash_record",
     ));
     return outcome?.ok === true;
   }, [askTrash, settle, targetType, trashRecord]);
-  const restore = React.useCallback(async (id: string, execution?: MutationExecutionOptions): Promise<boolean> => {
+  const restore = React.useCallback(async (id: string): Promise<boolean> => {
     if (!targetType) return false;
     const outcome = await settle(async () => extractActionOutcome(
-      await restoreRecord({ target_type: targetType, target_id: id }, execution),
+      await restoreRecord({ target_type: targetType, target_id: id }),
       "restore_record",
     ));
     return outcome?.ok === true;

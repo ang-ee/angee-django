@@ -11,6 +11,7 @@ from typing import Any, ClassVar, Literal, TypeVar, cast, get_args, get_origin
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
 
@@ -22,8 +23,8 @@ from angee.jobs.timeouts import TASK_SETTLEMENT_RESERVE_SECONDS, task_time_budge
 from angee.workflows.states import (
     DONE_OUTCOME,
     ERROR_OUTCOME,
-    AttemptResult,
     Outcome,
+    StepRunStatus,
     WaitingKind,
 )
 
@@ -88,11 +89,8 @@ class Done(_Settlement):
 
     def check(self, step: type[Step], *, config: Any = None) -> Done:
         outcome = validate_value(Outcome, self.outcome, field="outcome")
-        if (
-            outcome == ERROR_OUTCOME
-            and outcome not in step.outcomes_for(config)
-            or outcome not in step.available_outcomes(config)
-        ):
+        if (outcome == ERROR_OUTCOME and outcome not in step.outcomes_for(config)
+                or outcome not in step.available_outcomes(config)):
             raise ValidationError(f"Step {step.key!r} does not offer success outcome {outcome!r}.")
         if outcome in step.empty_outcomes:
             return Done(outcome=outcome)
@@ -105,7 +103,10 @@ class Done(_Settlement):
         return Done(output=output, outcome=outcome)
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
-        return rows.to_succeeded(output=self.output, outcome=self.outcome)
+        return rows.update(
+            **rows._cleared_wait(), status=StepRunStatus.SUCCEEDED,
+            output=self.output, outcome=self.outcome, retries=0,
+        )
 
 
 @dataclass(frozen=True)
@@ -165,7 +166,19 @@ class Fail(_Settlement):
         return replace(self, error=validate_value(str, self.error, field="error"))
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
-        return rows.fail_attempt(step_run, attempt, error=self.error)
+        retries = step_run.retries + 1
+        if attempt.retryable and step_run.requires_duplicate_acknowledgement:
+            return rows.to_waiting(kind=WaitingKind.ERROR, reason="possible duplicate effect", retries=retries)
+        if attempt.retryable and retries < step_run.step.retry.max_attempts:
+            return rows.to_waiting(
+                until=Now() + step_run.step.retry.delay_for(retries),
+                state=step_run.state, retries=retries,
+            )
+        error_field = apps.get_model("workflows", "StepAttempt")._meta.get_field("error")
+        return rows.update(
+            **rows._cleared_wait(), status=StepRunStatus.FAILED,
+            outcome=ERROR_OUTCOME, output={"error": error_field.get_prep_value(self.error)}, retries=retries,
+        )
 
 
 @dataclass(frozen=True)
@@ -179,7 +192,9 @@ class Ask(_Settlement):
     def check(self, step: type[Step], *, config: Any = None) -> Ask:
         request = DecisionRequest.model_validate(self.request)
         offered = step.available_outcomes(config)
-        if any(alternative.outcome not in offered for alternative in request.proposal.alternatives):
+        if any(
+            alternative.outcome not in offered for alternative in request.proposal.alternatives
+        ):
             raise ValidationError("A proposal names an outcome not declared by the asking step.")
         return replace(self, request=request, state=step.serialize_state(self.state))
 
@@ -197,48 +212,6 @@ class Ask(_Settlement):
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
         return rows.to_waiting(kind=WaitingKind.DECISION, state=self.state, decision_id=self.decision_id)
-
-
-@dataclass(frozen=True)
-class _AttemptRecord:
-    """Runner-owned outcome and diagnostics for one claimed attempt."""
-
-    settlement: _Settlement
-    result: AttemptResult = cast(AttemptResult, AttemptResult.SUCCEEDED)
-    error: str = ""
-    diagnostic_error: str | None = None
-    stacktrace: str = ""
-    retryable: bool = False
-    timed_out: bool = False
-
-    @classmethod
-    def from_settlement(cls, settlement: _Settlement) -> _AttemptRecord:
-        if isinstance(settlement, Fail):
-            return cls(settlement, result=cast(AttemptResult, AttemptResult.FAILED), error=settlement.error)
-        return cls(settlement)
-
-    @classmethod
-    def failure(
-        cls,
-        error: str,
-        *,
-        diagnostic_error: str | None = None,
-        stacktrace: str = "",
-        retryable: bool = False,
-        timed_out: bool = False,
-    ) -> _AttemptRecord:
-        return cls(
-            Fail(error=error),
-            result=cast(
-                AttemptResult,
-                AttemptResult.TIMED_OUT if timed_out else AttemptResult.FAILED,
-            ),
-            error=error,
-            diagnostic_error=diagnostic_error,
-            stacktrace=stacktrace,
-            retryable=retryable,
-            timed_out=timed_out,
-        )
 
 
 type Settlement = Done | Wait | NextPage | Fail | Ask
@@ -352,6 +325,11 @@ class Step[I, O, C](ImplBase):
     def normalize_input(cls, value: Any) -> Any:
         """Return JSON input after applying its model's defaults and validation."""
         return get_type_adapter(cls.input_model).dump_python(cls.parse_input(value), mode="json", by_alias=True)
+
+    @staticmethod
+    def done(output: Any = None, *, outcome: str = DONE_OUTCOME) -> Done:
+        """Construct a completion without validating or serializing the body's values."""
+        return Done(output=output, outcome=outcome)
 
     @classmethod
     def serialize_state(cls, state: Any) -> Any:

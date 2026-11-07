@@ -9,13 +9,12 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
-from rebac import generic_target
 from rebac.resources import model_resource_type
 
 from angee.base.models.identity import instance_from_public_id, public_id_for
+from angee.base.permissions import require_rebac_queryset
 from angee.base.querysets import row_lock_paths
 from angee.decisions.contracts import DecisionRequest
-from angee.iam.permissions import require_rebac_queryset
 from angee.workflows.runner import runner
 from angee.workflows.states import DONE_OUTCOME, NoteTone, RunRelation
 from angee.workflows.steps import Ask, Done, Fail, NextPage, Step, StepMode, Wait
@@ -35,9 +34,6 @@ class StepContext:
     now: datetime
     pending_records: list[models.Model] = field(default_factory=list, init=False, repr=False)
     pending_notes: list[dict[str, str]] = field(default_factory=list, init=False, repr=False)
-    _admissions: dict[int, tuple[type[models.Model], Any, Any, Any, str, Any, Any]] = field(
-        default_factory=dict, init=False, repr=False
-    )
 
     @property
     def state(self) -> Any:
@@ -58,6 +54,16 @@ class StepContext:
         page's external effects. The first claim owns token generation.
         """
         return f"{self.step_run.idempotency_token}:{self.step_run.page_index}"
+
+    @property
+    def is_last_attempt(self) -> bool:
+        """Whether another failure exhausts the current page's retry allowance."""
+        return self.step_run.retries + 1 >= self.step.retry.max_attempts
+
+    @property
+    def retry_acknowledged(self) -> bool:
+        """Whether an operator accepted a possible duplicate for this attempt."""
+        return self.attempt.acknowledged_by_id is not None
 
     @property
     def subject(self) -> models.Model | None:
@@ -91,24 +97,17 @@ class StepContext:
             self._require_mode(StepMode.DATABASE)
         if not model_resource_type(model):
             raise PermissionDenied(f"{model._meta.label} has no actor-scoped read contract.")
-        queryset = (
-            require_rebac_queryset(model).using(self.run._state.db).with_actor(self.actor).with_action(permission)
-        )
+        queryset = require_rebac_queryset(model, actor=self.actor).with_action(permission)
         if lock:
             queryset = queryset.select_for_update(no_key=True, of=row_lock_paths(model))
         instance = instance_from_public_id(model, public_id, queryset=queryset)
         if instance is None:
             raise PermissionDenied("The requested record is absent or inaccessible.")
-        self._admissions[id(instance)] = (
-            type(instance), instance.pk, instance._state.db,
-            instance.__dict__.get("revision"), permission,
-            self.actor, generic_target(instance, using=self.run._state.db),
-        )
         return instance
 
     def done(self, output: Any = None, *, outcome: str = DONE_OUTCOME) -> Done:
         """Construct this step's completion for checking at the body boundary."""
-        return Done(output=output, outcome=outcome)
+        return self.step.done(output, outcome=outcome)
 
     def wait(self, *, until: datetime | None = None, state: Any = None) -> Wait:
         """Wait for registered records or an aware deadline, retaining the checkpoint."""
@@ -117,9 +116,7 @@ class StepContext:
     def watch(self, *records: models.Model) -> None:
         """Observe later saves transactionally; lock records before testing a wait predicate."""
         self._require_mode(StepMode.DATABASE)
-        apps.get_model("workflows", "StepWatch").objects.db_manager(self.run._state.db).register(
-            self.step_run, records, actor=self.actor
-        )
+        apps.get_model("workflows", "StepWatch").objects.register(self.step_run, records, actor=self.actor)
 
     def next_page(self, state: Any = None) -> NextPage:
         """Continue with a raw checkpoint; checking and retry reset belong to settlement."""
@@ -141,7 +138,7 @@ class StepContext:
         row = instance_from_public_id(
             model,
             decision_ref,
-            queryset=model.objects.db_manager(self.run._state.db).with_actor(self.actor),
+            queryset=model.objects.with_actor(self.actor),
         )
         if row is None or self.run not in row.requesting_records():
             raise PermissionDenied("The decision is absent or inaccessible in this run.")
@@ -168,16 +165,7 @@ class StepContext:
         The returned link is unsaved until settlement commits. Failed or
         superseded attempts discard their staged evidence.
         """
-        admission = self._admissions.get(id(record))
-        target = None
-        if admission is not None and admission[:5] == (
-            type(record), record.pk, record._state.db, record.__dict__.get("revision"), "read"
-        ):
-            if admission[5] is self.actor:
-                target = admission[6]
-        link = runner.record(
-            self.step_run, record, label=label, operation=operation, actor=self.actor, admitted_target=target
-        )
+        link = runner.record(self.step_run, record, label=label, operation=operation, actor=self.actor)
         self.pending_records.append(link)
         return link
 
@@ -187,31 +175,17 @@ class StepContext:
             raise ValidationError("A note needs a message and a supported tone.")
         self.pending_notes.append({"tone": tone, "message": message})
 
-    def start_run(
-        self,
-        workflow: Any,
-        *,
-        subject: Any = None,
-        input: Any = None,
-        request_key: str | None = None,
-        relation: str = str(RunRelation.OWNED),
-        version: Any = None,
-    ) -> Any:
+    def start_run(self, workflow: Any, *, subject: Any = None, input: Any = None,
+                  request_key: str | None = None, relation: str = str(RunRelation.OWNED), version: Any = None) -> Any:
         """Start one child through admission, deriving a retry-stable key when omitted."""
-        return (
-            type(self.run)
-            .objects.db_manager(self.run._state.db)
-            .start(
-                workflow,
-                actor=self.actor,
-                subject=subject,
-                input=input,
-                request_key=request_key,
-                parent_step=self.step_run,
-                relation=relation,
-                version=version,
-            )
+        return type(self.run).objects.start(
+            workflow, actor=self.actor, subject=subject, input=input, request_key=request_key,
+            parent_step=self.step_run, relation=relation, version=version,
         )
+
+    def cancel_run(self, run: Any) -> None:
+        """Request cancellation as this run's actor after the body commits."""
+        type(self.run).objects.cancel_on_commit(run, self.actor)
 
     def _require_mode(self, mode: StepMode) -> None:
         """Reject operations outside their declared transaction boundary."""

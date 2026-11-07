@@ -54,6 +54,7 @@ from angee.agents.models import (
 )
 from angee.agents.models import Agent as AbstractAgent
 from angee.agents.sdk_backends import SDKInferenceBackend
+from angee.agents.skills import parse_skill_meta
 from angee.agents.testing.models import InferenceModel, InferenceProvider, Skill
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
@@ -107,31 +108,31 @@ def test_agent_runtime_registry_matches_implementation_keys() -> None:
     assert AbstractAgent._meta.get_field("runtime_class").check() == []
 
 
-# --- Skill.parse_manifest (pure) ---------------------------------------------
+# --- parse_skill_meta (pure) --------------------------------------------------
 
 
-def test_parse_skill_manifest_reads_frontmatter() -> None:
+def test_parse_skill_meta_reads_frontmatter() -> None:
     """The parser lifts name/description and keeps the rest as metadata."""
 
-    descriptor = Skill.parse_manifest(b"---\nname: Calculator\ndescription: arithmetic\nversion: 2\n---\nbody")
+    descriptor = parse_skill_meta(b"---\nname: Calculator\ndescription: arithmetic\nversion: 2\n---\nbody")
     assert descriptor["name"] == "Calculator"
     assert descriptor["description"] == "arithmetic"
     assert descriptor["metadata"] == {"version": 2}
 
 
-def test_parse_skill_manifest_coerces_typed_values_json_safe() -> None:
+def test_parse_skill_meta_coerces_typed_values_json_safe() -> None:
     """An unquoted date becomes a ``date`` YAML-side; the parser keeps metadata JSON-safe."""
 
-    descriptor = Skill.parse_manifest(b"---\nname: Dated\nreleased: 2024-01-15\n---\n")
+    descriptor = parse_skill_meta(b"---\nname: Dated\nreleased: 2024-01-15\n---\n")
     assert descriptor["metadata"] == {"released": "2024-01-15"}
     json.dumps(descriptor["metadata"])  # must not raise
 
 
-def test_parse_skill_manifest_tolerates_missing_or_malformed_frontmatter() -> None:
+def test_parse_skill_meta_tolerates_missing_or_malformed_frontmatter() -> None:
     """No frontmatter (or an unterminated block) yields an empty descriptor, not an error."""
 
-    assert Skill.parse_manifest(b"# just a heading")["name"] == ""
-    assert Skill.parse_manifest(b"---\nnot: [valid")["metadata"] == {}
+    assert parse_skill_meta(b"# just a heading")["name"] == ""
+    assert parse_skill_meta(b"---\nnot: [valid")["metadata"] == {}
 
 
 # --- skill discovery ----------------------------------------------------------
@@ -1050,7 +1051,7 @@ def test_ollama_backend_disables_environment_proxies_for_both_sdk_clients(
     ]
 
 
-@pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded", 1.5, "1.5", float("inf")])
+@pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded"])
 def test_ollama_backend_rejects_invalid_generation_limits(generation_limit: object) -> None:
     backend = OllamaInferenceBackend(
         SimpleNamespace(credential=None, base_url="", config={"generation_limit": generation_limit})

@@ -40,15 +40,6 @@ class DocumentRef:
     lines: tuple[LineRef, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class ExtractionRef:
-    """One retained revision in its immutable lineage."""
-
-    lineage_id: int
-    public_id: str
-    revision: int
-
-
 class _Outcome(BaseModel):
     """Facts shared by the two exclusive retained revision outcomes."""
 
@@ -57,7 +48,6 @@ class _Outcome(BaseModel):
     used_model_roles: list[ExtractionRole] = Field(default_factory=list)
     unresolved_reasons: list[str] = Field(default_factory=list)
     document: dict[str, Any] = Field(default_factory=dict)
-    corrections: list[dict[str, Any]] = Field(default_factory=list)
     request_digest: str
     identity_correspondence: dict[str, Any] | None = None
 
@@ -78,18 +68,6 @@ class FailedOutcome(_Outcome):
 
 ExtractionOutcome = Annotated[SucceededOutcome | FailedOutcome, Field(discriminator="kind")]
 outcome_adapter: TypeAdapter[SucceededOutcome | FailedOutcome] = TypeAdapter(ExtractionOutcome)
-
-
-@dataclass(frozen=True, slots=True)
-class CorrectionRef:
-    """Authority over scalar facts changed or explicitly confirmed."""
-
-    original_extraction_id: str
-    original_revision: int
-    decision_id: str
-    corrected_paths: tuple[str, ...]
-    revision_parent_extraction_id: str | None = None
-    revision_parent_revision: int | None = None
 
 
 class ExtractionPartKind(TextChoices):

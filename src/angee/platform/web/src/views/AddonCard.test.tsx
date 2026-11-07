@@ -100,6 +100,8 @@ function row(overrides: Partial<AddonResourceRow> = {}): AddonResourceRow {
   };
 }
 
+const CONTEXT = { refresh: vi.fn() };
+
 beforeEach(() => {
   mocks.resourceMutation.mockReset();
   mocks.resourceMutation.mockImplementation((document: unknown) => {
@@ -123,6 +125,7 @@ beforeEach(() => {
   mocks.refetchPreview.mockClear();
   mocks.toast.success.mockClear();
   mocks.toast.danger.mockClear();
+  CONTEXT.refresh.mockClear();
 });
 afterEach(cleanup);
 
@@ -164,7 +167,7 @@ describe("AddonCardActions", () => {
   test("uses the server's labels in the confirmation title and unresolved impacts", () => {
     mocks.preview.enableLabel = "angee.tags";
     mocks.preview.disableLabel = "angee.legacy";
-    render(<AddonCardActions row={row({ label: "angee.notes", state: "DISABLED" })} />);
+    render(<AddonCardActions row={row({ label: "angee.notes", state: "DISABLED" })} context={CONTEXT} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Enable" }));
 
@@ -174,7 +177,7 @@ describe("AddonCardActions", () => {
   });
 
   test("routes root and dependency mutations through the resource owner", () => {
-    render(<AddonCardActions row={row()} />);
+    render(<AddonCardActions row={row()} context={CONTEXT} />);
 
     expect(mocks.resourceMutation).toHaveBeenCalledTimes(4);
     expect(mocks.resourceMutation.mock.calls.map((call) => call[0])).toEqual([
@@ -201,7 +204,7 @@ describe("AddonCardActions", () => {
   });
 
   test("previews both deltas before revision-bound disable", async () => {
-    render(<AddonCardActions row={row()} />);
+    render(<AddonCardActions row={row()} context={CONTEXT} />);
     const button = screen.getByRole("button", { name: "Disable" });
     expect((button as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(button);
@@ -216,13 +219,13 @@ describe("AddonCardActions", () => {
     fireEvent.click(confirmation);
     await waitFor(() => expect(mocks.disable).toHaveBeenCalledWith({ addon: "angee.notes", revision: "revision-1" }));
     expect(mocks.toast.success).toHaveBeenCalled();
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(CONTEXT.refresh).toHaveBeenCalled();
   });
 
   test("opens a read-only refusal preview for a forced addon", () => {
     mocks.preview.can_apply = false;
     mocks.preview.refusal = "Required by angee.messaging.";
-    render(<AddonCardActions row={row({ forced: true })} />);
+    render(<AddonCardActions row={row({ forced: true })} context={CONTEXT} />);
     const button = screen.getByRole("button", { name: "Disable" });
     expect((button as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(button);
@@ -233,7 +236,7 @@ describe("AddonCardActions", () => {
   });
 
   test("previews before revision-bound enable of an installed addon", async () => {
-    render(<AddonCardActions row={row({ state: "DISABLED" })} />);
+    render(<AddonCardActions row={row({ state: "DISABLED" })} context={CONTEXT} />);
     fireEvent.click(screen.getByRole("button", { name: "Enable" }));
     expect(mocks.enable).not.toHaveBeenCalled();
     const confirmation = screen.getAllByRole("button", { name: "Enable" }).at(-1);
@@ -242,12 +245,12 @@ describe("AddonCardActions", () => {
     await waitFor(() => expect(mocks.enable).toHaveBeenCalledExactlyOnceWith({ addon: "angee.notes", revision: "revision-1" }));
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.toast.success).toHaveBeenCalledWith({ title: "Enabled" });
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(CONTEXT.refresh).toHaveBeenCalledOnce();
   });
 
   test("leaves queued state to the card badge", () => {
     const { container } = render(
-      <AddonCardActions row={row({ state: "DISABLED", pending: true })} />,
+      <AddonCardActions row={row({ state: "DISABLED", pending: true })} context={CONTEXT} />,
     );
     expect(container.textContent).toBe("");
   });
@@ -255,7 +258,7 @@ describe("AddonCardActions", () => {
   test("shows pending restart for a queued disable", () => {
     // An enabled addon dropped from settings.yaml is still composed but pending disable:
     // the footer must show the restart state, never a live Disable it could re-fire.
-    render(<AddonCardActions row={row({ state: "ENABLED", pending: true })} />);
+    render(<AddonCardActions row={row({ state: "ENABLED", pending: true })} context={CONTEXT} />);
     expect(screen.queryByRole("button", { name: "Disable" })).toBeNull();
   });
 
@@ -263,7 +266,7 @@ describe("AddonCardActions", () => {
     { state: "DISABLED", source: "REMOTE" },
     { state: "REMOVED", source: "LOCAL" },
   ])("queues a dependency install for $source/$state without a root preview", async ({ state, source }) => {
-    render(<AddonCardActions row={row({ state, source })} />);
+    render(<AddonCardActions row={row({ state, source })} context={CONTEXT} />);
     const button = screen.getByRole("button", { name: "Install" });
     expect((button as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(button);
@@ -273,10 +276,11 @@ describe("AddonCardActions", () => {
     expect(mocks.enable).not.toHaveBeenCalled();
     expect(mocks.disable).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(CONTEXT.refresh).not.toHaveBeenCalled();
   });
 
   test("queues dependency removal of an installed disabled addon", async () => {
-    render(<AddonCardActions row={row({ state: "DISABLED" })} />);
+    render(<AddonCardActions row={row({ state: "DISABLED" })} context={CONTEXT} />);
     const button = screen.getByRole("button", { name: "Uninstall" });
     fireEvent.click(button);
     fireEvent.click(button);
@@ -285,14 +289,16 @@ describe("AddonCardActions", () => {
     expect(mocks.disable).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(CONTEXT.refresh).not.toHaveBeenCalled();
   });
 
   test("does not report a queued dependency job when the server returns no operation", async () => {
     mocks.install.mockResolvedValueOnce({ install: null });
-    render(<AddonCardActions row={row({ state: "REMOVED" })} />);
+    render(<AddonCardActions row={row({ state: "REMOVED" })} context={CONTEXT} />);
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
     await waitFor(() => expect(mocks.toast.danger).toHaveBeenCalledOnce());
     expect(mocks.toast.success).not.toHaveBeenCalled();
     expect(mocks.enable).not.toHaveBeenCalled();
+    expect(CONTEXT.refresh).not.toHaveBeenCalled();
   });
 });

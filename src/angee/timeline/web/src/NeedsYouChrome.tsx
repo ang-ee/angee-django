@@ -6,7 +6,7 @@ import { useTimelineFeed } from "./useTimelineFeed";
 
 /**
  * The record-header Needs you control: how many lines on this record wait on
- * the viewer, from the first timeline page. It shows only while something waits and opens
+ * the viewer, from the shared timeline read. It shows only while something waits and opens
  * the Timeline on the needs-me scope; the lines carry the verbs.
  */
 export function NeedsYouChrome(): React.ReactElement | null {

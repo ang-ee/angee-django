@@ -11,7 +11,7 @@ from typing import Any, BinaryIO, cast
 
 from django.core.exceptions import ValidationError
 
-from angee.integrate_iphone.backup import BackupError, IosBackup, logical_key, validate_domain
+from angee.integrate_iphone.backup import BackupError, IosBackup, logical_key, split_logical_key
 from angee.storage.exceptions import UploadError
 from angee.storage_integrate.mounts import (
     LocalFolderMountBackend,
@@ -52,21 +52,6 @@ class IphoneBackupMountBackend(LocalFolderMountBackend):
         super().__init__(integration)
         self._backup_reader: IosBackup | None = None
         self._blob_by_path: dict[str, Path] = {}
-
-    def close(self) -> None:
-        """Release the cycle's manifest connection and cached physical paths."""
-
-        try:
-            if self._backup_reader is not None:
-                self._backup_reader.close()
-        finally:
-            self._backup_reader = None
-            self._blob_by_path.clear()
-            self._entry_mime_types.clear()
-            self.observed_paths.clear()
-            self.scan_errors = 0
-            self._root = None
-            super().close()
 
     @property
     def backup(self) -> IosBackup:
@@ -130,7 +115,9 @@ class IphoneBackupMountBackend(LocalFolderMountBackend):
         seen: set[str] = set()
         for domain, relative_path in self.backup.iter_dirs():
             try:
-                domain_root = validate_domain(domain)
+                # A domain root is a directory, not a file key; the sentinel is
+                # used only to ask the shared key owner to validate its segment.
+                domain_root, _sentinel = split_logical_key(logical_key(domain, "__root__"))
                 directory = (
                     logical_key(domain, relative_path) if relative_path else domain_root
                 )

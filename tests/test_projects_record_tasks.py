@@ -178,7 +178,7 @@ def test_a_deleted_record_takes_its_tasks_with_it(bulk: bool) -> None:
 
     with actor_context(writer):
         if bulk:
-            ChatterDoc.objects.with_actor(writer).filter(pk=doc.pk).delete()
+            ChatterDoc.objects.as_user(writer).filter(pk=doc.pk).delete()
         else:
             _as(writer, doc).delete()
 

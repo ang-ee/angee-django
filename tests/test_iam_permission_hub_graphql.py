@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import importlib
+from functools import partial
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.middleware import SessionMiddleware
-from django.http import HttpResponse
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
 from rebac import (
     ObjectRef,
     RelationshipTuple,
@@ -21,15 +19,20 @@ from rebac import (
     write_relationships,
 )
 from rebac.actors import to_subject_ref
-from rebac.models import PermissionAuditEvent, active_relationship_model
+from rebac.models import active_relationship_model
 from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant, revoke
 
-from angee.iam.graphql.resources import _grantable_relations
+from angee.base.pagination import MAX_PAGE_SIZE
+from angee.graphql.data.metadata import _grantable_relations
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.projects.testing.models import Project
-from tests.conftest import addon_schema, execute_schema
+from tests.conftest import addon_schema
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
+
+# IAM's verbs read and rotate the request session, so every operation here carries one.
+_execute = partial(execute_schema, session=True)
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -343,6 +346,33 @@ def test_roles_include_declared_empty_and_tuple_only_legacy_rows(
         user=admin,
     )
     assert rejected.errors is not None
+
+
+def test_the_overview_reads_only_grantable_roles_within_one_page(composed_tables: None) -> None:
+    """The overview's grant picker reads ``where: {grantable}`` with ``limit`` at the page bound.
+
+    The grantable catalogue is the composition's declared role objects; this one
+    composes every framework addon, and it fits the page with room to spare.
+    """
+
+    admin = _platform_admin("hub-role-page-admin")
+    subject = to_subject_ref(User.objects.create_user(username="hub-role-page-target"))
+    with system_context(reason="test tuple-only legacy role"):
+        active_relationship_model().objects.create(
+            resource_type="angee/role", resource_id="retired_reviewer", relation=ROLE_RELATION,
+            subject_type=subject.subject_type, subject_id=subject.subject_id,
+            optional_subject_relation=subject.optional_relation, caveat_name="", caveat_context=None,
+        )
+    rows = _data(_execute(
+        _schema("console"),
+        f"query {{ iam_roles(where: {{grantable: {{_eq: true}}}}, limit: {MAX_PAGE_SIZE}) {{ id grantable }} }}",
+        user=admin,
+    ))["iam_roles"]
+    grantable = [row for row in iam_roles.permission_hub_roles(limit=None) if row.grantable]
+    assert {row["id"] for row in rows} == {row.id for row in grantable}
+    assert all(row["grantable"] for row in rows)
+    assert "angee/role:retired_reviewer" not in {row["id"] for row in rows}
+    assert len(grantable) * 2 < MAX_PAGE_SIZE
 
 
 def test_grants_query_labels_principals_by_display_name(
@@ -860,7 +890,6 @@ def test_group_members_and_bindings_preserve_canonical_tuple_identity(
                 ),
             ])
 
-        before_audits = PermissionAuditEvent.objects.count()
         detail = _data(
             _execute(
                 schema,
@@ -881,7 +910,6 @@ def test_group_members_and_bindings_preserve_canonical_tuple_identity(
                 user=admin,
             )
         )["groups_by_pk"]
-        assert PermissionAuditEvent.objects.count() == before_audits
         assert detail["assignment_subject"] == f"auth/group:{group.sqid}#member"
         assert detail["members"][0]["subject"] == subject
         assert detail["members"][0]["subject_id"] == str(member.sqid)
@@ -1005,33 +1033,6 @@ def _schema(name: str) -> Any:
     """Build one IAM-only GraphQL schema bucket."""
 
     return addon_schema(iam_schema.schemas, name)
-
-
-def _execute(
-    schema: Any,
-    query: str,
-    variables: dict[str, Any] | None = None,
-    *,
-    user: Any | None = None,
-    request: Any | None = None,
-) -> Any:
-    """Execute a GraphQL operation with a session-bearing request context."""
-
-    return execute_schema(
-        schema,
-        query,
-        variables,
-        request=request or _request(user or AnonymousUser()),
-    )
-
-
-def _request(user: Any) -> Any:
-    """Return a request with the configured native Django session backend."""
-
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user
-    SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
-    return request
 
 
 def _type_block(sdl: str, type_name: str) -> str:

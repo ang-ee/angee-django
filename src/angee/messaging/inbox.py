@@ -1,30 +1,29 @@
 """Authorized personal-message exploration over the existing messaging corpus.
 
-Conversation sections are selected in SQL before their bounded previews. Every
-count and backlink is derived from readable eligible messages, never a global
-Fragment counter or a page of messages regrouped in the browser.
+Every count and backlink is derived from readable eligible messages, never a
+global Fragment counter or a page of messages regrouped in the browser.
+Conversation grouping belongs to :class:`~angee.messaging.inbox_results.InboxResults`.
 """
 
 from __future__ import annotations
 
 import shlex
-from collections import defaultdict
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import connections, models
-from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, When, Window
-from django.db.models.functions import RowNumber
+from django.core.exceptions import BadRequest
+from django.db import connections
+from django.db.models import Count, Exists, OuterRef, Q, Subquery
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rebac import current_actor
 
-from angee.base.identity import public_data_id_field
-from angee.iam.permissions import actor_user_id, instance_actor
+from angee.base.pagination import valid_page_size
+from angee.base.permissions import actor_user_id, contextual_action_holds
+from angee.messaging.managers import MessageQuerySet
 
 
 class InboxCoverage(BaseModel):
@@ -100,31 +99,28 @@ class InboxSearch(BaseModel):
 
 @dataclass(frozen=True)
 class InboxPage:
-    """A server-selected page; total rows and messages are independent facts."""
+    """A server-selected page; total rows and messages are independent facts.
+
+    Rows that name messages by public ID carry them once in ``messages``, a
+    readable queryset a projection loads with every relation it selects.
+    """
 
     rows: list[Any]
     count: int
     message_count: int = 0
+    messages: Any = None
 
     @staticmethod
     def window(page: int, size: int) -> slice:
-        """Validate the bounded offset page shared by records and group headers."""
+        """The bounded offset page shared by records and group headers.
 
-        if page < 1 or size < 1 or size > 100:
-            raise ValueError("Page must be positive and page size must be between 1 and 100.")
-        return slice((page - 1) * size, page * size)
+        A page before the first, or a size outside the page bound (``valid_page_size``),
+        is the client's error: clamping it would move every later page.
+        """
 
-
-@dataclass(frozen=True)
-class InboxConversation:
-    """One logical thread, or one standalone message, with bounded previews."""
-
-    id: str
-    thread: Any | None
-    latest: datetime
-    matching_count: int
-    total_count: int
-    messages: Any
+        if page < 1:
+            raise BadRequest("Page must be positive.")
+        return slice((page - 1) * valid_page_size(size), page * size)
 
 
 @dataclass(frozen=True)
@@ -148,33 +144,71 @@ class InboxSelection:
 
 
 class MessageInbox:
-    """Query owner for personal inbox reads, composed from a MessageQuerySet."""
+    """Query owner for personal inbox reads, composed from a MessageQuerySet.
+
+    The collection supplies the actor. :meth:`eligible` owns the base population,
+    for messages and for their parts; messages read under the action
+    ``MessageQuerySet.inbox`` selects. Every count, group, search and page derives
+    from it, and a result population narrows it
+    (:class:`~angee.messaging.inbox_results.InboxResults`) and stays distinct.
+    """
 
     def __init__(self, queryset: Any) -> None:
-        self.actor = instance_actor(queryset)
+        self.actor = queryset.actor() or current_actor()
         self.user_id = actor_user_id(self.actor)
-        self.messages = (
-            queryset.inbox()
-            .published()
-            .exclude(thread__modality="public_thread")
-            .for_feed(all_copies=True)
-        )
+        self.messages = queryset.inbox().filter(self.listed()).for_feed(all_copies=True)
         self.handles = self.collection("parties", "Handle").with_sender_name()
         self.parties = self.collection("parties", "Party")
         self.threads = self.collection("messaging", "Thread").inbox()
-        self.parts = self.parts_for(self.messages)
+        self.parts = self.parts_for()
         self.participants = self.collection("messaging", "Participant")
 
-    def collection(self, app: str, model: str) -> Any:
+    @staticmethod
+    def eligible(through: str = "") -> Q:
+        """Base inbox eligibility: published channel messages outside record chatter and public threads.
+
+        ``queryset.filter(MessageInbox.eligible())`` selects messages; ``through``
+        selects rows reaching such a message through that relation path, as
+        ``parts.filter(MessageInbox.eligible("message__"))`` does for parts whose own
+        read authorizes the message. The message queryset owns each predicate.
+        """
+
+        return MessageQuerySet.inbox_q(through) & MessageInbox.listed(through)
+
+    @staticmethod
+    def listed(through: str = "") -> Q:
+        """What the inbox lists of its population: published messages outside public threads."""
+
+        return MessageQuerySet.published_q(through) & ~Q(**{f"{through}thread__modality": "public_thread"})
+
+    def collection(self, app: str, model: str, *, action: str | None = None) -> Any:
         """Propagate the message collection actor to every joined read owner."""
 
         rows = apps.get_model(app, model).objects.all()
+        if action is not None:
+            rows = rows.with_action(action)
         return rows.with_actor(self.actor).scoped_for_aggregate() if self.actor is not None else rows.none()
 
-    def parts_for(self, messages: Any) -> Any:
-        """Readable parts of an already authorized eligible message population."""
+    def parts_for(self, messages: Any = None) -> Any:
+        """Readable parts of eligible messages, or of a narrower authorized ``messages`` population.
 
-        return self.collection("messaging", "Part").filter(message_id__in=Subquery(messages.order_by().values("pk")))
+        ``Part.read_inbox`` derives from the message action the inbox reads, so the
+        part's own actor-scoped read authorizes its live message once and eligibility
+        joins the message without scoping it again. A narrower population (a result
+        set whose canonical-copy and sender rules read the actor's own messages)
+        still carries its own message scope. While the effective policy leaves that
+        implication unproved (an exclusion or override on the part's read, or one on
+        the message or thread reads its arrow reaches), parts keep their generic read
+        inside the separately scoped eligible messages.
+        """
+
+        contextual = contextual_action_holds(apps.get_model("messaging", "Part"), "read_inbox")
+        parts = self.collection("messaging", "Part", action="read_inbox" if contextual else None)
+        if messages is None:
+            if contextual:
+                return parts.filter(self.eligible("message__"))
+            messages = self.messages
+        return parts.filter(message_id__in=Subquery(messages.order_by().values("pk")))
 
     def accounts(self) -> Any:
         """Readable accounts projected from eligible messages without full-row deduplication."""
@@ -185,10 +219,10 @@ class MessageInbox:
             .order_by("display_name", "pk")
         )
 
-    def coverage(self, coverage: InboxCoverage, rows: Any | None = None) -> Any:
+    def coverage(self, coverage: InboxCoverage) -> Any:
         """Apply source/date coverage without silently relaxing contradictions."""
 
-        rows = self.messages if rows is None else rows
+        rows = self.messages
         if coverage.platforms:
             rows = rows.filter(platform__in=coverage.platforms)
         if coverage.accounts:
@@ -274,10 +308,8 @@ class MessageInbox:
             handles = self.handles.filter(party_id__in=Subquery(members.values("pk")), party_link_confirmed=True)
         return self.involving_handles(rows, handles)
 
-    def matching(self, rows: Any, search: InboxSearch, *, part_rows: Any | None = None) -> Any:
+    def matching(self, rows: Any, search: InboxSearch) -> Any:
         """Search readable part uses with native Postgres full text and filename matching."""
-
-        part_rows = self.parts if part_rows is None else part_rows
 
         if search.direction:
             if search.direction not in ("inbound", "outbound"):
@@ -293,7 +325,7 @@ class MessageInbox:
                 return rows.none()
             stars = apps.get_model("messaging", "MessageStar").objects.filter(user_id=self.user_id)
             rows = rows.filter(pk__in=Subquery(stars.values("message_id")))
-        parts = part_rows.filter(message_id=OuterRef("pk"))
+        parts = self.parts.filter(message_id=OuterRef("pk"))
         if search.attachment:
             attachments = parts.filter(disposition="attachment")
             if search.attachment in ("image", "video", "audio"):
@@ -319,9 +351,9 @@ class MessageInbox:
             # Independent candidate paths let PostgreSQL start at the fragment
             # GIN index. A correlated text-or-filename predicate instead probes
             # parts for every message before it can narrow the population.
-            text_matches = part_rows.filter(Q(role__in=roles) & text).order_by().values("message_id")
+            text_matches = self.parts.filter(Q(role__in=roles) & text).order_by().values("message_id")
             filenames = (
-                part_rows.filter(name__icontains=term, disposition="attachment").order_by().values("message_id")
+                self.parts.filter(name__icontains=term, disposition="attachment").order_by().values("message_id")
             )
             rows = rows.filter(pk__in=Subquery(text_matches.union(filenames)))
         if search.relations:
@@ -360,154 +392,18 @@ class MessageInbox:
         scoped = self.scoped(self.coverage(coverage), sender=sender, circle=circle)
         return self.matching(scoped, search).canonical()
 
-    def _conversation_rows(self, rows: Any) -> Any:
-        # Both the original and redirected thread keep their own read gate.
-        # A message in an unreadable thread remains a standalone section.
-        return rows.alias(
-            _survivor_visible=Exists(self.threads.filter(pk=rows.survivor_id("thread__", ref=OuterRef))),
-            _thread_visible=Exists(self.threads.filter(pk=OuterRef("thread_id"))),
-        ).annotate(
-            _conversation=Case(
-                When(_survivor_visible=True, then=rows.survivor_id("thread__")),
-                When(_thread_visible=True, then=F("thread_id")),
-                default=-F("pk"),
-                output_field=models.BigIntegerField(),
-            ),
-        )
+    def page_messages(self, ids: Any) -> Any:
+        """The readable messages a page's rows name, with their list-scale title text."""
 
-    def readable_threads(self, public_ids: Iterable[str]) -> dict[str, Any]:
-        """Resolve a bounded page of public thread IDs through thread read once."""
+        return self.messages.filter(pk__in=ids).with_title_text().order_by("pk")
 
-        field = public_data_id_field(self.threads.model)
-        if field is None:
-            raise ImproperlyConfigured("messaging.Thread requires a public data ID field")
-        decoded = {}
-        for public_id in public_ids:
-            try:
-                pk = field.public_id_to_value(public_id)
-            except (TypeError, ValueError, ValidationError):
-                continue
-            if pk is not None:
-                decoded[public_id] = pk
-        threads = {
-            thread.pk: thread for thread in self.threads.filter(pk__in=decoded.values()).select_related("title")
-        }
-        return {public_id: threads[pk] for public_id, pk in decoded.items() if pk in threads}
+    def message(self, public_id: str) -> Any:
+        """Read a message independently of the current result filters."""
 
-    def cache_readable_threads(self, messages: Iterable[Any], *, known: Iterable[Any] = ()) -> None:
-        """Seed the shared relation cache from one actor-scoped read of a bounded page."""
-
-        rows = list(messages)
-        known_rows = list(known)
-        threads = {thread.pk: thread for thread in known_rows}
-        if not known_rows:
-            ids = {message.thread_id for message in rows if message.thread_id is not None}
-            if ids:
-                threads = {
-                    thread.pk: thread for thread in self.threads.filter(pk__in=ids).select_related("title")
-                }
-        for message in rows:
-            message._state.fields_cache["thread"] = threads.get(message.thread_id)
-
-    def conversations(self, rows: Any, *, page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
-        """Page logical sections, then select at most three matches in each using SQL windows."""
-
-        matches = self._conversation_rows(rows).scoped_for_aggregate().order_by()
-        groups = matches.values("_conversation").annotate(latest=Max("_order_at"), total=Count("pk", distinct=True))
-        count = groups.count()
-        selected = list(
-            groups.order_by("latest" if oldest else "-latest", "_conversation")[InboxPage.window(page, size)]
-        )
-        keys = [row["_conversation"] for row in selected]
-        ranked = (
-            matches.filter(_conversation__in=keys)
-            .annotate(
-                _preview_rank=Window(
-                    RowNumber(), partition_by=[F("_conversation")], order_by=[F("_order_at").desc(), F("pk").desc()]
-                )
-            )
-            .filter(_preview_rank__lte=3)
-        )
-        preview_ids: dict[int, list[int]] = defaultdict(list)
-        public_ids: dict[int, str] = {}
-        for row in ranked:
-            preview_ids[row._conversation].append(row.pk)
-            public_ids[row.pk] = str(row.sqid)
-        totals = dict(
-            self._conversation_rows(self.messages)
-            .scoped_for_aggregate()
-            .order_by()
-            .filter(_conversation__in=keys)
-            .values("_conversation")
-            .annotate(total=Count("pk", distinct=True))
-            .values_list("_conversation", "total")
-        )
-        threads = {row.pk: row for row in self.threads.filter(pk__in=[key for key in keys if key > 0])}
-        previews = self.messages.filter(pk__in=[pk for ids in preview_ids.values() for pk in ids])
-        # Keep querysets in the GraphQL projection so its native optimizer can
-        # batch only requested sender/part/file fields through their read gates.
-        result = [
-            InboxConversation(
-                id=f"thread:{threads[key].sqid}" if key in threads else f"message:{public_ids[-key]}",
-                thread=threads.get(key),
-                latest=row["latest"],
-                matching_count=row["total"],
-                total_count=totals.get(key, 0),
-                messages=previews.filter(pk__in=preview_ids[key]),
-            )
-            for row in selected
-            for key in [row["_conversation"]]
-        ]
-        return InboxPage(result, count, matches.count())
-
-    def message(self, public_id: str, *, include_title: bool = True) -> Any:
-        """Read a message independently of result filters, projecting its title when requested."""
-
-        messages = self.messages.with_title_text() if include_title else self.messages
-        message = messages.from_public_id(public_id)
+        message = self.messages.from_public_id(public_id)
         if message is None:
             raise ValueError("Message unavailable.")
-        self.cache_readable_threads((message,))
         return message
-
-    def selected_message(
-        self, public_id: str, coverage: InboxCoverage, search: InboxSearch, *,
-        sender: str = "", circle: str = "", include_title: bool = False,
-    ) -> tuple[Any, bool]:
-        """Admit one public message before checking its result membership."""
-
-        message = self.message(public_id, include_title=include_title)
-        return (
-            message,
-            self._matches_message(message, coverage, search, sender=sender, circle=circle),
-        )
-
-    def message_uses(self, public_id: str) -> list[InboxPartUse]:
-        """Admit one public message before counting its eligible target uses."""
-
-        return self._part_uses(self.message(public_id, include_title=False))
-
-    def _matches_message(
-        self, message: Any, coverage: InboxCoverage, search: InboxSearch, *, sender: str = "", circle: str = ""
-    ) -> bool:
-        """Check one admitted message against the same result predicates."""
-
-        # The row was admitted by message(). A structural candidate may test its
-        # own fields and part links without recompiling Message.read a second time.
-        candidate = self.messages.model._base_manager.filter(pk=message.pk).annotate(
-            _order_at=self.messages.chronological_time()
-        )
-        selected_parts = self.parts.model._base_manager.filter(message_id=message.pk)
-        matches = self.matching(
-            self.scoped(self.coverage(coverage, candidate), sender=sender, circle=circle),
-            search,
-            part_rows=selected_parts,
-        ).exists()
-        if not matches or message.merged_into_id is None:
-            return matches
-        return not self.results(coverage, search, sender=sender, circle=circle).filter(
-            pk=message.merged_into_id
-        ).exists()
 
     def target_parts(self, target: str) -> Any:
         """Authorize a file through Storage, or shared text through an eligible use.
@@ -530,72 +426,55 @@ class MessageInbox:
             raise ValueError("Related content unavailable.")
         return parts
 
-    def _part_uses(self, message: Any) -> list[InboxPartUse]:
-        """Count selected targets through readable messages, without re-gating their parts."""
+    def part_uses(self, message: Any) -> list[InboxPartUse]:
+        """Batch both target counts; selecting more parts does not add count queries."""
 
-        # Part.read inherits Message.read. These structural rows belong to the
-        # admitted message; their target IDs only select candidates below.
-        part_model = apps.get_model("messaging", "Part")
-        parts = list(part_model._base_manager.filter(message_id=message.pk).select_related("fragment"))
-        readable_uses = part_model._base_manager.order_by().filter(
-            message_id__in=Subquery(self.messages.order_by().values("pk"))
-        )
-        file_ids = {part.file_id for part in parts if part.file_id is not None}
-        file_count = (
-            readable_uses.filter(file_id=OuterRef("pk"))
-            .values("file_id")
-            .annotate(total=Count("message_id", distinct=True))
-            .values("total")[:1]
-        )
-        file_rows = {
-            row.pk: row for row in self.collection("storage", "File")
-            .filter(pk__in=file_ids or {0})
-            .select_related("mime_type")
-            .annotate(_inbox_use_count=Subquery(file_count))
-        }
-        message._inbox_part_files = file_rows
-        message._inbox_part_file_ids = file_ids
-        message._inbox_part_files_actor = self.actor
-        files = {pk: str(row.sqid) for pk, row in file_rows.items()}
-        fragment_ids = [part.fragment_id for part in parts if part.fragment_id]
-        fragment_counts = (
-            dict(
-                readable_uses.filter(fragment_id__in=fragment_ids)
-                .values("fragment_id")
-                .annotate(total=Count("message_id", distinct=True))
-                .values_list("fragment_id", "total")
+        parts = list(self.parts.filter(message=message).select_related("fragment"))
+        files = {
+            row.pk: str(row.sqid)
+            for row in self.collection("storage", "File").filter(
+                pk__in=[part.file_id for part in parts if part.file_id]
             )
-            if fragment_ids
-            else {}
-        )
+        }
+        targets = {"file_id": list(files), "fragment_id": [part.fragment_id for part in parts if part.fragment_id]}
+        counts = {
+            field: dict(
+                self.parts.order_by()
+                .filter(**{f"{field}__in": ids})
+                .values(field)
+                .annotate(total=Count("message_id", distinct=True))
+                .values_list(field, "total")
+            )
+            for field, ids in targets.items()
+        }
         result = []
         for part in parts:
             if part.file_id in files:
                 result.append(
-                    InboxPartUse(
-                        str(part.sqid), f"file:{files[part.file_id]}", file_rows[part.file_id]._inbox_use_count or 0
-                    )
+                    InboxPartUse(str(part.sqid), f"file:{files[part.file_id]}", counts["file_id"].get(part.file_id, 0))
                 )
             if part.fragment_id:
-                fragment = part.fragment
-                assert fragment is not None
                 result.append(
                     InboxPartUse(
-                        str(part.sqid),
-                        f"fragment:{fragment.sqid}",
-                        fragment_counts.get(part.fragment_id, 0),
+                        str(part.sqid), f"fragment:{part.fragment.sqid}", counts["fragment_id"].get(part.fragment_id, 0)
                     )
                 )
         return result
 
-    def related(self, target: str, *, text: str = "", page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
-        """Distinct readable message uses, independent of coverage and sender scope."""
+    def uses(self, target: str) -> Any:
+        """Distinct readable messages using one target, independent of coverage and sender scope."""
 
         parts = self.target_parts(target)
-        all_uses = self.messages.filter(pk__in=Subquery(parts.order_by().values("message_id")))
+        return self.messages.filter(pk__in=Subquery(parts.order_by().values("message_id")))
+
+    def related(self, target: str, *, text: str = "", page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
+        """Page one target's message uses; the total counts them before the text search."""
+
+        all_uses = self.uses(target)
         rows = self.matching(all_uses, InboxSearch(text=text, quoted=True))
+        # A lazy page lets the GraphQL projection load the selected relations once.
         return InboxPage(
-            list(rows.order_by("_order_at" if oldest else "-_order_at", "pk")[InboxPage.window(page, size)]),
+            rows.with_title_text().chronological(oldest_first=oldest)[InboxPage.window(page, size)],
             rows.count(),
             all_uses.count(),
         )

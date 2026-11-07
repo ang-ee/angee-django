@@ -12,7 +12,6 @@ export function ConnectCardDavAction(): React.ReactElement {
   // Correct as-is: parties.Directory declares changes(Directory, field="directoryChanged").
   const [connect] = useAuthoredMutation(ConnectCardDavDirectory, {
     invalidateModels: [MODEL],
-    transient: true,
   });
   const t = useCardDavT();
   const fields = React.useMemo<readonly DescriptorField[]>(

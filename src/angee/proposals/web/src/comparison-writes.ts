@@ -1,5 +1,5 @@
-import { refineResourceName, useModelMetadata, useResourceInvalidates, type Row } from "@angee/metadata";
-import { extractActionOutcome, refineFieldsFromPaths, useReconcileMutationResponse, type MutationExecutionOptions } from "@angee/refine";
+import { refineResourceName, useModelMetadata, type Row } from "@angee/metadata";
+import { extractActionOutcome, refineFieldsFromPaths } from "@angee/refine";
 import { canonicalOptionValue, useActionResultRun, useAuthoredResourceMutation, useEnumOptions, optionToken } from "@angee/ui";
 import { useCreate, useUpdate, type BaseRecord, type HttpError } from "@refinedev/core";
 
@@ -16,13 +16,13 @@ export function useComparisonAnswerVisibility() {
   const [change, state] = useAuthoredResourceMutation(ANSWER_VISIBILITY, { invalidateModels: [ANSWER_MODEL] });
   return {
     pending: state.fetching,
-    change: async (answer: string, revision: number | null | undefined, value: string, execution?: MutationExecutionOptions) => {
+    change: async (answer: string, revision: number | null | undefined, value: string) => {
       const visibility = canonicalOptionValue(options, value);
       // Generated enum types are erased; narrow the metadata option at the wire boundary.
       if (visibility !== "ROUND" && visibility !== "RESPONDER" && visibility !== "SEALED") {
         throw new TypeError(`Unknown proposal answer visibility: ${value}`);
       }
-      return extractActionOutcome(await change({ answer, revision, visibility }, execution), "set_proposal_answer_visibility");
+      return extractActionOutcome(await change({ answer, revision, visibility }), "set_proposal_answer_visibility");
     },
   };
 }
@@ -32,14 +32,11 @@ export function useComparisonAnswerWrite() {
   const t = useProposalsT();
   const resource = useModelMetadata(ANSWER_MODEL)?.resource ?? null;
   const target = refineResourceName(resource);
-  const reconcile = useReconcileMutationResponse();
-  const invalidates = useResourceInvalidates([ANSWER_MODEL],
-    (_data: unknown, input: { id: string }) => [{ model: ANSWER_MODEL, id: input.id }]);
   const options = {
     resource: target,
     dataProviderName: resource?.schemaName,
     meta: { fields: refineFieldsFromPaths(["id", "body", "visibility", "revision"]) },
-    invalidates: [],
+    invalidates: ["list", "many", "detail"] as ("list" | "many" | "detail")[],
     successNotification: false as const,
     errorNotification: false as const,
   };
@@ -50,7 +47,7 @@ export function useComparisonAnswerWrite() {
 
   return {
     pending: create.mutation.isPending || update.mutation.isPending || visibilityAction.pending,
-    save: (proposalId: string, topicId: string, body: string, visibility: string, answer?: ComparisonAnswer) => reconcile.batch(async (reconciliation) => {
+    save: async (proposalId: string, topicId: string, body: string, visibility: string, answer?: ComparisonAnswer) => {
       if (!resource) throw new Error(t("comparison.saveError"));
       if (answer) {
         if (typeof answer.revision !== "number") throw new Error(t("comparison.saveError"));
@@ -61,25 +58,17 @@ export function useComparisonAnswerWrite() {
             values: { body },
             meta: { ...options.meta, gqlVariables: { expected_revision: revision } },
           });
-          await reconcile(result.data, { id: answer.id }, { invalidates, reconciliation,
-            records: [{ model: ANSWER_MODEL, id: answer.id,
-              relatedRecords: [{ model: PROPOSAL_MODEL, id: proposalId }] }],
-          });
           revision = typeof result.data.revision === "number" ? result.data.revision : revision;
         }
         if (optionToken(visibility) !== optionToken(answer.visibility)) {
-          const outcome = await settle(() => visibilityAction.change(answer.id, revision, visibility, { reconciliation }));
+          const outcome = await settle(() => visibilityAction.change(answer.id, revision, visibility));
           return outcome?.ok === true;
         }
       } else {
-        const result = await create.mutateAsync({ values: { proposal: proposalId, topic: topicId, body, visibility } });
-        await reconcile(result.data, { id: String(result.data.id) }, { invalidates, reconciliation,
-          records: [{ model: ANSWER_MODEL, id: String(result.data.id), action: "create",
-            relatedRecords: [{ model: PROPOSAL_MODEL, id: proposalId }] }],
-        });
+        await create.mutateAsync({ values: { proposal: proposalId, topic: topicId, body, visibility } });
       }
       return true;
-    }),
+    },
   };
 }
 
@@ -87,17 +76,11 @@ export function useComparisonAnswerWrite() {
 export function useComparisonStatementWrite() {
   const t = useProposalsT();
   const resource = useModelMetadata(PROPOSAL_MODEL)?.resource ?? null;
-  const reconcile = useReconcileMutationResponse();
-  const invalidates = useResourceInvalidates([PROPOSAL_MODEL],
-    (_data: unknown, input: { id?: string | number }) => [{ model: PROPOSAL_MODEL, id: String(input.id) }]);
   const update = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     meta: { fields: refineFieldsFromPaths(["id", "statement", "revision"]) },
-    invalidates: [],
-    mutationOptions: { onSuccess: (result, input) => reconcile(result.data, input, {
-      invalidates, records: [{ model: PROPOSAL_MODEL, id: String(input.id) }],
-    }) },
+    invalidates: ["list", "many", "detail"],
     successNotification: false,
     errorNotification: false,
   });

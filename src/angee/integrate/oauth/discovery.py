@@ -11,6 +11,7 @@ from django.core.cache import cache
 from angee.integrate.oauth.client import _get_json
 from angee.integrate.oauth.errors import DISCOVERY_FAILED, OAuthFlowError
 
+_DEFAULT_DISCOVERY_TTL_SECONDS = 3600
 _DISCOVERY_CACHE_PREFIX = "angee.integrate.oauth.discovery:"
 
 
@@ -41,4 +42,4 @@ def _discovery_cache_key(discovery_url: str) -> str:
 def _discovery_ttl_seconds() -> int:
     """Return the configured lifetime for cached discovery documents."""
 
-    return int(settings.ANGEE_INTEGRATE_OAUTH_DISCOVERY_TTL)
+    return int(getattr(settings, "ANGEE_OIDC_DISCOVERY_TTL", _DEFAULT_DISCOVERY_TTL_SECONDS))

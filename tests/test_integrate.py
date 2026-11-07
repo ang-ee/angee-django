@@ -99,7 +99,7 @@ def test_bridge_implementation_property_is_owned_by_integration(concrete_bridge:
 def test_bridge_declares_runtime_contract_methods() -> None:
     """Bridge exposes the contract domain subclasses implement."""
 
-    for method_name in ("sync", "start_live", "stop_live"):
+    for method_name in ("sync", "handle_webhook", "verify_webhook", "start_live", "stop_live"):
         assert callable(getattr(Bridge, method_name))
 
 

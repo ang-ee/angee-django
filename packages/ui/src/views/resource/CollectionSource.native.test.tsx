@@ -15,7 +15,6 @@ import {
 import { testDataResource } from "@angee/metadata/testing";
 import {
   OperationDocumentsProvider,
-  invalidateAuthoredQueries,
   type GroupByResult,
   type TypedDocumentNode,
 } from "@angee/refine";
@@ -24,8 +23,6 @@ import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../../testing";
 import {
   collectionQuery,
-  collectionBatchQuery,
-  useCollectionQueryBatch,
   type CollectionGroupRequest,
   type CollectionPage,
   type CollectionPageRequest,
@@ -86,14 +83,6 @@ const GroupsDocument: TypedDocumentNode<{ groups: GroupByResult }, Variables> =
       }
     }
   `;
-const BatchDocument: TypedDocumentNode<
-  { batch: { key: string; page: CollectionPage<ActivityRow> }[] },
-  { requests: readonly { key: string; page: number; pageSize: number }[] }
-> = gql`
-  query Batch($requests: JSON!) {
-    batch(requests: $requests) { key page { rows { id title } total } }
-  }
-`;
 const contract = ResourceQuery.forRows({
   fields: {
     id: { scalar: "ID" },
@@ -131,257 +120,13 @@ const source: CollectionSource<ActivityRow> = {
   }),
   leafPageSize: 3,
 };
-const { Provider, createClient, clearClients } = createUiTestProviders({
+const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://collection",
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 afterEach(() => {
   cleanup();
   clearClients();
-});
-
-test("authored collection batches independently keyed leaf pages into one request", async () => {
-  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    const variables = meta?.gqlVariables as { requests: { key: string; page: number }[] };
-    return { data: { batch: variables.requests.map(({ key, page }) => ({ key, page: {
-      total: 20, rows: [{ id: key, title: `${key} page ${page}` }],
-    } })) } };
-  });
-  const batched = collectionQuery({
-    batch: collectionBatchQuery({
-      document: BatchDocument,
-      variables: (requests: readonly (CollectionPageRequest & { key: string })[]) => ({
-        requests: requests.map(({ key, page, pageSize }) => ({ key, page, pageSize })),
-      }),
-      select: (data) => new Map(data.batch.map(({ key, page }) => [key, { data: page }])),
-    }),
-  });
-  function Probe({ count }: { count: number }) {
-    const requests = Array.from({ length: count }, (_, index) => ({
-      key: `group-${index}`, filter: undefined, order: undefined, page: index + 1, pageSize: 3,
-    }));
-    const pages = useCollectionQueryBatch(batched, requests);
-    return <output>{[...pages].map(([key, result]) => `${key}:${result.data?.rows[0]?.title ?? "loading"}`).join("|")}</output>;
-  }
-  const view = render(<Provider dataProvider={{ custom }} providerNames={[]}><Probe count={1} /></Provider>);
-  await screen.findByText("group-0:group-0 page 1");
-  view.rerender(<Provider dataProvider={{ custom }} providerNames={[]}><Probe count={5} /></Provider>);
-  await screen.findByText(/group-4:group-4 page 5/);
-  view.rerender(<Provider dataProvider={{ custom }} providerNames={[]}><Probe count={10} /></Provider>);
-  await screen.findByText(/group-9:group-9 page 10/);
-  expect(custom).toHaveBeenCalledTimes(3);
-  expect(custom.mock.calls.map(([request]) => (request.meta?.gqlVariables as { requests: unknown[] }).requests.length)).toEqual([1, 4, 5]);
-});
-
-test("a failed transport retries its whole batch once under the client policy", async () => {
-  let attempts = 0;
-  const client = createClient({ defaultOptions: { queries: {
-    retry: (failureCount, error) => failureCount < 1 && error.message === "offline",
-    retryDelay: () => 0,
-  } } });
-  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    if (++attempts === 1) throw new Error("offline");
-    const variables = meta?.gqlVariables as { requests: { key: string }[] };
-    return { data: { batch: variables.requests.map(({ key }) => ({ key, page: {
-      total: 1, rows: [{ id: key, title: key }],
-    } })) } };
-  });
-  const batched = collectionQuery({ batch: collectionBatchQuery({
-    document: BatchDocument,
-    variables: (requests: readonly (CollectionPageRequest & { key: string })[]) => ({
-      requests: requests.map(({ key, page, pageSize }) => ({ key, page, pageSize })),
-    }),
-    select: (data) => new Map(data.batch.map(({ key, page }) => [key, { data: page }])),
-  }) });
-  function Probe() {
-    const requests = ["first", "second"].map((key) => ({ key, filter: undefined, order: undefined, page: 1, pageSize: 3 }));
-    const pages = useCollectionQueryBatch(batched, requests);
-    return <output>{[...pages.values()].filter((page) => page.data).length}</output>;
-  }
-  render(<Provider dataProvider={{ custom }} providerNames={[]} queryClient={client}><Probe /></Provider>);
-  await screen.findByText("2");
-  expect(custom).toHaveBeenCalledTimes(2);
-  expect(custom.mock.calls.map(([call]) => (call.meta?.gqlVariables as { requests: unknown[] }).requests.length)).toEqual([2, 2]);
-});
-
-test("a capped batch splits before sending pages to its transport", async () => {
-  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    const variables = meta?.gqlVariables as { requests: { key: string }[] };
-    return { data: { batch: variables.requests.map(({ key }) => ({ key, page: {
-      total: 1, rows: [{ id: key, title: key }],
-    } })) } };
-  });
-  const batched = collectionQuery({ batch: collectionBatchQuery({
-    document: BatchDocument,
-    maxPages: 100,
-    variables: (requests: readonly (CollectionPageRequest & { key: string })[]) => ({
-      requests: requests.map(({ key, page, pageSize }) => ({ key, page, pageSize })),
-    }),
-    select: (data) => new Map(data.batch.map(({ key, page }) => [key, { data: page }])),
-  }) });
-  function Probe() {
-    const requests = Array.from({ length: 101 }, (_, index) => ({
-      key: `page-${index}`, filter: undefined, order: undefined, page: 1, pageSize: 3,
-    }));
-    const pages = useCollectionQueryBatch(batched, requests);
-    return <output>{[...pages.values()].filter((page) => page.data).length}</output>;
-  }
-  render(<Provider dataProvider={{ custom }} providerNames={[]}><Probe /></Provider>);
-  await screen.findByText("101");
-  expect(custom.mock.calls.map(([call]) => (call.meta?.gqlVariables as { requests: unknown[] }).requests.length)).toEqual([100, 1]);
-});
-
-test("a cached batch page takes its caption from the current render", async () => {
-  const custom = vi.fn(async () => ({ data: { batch: [{ key: "first", page: {
-    total: 1, rows: [{ id: "first", title: "First" }],
-  } }] } }));
-  function Probe({ caption }: { caption: string }) {
-    const batched = collectionQuery({ batch: collectionBatchQuery({
-      document: BatchDocument,
-      variables: (requests: readonly (CollectionPageRequest & { key: string })[]) => ({
-        requests: requests.map(({ key, page, pageSize }) => ({ key, page, pageSize })),
-      }),
-      select: (data) => new Map(data.batch.map(({ key, page }) => [key, { data: page }])),
-      present: (page) => ({ ...page, summary: caption }),
-    }) });
-    const pages = useCollectionQueryBatch(batched, [
-      { key: "first", filter: undefined, order: undefined, page: 1, pageSize: 3 },
-    ]);
-    return <output>{pages.get("first")?.data?.summary ?? "loading"}</output>;
-  }
-  const view = render(<Provider dataProvider={{ custom }} providerNames={[]}><Probe caption="One" /></Provider>);
-  await screen.findByText("One");
-  view.rerender(<Provider dataProvider={{ custom }} providerNames={[]}><Probe caption="Uno" /></Provider>);
-  expect(screen.getByText("Uno")).toBeTruthy();
-  expect(custom).toHaveBeenCalledTimes(1);
-});
-
-test("paging one batched group retains sibling rows and reads only the changed page", async () => {
-  let release: (() => void) | undefined;
-  const pending = new Promise<void>((resolve) => { release = resolve; });
-  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    const variables = meta?.gqlVariables as { requests: { key: string; page: number }[] };
-    if (variables.requests.some(({ page }) => page === 2)) await pending;
-    return { data: { batch: variables.requests.map(({ key, page }) => ({ key, page: {
-      total: 20, rows: [{ id: key, title: `${key} page ${page}` }],
-    } })) } };
-  });
-  const batched = collectionQuery({
-    batch: collectionBatchQuery({
-      document: BatchDocument,
-      variables: (requests: readonly (CollectionPageRequest & { key: string })[]) => ({
-        requests: requests.map(({ key, page, pageSize }) => ({ key, page, pageSize })),
-      }),
-      select: (data) => new Map(data.batch.map(({ key, page }) => [key, { data: page }])),
-    }),
-  });
-  function Probe({ secondPage }: { secondPage: number }) {
-    const requests = ["first", "second"].map((key) => ({
-      key, filter: undefined, order: undefined, page: key === "first" ? 1 : secondPage, pageSize: 3,
-    }));
-    const pages = useCollectionQueryBatch(batched, requests);
-    return <output>{[...pages].map(([key, result]) => `${key}:${result.data?.rows[0]?.title ?? "loading"}`).join("|")}</output>;
-  }
-  const view = render(<Provider dataProvider={{ custom }} providerNames={[]}><Probe secondPage={1} /></Provider>);
-  await screen.findByText("first:first page 1|second:second page 1");
-  view.rerender(<Provider dataProvider={{ custom }} providerNames={[]}><Probe secondPage={2} /></Provider>);
-  await waitFor(() => expect(custom).toHaveBeenCalledTimes(2));
-  expect(screen.getByText("first:first page 1|second:second page 1")).toBeTruthy();
-  expect((custom.mock.calls[1]![0].meta?.gqlVariables as { requests: { key: string }[] }).requests.map(({ key }) => key)).toEqual(["second"]);
-  release?.();
-  await screen.findByText("first:first page 1|second:second page 2");
-});
-
-test("rebuilt batch sources retain pages across route changes, collapse and live refresh", async () => {
-  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  const resources = [testDataResource("messaging.Message")];
-  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    const variables = meta?.gqlVariables as { requests: { key: string; page: number }[] };
-    return { data: { batch: variables.requests.map(({ key, page }) => ({ key, page: {
-      total: 20, rows: [{ id: key, title: `${key} page ${page}` }],
-    } })) } };
-  });
-  function Probe({ second, route, secondPage = 1 }: { second: boolean; route: string; secondPage?: number }) {
-    const source = collectionQuery({
-      models: ["messaging.Message"],
-      batch: collectionBatchQuery({
-        document: BatchDocument,
-        variables: (requests: readonly (CollectionPageRequest & { key: string })[]) => ({
-          requests: requests.map(({ key, page, pageSize }) => ({ key, page, pageSize })),
-        }),
-        select: (data) => new Map(data.batch.map(({ key, page }) => [key, { data: page }])),
-      }),
-    });
-    const requests = (second ? ["first", "second"] : ["first"]).map((key) => ({
-      key, filter: undefined, order: undefined, page: key === "second" ? secondPage : 1, pageSize: 3,
-    }));
-    const pages = useCollectionQueryBatch(source, requests);
-    return <output data-route={route}>{[...pages].map(([key, result]) =>
-      `${key}:${result.data?.rows[0]?.title ?? "loading"}`).join("|")}</output>;
-  }
-  const view = render(<Provider dataProvider={{ custom }} providerNames={[]} queryClient={client} resources={resources}>
-    <Probe second route="results" />
-  </Provider>);
-  await screen.findByText("first:first page 1|second:second page 1");
-  expect(custom).toHaveBeenCalledTimes(1);
-  expect((custom.mock.calls[0]![0].meta?.gqlVariables as { requests: unknown[] }).requests).toHaveLength(2);
-  view.rerender(<Provider dataProvider={{ custom }} providerNames={[]} queryClient={client} resources={resources}>
-    <Probe second route="links" />
-  </Provider>);
-  expect(screen.getByText("first:first page 1|second:second page 1")).toBeTruthy();
-  expect(custom).toHaveBeenCalledTimes(1);
-  view.rerender(<Provider dataProvider={{ custom }} providerNames={[]} queryClient={client} resources={resources}>
-    <Probe second={false} route="links" />
-  </Provider>);
-  view.rerender(<Provider dataProvider={{ custom }} providerNames={[]} queryClient={client} resources={resources}>
-    <Probe second route="links" />
-  </Provider>);
-  expect(screen.getByText("first:first page 1|second:second page 1")).toBeTruthy();
-  expect(custom).toHaveBeenCalledTimes(1);
-  view.rerender(<Provider dataProvider={{ custom }} providerNames={[]} queryClient={client} resources={resources}>
-    <Probe second route="links" secondPage={2} />
-  </Provider>);
-  await screen.findByText("first:first page 1|second:second page 2");
-  expect(custom).toHaveBeenCalledTimes(2);
-  expect((custom.mock.calls[1]![0].meta?.gqlVariables as { requests: { key: string }[] }).requests.map(({ key }) => key)).toEqual(["second"]);
-  await act(async () => { await invalidateAuthoredQueries(client, ["messaging.Message"]); });
-  await waitFor(() => expect(custom).toHaveBeenCalledTimes(3));
-  expect((custom.mock.calls[2]![0].meta?.gqlVariables as { requests: { key: string; page: number }[] }).requests)
-    .toEqual([{ key: "first", page: 1, pageSize: 3 }, { key: "second", page: 2, pageSize: 3 }]);
-  await act(async () => {
-    await client.invalidateQueries({ predicate: (query) => {
-      const variables = query.queryKey[5] as { requests?: { key: string }[] };
-      return variables.requests?.[0]?.key === "second";
-    } });
-  });
-  await waitFor(() => expect(custom).toHaveBeenCalledTimes(4));
-  expect((custom.mock.calls[3]![0].meta?.gqlVariables as { requests: { key: string }[] }).requests.map(({ key }) => key)).toEqual(["second"]);
-  expect(screen.getByText("first:first page 1|second:second page 2")).toBeTruthy();
-});
-
-test("a failed batch page sets only that key's error", async () => {
-  const custom = vi.fn(async () => ({ data: { batch: [
-    { key: "first", page: { total: 1, rows: [{ id: "first", title: "Visible" }] } },
-    { key: "second", page: { total: 0, rows: [] } },
-  ] } }));
-  const batched = collectionQuery({
-    batch: collectionBatchQuery({
-      document: BatchDocument,
-      variables: (requests: readonly (CollectionPageRequest & { key: string })[]) => ({
-        requests: requests.map(({ key, page, pageSize }) => ({ key, page, pageSize })),
-      }),
-      select: (data) => new Map(data.batch.map(({ key, page }) => [key,
-        key === "second" ? { error: new Error("Conversation unavailable.") } : { data: page },
-      ])),
-    }),
-  });
-  function Probe() {
-    const requests = ["first", "second"].map((key) => ({ key, filter: undefined, order: undefined, page: 1, pageSize: 3 }));
-    const pages = useCollectionQueryBatch(batched, requests);
-    return <output>{[...pages].map(([key, result]) => `${key}:${result.data?.rows[0]?.title ?? result.error?.message ?? "loading"}`).join("|")}</output>;
-  }
-  render(<Provider dataProvider={{ custom }} providerNames={[]}><Probe /></Provider>);
-  await screen.findByText("first:Visible|second:Conversation unavailable.");
 });
 
 function fixture(grouped: boolean, interactive = false, tree = false) {
@@ -394,6 +139,7 @@ function fixture(grouped: boolean, interactive = false, tree = false) {
     const { request } = meta?.gqlVariables as Variables;
     requests.push(request);
     if ("group" in request) {
+      const account = `account-${request.page}`;
       return {
         data: {
           groups: {
@@ -401,11 +147,12 @@ function fixture(grouped: boolean, interactive = false, tree = false) {
             totalCount: 27,
             buckets: [
               {
-                key: {
-                  account: `account-${request.page}`,
-                  label: `Account ${request.page}`,
-                },
+                key: { account, label: `Account ${request.page}` },
                 count: 60,
+                // The leaf groups read carries each group's first page.
+                ...(request.leafPageSize
+                  ? { rows: [{ id: `${account}-1`, title: `Activity ${account} page 1` }] }
+                  : {}),
               },
             ],
           },
@@ -543,11 +290,12 @@ test("an authored source groups through the complete custom catalog without pres
     && request.group.field === "account"
     && filterOperatorValue(request.filter, "title", "iContains") === "document",
   )).toBe(true));
-  await waitFor(() => expect(f.requests.some((request) =>
-    !("group" in request)
-    && filterOperatorValue(request.filter, "title", "iContains") === "document"
-    && Filter.from(request.filter).facetValues("account")[0] === "account-1",
-  )).toBe(true));
+  // The group's first page rides on the groups read; no per-group page request.
+  expect(await screen.findByText("Activity account-1 page 1")).toBeTruthy();
+  expect(f.requests.some((request) => "group" in request && request.leafPageSize === 3)).toBe(true);
+  expect(f.requests.some((request) =>
+    !("group" in request) && Filter.from(request.filter).facetValues("account")[0] === "account-1",
+  )).toBe(false);
   expect(f.getList).not.toHaveBeenCalled();
 });
 

@@ -1,15 +1,12 @@
 import * as React from "react";
 import {
   fieldUpdatable,
-  refineInvalidationParams,
-  refineResourceIdentifier,
   refineResourceName,
   rowPublicId,
   type ModelFieldMetadata,
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
-import { useReconcileMutationResponse } from "@angee/refine";
 import { useUpdate, type BaseRecord, type HttpError } from "@refinedev/core";
 import type { Row as TableRowModel } from "@tanstack/react-table";
 
@@ -75,11 +72,13 @@ export function useBoardLaneState<TRow extends Row>({
   modelMetadata,
   rows,
   enabled,
+  refetchRows,
 }: {
   laneSource: ResolvedBoardLaneSource | null | undefined;
   modelMetadata: ModelMetadata | null | undefined;
   rows: readonly TRow[];
   enabled: boolean;
+  refetchRows?: () => void;
 }): BoardLaneState<TRow> {
   const t = useUiT();
   const toast = useToast();
@@ -131,12 +130,10 @@ export function useBoardLaneState<TRow extends Row>({
     }));
   }, [laneResult.options, laneResult.rows, source?.foldField]);
   const dataResource = modelMetadata?.resource ?? null;
-  const reconcileMutationResponse = useReconcileMutationResponse();
   const update = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: refineResourceName(source ? dataResource : null),
     dataProviderName: source ? dataResource?.schemaName : undefined,
-    invalidates: [],
-    mutationMode: "pessimistic",
+    invalidates: ["list", "many", "detail"],
     successNotification: false,
     errorNotification: false,
   });
@@ -190,14 +187,6 @@ export function useBoardLaneState<TRow extends Row>({
       if (source.rankField && !source.rankInputField && rank === undefined) return;
       const id = rowPublicId(row);
       if (!id) return;
-      const effects = {
-        records: [{ model: dataResource.modelLabel, id }],
-        invalidates: [refineInvalidationParams({
-          resource: refineResourceIdentifier(dataResource),
-          dataProviderName: dataResource.schemaName,
-          id,
-        })],
-      };
       const serverLane = relationValueId(readPath(row, source.field));
       const serverRank = source.rankField
         ? finiteRank(readPath(row, source.rankField))
@@ -220,7 +209,7 @@ export function useBoardLaneState<TRow extends Row>({
       };
       setOptimisticLaneEntryByRowId((current) => new Map(current).set(id, request));
       try {
-        const saved = await updateRef.current.mutateAsync({
+        await updateRef.current.mutateAsync({
           id,
           values: {
             [source.field]: laneId,
@@ -233,22 +222,14 @@ export function useBoardLaneState<TRow extends Row>({
         });
         setOptimisticLaneEntryByRowId((current) => {
           if (current.get(id) !== request) return current;
-          if (intent) return current;
           const next = new Map(current);
-          next.set(id, { ...request, settled: true });
+          // Intent has no client rank to reconcile. Native invalidation/refetch
+          // supplies the canonical rank; only this request may clear its overlay.
+          if (intent) next.delete(id);
+          else next.set(id, { ...request, settled: true });
           return next;
         });
-        const reconciled = await reconcileMutationResponse(saved, undefined, effects)
-          .then(() => true, () => false);
-        if (intent) setOptimisticLaneEntryByRowId((current) => {
-          if (current.get(id) !== request) return current;
-          const next = new Map(current);
-          // The server owns the rank for an intent move. Keep its lane overlay
-          // until that read settles, then let the canonical row clear it.
-          if (reconciled) next.set(id, { ...request, settled: true });
-          else next.delete(id);
-          return next;
-        });
+        if (intent) refetchRows?.();
       } catch (error) {
         setOptimisticLaneEntryByRowId((current) => {
           if (current.get(id) !== request) return current;
@@ -260,14 +241,14 @@ export function useBoardLaneState<TRow extends Row>({
           title: t("board.moveFailed"),
           description: errorMessage(error, t("board.moveFailedDescription")),
         });
-        void reconcileMutationResponse(undefined, undefined, effects).catch(() => undefined);
+        refetchRows?.();
       }
     },
     [
       dataResource,
       dragEnabled,
       optimisticLaneEntryByRowId,
-      reconcileMutationResponse,
+      refetchRows,
       source,
       t,
       toast,

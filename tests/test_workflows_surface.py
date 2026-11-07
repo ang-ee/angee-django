@@ -15,9 +15,9 @@ from django.db.models.deletion import PROTECT
 from pydantic import BaseModel
 
 import angee.workflows as workflows
+from angee.base.models.derived import DerivedFrom
+from angee.base.models.refs import RecordRefMixin
 from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
-from angee.iam.models.derived import ProtectedDerivedFrom
-from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.provenance.evidence import EvidenceFact, EvidenceReference, FactAuthority, readable_records
 from angee.workflows.managers import PublishResult
 from angee.workflows.states import RunOrigin
@@ -38,39 +38,34 @@ EXPECTED_VERBS = {
     "extraction.Extraction.manager": (
         "authorized_document_sources inference_authority_base "
         "inference_candidate_selectors inference_current_head latest_succeeded_identity_authority "
-        "retain_result reused_inference"
+        "prepare_pages retain_result reused_inference"
     ),
     "extraction.Extraction.queryset": "validate_insert",
     "extraction.ExtractionLineage.queryset": "validate_insert",
     "extraction.ExtractionPage.queryset": "validate_insert",
-    "extraction.ExtractionPart.queryset": "validate_insert with_part_values",
+    "extraction.ExtractionPart.queryset": "validate_insert",
     "extraction.ExtractionSource.queryset": "validate_insert",
     "workflows.StepAttempt.queryset": "close",
     "workflows.StepRecord.queryset": "change_related_records",
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
-        # WorkflowRun's map completion now reads one aggregate body_progress projection.
-        "answered_decisions body_progress cancel_open changed_records claim collect_map count_redispatch "
-        "dispatch due expire expired "
-        "extend_deadline fail_attempt fenced for_map item_counts nodes settle terminal_runs to_ready to_running "
-        "to_succeeded to_waiting undispatched unrouted_failures with_retry_batch"
+        "answered_decisions cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
+        "extend_deadline fenced for_map graph_rows item_counts nodes settle terminal_runs to_ready to_running "
+        "to_waiting undispatched"
     ),
     "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
     "workflows.Trigger.manager": "admit disable drain enable enable_preview lock_grants reconcile_grants revoke_grant",
     "workflows.Trigger.queryset": "bulk_create update",
-    "workflows.TriggerEvent.manager": "record_changes",
+    "workflows.TriggerEvent.manager": "record_change record_changes",
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": (
-        "cancel cancel_abandoned prune reap_interrupted reprocess start"
+        "cancel cancel_abandoned cancel_on_commit prune reap_interrupted reopen reprocess start"
     ),
-    "workflows.WorkflowRun.queryset": (
-        "about blocking for_subject hold hold_owned retention_candidates with_cancel_batch "
-        "with_policy_versions working_on"
-    ),
-    "decisions.Decision.manager": "ask",
+    "workflows.WorkflowRun.queryset": "about blocking for_subject hold hold_owned retention_candidates working_on",
+    "decisions.Decision.manager": "ask decide withdraw",
     "decisions.Decision.queryset": (
-        "attention_expression for_records open open_expression open_for waiting_on waiting_on_expression"
+        "attention_expression for_records open open_expression open_for waiting_on"
     ),
 }
 
@@ -84,7 +79,7 @@ EXPECTED_TYPES = {
 
 EXPECTED_RUNNER = tuple(
     f"Runner.{name}" for name in (
-        "begin_effect", "execute", "heartbeat", "raise_if_canceled", "reap", "record",
+        "advance", "begin_effect", "execute", "heartbeat", "raise_if_canceled", "reap", "record",
         "redispatch", "tick", "wake", "wake_decisions", "wake_records", "wake_runs",
     )
 )
@@ -100,7 +95,7 @@ EXPECTED_SETTINGS = {
 
 EXPECTED_TEST_DRIVERS = (
     "RunFactory", "capture_tasks", "decide", "deliver_decision_wakes", "load_workflow", "observe",
-    "register_steps", "run_until", "start_run",
+    "publish_draft", "register_steps", "run_until", "start_run",
 )
 
 
@@ -139,18 +134,6 @@ def test_workflows_public_surface() -> None:
                 if names := _public_verbs(cls, label, base):
                     verbs[f"{label}.{model.__name__}.{owner}"] = names
     assert verbs == {owner: tuple(names.split()) for owner, names in EXPECTED_VERBS.items()}
-
-    from angee.decisions.models import Decision
-    from angee.workflows.models.runs import WorkflowRun
-
-    # Moved transitions remain public on the rows that own their state.
-    for source, names in (
-        (Decision, ("decide", "withdraw")),
-        (WorkflowRun, ("advance", "cancel_on_commit", "reopen")),
-    ):
-        model = apps.get_model(source._meta.label)
-        for name in names:
-            assert getattr(model, name) is getattr(source, name)
 
     types = {}
     runner = []
@@ -259,16 +242,16 @@ def test_evidence_owner_surface() -> None:
     extraction_source = apps.get_model("extraction", "ExtractionSource")
     extraction = apps.get_model("extraction", "Extraction")
     decision = apps.get_model("decisions", "Decision")
-    assert issubclass(run_evidence, ProtectedRecordRefMixin)
-    assert issubclass(extraction_source, ProtectedDerivedFrom)
-    assert callable(extraction.fact_correction) and callable(extraction.fact_authority)
+    assert issubclass(run_evidence, RecordRefMixin)
+    assert issubclass(extraction_source, DerivedFrom)
+    assert callable(extraction.fact_authority)
     assert issubclass(DecisionFact, EvidenceFact)
     assert issubclass(DecisionRecordReference, EvidenceReference)
     assert issubclass(DecisionRequest, BaseModel)
     assert tuple(FactAuthority) == ("source", "correction", "unverified")
     assert callable(readable_records)
     concern = apps.get_model("decisions", "DecisionRecord")
-    assert issubclass(concern, ProtectedDerivedFrom)
+    assert issubclass(concern, DerivedFrom)
     assert decision._meta.get_field("records").related_model is concern
     assert next(index.fields for index in concern._meta.indexes if index.name == "decisions_record_target") == [
         "content_type",

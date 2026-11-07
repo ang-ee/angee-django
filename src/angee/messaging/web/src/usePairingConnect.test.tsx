@@ -90,7 +90,6 @@ describe("usePairingConnect", () => {
 
     expect(hookMocks.mutationOptions).toEqual({
       invalidateModels: ["messaging.Channel"],
-      transient: true,
     });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 

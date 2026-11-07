@@ -31,6 +31,6 @@ export function PartyRecordRedirect(): React.ReactElement {
       search: (current: Record<string, unknown>) => current,
     });
   }, [id, navigate, party, route, routeHref]);
-  if (query.isFetching) return <LoadingPanel message={t("partyRedirect.loading")} />;
+  if (query.isFetching) return <LoadingPanel loadingLabel={t("partyRedirect.loading")} />;
   return <EmptyState icon="parties" title={t("partyRedirect.unavailable")} />;
 }

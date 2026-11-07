@@ -53,8 +53,6 @@ from tests.conftest import make_integration
 from tests.integrate_fixtures import ConnectionBridge
 from tests.stream_adapters import applied_history, failure_state
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 class WorkerLost(BaseException):
     """Interrupt the worker after an independently committed driver page."""
@@ -250,7 +248,6 @@ def test_busy_bridge_wait_preserves_checkpoint_without_beginning_an_effect(cycle
     closed.assert_called_once()
 
 
-@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Separate PostgreSQL advisory-lock sessions required.")
 def test_two_partition_runs_wait_without_retry_or_effect_while_bridge_io_is_owned(cycle, monkeypatch):
     """The execution lock covers independent runs, beyond a single map planner."""

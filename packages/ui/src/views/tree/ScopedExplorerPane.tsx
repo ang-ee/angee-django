@@ -178,7 +178,7 @@ export function ScopedExplorerPane<
 
 function ExplorerNavigatorSkeleton({ label }: { label: string }): React.ReactElement {
   return (
-    <SkeletonStatus label={label} className="flex h-full min-h-0 flex-col gap-3 p-2">
+    <SkeletonStatus loadingLabel={label} className="flex h-full min-h-0 flex-col gap-3 p-2">
       <div aria-hidden="true" className="space-y-3">
         <Skeleton className="h-9 w-full" />
         {Array.from({ length: 7 }, (_, index) => (
@@ -194,7 +194,7 @@ function ExplorerNavigatorSkeleton({ label }: { label: string }): React.ReactEle
 
 function ExplorerContentSkeleton({ label }: { label: string }): React.ReactElement {
   return (
-    <SkeletonStatus label={label} className="h-full min-h-0 bg-canvas p-4">
+    <SkeletonStatus loadingLabel={label} className="h-full min-h-0 bg-canvas p-4">
       <div aria-hidden="true" className="flex h-full min-h-0 flex-col gap-4">
         <div className="flex items-center justify-between gap-4">
           <Skeleton shape="text" size="lg" className="w-48" />

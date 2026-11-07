@@ -2,19 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
-
-_Settings = TypedDict(
-    "_Settings",
-    {
-        "ANGEE_OIDC_JWKS_TTL": int,
-        "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.generic_oidc": str,
-        "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.google": str,
-    },
-)
-
-SETTINGS: _Settings = {
-    "ANGEE_OIDC_JWKS_TTL": 3600,
+SETTINGS = {
+    # Lifetime of a cached ``.well-known/openid-configuration`` discovery document.
+    # The single-use redirect-state TTL is OAuth-level and owned by ``integrate``.
+    "ANGEE_OIDC_DISCOVERY_TTL": 3600,
     "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.generic_oidc": "angee.iam_integrate_oidc.providers.GenericOidc",
     "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.google": "angee.iam_integrate_oidc.providers.GoogleType",
 }

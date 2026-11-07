@@ -141,8 +141,8 @@ def batch_ingest(
                 message_model.objects.ingest(
                     batch,
                     channel=channel,
-                    historical=True,
                     quote_edges=False,
+                    historical=True,
                 )
         total += len(batch)
         if on_batch is not None:

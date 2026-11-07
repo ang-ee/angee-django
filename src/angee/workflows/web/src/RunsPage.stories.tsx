@@ -8,7 +8,7 @@ import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
 import { decisionFixture, decisionResourceFixture } from "@angee/decisions/testing";
 import { RunsPage } from "./RunsPage";
 import type { Run, StepRun } from "./testing/documents.console";
-import { runFixture, runGraphFixture, runResourceFixture, recordResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
+import { runFixture, runGraphFixture, runGraphReadFixture, runResourceFixture, recordResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
 import type { RunGraphData } from "./run-graph";
 import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
@@ -107,14 +107,13 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
       if (query.includes("workflowrun_by_pk")) return queryError
         ? jsonResponse({ errors: [{ message: "The run could not be loaded." }] })
         : jsonResponse({ data: { workflowrun_by_pk: unavailable ? null : { ...current, id: variables.id,
-          ...(query.includes("WorkflowRunGraph") ? { graph: graph ?? runGraphFixture(currentSteps[0]) } : {}) } } });
+          ...(query.includes("WorkflowRunGraph") ? runGraphReadFixture(graph ?? runGraphFixture(currentSteps[0])) : {}) } } });
       if (query.includes("workflow_by_pk")) return jsonResponse({ data: { workflow_by_pk: current.version?.workflow } });
       if (query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: current.run_as } });
       if (query.includes("triggerevent_by_pk")) return jsonResponse({ data: { triggerevent_by_pk: { id: "wte_review", display_name: "Review event" } } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
       if (query.includes("steprecord")) return jsonResponse({ data: {
-        steprecord: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records)
-          : evidence.map((record) => ({ ...record, record_label: record.record_model === "notes.Note" ? "Review notes" : null })),
+        steprecord: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records) : evidence,
         steprecord_aggregate: { aggregate: { count: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records).length : evidence.length } },
       } });
       if (query.includes("steprun_by_pk")) {
@@ -125,9 +124,7 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
       }
       if (query.includes("stepattempt_by_pk")) return jsonResponse({ data: { stepattempt_by_pk: currentSteps.flatMap((step) => step.attempts).find((attempt) => attempt.id === variables.id) } });
       for (const [name, rows] of [["stepattempt", currentSteps.flatMap((step) => step.attempts)], ["steprecord", currentSteps.flatMap((step) => step.records)], ["stepwatch", currentSteps.flatMap((step) => step.watches)]] as const) {
-        if (query.includes(name)) return jsonResponse({ data: { [name]: name === "stepwatch"
-          ? rows.map((row) => ({ ...row, record_label: "Review notes" })) : rows,
-        [`${name}_aggregate`]: { aggregate: { count: rows.length } } } });
+        if (query.includes(name)) return jsonResponse({ data: { [name]: rows, [`${name}_aggregate`]: { aggregate: { count: rows.length } } } });
       }
       if (/\bsteprun(?:\s*\(|\s*\{)/.test(query)) {
         const offset = typeof variables.offset === "number" ? variables.offset : 0;
@@ -139,23 +136,17 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
         decisions: [{ id: "dcn_review", kind: "review", verdict: null, answered_at: null }],
         decisions_aggregate: { aggregate: { count: 1 } },
       } });
-      if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: [{
-        key: { status: current.status, origin: current.origin, version__workflow_id: current.version?.workflow?.id,
-          version__workflow__name: current.version?.workflow?.name },
-        aggregate: { count: 1 },
-      }], totalCount: 1 } });
-      if (query.includes("query GroupedResourceList") && query.includes("workflowrun_grouped_rows")) {
-        const sourceRows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];
-        const pages = variables.pages as { key: string; offset: number; limit: number }[];
-        return jsonResponse({ data: { rows: pages.map((page) => ({ key: page.key, rows: sourceRows
-          .filter((row) => row.status === page.key)
-          .slice(page.offset, page.offset + page.limit)
-          .map((row) => ({ ...row, subject_label: "Review notes" })) })) } });
-      }
-      if (/\bworkflow\s*\(/.test(query)) return jsonResponse({ data: { workflow: [current.version?.workflow], workflow_aggregate: { aggregate: { count: 1 } } } });
+      // A child-runs scope lists the children; every other run scope lists the run itself.
       const rows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];
-      return jsonResponse({ data: { workflowrun: rows.map((row) => ({ ...row, subject_label: "Review notes" })),
-        workflowrun_aggregate: { aggregate: { count: rows.length } } } });
+      // The leaf groups read carries each group's first page of the same scoped rows.
+      if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: rows.slice(0, 1).map((row) => ({
+        key: { status: row.status, origin: row.origin, version__workflow_id: row.version?.workflow?.id,
+          version__workflow__name: row.version?.workflow?.name },
+        aggregate: { count: rows.length },
+        ...(variables.with_rows ? { rows } : {}),
+      })), totalCount: Math.min(rows.length, 1) } });
+      if (/\bworkflow\s*\(/.test(query)) return jsonResponse({ data: { workflow: [current.version?.workflow], workflow_aggregate: { aggregate: { count: 1 } } } });
+      return jsonResponse({ data: { workflowrun: rows, workflowrun_aggregate: { aggregate: { count: rows.length } } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, recordResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,

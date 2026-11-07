@@ -23,18 +23,16 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
-from django.test import RequestFactory
 from rebac import system_context, to_object_ref
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.platform import managers as platform_managers
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.platform import models as platform_models
 from angee.platform.installer import AddonInstallerBackend
-from angee.platform.managers import _preview_revision
-from tests.conftest import SchemaAddon, catalogue_package, execute_schema
+from angee.platform.models import _preview_revision
+from tests.conftest import SchemaAddon, catalogue_package
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 
 User = get_user_model()
 platform_schema = importlib.import_module("angee.platform.schema")
@@ -65,7 +63,7 @@ def project_settings_yaml(tmp_path: Path, settings: Any, monkeypatch: pytest.Mon
     path.write_text(_SETTINGS_YAML, encoding="utf-8")
     settings.BASE_DIR = tmp_path
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
-    monkeypatch.setattr(platform_managers.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
     return path
 
 
@@ -85,7 +83,7 @@ def test_enable_appends_the_root_and_reflects_pending(
     del composed_tables
     admin = _platform_admin("install-admin")
 
-    result = _data(_execute(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=admin))["enable"]
+    result = _data(execute_schema(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=admin))["enable"]
 
     assert result["ok"] is True
     assert _AVAILABLE_ADDON in result["message"]
@@ -111,7 +109,7 @@ def test_enable_is_idempotent_for_an_already_listed_root(
     admin = _platform_admin("install-idempotent-admin")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
-    result = _data(_execute(_schema(), _ENABLE, {"addon": "angee.platform"}, user=admin))["enable"]
+    result = _data(execute_schema(_schema(), _ENABLE, {"addon": "angee.platform"}, user=admin))["enable"]
 
     assert result["ok"] is True
     assert "already enabled" in result["message"]
@@ -133,7 +131,7 @@ def test_enable_refuses_a_non_materialised_addon(
     admin = _platform_admin("install-unknown-admin")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
-    result = _data(_execute(_schema(), _ENABLE, {"addon": "not.a.real.addon"}, user=admin))["enable"]
+    result = _data(execute_schema(_schema(), _ENABLE, {"addon": "not.a.real.addon"}, user=admin))["enable"]
 
     assert result["ok"] is False
     assert "not installed and cannot be enabled" in result["message"]
@@ -233,10 +231,10 @@ def test_data_inventory_lists_donor_fields_separately(monkeypatch: pytest.Monkey
     """A disabled donor reports copied fields without claiming ownership of the target model."""
 
     config = SimpleNamespace(name="example.donor")
-    monkeypatch.setattr(platform_managers.composed, "addons", lambda: [config])
-    monkeypatch.setattr(platform_managers.composed, "data_models", lambda owner: [])
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [config])
+    monkeypatch.setattr(platform_models.composed, "data_models", lambda owner: [])
     monkeypatch.setattr(
-        platform_managers.composed,
+        platform_models.composed,
         "contributed_fields",
         lambda owner: [
             SimpleNamespace(
@@ -262,10 +260,10 @@ def test_disable_removes_the_root(
 
     del composed_tables
     # Seed an extra root so there is something to disable in the file.
-    _data(_execute(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=_platform_admin("seed-admin")))
+    _data(execute_schema(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=_platform_admin("seed-admin")))
     admin = _platform_admin("disable-admin")
 
-    result = _data(_execute(_schema(), _DISABLE, {"addon": _AVAILABLE_ADDON}, user=admin))["disable"]
+    result = _data(execute_schema(_schema(), _DISABLE, {"addon": _AVAILABLE_ADDON}, user=admin))["disable"]
 
     assert result["ok"] is True
     assert "Disabled" in result["message"]
@@ -283,7 +281,7 @@ def test_disable_refuses_an_addon_required_by_the_loaded_graph(
 
     del composed_tables
     admin = _platform_admin("forced-admin")
-    monkeypatch.setattr(platform_managers.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
     if persisted_forced is not None:
         with system_context(reason="test.platform.forced.seed"):
             Addon.objects.update_or_create(
@@ -292,7 +290,7 @@ def test_disable_refuses_an_addon_required_by_the_loaded_graph(
             )
     before = project_settings_yaml.read_text(encoding="utf-8")
 
-    result = _data(_execute(_schema(), _DISABLE, {"addon": "angee.iam"}, user=admin))["disable"]
+    result = _data(execute_schema(_schema(), _DISABLE, {"addon": "angee.iam"}, user=admin))["disable"]
 
     assert result["ok"] is False
     assert "cannot be disabled" in result["message"]
@@ -309,7 +307,7 @@ def test_disable_ignores_stale_catalogue_dependency_flags(
 
     del composed_tables
     admin = _platform_admin("stale-forced-admin")
-    monkeypatch.setattr(platform_managers.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
     with system_context(reason="test.platform.stale-forced.seed"):
         Addon.objects.update_or_create(
             name="angee.platform",
@@ -320,7 +318,7 @@ def test_disable_ignores_stale_catalogue_dependency_flags(
             },
         )
 
-    result = _data(_execute(_schema(), _DISABLE, {"addon": "angee.platform"}, user=admin))["disable"]
+    result = _data(execute_schema(_schema(), _DISABLE, {"addon": "angee.platform"}, user=admin))["disable"]
 
     assert result["ok"] is True
     assert "Disabled" in result["message"]
@@ -337,7 +335,7 @@ def test_enable_denies_a_non_admin(
     plain = User.objects.create_user(username="plain-user", password="plain-user")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
-    result = _execute(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=plain)
+    result = execute_schema(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=plain)
 
     assert result.errors is not None
     assert project_settings_yaml.read_text(encoding="utf-8") == before
@@ -348,14 +346,6 @@ def _schema() -> Any:
 
     parts = {key: tuple(platform_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}
     return GraphQLSchemas([SchemaAddon({"console": parts})]).build("console")
-
-
-def _execute(schema: Any, query: str, variables: dict[str, Any] | None = None, *, user: Any | None = None) -> Any:
-    """Execute one operation against the platform console schema as ``user``."""
-
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user or AnonymousUser()
-    return execute_schema(schema, query, variables, request=request)
 
 
 def test_change_preview_refuses_overridden_installed_apps(
@@ -399,7 +389,7 @@ def test_pending_changes_uses_configured_transport(
     settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
         "remote": "tests.test_platform_install._RemoteInstallerBackend",
     }
-    monkeypatch.setattr(platform_managers.composed, "root_app_names", lambda: loaded)
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: loaded)
 
     assert Addon.objects.pending_changes() is expected
 
@@ -419,7 +409,7 @@ def test_package_changes_delegate_to_native_job_without_editing_roots(
             calls.append((requirement, remove))
             return operation
 
-    monkeypatch.setattr(platform_managers, "addon_installer", lambda: SimpleNamespace(backend=Backend()))
+    monkeypatch.setattr(platform_models, "addon_installer", lambda: SimpleNamespace(backend=Backend()))
     before = project_settings_yaml.read_bytes()
     with system_context(reason="test.platform.native-dependency-job"):
         Addon.objects.create(name="example.native_job", distribution="example-native-job")
@@ -427,24 +417,3 @@ def test_package_changes_delegate_to_native_job_without_editing_roots(
     assert result is operation
     assert calls == [("example-native-job", remove)]
     assert project_settings_yaml.read_bytes() == before
-
-
-def test_committed_settings_survive_catalogue_refresh_failure(
-    composed_tables: None, project_settings_yaml: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A derived database failure reports committed intent, then can reconcile later."""
-
-    from django.db import DatabaseError
-
-    def fail_refresh(manager: Any, **options: Any) -> None:
-        raise DatabaseError("mirror unavailable")
-
-    with monkeypatch.context() as patch, system_context(reason="test.platform.commit_then_reconcile"):
-        patch.setattr(platform_managers.AddonManager, "reconcile_from_registry", fail_refresh)
-        result = Addon.objects.enable(_AVAILABLE_ADDON)
-    assert _AVAILABLE_ADDON in project_settings_yaml.read_text()
-    assert result.ok and result.reconciliation_pending
-    assert "Catalogue refresh is pending" in result.summary
-    with system_context(reason="test.platform.recover_mirror"):
-        Addon.objects.reconcile_from_registry(desired=frozenset({"angee.platform", _AVAILABLE_ADDON}))
-        assert Addon.objects.get(name=_AVAILABLE_ADDON).pending

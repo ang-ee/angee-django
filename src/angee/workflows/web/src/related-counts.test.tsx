@@ -3,15 +3,14 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, CHATTER_CONTAINERS, RelatedCountProbe, containersFromChildren, type ChatterViewContext } from "@angee/ui";
-import type { RunRelatedQuery } from "@angee/gql/console/graphql";
 
 const query = vi.hoisted(() => vi.fn());
 vi.mock("@angee/refine", async (original) => ({
   ...(await original<typeof import("@angee/refine")>()), useAuthoredQuery: query,
 }));
 
-import { DecisionRunCountDocument, DecisionStepsDocument, RecordRelatedRunsDocument, RunDecisionsCountDocument, RunRelatedDocument } from "./documents.console";
-import { decisionRunGroup, recordRunsGroup, runDecisionsGroup, runRecords, runRecordsGroup } from "./related";
+import { DecisionStepsDocument, RecordRelatedRunsDocument, RunRelatedDocument } from "./documents.console";
+import { decisionRunGroup, recordRunsGroup, runDecisionsGroup, runRecordsGroup } from "./related";
 
 afterEach(() => { cleanup(); query.mockReset(); });
 
@@ -21,50 +20,42 @@ const context = (model: string): ChatterViewContext => ({
   view: { kind: "record", type: "record", sqid: "rec_1" },
 });
 
-test("a run's Decisions badge selects only the step aggregate", () => {
-  query.mockReturnValue({ data: { steprun_aggregate: { aggregate: { count: 2 } } } });
+const groupCount = (group: string, count: number) => ({ data: { related_counts: [{ group, count }] } });
+
+test("a run's Decisions badge counts its declared related count without the run's related read", () => {
+  query.mockReturnValue(groupCount("workflows.decisions", 2));
+  const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "workflows.WorkflowRun#groups": { decisions: runDecisionsGroup },
-  }) }}><RelatedCountProbe id="related" context={context("workflows.WorkflowRun")} onCount={vi.fn()} /></AppRuntimeProvider>);
-  expect(query).toHaveBeenCalledWith(RunDecisionsCountDocument, { run: "rec_1" }, expect.anything());
+    "workflows.WorkflowRun#groups": { "workflows.decisions": runDecisionsGroup },
+  }) }}><RelatedCountProbe id="related" context={context("workflows.WorkflowRun")} onCount={onCount} /></AppRuntimeProvider>);
+  expect(query).toHaveBeenCalledWith(expect.anything(), { model: "workflows.WorkflowRun", id: "rec_1", groups: ["workflows.decisions"] }, expect.anything());
   expect(query).not.toHaveBeenCalledWith(RunRelatedDocument, expect.anything(), expect.anything());
+  expect(onCount).toHaveBeenLastCalledWith("related", 2);
 });
 
-test("a decision's Run badge selects only the step aggregate", () => {
-  query.mockReturnValue({ data: { steprun_aggregate: { aggregate: { count: 1 } } } });
+test("a decision's Run badge counts its declared related count without the decision's steps", () => {
+  query.mockReturnValue(groupCount("workflows.run", 1));
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "decisions.Decision#groups": { run: decisionRunGroup },
+    "decisions.Decision#groups": { "workflows.run": decisionRunGroup },
   }) }}><RelatedCountProbe id="related" context={context("decisions.Decision")} onCount={vi.fn()} /></AppRuntimeProvider>);
-  expect(query).toHaveBeenCalledWith(DecisionRunCountDocument, { decision: "rec_1" }, expect.anything());
+  expect(query).toHaveBeenCalledWith(expect.anything(), { model: "decisions.Decision", id: "rec_1", groups: ["workflows.run"] }, expect.anything());
   expect(query).not.toHaveBeenCalledWith(DecisionStepsDocument, expect.anything(), expect.anything());
 });
 
-test("timeline-derived Runs count waits for the Links pane", () => {
+test("a record's Runs badge counts its declared related count without the timeline read", () => {
+  query.mockReturnValue(groupCount("workflows.runs", 3));
+  const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { runs: recordRunsGroup },
-  }) }}><RelatedCountProbe id="related" context={context("example.Record")} onCount={vi.fn()} /></AppRuntimeProvider>);
+    "related#groups": { "workflows.runs": recordRunsGroup },
+  }) }}><RelatedCountProbe id="related" context={context("example.Record")} onCount={onCount} /></AppRuntimeProvider>);
+  expect(query).toHaveBeenCalledWith(expect.anything(), { model: "example.Record", id: "rec_1", groups: ["workflows.runs"] }, expect.anything());
   expect(query).not.toHaveBeenCalledWith(RecordRelatedRunsDocument, expect.anything(), expect.anything());
+  expect(onCount).toHaveBeenLastCalledWith("related", 3);
 });
 
 test("a run's derived distinct Records count waits for the Links pane", () => {
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "workflows.WorkflowRun#groups": { records: runRecordsGroup },
+    "workflows.WorkflowRun#groups": { "workflows.records": runRecordsGroup },
   }) }}><RelatedCountProbe id="related" context={context("workflows.WorkflowRun")} onCount={vi.fn()} /></AppRuntimeProvider>);
   expect(query).not.toHaveBeenCalledWith(RunRelatedDocument, expect.anything(), expect.anything());
-});
-
-test("run records use the generated operation enum and keep the strongest role", () => {
-  const record = (id: string, operation: RunRelatedQuery["steprecord"][number]["operation"]) => ({
-    id: `step_${id}_${operation}`, label: id, operation, record_model: "notes.Note", record_id: id,
-    step_run: { id: `run_${id}`, node_label: operation },
-  });
-  const data: RunRelatedQuery = {
-    workflowrun_by_pk: { id: "run_1", subject_model: null, subject_id: null, trigger_event: null },
-    steprecord: [record("created", "CREATED"), record("changed", "CHANGED"), record("read", "READ"),
-      record("created", "READ"), record("called", "CALLED")],
-    steprun: [],
-  };
-  expect(runRecords(data).map(({ id, role }) => [id, role])).toEqual([
-    ["created", "created"], ["changed", "changed"], ["read", "read"], ["called", "read"],
-  ]);
 });

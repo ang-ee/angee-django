@@ -142,12 +142,12 @@ converts it to the FK's Python type and returns no user for other subject types.
 
 **Changeset** — attribution for one logical write, owned by
 [`changeset()`](../src/angee/provenance/context.py) and stored by the
-[provenance addon](../src/angee/provenance/models/changesets.py).
+[provenance addon](../src/angee/provenance/models.py).
 
 **Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
 classifies the logical work, including `pull`/`push` for sync, `import` for a
 one-shot import and `seed` for seed loads. The
-[`Changeset` enums](../src/angee/provenance/models/changesets.py) own that vocabulary.
+[`Changeset` enums](../src/angee/provenance/models.py) own that vocabulary.
 
 **Write group** — an internal ephemeral identity for nested ORM dispatch. Its
 deduplication ends with the dispatch; successive writes in one changeset remain
@@ -273,6 +273,12 @@ surface, not an import file.
 may target. A data resource's `recordEdges` lists the edges its records can
 carry; record surfaces for one edge apply only there.
 
+**Related count** — the row count of one Links-tab group on a record, read
+without its rows. The group's addon declares a `RelatedCount` under the group's
+id whose read is the owner method the group's root lists, bounded like that
+root; `related_counts` counts a record's groups in one statement. A related
+count names a group, not an edge model: several groups may list one record edge.
+
 **Merge** — folding one or more *merged records* into a *survivor* of the same
 model (`MergeableMixin.merge`, the shared `merge_records` verb). Each
 *reference* to a merged record, meaning a foreign key or a record edge pointing
@@ -298,8 +304,11 @@ backend finalizes `DataResourceQuery` against the composed schema; frontend
 Explicit local row declarations use the same contract and semantics.
 
 **Group axis** — one query dimension with a stable bucket identity, optional
-display label, required row selections and optional server grouping and drill
-projections. Labels describe buckets; identities distinguish them.
+display label, required row selections and optional server grouping; a server
+axis always carries the drill that selects one bucket, with two exceptions: an
+extraction part (a weekday, a month number) has no drill and is summary-only,
+and a JSON bucket that drills by containment is unavailable on a backend without
+JSON containment. Labels describe buckets; identities distinguish them.
 
 **REBAC resource** — an authorization object (`ObjectRef`) in the
 `django-zed-rebac` schema. It names what an actor can read/write; it is separate
@@ -332,6 +341,18 @@ against the feed's live horizon. See [public feeds](../src/angee/posts/README.md
 **Delivery settlement** — messaging's reflection of provider acceptance or refusal
 into the outbound message's status, provider identity and retry schedule. See
 [the delivery owner](../src/angee/messaging/delivery.py).
+
+**Chatter** — a record's own conversation: the thread a `ThreadAttachment` with
+the `chatter` role binds to one record, read through that record's read
+(`messaging/thread#chatter_read`). A `source` attachment instead retains an
+existing conversation as evidence for a record and changes nothing about who
+reads it. See [the thread attachment owner](../src/angee/messaging/managers.py).
+
+**Messaging inbox** — a person's channel and direct conversations and their
+messages, outside every record's chatter, read under `read_inbox`
+(`ThreadQuerySet.inbox`, `MessageQuerySet.inbox`); `MessageInbox` owns its
+search, groups and pages. Distinct from the decisions **Inbox**. See
+[the inbox owner](../src/angee/messaging/inbox.py).
 
 **Workflow version** — an immutable published definition, including the
 normalized contracts of any child workflows it awaits. A run pins one version.

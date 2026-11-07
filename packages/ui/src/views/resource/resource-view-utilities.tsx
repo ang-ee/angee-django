@@ -37,7 +37,7 @@ export function useResourceViewUtilityContext(): ResourceViewUtilityContext {
  * model lookup (`modelBacked: false`) and keeps the kind-level utilities.
  * @owner ResourceToolbar
  */
-function useResourceViewUtilities(
+export function useResourceViewUtilities(
   resource: string,
   { modelBacked = true }: { modelBacked?: boolean } = {},
 ): readonly ComposedContainerChild[] {

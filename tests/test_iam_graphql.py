@@ -17,6 +17,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -26,17 +27,16 @@ from django.apps import apps
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, transaction
-from django.http import HttpResponse
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.middleware import ActorMiddleware
 from rebac.roles import grant as grant_role
+from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
 from angee.base.identity import public_data_id_field
@@ -46,9 +46,10 @@ from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
 from angee.graphql.events import ChangePayload
 from angee.graphql.schema import AngeeSchema
+from angee.graphql.testing.documents import execute_schema, graphql_request
+from angee.graphql.testing.documents import result_data as _data
+from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
-from angee.iam.graphql.view_as import ViewAsReadOnlyExtension
-from angee.iam.graphql.views import IAMGraphQLView
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -57,15 +58,8 @@ from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
     test_messaging,  # noqa: F401 -- register the concrete relation graph
 )
-from tests.conftest import (
-    Credential,
-    ExternalAccount,
-    OAuthClient,
-    addon_schema,
-    execute_schema,
-)
+from tests.conftest import Credential, ExternalAccount, OAuthClient, addon_schema
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 from tests.iam_models import Group as IAMGroup
 from tests.tables import model_tables
 from tests.test_decisions_concurrency import submit, wait_for_lock
@@ -80,6 +74,8 @@ integrate_connect = importlib.import_module("angee.integrate.connect")
 # The connection/login surface now spans three addons; tests compose them the way
 # the runtime does (one merged schema per bucket).
 _SCHEMA_SOURCES = (iam_schema.schemas, integrate_schema.schemas, oidc_schema.schemas)
+# IAM's verbs read and rotate the request session, so every operation here carries one.
+_execute = partial(execute_schema, session=True)
 
 
 def test_available_connections_returns_only_enabled_oauth_clients_without_secret_fields(
@@ -242,7 +238,7 @@ def test_login_complete_provisions_and_logs_in(
         email="oidc@example.com",
     )
     public_schema = _schema("public")
-    request = _request(AnonymousUser())
+    request = graphql_request(AnonymousUser(), session=True)
 
     start = _data(
         _execute(
@@ -265,13 +261,13 @@ def test_login_complete_provisions_and_logs_in(
     )["login_start"]
 
     def complete_login(
-        completion: oidc_identity.OidcLoginCompletion,
+        selected_oauth_client: OAuthClient,
         *,
         code: str,
         state_token: str,
         redirect_uri: str,
     ) -> Any:
-        assert completion.oauth_client.pk == oauth_client.pk
+        assert selected_oauth_client.pk == oauth_client.pk
         assert code == "code"
         assert state_token == start["state"]
         assert redirect_uri == "https://app.example/callback"
@@ -281,7 +277,7 @@ def test_login_complete_provisions_and_logs_in(
             next_path="/after-login",
         )
 
-    monkeypatch.setattr(oidc_identity.OidcLoginCompletion, "complete_login", complete_login)
+    monkeypatch.setattr(oidc_identity, "complete_login", complete_login)
 
     completed = _data(
         _execute(
@@ -329,7 +325,7 @@ def test_login_complete_returns_oidc_flow_error_payload(
 
     oauth_client = _oauth_client("oidc-error", is_oidc=True, is_enabled=True)
     public_schema = _schema("public")
-    request = _request(AnonymousUser())
+    request = graphql_request(AnonymousUser(), session=True)
     start = _data(
         _execute(
             public_schema,
@@ -352,7 +348,7 @@ def test_login_complete_returns_oidc_flow_error_payload(
         del args, kwargs
         raise OAuthFlowError("invalid_id_token", 400, "bad token")
 
-    monkeypatch.setattr(oidc_identity.OidcLoginCompletion, "complete_login", complete_login)
+    monkeypatch.setattr(oidc_identity, "complete_login", complete_login)
 
     completed = _data(
         _execute(
@@ -417,7 +413,7 @@ def test_login_upgrades_a_stale_password_hash_for_valid_credentials(
             _schema("public"),
             _LOGIN_MUTATION,
             {"username": "rehash-user", "password": raw_password},
-            request=_request(AnonymousUser()),
+            request=graphql_request(AnonymousUser(), session=True),
         )
     )
 
@@ -447,7 +443,7 @@ def test_login_with_wrong_password_fails_and_writes_no_hash_upgrade(
             _schema("public"),
             _LOGIN_MUTATION,
             {"username": "no-rehash-user", "password": "wrong-password"},
-            request=_request(AnonymousUser()),
+            request=graphql_request(AnonymousUser(), session=True),
         )
     )
 
@@ -475,7 +471,7 @@ def test_login_refuses_service_account(
             _schema("public"),
             _LOGIN_MUTATION,
             {"username": "svc-agent", "password": "secret"},
-            request=_request(AnonymousUser()),
+            request=graphql_request(AnonymousUser(), session=True),
         )
     )
 
@@ -500,7 +496,7 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
         email="link@example.com",
     )
     public_schema = _schema("public")
-    request = _request(user)
+    request = graphql_request(user, session=True)
     start = _data(
         _execute(
             public_schema,
@@ -521,13 +517,13 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
     )["link_account_start"]
 
     def complete_link(
-        completion: oidc_identity.OidcLoginCompletion,
+        selected_oauth_client: OAuthClient,
         *,
         code: str,
         state_token: str,
         redirect_uri: str,
     ) -> Any:
-        assert completion.oauth_client.pk == oauth_client.pk
+        assert selected_oauth_client.pk == oauth_client.pk
         assert code == "code"
         assert redirect_uri == "https://app.example/callback"
         record = state.consume(state_token)
@@ -539,7 +535,7 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
             next_path=record.next_path or "/",
         )
 
-    monkeypatch.setattr(oidc_identity.OidcLoginCompletion, "complete_link", complete_link)
+    monkeypatch.setattr(oidc_identity, "complete_link", complete_link)
 
     completed = _data(
         _execute(
@@ -588,7 +584,7 @@ def test_connect_account_complete_uses_bounded_provider_error_message(
     user = User.objects.create_user(username="connect-rate-limited", email="connect@example.com")
     oauth_client = _oauth_client("connect-anthropic", is_oidc=False)
     public_schema = _schema("public")
-    request = _request(user)
+    request = graphql_request(user, session=True)
     oauth_client_id = str(oauth_client.sqid)
     start = _data(
         _execute(
@@ -659,8 +655,7 @@ def test_connect_account_complete_uses_bounded_provider_error_message(
         "account": None,
         "credential": None,
         "error": (
-            "The provider could not complete authorization."
-            if http_status == 400
+            "The provider could not complete authorization." if http_status == 400
             else "The provider is temporarily unavailable. Try again later."
         ),
         "error_code": "token_exchange_failed" if http_status == 400 else "provider_unavailable",
@@ -1369,8 +1364,7 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
         assert field in oauth_client_set
     oauth_client_oidc_extension = "\n".join(
         _sdl_block(block, "extend type OAuthClientType")
-        for block in console_sdl.split("\n\n")
-        if block.startswith("extend type OAuthClientType")
+        for block in console_sdl.split("\n\n") if block.startswith("extend type OAuthClientType")
     )
     for field in ("jwks_uri", "login_enabled", "link_on_email_match", "create_on_login"):
         assert field in oauth_client_oidc_extension
@@ -1514,9 +1508,8 @@ def test_public_user_change_subscription_only_yields_the_actor(
         readable_fields=readable_fields,
     )
 
-    async def subscribe(model: type[Any], *, ready: asyncio.Event):
+    async def subscribe(model: type[Any]):
         assert model is User
-        ready.set()
         yield other_change
         yield actor_change
 
@@ -1534,11 +1527,9 @@ def test_public_user_change_subscription_only_yields_the_actor(
 
     events = asyncio.run(collect())
 
-    assert [event.action for event in events] == ["ready", "update"]
-    changes = [event for event in events if event.action != "ready"]
-    assert [str(event.id) for event in changes] == [public_id_of(actor)]
-    assert changes[0].changed_fields == ["password", "preferences"]
-    assert changes[0].changed_values == {"preferences": actor.preferences}
+    assert [str(event.id) for event in events] == [public_id_of(actor)]
+    assert events[0].changed_fields == ["password", "preferences"]
+    assert events[0].changed_values == {"preferences": actor.preferences}
 
 
 @pytest.mark.django_db
@@ -1849,13 +1840,10 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
         assert Credential.objects.filter(user=user, external_account=account).exists()
 
 
-@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
 @pytest.mark.parametrize("second_path", ("self_service", "administrator"))
 def test_competing_oidc_disconnects_keep_one_sign_in_method(
-    iam_connection_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-    second_path: str,
+    iam_connection_tables: None, monkeypatch: pytest.MonkeyPatch, second_path: str,
 ) -> None:
     """Both deletion entrypoints wait on the common user before counting accounts."""
 
@@ -1868,11 +1856,8 @@ def test_competing_oidc_disconnects_keep_one_sign_in_method(
     ]
     credentials = [
         Credential.objects.upsert_for_user(
-            user,
-            oauth_client,
-            CredentialKind.OAUTH,
-            {"access_token": f"race-token-{index}"},
-            external_account=account,
+            user, oauth_client, CredentialKind.OAUTH,
+            {"access_token": f"race-token-{index}"}, external_account=account,
         )
         for index, (oauth_client, account) in enumerate(zip(oauth_clients, accounts, strict=True))
     ]
@@ -1882,8 +1867,7 @@ def test_competing_oidc_disconnects_keep_one_sign_in_method(
         with actor_context(admin if second_path == "administrator" else user):
             if second_path == "administrator":
                 preview = integrate_schema.IntegrateCredentialMutation().delete_credential(
-                    id=credentials[1].public_id,
-                    confirm=True,
+                    id=credentials[1].public_id, confirm=True,
                 )
                 assert preview.refusals == ["This is your only sign-in method."]
                 return not preview.has_blockers
@@ -1906,8 +1890,8 @@ def test_competing_oidc_disconnects_keep_one_sign_in_method(
         assert ExternalAccount.objects.get(pk=accounts[1].pk).owner_id == user.pk
 
 
-def test_oidc_disconnect_policy_uses_the_persisted_credentials_database(tmp_path: Path) -> None:
-    """Conflicting default-db policy cannot authorize unlinking a secondary-db user's last account."""
+def test_oidc_disconnect_policy_keeps_the_last_sign_in_method(tmp_path: Path) -> None:
+    """The OIDC donor lets a passwordless user unlink one account but never the last."""
 
     package = tmp_path / "native_oidc"
     package.mkdir()
@@ -1916,14 +1900,12 @@ def test_oidc_disconnect_policy_uses_the_persisted_credentials_database(tmp_path
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.db import models
 from angee.iam_integrate_oidc.models import CredentialOidc, OAuthClientOidc
-from angee.integrate.querysets import OAuthClientQuerySet
 
 class User(AbstractBaseUser):
     username = models.CharField(max_length=40, unique=True)
     USERNAME_FIELD = "username"
 
 class OAuthClient(OAuthClientOidc, models.Model):
-    objects = models.Manager.from_queryset(OAuthClientQuerySet)()
     is_enabled = models.BooleanField(default=True)
     client_id = models.CharField(max_length=40, default="native-client")
     authorize_endpoint = models.URLField(default="https://issuer.example/authorize")
@@ -1955,55 +1937,47 @@ os.environ.pop("DJANGO_SETTINGS_MODULE", None)
 from django.conf import settings
 from angee.integrate.autoconfig import SETTINGS as INTEGRATE_SETTINGS
 settings.configure(
-    INSTALLED_APPS=["django.contrib.auth", "django.contrib.contenttypes", "rebac", "native_oidc"],
+    INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "native_oidc"],
     AUTH_USER_MODEL="native_oidc.User",
-    DATABASES={alias: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
-               for alias in ("default", "secondary")},
-    SECRET_KEY="oidc-alias-regression",
+    DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+    SECRET_KEY="oidc-disconnect-policy",
     ANGEE_OAUTH_PROVIDER_TYPE_CLASSES=INTEGRATE_SETTINGS["ANGEE_OAUTH_PROVIDER_TYPE_CLASSES"],
 )
 import django
 django.setup()
 from django.core.exceptions import ValidationError
-from django.db import connections, transaction
+from django.db import connection, transaction
 from rebac.models import PermissionAuditEvent
 from native_oidc.models import Credential, ExternalAccount, OAuthClient, User
 
-for alias in ("default", "secondary"):
-    with connections[alias].schema_editor() as editor:
-        for model in (User, OAuthClient, ExternalAccount, Credential, PermissionAuditEvent):
-            editor.create_model(model)
-    user = User.objects.using(alias).create(username="identity", password="usable" if alias == "default" else "!")
-    client = OAuthClient._base_manager.using(alias).create(login_enabled=alias == "secondary")
-    for _ in range(3 if alias == "default" else 2):
-        account = ExternalAccount.objects.using(alias).create(oauth_client=client)
-        Credential.objects.using(alias).create(user=user, oauth_client=client, external_account=account)
+with connection.schema_editor() as editor:
+    for model in (User, OAuthClient, ExternalAccount, Credential, PermissionAuditEvent):
+        editor.create_model(model)
+user = User.objects.create(username="identity", password="!")
+client = OAuthClient.objects.create(login_enabled=True)
+for _ in range(2):
+    account = ExternalAccount.objects.create(oauth_client=client)
+    Credential.objects.create(user=user, oauth_client=client, external_account=account)
 
-with transaction.atomic(using="secondary"):
-    first = Credential.objects.using("secondary").first()
+with transaction.atomic():
+    first = Credential.objects.first()
     first.check_disconnect()
-    first.delete(using="secondary")
-with transaction.atomic(using="secondary"):
-    remaining = Credential.objects.using("secondary").get()
+    first.delete()
+with transaction.atomic():
+    remaining = Credential.objects.get()
     try:
         remaining.check_disconnect()
     except ValidationError as error:
         assert error.code == "only_sign_in_method"
     else:
-        raise AssertionError("The secondary user's final sign-in method must remain linked.")
-assert Credential.objects.using("secondary").count() == 1
-assert Credential.objects.using("default").count() == 3
+        raise AssertionError("The user's final sign-in method must remain linked.")
+assert Credential.objects.count() == 1
 """
     root = Path(__file__).resolve().parents[1]
     environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src"), str(tmp_path)))}
     result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=root,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=60,
-        check=False,
+        [sys.executable, "-c", script], cwd=root, env=environment,
+        text=True, capture_output=True, timeout=60, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -2063,7 +2037,7 @@ def test_view_as_target_has_no_pinned_admitting_actor(
             assert active.user.effective_actor() == (to_subject_ref(target), False)
             return active.user.has_access("write")
 
-    view = IAMGraphQLView.as_view(schema_name="public", schema=AngeeSchema(query=Query))
+    view = GraphQLView.as_view(schema=AngeeSchema(query=Query))
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
     request = RequestFactory().post(
         "/graphql/public/",
@@ -2092,7 +2066,7 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
             return "hello"
 
     schema = AngeeSchema(query=Query, extensions=[ViewAsReadOnlyExtension])
-    view = IAMGraphQLView.as_view(schema_name="public", schema=schema)
+    view = GraphQLView.as_view(schema=schema)
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
     request = RequestFactory().post(
         "/graphql/public/",
@@ -2152,10 +2126,7 @@ def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
 ) -> None:
     admin = _platform_admin("preview-denied-admin")
     monkeypatch.setattr(User._default_manager, "admit_view_as", None)
-    monkeypatch.setattr(
-        "angee.graphql.views._get_view",
-        lambda schema_name: IAMGraphQLView.as_view(schema_name=schema_name, schema=None),
-    )
+    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: None)
     request = RequestFactory().post(
         "/graphql/public/",
         data={"query": "query Preview { __typename }", "operationName": "Preview"},
@@ -2192,24 +2163,6 @@ def _dedup(values: tuple[Any, ...]) -> tuple[Any, ...]:
     return tuple(out)
 
 
-def _execute(
-    schema: Any,
-    query: str,
-    variables: dict[str, Any] | None = None,
-    *,
-    user: Any | None = None,
-    request: Any | None = None,
-) -> Any:
-    """Execute a GraphQL operation with a session-bearing request context."""
-
-    return execute_schema(
-        schema,
-        query,
-        variables,
-        request=request or _request(user or AnonymousUser()),
-    )
-
-
 def _sdl_block(sdl: str, header: str) -> str:
     """Return one SDL block by its header prefix."""
 
@@ -2217,15 +2170,6 @@ def _sdl_block(sdl: str, header: str) -> str:
     body = sdl.index("{", start)
     end = sdl.index("\n}", body)
     return sdl[start:end]
-
-
-def _request(user: Any) -> Any:
-    """Return a request with the configured native Django session backend."""
-
-    request = RequestFactory().post("/graphql/public/")
-    request.user = user
-    SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
-    return request
 
 
 _LOGIN_MUTATION = """

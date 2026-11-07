@@ -1,4 +1,4 @@
-"""Concrete protected record-reference and merge probes."""
+"""Concrete probes for :class:`~angee.base.models.refs.RecordRefMixin` targets and edges, and for merge moves."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Lower
 
+from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin
-from angee.iam.models.base import ProtectedModel
-from angee.iam.models.merge import ProtectedMergeableMixin
-from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.base.models.merge import MergeableMixin
+from angee.base.models.refs import RecordRefMixin
 
 
-class RecordRefTypedTarget(SqidMixin, ProtectedModel):
+class RecordRefTypedTarget(SqidMixin, AngeeModel):
     """Concrete sqid-backed target with a REBAC resource type."""
 
     sqid_prefix = "rrt_"
@@ -38,7 +38,7 @@ class RecordRefPlainTarget(SqidMixin, models.Model):
         db_table = "test_record_ref_plain_target"
 
 
-class RecordRefTargetEdge(ProtectedRecordRefMixin):
+class RecordRefTargetEdge(RecordRefMixin, models.Model):
     """Concrete target edge used by record-ref tests."""
 
     on_target_delete = models.CASCADE
@@ -52,7 +52,7 @@ class RecordRefTargetEdge(ProtectedRecordRefMixin):
         db_table = "test_record_ref_target_edge"
 
 
-class RecordRefSubjectEdge(ProtectedRecordRefMixin):
+class RecordRefSubjectEdge(RecordRefMixin, models.Model):
     """Concrete subject edge used by record-ref tests."""
 
     on_target_delete = models.PROTECT
@@ -66,7 +66,7 @@ class RecordRefSubjectEdge(ProtectedRecordRefMixin):
         db_table = "test_record_ref_subject_edge"
 
 
-class RecordRefCustomEdge(ProtectedRecordRefMixin):
+class RecordRefCustomEdge(RecordRefMixin, models.Model):
     """Concrete reference with independently named relation fields and columns."""
 
     kind = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+", db_column="kind_column")
@@ -79,7 +79,7 @@ class RecordRefCustomEdge(ProtectedRecordRefMixin):
         db_table = "test_record_ref_custom_edge"
 
 
-class RecordRefNullableEdge(ProtectedRecordRefMixin):
+class RecordRefNullableEdge(RecordRefMixin, models.Model):
     """Concrete nullable edge used by empty-reference tests."""
 
     on_target_delete = models.SET_NULL
@@ -93,7 +93,7 @@ class RecordRefNullableEdge(ProtectedRecordRefMixin):
         db_table = "test_record_ref_nullable_edge"
 
 
-class CustomColumnEdge(ProtectedRecordRefMixin):
+class CustomColumnEdge(RecordRefMixin, models.Model):
     """An alternate column adopter also requires native string-id conversion."""
 
     target_ct = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE)
@@ -106,13 +106,13 @@ class CustomColumnEdge(ProtectedRecordRefMixin):
         db_table = "test_record_ref_custom_columns"
 
 
-class MergeReferenceNode(ProtectedMergeableMixin):
+class MergeReferenceNode(MergeableMixin):
     """A native merge owner with a self-reference that must never become a loop."""
 
     title = models.CharField(max_length=80)
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE)
 
-    class Meta(ProtectedMergeableMixin.Meta):
+    class Meta(MergeableMixin.Meta):
         abstract = False
         db_table = "test_merge_reference_node"
 

@@ -5,7 +5,7 @@ from contextlib import nullcontext
 import pytest
 from rebac import SubjectRef, actor_context, system_context, to_subject_ref
 
-from angee.iam.permissions import instance_actor
+from angee.base.permissions import instance_actor
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, OwnershipContainer, ownership_tables  # noqa: F401
 
@@ -36,17 +36,6 @@ def test_plain_django_instance_uses_only_ambient_actor(ambient):
         assert instance_actor(instance) == ambient
         with system_context(reason="test.instance_actor.plain"):
             assert instance_actor(instance) == ambient
-
-
-@pytest.mark.parametrize("pinned", [None, SubjectRef.of("auth/user", "17")])
-@pytest.mark.parametrize("ambient", [None, SubjectRef.of("auth/user", "29")])
-def test_queryset_actor_keeps_its_pin_or_ambient_requester_under_sudo(pinned, ambient):
-    rows = OwnedRow.objects.all()
-    rows = rows.with_actor(pinned) if pinned is not None else rows.sudo(reason="test.instance_actor.queryset")
-    with actor_context(ambient) if ambient is not None else nullcontext():
-        assert instance_actor(rows) == (pinned if pinned is not None else ambient)
-        with system_context(reason="test.instance_actor.ambient_sudo"):
-            assert instance_actor(rows) == (pinned if pinned is not None else ambient)
 
 
 @pytest.mark.usefixtures("ownership_tables")

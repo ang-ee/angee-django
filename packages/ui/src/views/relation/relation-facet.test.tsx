@@ -53,12 +53,6 @@ beforeEach(() => {
 });
 
 describe("useRelationFacets", () => {
-  test("keeps relation bucket requests disabled until a filter control opens", () => {
-    renderHook(() => useRelationFacets("agents.InferenceModel", [{ field: "provider" }], undefined, {}, false),
-      { wrapper: Metadata });
-    expect(dataMocks.facets.mock.calls[0]?.[1]).toMatchObject({ enabled: false });
-  });
-
   test.each([null, ""])("a missing relation remains No value with label key %j", (label) => {
     dataMocks.facets.mockReturnValue(resourceFacets({
       provider: [{ value: "", label: "Blank", count: 2,

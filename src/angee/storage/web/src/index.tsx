@@ -67,7 +67,6 @@ const storage = defineBaseAddon({
 });
 
 export { useStorageUpload } from "./data/use-upload";
-export { useDrivePicker } from "./data/use-drive-picker";
 export { recordFilesGroup } from "./RecordFilesPane";
 export { FileRecordPreview } from "./views/FilePreview";
 export type { StorageUpload, UploadedFile, UploadTarget, UploadTask } from "./data/use-upload";

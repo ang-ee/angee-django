@@ -1,15 +1,15 @@
-"""Changesets selected through the history owner's document membership."""
+"""Closed changesets selected through the history owner's document membership."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Any
 
+from django.apps import apps
 from django.db import models
 from django.db.models.functions import Cast
 from rebac import SubjectRef, resolve_subjects
 
-from angee.provenance.changeset_querysets import ChangesetQuerySet
 from angee.provenance.contrib.angee.history import record_history
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, timeline_subject
 
@@ -25,7 +25,8 @@ class ChangeKind(TimelineKind):
         return record_history(model) is not None and timeline_subject(model)
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        return ChangesetQuerySet.for_record(record, actor)
+        model = apps.get_model("provenance", "Changeset")
+        return model.objects.sudo(reason="provenance.record_history").closed_for_record(record).scoped()
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         integer_key = models.Q(origin_object_id__regex=r"^[0-9]{1,18}$") | models.Q(
@@ -57,10 +58,7 @@ class ChangeKind(TimelineKind):
         if row.state == row.State.CLOSED:
             yield from (
                 (model, pk)
-                for model, pk in type(row)
-                .objects.db_manager(row._state.db, hints={"instance": row})
-                .filter(pk=row.pk)
-                .records_touched()
+                for model, pk in type(row).objects.filter(pk=row.pk).records_touched()
                 if self.eligible(model)
             )
 

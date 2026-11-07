@@ -10,28 +10,12 @@ from typing import Any
 from django.conf import settings as django_settings
 
 SETTINGS = {
-    "ANGEE_GRAPHQL_SCHEMA_CLASS:append": ["angee.iam.graphql.schema.IAMSchema"],
-    "ANGEE_GRAPHQL_HTTP_VIEW_CLASS:append": ["angee.iam.graphql.views.IAMGraphQLView"],
-    "ANGEE_GRAPHQL_WS_CONSUMER_CLASS:append": ["angee.iam.graphql.consumers.IAMGraphQLWSConsumer"],
-    "ANGEE_GRAPHQL_RESOURCE_CONTRIBUTORS:append": ["angee.iam.graphql.resources.contribute"],
-    "ANGEE_GRAPHQL_RESOURCE_METADATA:append": ["angee.iam.graphql.resources.enrich_metadata"],
-    "ANGEE_GRAPHQL_CHANGE_PROJECTORS:append": ["angee.iam.graphql.changes.project"],
-    "ANGEE_GRAPHQL_CHANGE_FILTER:append": ["angee.iam.graphql.changes.filter_event"],
-    "COMPOSE_INTEGRATIONS:append": ["angee.iam.build.PermissionIntegration"],
-    "COMPOSE_FINGERPRINT_GLOBS:append": ["pyproject.toml", "**/*.zed"],
-    "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": ["permissions"],
-    "ANGEE_REBAC_FORCE_OVERWRITE": False,
-    "REBAC_BACKEND": "local",
-    "REBAC_LOCAL_BACKEND_STORAGE": "registry",
-    "REBAC_STRICT_MODE": True,
-    "REBAC_LINT_BARE_PREFETCH": False,
-    "REBAC_FIELD_READ_MODE": "redact",
-    "REBAC_ALLOW_SUDO": True,
-    "REBAC_SUPERUSER_BYPASS": False,
     "ANGEE_SERVER_COMMAND_CONTEXT:append": ["angee.iam.context.command_context"],
     "AUTH_USER_MODEL": "iam.User",
     # IAM owns the platform-admin role used by its schema and bootstrap command.
     "REBAC_UNIVERSAL_ADMIN_ROLE": "angee/role:admin",
+    # Only platform admins open the server's request profiling UI.
+    "ANGEE_PROFILING_PERMISSION": "angee.iam.permissions.is_platform_admin",
     "MIDDLEWARE:append": [
         "django.contrib.sessions.middleware.SessionMiddleware",
         "django.middleware.csrf.CsrfViewMiddleware",
@@ -51,23 +35,17 @@ SETTINGS = {
 """Django settings contributed when IAM is installed."""
 
 
-def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
-    """Derive IAM's REBAC depth and isolate cookies shared on localhost ports.
+def settings(namespace: Mapping[str, Any]) -> dict[str, str]:
+    """Isolate local projects' cookies; browsers share localhost cookies across ports.
 
-    An explicit REBAC_DEPTH_LIMIT wins; otherwise SQLite defaults to eight and
-    another or unset engine defaults to sixteen. Browsers share localhost cookies
-    across ports, so local projects use names based on the stable project path.
     Production and explicit cookie names retain their host-defined behavior.
+    The project path is stable across process reloads and source workspaces.
     """
 
-    result = {"REBAC_DEPTH_LIMIT": int(namespace.get(
-        "REBAC_DEPTH_LIMIT", 8 if namespace.get("DATABASES", {}).get("default", {}).get("ENGINE")
-        == "django.db.backends.sqlite3" else 16,
-    ))}
     if not namespace.get("DEBUG") or not namespace.get("BASE_DIR"):
-        return result
+        return {}
     suffix = hashlib.blake2s(str(namespace["BASE_DIR"]).encode(), digest_size=6).hexdigest()
-    return result | {
+    return {
         name: f"angee_{suffix}_{cookie}"
         for name, cookie in (("SESSION_COOKIE_NAME", "session"), ("CSRF_COOKIE_NAME", "csrf"))
         if name not in namespace

@@ -42,9 +42,7 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   const variables = useMemo(() => ({ modelLabel: target.modelLabel, recordId: target.recordId, role }),
     [target.modelLabel, target.recordId, role]);
   const bindings = useAuthoredQuery(KnowledgeRecordNotes, variables, {
-    enabled: Boolean(target.modelLabel && target.recordId), models: [...BINDING_MODELS, target.modelLabel],
-    records: [{ model: target.modelLabel, id: target.recordId }],
-    relatedModels: [RECORD_BINDING_MODEL],
+    enabled: Boolean(target.modelLabel && target.recordId), models: BINDING_MODELS,
   });
   const canBind = bindings.data?.record_knowledge_can_bind ?? false;
   const vaultById = useAuthoredQuery(KnowledgeVault, { id: typeof vault === "string" ? vault : "" }, {
@@ -55,20 +53,10 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   });
   const vaultQuery = typeof vault === "string" ? vaultById : vaultByResource;
   const writableVault = typeof vault === "string" ? vaultById.data?.vaults_by_pk : vaultByResource.data?.knowledge_vault_for_resource;
-  const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, {
-    invalidateModels: BINDING_MODELS,
-    records: (data, input) => {
-      const binding = data?.create_record_note;
-      return binding?.page ? [
-        { model: RECORD_BINDING_MODEL, id: binding.id, action: "create",
-          relatedRecords: [{ model: input.model_label, id: input.record_id }, { model: PAGE_MODEL, id: binding.page }] },
-        { model: PAGE_MODEL, id: binding.page, action: "create" },
-      ] : [];
-    },
-  });
+  const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, { invalidateModels: BINDING_MODELS });
   const pendingNote = useRef<{ fingerprint: string; key: string } | null>(null);
 
-  if (bindings.isPending && !bindings.data) return <SkeletonStatus label={t("notes.loading")} className="space-y-3 p-4">
+  if (bindings.isPending && !bindings.data) return <SkeletonStatus loadingLabel={t("notes.loading")} className="space-y-3 p-4">
     <Skeleton size="lg" /><SkeletonText lines={2} size="lg" /><SkeletonText lines={2} size="lg" />
   </SkeletonStatus>;
   if (bindings.error && !bindings.data) return <ErrorBanner description={errorMessage(bindings.error, t("notes.loadError"))} />;
@@ -93,14 +81,14 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
     record: writableVault,
     permission: "write",
     args: [{ name: "body" }],
-    submit: async (values, context) => {
+    submit: async (values) => {
       const body = String(values.body ?? "").trim();
       if (!body) throw new Error(t("notes.bodyRequired"));
       if (!writableVault) throw new Error(t("notes.createError"));
       const input = { model_label: target.modelLabel, record_id: target.recordId, vault: writableVault.id, body, role };
       const fingerprint = JSON.stringify(input);
       if (pendingNote.current?.fingerprint !== fingerprint) pendingNote.current = { fingerprint, key: createClientKey() };
-      await createNote({ ...input, idempotency_key: pendingNote.current.key }, { reconciliation: context.reconciliation });
+      await createNote({ ...input, idempotency_key: pendingNote.current.key });
       pendingNote.current = null;
       return { ok: true, message: t("notes.added") };
     },
@@ -118,6 +106,7 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
       createAction,
       createComposer: { bodyArg: "body", prompt: composer?.prompt ?? t("notes.prompt"),
         audience: composer?.audience },
+      onCreated: () => { void bindings.refetch(); },
     }} />
   </>;
 }

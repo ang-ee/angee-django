@@ -20,7 +20,7 @@ from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 from strawberry_django.utils.requests import get_request
 
-from angee.iam.graphql.actions import session_user as _session_user
+from angee.graphql.actions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
@@ -165,7 +165,8 @@ class OidcLoginMutation:
         request = get_request(info)
         try:
             oauth_client = oauth_flow.remembered_oauth_client(request, state)
-            result = identity.OidcLoginCompletion(oauth_client).complete_login(
+            result = identity.complete_login(
+                oauth_client,
                 code=code,
                 state_token=state,
                 redirect_uri=redirect_uri,
@@ -228,7 +229,8 @@ class OidcLoginMutation:
         _session_user(info)
         try:
             oauth_client = oauth_flow.remembered_oauth_client(request, state)
-            result = identity.OidcLoginCompletion(oauth_client).complete_link(
+            result = identity.complete_link(
+                oauth_client,
                 code=code,
                 state_token=state,
                 redirect_uri=redirect_uri,

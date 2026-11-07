@@ -71,7 +71,7 @@ from typing import Any, NoReturn, cast
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.fields.mixins import FieldCacheMixin
 
 from angee.base.exceptions import TransitionNotAllowed
@@ -297,8 +297,7 @@ class StateTransitions:
 
         source, target = self._allowed_values(instance, spec)
 
-        manager = type(instance)._base_manager.db_manager(instance._state.db, hints={"instance": instance})
-        with transaction.atomic(using=manager.db):
+        with transaction.atomic(using=instance._state.db or router.db_for_write(type(instance), instance=instance)):
             result = method(instance, *args, **kwargs)
             self._write_target(instance, target)
             if spec.on_success is not None:
@@ -639,10 +638,9 @@ def save_state(
         raise ImproperlyConfigured("save_state must run as a StateTransitions on_success hook.")
     fields = {field_name, *cast(set[str], getattr(instance, "_transition_fields", set()))}
     try:
-        manager = type(instance)._base_manager.db_manager(instance._state.db, hints={"instance": instance})
-        with transaction.atomic(using=manager.db):
+        with transaction.atomic(using=instance._state.db or router.db_for_write(type(instance), instance=instance)):
             _verify_uncontended_source(instance, field_name, source, target)
-            instance.save(using=manager.db, update_fields=fields)
+            instance.save(update_fields=fields)
     finally:
         if hasattr(instance, "_transition_fields"):
             delattr(instance, "_transition_fields")
@@ -655,8 +653,7 @@ def _verify_uncontended_source(
 
     if not isinstance(instance, PersistenceMixin):
         raise TypeError("Guarded state transitions require PersistenceMixin.")
-    manager = type(instance)._base_manager.db_manager(instance._state.db, hints={"instance": instance})
-    reader = type(instance).system_queryset(lock=("self",)).using(manager.db)
+    reader = type(instance).system_queryset(lock=("self",))
     committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
     field = cast(StateField, instance._meta.get_field(field_name))
     if _state_key(field, committed) != _state_key(field, source):

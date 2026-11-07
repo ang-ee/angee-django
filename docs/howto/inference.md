@@ -41,7 +41,7 @@ print(response.usage.input_tokens, response.usage.output_tokens)
 
 `InferenceProvider.chat` accepts keyword-only `model=...`, `messages=...`,
 `model_settings=...`, `model_request_parameters=...`, and `credential=...`.
-[`InferenceModel.chat`](../../src/angee/agents/models/inference.py) resolves its wire
+[`InferenceModel.chat`](../../src/angee/agents/models.py) resolves its wire
 model name and takes native messages as its first argument. It returns
 `pydantic_ai.messages.ModelResponse`.
 
@@ -64,7 +64,7 @@ then `async with binding as model` inside the runner. Custom backends implement
 not add a second request/response protocol. Client contexts close on normal
 completion, provider errors and cancellation.
 
-[`InferenceModel.require_usable`](../../src/angee/agents/models/inference.py) requires
+[`InferenceModel.require_usable`](../../src/angee/agents/models.py) requires
 the actor's read access, approved deployment identity and a live model with an
 accepted use. Roles name approval policies independently of modality; callers
 declare their accepted `uses`. An absent
@@ -81,7 +81,7 @@ vendor adapters extend that policy with SDK exception types. Invalid local
 timeout settings are terminal configuration errors. Adapter timestamps and
 provider ids in the response are retained evidence, not stable hash or reuse keys.
 
-[`normalize_inference_usage`](../../src/angee/agents/models/inference.py) is the one
+[`normalize_inference_usage`](../../src/angee/agents/models.py) is the one
 usage projection for direct requests and agent sessions. It emits non-zero
 `input_tokens`, `output_tokens`, `tokens`, `requests`, and `tool_calls` values.
 
@@ -90,5 +90,5 @@ uses `InferenceModel.infer` for grounded recognition and mapping. Its
 [`workflows_extraction`](../../src/angee/workflows_extraction/README.md)
 adapter owns the workflow graph and steps: `infer_evidence` reads a pinned
 extraction revision, rechecks source access, and routes an unavailable model to
-the `inference_failed` outcome with a reader-facing reason. Provider selection,
-source retention and correction authority stay with extraction and agents.
+the `inference_failed` outcome with a reader-facing reason. Provider selection
+and source retention stay with extraction and agents.

@@ -48,9 +48,7 @@ class CredentialOidc(Composable, extends="integrate.Credential"):
             oauth_field.related_model._base_manager.using(using).filter(pk=credential.oauth_client_id).first()
         )
         if oauth_client is None or not type(oauth_client).login_picker_queryset(
-            type(oauth_client).objects.db_manager(using).system_context(
-                reason="iam_integrate_oidc.unlink.guard"
-            ).filter(pk=oauth_client.pk),
+            type(oauth_client)._base_manager.using(using).filter(pk=oauth_client.pk),
         ).exists():
             return
         user_field = type(credential).user.field
@@ -134,13 +132,17 @@ class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
     def login_picker_queryset(cls, queryset: Any) -> Any:
         """Return enabled, configured, login-capable OAuth clients."""
 
-        return queryset.ready().filter(login_enabled=True)
+        return (
+            queryset.filter(is_enabled=True, login_enabled=True)
+            .exclude(client_id="")
+            .filter(models.Q(authorize_endpoint__gt="", token_endpoint__gt="") | models.Q(discovery_url__gt=""))
+        )
 
     @classmethod
     def login_accounts(cls, rows: Any) -> Any:
         """Admit active linked identities whose provider can still start OIDC login."""
 
-        clients = cls.login_picker_queryset(cls.objects.using(rows.db).all())
+        clients = cls.login_picker_queryset(cls._base_manager.using(rows.db).all())
         return rows.filter(status=AccountStatus.ACTIVE, oauth_client_id__in=clients.values("pk"))
 
     DISCOVERY_FIELDS = {
@@ -152,6 +154,13 @@ class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
     def fill_extension_fields_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
         """Fill blank OIDC fields from a discovery document; return whether changed."""
 
-        changed = self.fill_blank_discovery_fields(discovery, self.DISCOVERY_FIELDS)
+        changed = False
+        for field, key in self.DISCOVERY_FIELDS.items():
+            if getattr(self, field, ""):
+                continue
+            value = discovery.get(key)
+            if value:
+                setattr(self, field, str(value))
+                changed = True
         parent = getattr(super(), "fill_extension_fields_from_discovery", None)
         return (bool(parent(discovery)) if parent is not None else False) or changed

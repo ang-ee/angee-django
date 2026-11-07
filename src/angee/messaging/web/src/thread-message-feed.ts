@@ -25,7 +25,6 @@ export function useThreadMessageFeed(threadId: string, anchor = "", allCopies = 
       select: (data) => messageFeedWindow(data.thread_message_feed),
     },
     revalidate: {
-      models: ["messaging.Message"],
       document: ThreadTranscriptRevalidateDocument,
       variables: (ids) => ({ threadId, ids, allCopies, anchor }),
       select: (data) => messageFeedRevalidation(data.thread_message_feed_revalidate),

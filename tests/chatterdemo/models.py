@@ -24,14 +24,14 @@ from django.db import models
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.iam.models.base import ProtectedModel
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 
 
-class ChatterDoc(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, ProtectedModel):
+class ChatterDoc(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
     """A gated document that opts into record chatter with post-access divergence."""
 
     sqid_prefix = "cdc_"
@@ -58,7 +58,7 @@ class ChatterDoc(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, Protec
         return self.title
 
 
-class TrackedRecordParent(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, ProtectedModel):
+class TrackedRecordParent(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
     """Concrete threaded parent standing in for a materialized ``extends`` target.
 
     Keeps native history and guards ``status`` with a

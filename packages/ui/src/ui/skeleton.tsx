@@ -110,7 +110,8 @@ export const SkeletonText = React.forwardRef<
 SkeletonText.displayName = "SkeletonText";
 
 export type SkeletonStatusProps = React.HTMLAttributes<HTMLDivElement> & {
-  label: React.ReactNode;
+  /** Announced while the content loads; no loading copy is visible. */
+  loadingLabel: React.ReactNode;
 };
 
 /**
@@ -123,7 +124,7 @@ export const SkeletonStatus = React.forwardRef<
   {
     children,
     className,
-    label,
+    loadingLabel,
     ...props
   },
   ref,
@@ -136,7 +137,7 @@ export const SkeletonStatus = React.forwardRef<
       className={className}
       role={props.role ?? "status"}
     >
-      <span className="sr-only">{label}</span>
+      <span className="sr-only">{loadingLabel}</span>
       {children}
     </div>
   );

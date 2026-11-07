@@ -38,8 +38,8 @@ accessible through `ctx.decision(id)` in that run. Reading another run's questio
 as evidence does not make it this run's question. An open question cannot be
 replaced. The built-in `ask_decision` resolves the symbolic `subject` key in
 configured actions to the run's subject public identity. Answering enqueues
-`workflows.wake_decisions` on the decision database's commit; the worker wakes
-the waiting step, and the tick recovers a failed or skipped wake.
+`workflows.wake_decisions` on commit; the worker wakes the waiting step, and the
+tick recovers a failed or skipped wake.
 
 [`apply_proposals`](decision_steps.py) is the shared application path: as the run actor
 it sets fields through normal validated model saves, resolves relation sets through
@@ -101,10 +101,9 @@ inputs, and calls `start_workflow_run` with a client-generated UUID request key.
 The workflow resource's `subject_model`, `can_start` and `is_published` filters
 own discovery; run admission owns authorization, validation and replay.
 
-[`Runner`](runner.py) coordinates execution and the tick. Native run and step
-[models](models/) own row transitions and persisted graph planning;
-[querysets](querysets.py) own selected transitions. [Managers](managers.py) own
-admission factories, cancellation populations and retention. A database step holds its run lock for its
+[`Runner`](runner.py) owns execution and the tick. The run and step managers and
+querysets in [`managers.py`](managers.py) own admission, locked row transitions,
+cancellation and retention. A database step holds its run lock for its
 whole transaction. The domain writes, fenced result and successor planning
 commit together. After commit, every ready row of an active run is sent to the job
 queue, including parallel branches whose earlier message encountered a busy run.

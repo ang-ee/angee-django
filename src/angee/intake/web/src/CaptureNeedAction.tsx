@@ -36,8 +36,6 @@ export function CaptureNeedAction({
   const importanceOptions = useEnumOptions(NEED_MODEL, "importance", { casing: "upper" });
   const [capture] = useAuthoredResourceMutation(CaptureNeedDocument, {
     invalidateModels: [NEED_MODEL],
-    records: (data, input) => data?.capture_need.id ? [{ model: NEED_MODEL, id: data.capture_need.id,
-      action: "create", relatedRecords: [{ model: input.target.model_label, id: input.target.record_id }] }] : [],
     shouldInvalidate: (data) => data?.capture_need.ok === true,
   });
   const fields = React.useMemo<readonly DescriptorField[]>(

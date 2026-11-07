@@ -8,13 +8,14 @@ from django.db import models
 from django.db.models.functions import Upper
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.models.base import AngeeDataModel
+from angee.graphql.actions import session_user
 from angee.graphql.data.hasura import _declared_aliases, _declared_filter_expressions, hasura_model_resource
+from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.graphql.actions import session_user
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.models.base import ProtectedDataModel
+from angee.graphql.testing.documents import execute_schema, result_data
 from tests.composed_host import run_composed_tests
-from tests.conftest import create_user, execute_schema, make_addon, result_data
+from tests.conftest import create_user, make_addon
 from tests.scopedemo.models import Scope
 
 
@@ -28,7 +29,7 @@ def clear_declared_aliases():
 
 
 @strawberry_django.type(Scope)
-class AliasScopeType(ProtectedNode):
+class AliasScopeType(AngeeNode):
     """Reuse an installed test model without adding a model or registry entry."""
 
     name: strawberry.auto
@@ -182,7 +183,7 @@ def test_alias_cannot_override_a_computed_filter(monkeypatch):
 
 def test_contributors_cannot_claim_the_same_alias(monkeypatch):
     """Conflicting inherited declarations fail instead of following Python MRO precedence."""
-    monkeypatch.setattr(ProtectedDataModel, "hasura_aliases", {"parent_name": "name"}, raising=False)
+    monkeypatch.setattr(AngeeDataModel, "hasura_aliases", {"parent_name": "name"}, raising=False)
     monkeypatch.setattr(Scope, "hasura_aliases", {"parent_name": "parent__name"}, raising=False)
     with pytest.raises(ImproperlyConfigured, match="duplicate sortable alias 'parent_name'"):
         build_resource()

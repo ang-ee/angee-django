@@ -14,8 +14,8 @@ class PlatformConfig(AppConfig):
     runtime (the addon registry, concrete models, fields, and relation edges) —
     and hosts the sections other base addons contribute into it (``resources``
     contributes the import ledger, ``operator`` contributes the daemon console).
-    ``Addon`` is the retained catalogue mirror; ``platform/explorer`` is the
-    table-less REBAC anchor gating runtime introspection.
+    It holds no data tables; its reads are gated by the table-less
+    ``platform/explorer`` REBAC anchor.
     """
 
     default = True

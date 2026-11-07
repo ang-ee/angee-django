@@ -9,12 +9,11 @@ from django.db import models
 from rebac.managers import RebacQuerySet
 from rebac.watch import statement_keys
 
-from angee.base.querysets import MergeableUnscopedQuerySet, by_key, row_lock_paths
-from angee.iam.querysets import ProtectedQuerySet, ProtectedUnscopedQuerySet
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, MergeableUnscopedQuerySet, by_key, row_lock_paths
 from angee.provenance.querysets import HistoryQuerySet
 
 
-class AngeeHistoryQuerySet[T: models.Model](HistoryQuerySet[T], ProtectedQuerySet[T]):
+class AngeeHistoryQuerySet[T: models.Model](HistoryQuerySet[T], AngeeQuerySet[T]):
     """Capture guarded writes while reading full stored snapshots internally."""
 
     def capture_queryset(self) -> Self:
@@ -28,7 +27,7 @@ class AngeeHistoryQuerySet[T: models.Model](HistoryQuerySet[T], ProtectedQuerySe
         yield from by_key(self, keys)
 
 
-class AngeeHistoryUnscopedQuerySet[T: models.Model](HistoryQuerySet[T], ProtectedUnscopedQuerySet[T]):
+class AngeeHistoryUnscopedQuerySet[T: models.Model](HistoryQuerySet[T], AngeeUnscopedQuerySet[T]):
     """Capture base-manager writes with their native tracked mutation policy."""
 
     def capture_queryset(self) -> Self:

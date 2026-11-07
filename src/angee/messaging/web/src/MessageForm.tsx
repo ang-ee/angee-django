@@ -8,7 +8,7 @@ import {
   useResolvedWidget,
 } from "@angee/ui";
 import { useModelMetadata } from "@angee/metadata";
-import { useAuthoredQuery, useSetAuthoredQueryData } from "@angee/refine";
+import { useAuthoredQuery } from "@angee/refine";
 
 import { useMessagingT } from "./i18n";
 import { MessageReaderDocument, type PartListRow } from "./documents";
@@ -135,18 +135,14 @@ function MessagePartsTab({ recordId }: RecordPanelContext): React.ReactElement {
 function MessageRecordReader({ recordId }: Pick<RecordPanelContext, "recordId">): React.ReactElement {
   const t = useMessagingT();
   const [previewPartId, setPreviewPartId] = React.useState<string | null>(null);
-  const acceptQuery = useSetAuthoredQueryData();
   const query = useAuthoredQuery(MessageReaderDocument, { id: recordId }, {
     models: [MODEL, PART_MODEL, FILE_MODEL, STAR_MODEL],
     records: [{ model: MODEL, id: recordId }],
   });
-  if (query.isFetching && !query.data) return <LoadingPanel message={t("messages.loadingBody")} />;
+  if (query.isFetching && !query.data) return <LoadingPanel loadingLabel={t("messages.loadingBody")} />;
   const message = query.data?.messages[0];
   if (!message) return <ErrorBanner description={t("messages.bodyUnavailable")} />;
-  return <MessageReader message={message} previewPartId={previewPartId} onPreviewPartChange={setPreviewPartId}
-    acceptResponse={(accepted) => acceptQuery(MessageReaderDocument, { id: recordId }, (current) => current ? {
-      ...current, messages: current.messages.map((row) => row.id === accepted.id ? { ...row, starred: accepted.starred } : row),
-    } : current, { complete: false })} />;
+  return <MessageReader message={message} previewPartId={previewPartId} onPreviewPartChange={setPreviewPartId} />;
 }
 
 export function messageRecordTabs(

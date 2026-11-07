@@ -23,7 +23,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.db.models.signals import post_save
-from django.test import RequestFactory, TestCase
+from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from openai import DefaultHttpxClient, OpenAI
@@ -31,9 +31,11 @@ from rebac import system_context
 
 from angee.base.models.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.iam.testing.graphql import measure_graphql_document
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
+from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.locks import bridge_advisory_lock
+from angee.integrate.events import EventKind
 from angee.integrate.states import StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
@@ -51,13 +53,9 @@ from tests.conftest import (
     Vendor,
     WebhookSubscription,
     current_stream,
-    execute_schema,
     make_integration,
 )
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import (
-    result_data as _data,
-)
 from tests.stream_adapters import failure_state
 from tests.test_agents import InferenceModel, InferenceProvider
 
@@ -65,6 +63,10 @@ User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
 integrate_vcs_schema = importlib.import_module("angee.integrate_vcs.schema")
+_BRIDGE_SYNCED = str(EventKind.BRIDGE_SYNCED)
+"""Raw stored value of one integration event kind (``str`` for clean typing)."""
+
+
 def test_integration_node_resolves_nested_relations(
     composed_tables: None,
 ) -> None:
@@ -75,7 +77,7 @@ def test_integration_node_resolves_nested_relations(
     console_schema = _schema()
 
     resolved = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             query Integration($id: String!) {
@@ -90,7 +92,7 @@ def test_integration_node_resolves_nested_relations(
             }
             """,
             {"id": _public_id(conn)},
-            user=admin,
+            user=admin
         )
     )["integrations_by_pk"]
     assert resolved == {
@@ -123,7 +125,7 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
         stream = current_stream(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
         RecordLink.objects.observe(stream, "person:1")
     with CaptureQueriesContext(connection) as one:
-        rows = _data(_execute(schema, query, user=admin))
+        rows = _data(execute_schema(schema, query, user=admin))
     assert rows == {
         "sync_streams": [{"display_name": "contacts (book)"}],
         "record_links": [{"display_name": "person:1"}],
@@ -133,152 +135,13 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
             extra = current_stream(bridge, f"contacts-{index}", kind=StreamKind.RECORD_REPLICA)
             RecordLink.objects.observe(extra, f"person:{index + 2}")
     with CaptureQueriesContext(connection) as many:
-        rows = _data(_execute(schema, query, user=admin))
+        rows = _data(execute_schema(schema, query, user=admin))
     assert {row["display_name"] for row in rows["sync_streams"]} == {
         "contacts (book)",
         *(f"contacts-{index}" for index in range(4)),
     }
     assert {row["display_name"] for row in rows["record_links"]} == {f"person:{index}" for index in range(1, 6)}
     assert len(many) <= len(one) + 1
-
-
-@pytest.mark.django_db(transaction=True)
-def test_record_link_source_fields_are_batched_at_one_five_ten_twenty(composed_tables: None) -> None:
-    """Connector URL and label share a page prefetch, independent of link count."""
-
-    del composed_tables
-    bridge = make_integration("link-source-budget", model=Channel)
-    with system_context(reason="test link source budget"):
-        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
-        for index in range(20):
-            RecordLink.objects.observe(stream, f"person:{index}")
-    schema = _schema()
-    document = """query LinkSources($limit: Int!) {
-        record_links(limit: $limit) { id source_url source_label }
-    }"""
-    reads = {
-        size: measure_graphql_document(schema, document, {"limit": size}, actor=bridge.owner)
-        for size in (1, 5, 10, 20)
-    }
-    admin = _platform_admin("link-source-budget-admin")
-    admin_reads = {
-        size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
-        for size in (1, 5, 10, 20)
-    }
-    for size, read in reads.items():
-        assert len(read.data["record_links"]) == size
-        assert [row["source_label"] for row in read.data["record_links"]] == [
-            f"person:{index}" for index in range(size)
-        ]
-        assert all(row["source_url"] is None for row in read.data["record_links"])
-        # One page hook supplies streams and connectors; the merged read proof
-        # now uses nine fixed statements at every page size.
-        assert read.statement_count == 9, (size, read.statement_count)
-        read.assert_no_audit_writes()
-        read.assert_bytes(
-            total=120_000, largest=30_000,
-            cause="the composed policy pre-reads each referenced type (policy fan-out)",
-        )
-    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
-        reads[larger].assert_flat_from(reads[smaller])
-    for size, read in admin_reads.items():
-        assert len(read.data["record_links"]) == size
-        assert read.statement_count == 11, (size, read.statement_count)
-        read.assert_no_audit_writes()
-    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
-        admin_reads[larger].assert_flat_from(admin_reads[smaller])
-
-
-def test_stream_failure_labels_use_projected_source(composed_tables: None) -> None:
-    """A linked failure uses the stream's selected connector for its labels."""
-
-    del composed_tables
-    bridge = make_integration("failure-source-label", model=Channel)
-    with system_context(reason="test stream failure source label"):
-        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
-        link = RecordLink.objects.observe(stream, "person:1")
-        link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
-    schema = _schema()
-    result = _data(_execute(schema, "{ sync_streams { failures { source_label source_url } } }", user=bridge.owner))
-    assert len(result["sync_streams"]) == 1
-    assert result["sync_streams"][0]["failures"] == [{"source_label": "person:1", "source_url": None}]
-
-
-@pytest.mark.postgresql
-@pytest.mark.django_db(transaction=True)
-def test_bridge_status_fields_share_page_reads_at_one_five_ten_twenty(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Bridge failure counts and live-lock status have fixed page query overhead."""
-
-    del composed_tables
-    admin = _platform_admin("bridge-status-budget")
-    for index in range(20):
-        make_integration(f"bridge-status-{index:02d}", model=VcsBridge)
-    schema = _schema()
-    document = """query BridgeStatus($limit: Int!) {
-        vcs_bridges(limit: $limit) { id open_failure_count is_syncing }
-    }"""
-    snapshot = integrate_schema.task_lock_snapshot
-    calls: list[str] = []
-
-    def record_snapshot(*, using: str) -> Any:
-        calls.append(using)
-        return snapshot(using=using)
-
-    monkeypatch.setattr(integrate_schema, "task_lock_snapshot", record_snapshot)
-    reads = {}
-    for size in (1, 5, 10, 20):
-        calls.clear()
-        reads[size] = measure_graphql_document(schema, document, {"limit": size}, actor=admin)
-        assert calls == ["default"], (size, calls)
-    for size, read in reads.items():
-        assert len(read.data["vcs_bridges"]) == size
-        assert all(row["open_failure_count"] == 0 and row["is_syncing"] is False
-                   for row in read.data["vcs_bridges"])
-        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
-        assert read.statement_count == (8 if connection.vendor == "postgresql" else 7), (size, read.statement_count)
-        read.assert_no_audit_writes()
-        read.assert_bytes(total=16_000, largest=4_000)
-    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
-        reads[larger].assert_flat_from(reads[smaller])
-
-
-@pytest.mark.postgresql
-def test_live_bridge_stage_uses_one_postgresql_lock_snapshot(composed_tables: None) -> None:
-    """Live rows share a lock snapshot and distinguish a held lock from stale stages."""
-
-    del composed_tables
-    if connection.vendor != "postgresql":
-        pytest.skip("PostgreSQL advisory lock snapshot")
-    admin = _platform_admin("bridge-live-stage-budget")
-    bridges = [make_integration(f"bridge-live-stage-{index:02d}", model=VcsBridge) for index in range(20)]
-    with system_context(reason="test bridge live stage budget"):
-        VcsBridge._base_manager.filter(pk__in=[bridge.pk for bridge in bridges]).update(
-            sync_stage=VcsBridge.SyncStage.SYNCING,
-        )
-    schema = _schema()
-    document = """query BridgeStages($limit: Int!) {
-        vcs_bridges(limit: $limit, order_by: [{created_at: asc}]) { id is_syncing sync_stage }
-    }"""
-    with bridge_advisory_lock(bridges[0]) as acquired:
-        assert acquired
-        reads = {
-            size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
-            for size in (1, 5, 10, 20)
-        }
-    for size, read in reads.items():
-        assert len(read.data["vcs_bridges"]) == size
-        assert read.data["vcs_bridges"][0]["is_syncing"] is True
-        assert read.data["vcs_bridges"][0]["sync_stage"] == "SYNCING"
-        assert all(row["is_syncing"] is False and row["sync_stage"] == "FAILED"
-                   for row in read.data["vcs_bridges"][1:])
-        # session-merged schema (O 9aaaf82ca) measures the composed product policy.
-        assert read.statement_count == 5, (size, read.statement_count)
-        read.assert_no_audit_writes()
-        read.assert_bytes(total=18_000, largest=8_000)
-    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
-        reads[larger].assert_flat_from(reads[smaller])
 
 
 def test_sync_stream_filter_and_batched_integration_projection(composed_tables: None) -> None:
@@ -301,7 +164,7 @@ def test_sync_stream_filter_and_batched_integration_projection(composed_tables: 
         }
     """
     with CaptureQueriesContext(connection) as one:
-        first = _data(_execute(schema, query, {"id": _public_id(bridge)}, user=admin))["sync_streams"]
+        first = _data(execute_schema(schema, query, {"id": _public_id(bridge)}, user=admin))["sync_streams"]
     assert [row["partition"] for row in first] == ["first"]
     assert first[0]["integration"]["id"] == _public_id(bridge)
 
@@ -309,7 +172,7 @@ def test_sync_stream_filter_and_batched_integration_projection(composed_tables: 
         for index in range(4):
             current_stream(bridge, "messages", f"partition-{index}")
     with CaptureQueriesContext(connection) as many:
-        rows = _data(_execute(schema, query, {"id": _public_id(bridge)}, user=admin))["sync_streams"]
+        rows = _data(execute_schema(schema, query, {"id": _public_id(bridge)}, user=admin))["sync_streams"]
     assert len(rows) == 5
     assert all(row["integration"] == first[0]["integration"] for row in rows)
     assert len(many) <= len(one) + 1
@@ -356,12 +219,12 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
         .replace("BRIDGE_FILTER", bridge_filter)
         .replace("GROUP_FIELD", group_field)
     )
-    visible = _data(_execute(schema, query, {"bridge": _public_id(bridge)}, user=owner))
+    visible = _data(execute_schema(schema, query, {"bridge": _public_id(bridge)}, user=owner))
     assert len(visible["rows"]) == 1
     assert visible["total"]["aggregate"]["count"] == visible["group_count"] == 1
     assert visible["groups"] == [{"aggregate": {"count": 1}}]
-    hidden = _execute(schema, query, {"bridge": _public_id(bridge)}, user=outsider)
-    unknown = _execute(
+    hidden = execute_schema(schema, query, {"bridge": _public_id(bridge)}, user=outsider)
+    unknown = execute_schema(
         schema, query, {"bridge": public_id_for(Integration, bridge.pk + other.pk + 1_000_000)}, user=outsider
     )
     assert (
@@ -401,15 +264,15 @@ def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_
         }
     """
     variables = {"bridge": _public_id(bridge)}
-    _data(_execute(schema, query, variables, user=owner))
+    _data(execute_schema(schema, query, variables, user=owner))
     with CaptureQueriesContext(connection) as one:
-        initial = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
+        initial = _data(execute_schema(schema, query, variables, user=owner))["sync_streams"]
     assert initial == [{"open_failure_count": 2, "link_count": 3}]
     with system_context(reason="test extra zero-count streams"):
         for index in range(5):
             current_stream(bridge, "contacts", f"zero-{index}", kind=StreamKind.RECORD_REPLICA)
     with TestCase().assertNumQueries(len(one)):
-        many = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
+        many = _data(execute_schema(schema, query, variables, user=owner))["sync_streams"]
     assert many == [*initial, *[{"open_failure_count": 0, "link_count": 0}] * 5]
 
 
@@ -424,7 +287,7 @@ def test_integration_stream_count_is_inherited_by_bridge_projection(composed_tab
         current_stream(bridge, "repository", "one")
         current_stream(bridge, "repository", "two")
     rows = _data(
-        _execute(_schema(), "{ integrations { id stream_count } vcs_bridges { id stream_count } }", user=admin)
+        execute_schema(_schema(), "{ integrations { id stream_count } vcs_bridges { id stream_count } }", user=admin)
     )
     expected = {_public_id(bridge): 2, _public_id(empty): 0}
     for root in ("integrations", "vcs_bridges"):
@@ -441,7 +304,7 @@ def test_record_link_target_uses_shared_public_reference(composed_tables: None) 
         stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "bound", target=stream)
         empty = RecordLink.objects.observe(stream, "unbound")
-    rows = _data(_execute(_schema(), "{ record_links { id model_label record_id } }", user=owner))["record_links"]
+    rows = _data(execute_schema(_schema(), "{ record_links { id model_label record_id } }", user=owner))["record_links"]
     assert {row["id"]: (row["model_label"], row["record_id"]) for row in rows} == {
         _public_id(link): ("integrate.SyncStream", _public_id(stream)),
         _public_id(empty): ("", ""),
@@ -465,21 +328,41 @@ def test_record_sources_filter_by_readable_target_and_project_connector_url(comp
       }
     """
     variables = {"model": "integrate.SyncStream", "id": _public_id(stream)}
-    schema = _schema()
-    with CaptureQueriesContext(connection) as captured:
-        visible = _data(_execute(schema, query, variables, user=bridge.owner))["record_links"]
+    visible = _data(execute_schema(_schema(), query, variables, user=bridge.owner))["record_links"]
     assert visible == [{
         "id": _public_id(link),
         "external_key": "message:1",
         "source_url": None,
         "stream": {"key": "messages", "integration": {"display_name": bridge.record_display_label}},
     }]
-    proof_sql = [item["sql"] for item in captured if "_angee_reference_key" in item["sql"]]
-    assert len(proof_sql) == 1
-    assert f'FROM "{RecordLink._meta.db_table}"' in proof_sql[0]
-    assert f'FROM "{SyncStream._meta.db_table}"' in proof_sql[0]
-    assert proof_sql[0].count("_angee_reference_key") == 1
-    assert _data(_execute(schema, query, variables, user=outsider_bridge.owner))["record_links"] == []
+    assert _data(execute_schema(_schema(), query, variables, user=outsider_bridge.owner))["record_links"] == []
+
+
+def test_record_sources_count_aggregates_the_rows_readable_target_filter(composed_tables: None) -> None:
+    """The Sources badge's count-only aggregate answers exactly the rows its pane would read."""
+
+    del composed_tables
+    bridge = make_integration("record-sources-count", model=Channel)
+    outsider_bridge = make_integration("record-sources-count-outsider", model=Channel)
+    with system_context(reason="test record sources count"):
+        stream = current_stream(bridge, "messages", kind=StreamKind.RECORD_REPLICA)
+        other = current_stream(bridge, "threads", kind=StreamKind.RECORD_REPLICA)
+        for key in ("message:1", "message:2"):
+            RecordLink.objects.observe(stream, key, target=stream)
+        RecordLink.objects.observe(other, "thread:1", target=other)
+    query = """
+      query Sources($modelLabel: String!, $recordId: String!) {
+        record_links(where: {model_label: {_eq: $modelLabel}, record_id: {_eq: $recordId}}) { id }
+        record_links_aggregate(
+          where: {model_label: {_eq: $modelLabel}, record_id: {_eq: $recordId}}
+        ) { aggregate { count } }
+      }
+    """
+    variables = {"modelLabel": "integrate.SyncStream", "recordId": _public_id(stream)}
+    for user, expected in ((bridge.owner, 2), (outsider_bridge.owner, 0)):
+        result = _data(execute_schema(_schema(), query, variables, user=user))
+        assert len(result["record_links"]) == expected
+        assert result["record_links_aggregate"] == {"aggregate": {"count": expected}}
 
 
 @pytest.mark.parametrize(
@@ -528,11 +411,11 @@ def test_sync_actions_dispatch_managers_and_refuse_non_admins(
         arguments = {"stream": target.stream_id, "slot": target.slot}
     query = query.replace("ACTION", mutation)
     for denied in (owner, outsider, AnonymousUser()):
-        result = _execute(schema, query, arguments, user=denied)
+        result = execute_schema(schema, query, arguments, user=denied)
         assert result.errors and result.errors[0].extensions["code"] == "PERMISSION_DENIED"
     assert calls == []
     before = timezone.now()
-    assert _data(_execute(schema, query, arguments, user=admin))[mutation]["ok"]
+    assert _data(execute_schema(schema, query, arguments, user=admin))[mutation]["ok"]
     assert calls == [target.pk]
     with system_context(reason="test sync action outcome"):
         if model is SyncStream:
@@ -585,10 +468,10 @@ def test_integration_capabilities_are_native_creatable_children(
 
     admin = _platform_admin("integration-capabilities-admin")
     rows = _data(
-        _execute(
+        execute_schema(
             _schema(),
             "query { integration_capabilities { resource label icon create_mode } }",
-            user=admin,
+            user=admin
         )
     )["integration_capabilities"]
     modes = {row["resource"]: row["create_mode"] for row in rows}
@@ -607,10 +490,10 @@ def test_integration_concrete_target_keeps_parent_only_rows_unavailable(
     parent = make_integration("target-parent")
     child = make_integration("target-vcs", model=VcsBridge)
     rows = _data(
-        _execute(
+        execute_schema(
             _schema(),
             "query { integrations(limit: 20) { id concrete_target { state resource id } } }",
-            user=admin,
+            user=admin
         )
     )["integrations"]
     targets = {row["id"]: row["concrete_target"] for row in rows}
@@ -632,10 +515,10 @@ def test_concrete_target_fails_closed_for_unexposed_and_ambiguous_children(
     sibling_parent = make_integration("target-sibling", model=InferenceProvider, backend_class="manual")
     VcsBridge(integration_ptr_id=sibling_parent.pk, backend_class="local").save_base(raw=True, force_insert=True)
     rows = _data(
-        _execute(
+        execute_schema(
             _schema(),
             "query { integrations(limit: 20) { id concrete_target { state resource id } } }",
-            user=admin,
+            user=admin
         )
     )["integrations"]
     targets = {row["id"]: row["concrete_target"] for row in rows}
@@ -657,7 +540,7 @@ def test_concrete_target_list_query_cost_is_bounded_by_child_types(
     schema = _schema()
     query = "query { integrations(limit: 20) { id concrete_target { state resource id } } }"
     with CaptureQueriesContext(connection) as one:
-        first = _data(_execute(schema, query, user=admin))["integrations"]
+        first = _data(execute_schema(schema, query, user=admin))["integrations"]
     first_targets = {row["id"]: row["concrete_target"]["state"] for row in first}
     assert first_targets[_public_id(parent)] == "UNAVAILABLE"
     assert first_targets[_public_id(hidden)] == "UNAVAILABLE"
@@ -665,27 +548,9 @@ def test_concrete_target_list_query_cost_is_bounded_by_child_types(
     for index in range(4):
         make_integration(f"target-budget-more-{index}", model=VcsBridge)
     with CaptureQueriesContext(connection) as many:
-        many_rows = _data(_execute(schema, query, user=admin))["integrations"]
+        many_rows = _data(execute_schema(schema, query, user=admin))["integrations"]
     assert sum(row["concrete_target"]["state"] == "AVAILABLE" for row in many_rows) == 5
     assert len(many) <= len(one) + 1
-
-
-def test_prepared_concrete_children_rescope_actor_and_exposure(composed_tables: None) -> None:
-    """A page's visible child cannot be reused for a different actor or schema."""
-
-    del composed_tables
-    bridge = make_integration("target-cache-scope", model=VcsBridge)
-    admin = _platform_admin("target-cache-admin")
-    outsider = User.objects.create_user(username="target-cache-outsider")
-    exposed = {VcsBridge._meta.label}
-    row = (
-        Integration.objects.with_actor(admin)
-        .with_concrete_children(actor=admin)
-        .get(pk=bridge.pk)
-    )
-    assert len(row.concrete_children(actor=admin, exposed_model_labels=exposed)[1]) == 1
-    assert row.concrete_children(actor=admin, exposed_model_labels=set())[1] == []
-    assert row.concrete_children(actor=outsider, exposed_model_labels=exposed)[1] == []
 
 
 def test_integration_groups_aggregate_runs_with_rebac_scope(
@@ -702,7 +567,7 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
     assert group_by_type is not None
 
     grouped = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             query IntegrationGroups($groupBy: [GROUP_BY_SPEC!]!) {
@@ -720,7 +585,7 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
                     {"field": "CONCRETE_TYPE__MODEL"},
                 ],
             },
-            user=admin,
+            user=admin
         )
     )["integrations_groups"]
     assert grouped == [
@@ -890,7 +755,7 @@ def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
 
     admin = _platform_admin("oauth-create-defaults-admin")
     created = _data(
-        _execute(
+        execute_schema(
             _schema(),
             """
             mutation CreateClient($object: oauth_clients_insert_input!) {
@@ -898,11 +763,11 @@ def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
             }
             """,
             {"object": {"slug": "create-defaults", "display_name": "Defaults", "provider_type": "GOOGLE"}},
-            user=admin,
+            user=admin
         )
     )["insert_oauth_clients_one"]
 
-    client = OAuthClient.objects.with_actor(admin).get(sqid=created["id"])
+    client = OAuthClient.objects.as_user(admin).get(sqid=created["id"])
     assert client.discovery_url == "https://accounts.google.com/.well-known/openid-configuration"
     assert client.authorize_endpoint == "https://accounts.google.com/o/oauth2/v2/auth"
     assert client.default_scopes == [
@@ -928,12 +793,12 @@ def test_impl_choices_are_admin_only(composed_tables: None) -> None:
         }
     """
 
-    assert _execute(console_schema, query, user=plain).errors is not None
-    result = _data(_execute(console_schema, query, user=admin))["impl_choices"]
+    assert execute_schema(console_schema, query, user=plain).errors is not None
+    result = _data(execute_schema(console_schema, query, user=admin))["impl_choices"]
     assert {"key": "stub"} in result
 
     vcs_result = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             query {
@@ -943,7 +808,7 @@ def test_impl_choices_are_admin_only(composed_tables: None) -> None:
               }
             }
             """,
-            user=admin,
+            user=admin
         )
     )["impl_choices"]
     assert {"key": "stub", "config_schema": None} in vcs_result
@@ -1008,6 +873,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None
             owner=user,
             backend_class="stub",
             lifecycle="disconnected",
+            webhook_secret="created-secret",
         )
         integration = Integration.objects.get(pk=bridge.pk)
 
@@ -1018,6 +884,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None
         assert bridge.owner_id == integration.owner_id
         assert bridge.vendor_id == integration.vendor_id
         assert bridge.credential_id == integration.credential_id
+        assert str(bridge.webhook_secret) == "created-secret"
 
 
 def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
@@ -1026,7 +893,7 @@ def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
     """Concrete GraphQL creation enforces backend config at the model save boundary."""
 
     seed = make_integration("typed-config-seed", backend_class="stub", model=VcsBridge)
-    result = _execute(
+    result = execute_schema(
         _schema(),
         """
         mutation InvalidConfig($vendor: ID!, $owner: ID!) {
@@ -1039,7 +906,7 @@ def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
         }
         """,
         {"vendor": _public_id(seed.vendor.sqid), "owner": str(seed.owner.sqid)},
-        user=_platform_admin("typed-config-admin"),
+        user=_platform_admin("typed-config-admin")
     )
 
     assert result.errors is not None
@@ -1083,9 +950,9 @@ def test_integration_update_delete_are_admin_only(
         }
     """
 
-    assert _execute(console_schema, update_integration, {"id": integration_id}, user=plain).errors is not None
+    assert execute_schema(console_schema, update_integration, {"id": integration_id}, user=plain).errors is not None
 
-    updated = _data(_execute(console_schema, update_integration, {"id": integration_id}, user=admin))[
+    updated = _data(execute_schema(console_schema, update_integration, {"id": integration_id}, user=admin))[
         "update_integrations_by_pk"
     ]
     assert updated == {"account": None, "vendor": {"slug": "conn-crud"}}
@@ -1098,9 +965,9 @@ def test_integration_update_delete_are_admin_only(
         }
     """
 
-    assert _execute(console_schema, delete_integration, {"id": integration_id}, user=plain).errors is not None
+    assert execute_schema(console_schema, delete_integration, {"id": integration_id}, user=plain).errors is not None
 
-    deleted = _data(_execute(console_schema, delete_integration, {"id": integration_id}, user=admin))[
+    deleted = _data(execute_schema(console_schema, delete_integration, {"id": integration_id}, user=admin))[
         "delete_integrations_by_pk"
     ]
     assert deleted["id"] == integration_id
@@ -1136,9 +1003,9 @@ def test_attach_integration_credential_targets_owned_concrete_child(
         "credential": _public_id(replacement),
     }
 
-    denied = _execute(_schema(), mutation, variables, user=other)
+    denied = execute_schema(_schema(), mutation, variables, user=other)
     assert denied.errors is not None
-    attached = _data(_execute(_schema(), mutation, variables, user=bridge.owner))["attach_integration_credential"]
+    attached = _data(execute_schema(_schema(), mutation, variables, user=bridge.owner))["attach_integration_credential"]
     assert attached == {
         "lifecycle": "CONNECTED",
         "credential": {"display_name": "replacement-token"},
@@ -1172,7 +1039,7 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
     """
     variables = {"resource": "integrate_vcs.VcsBridge", "id": _public_id(bridge)}
 
-    result = _data(_execute(_schema(), mutation, variables, user=bridge.owner))["connect_integration"]
+    result = _data(execute_schema(_schema(), mutation, variables, user=bridge.owner))["connect_integration"]
     assert result == {
         "attached": True,
         "integration": {
@@ -1203,20 +1070,21 @@ def test_connection_admissions_project_ownership_without_loading_credentials(com
         }
     """
     variables = {"id": _public_id(bridge)}
-    assert _data(_execute(_schema(), query, variables, user=bridge.owner))["vcs_bridges_by_pk"] == {
+    assert _data(execute_schema(_schema(), query, variables, user=bridge.owner))["vcs_bridges_by_pk"] == {
         "can_connect": True,
         "can_resume": False,
         "can_retry_discovery": False,
     }
-    assert _data(_execute(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"] == {
+    assert _data(execute_schema(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"] == {
         "can_connect": False,
         "can_resume": False,
         "can_retry_discovery": False,
     }
     with system_context(reason="test.integrate.resume_admissions"):
         VcsBridge.objects.filter(pk=bridge.pk).update(credential=bridge.credential, lifecycle="paused")
-    assert _data(_execute(_schema(), query, variables, user=bridge.owner))["vcs_bridges_by_pk"]["can_resume"] is False
-    assert _data(_execute(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"]["can_resume"] is True
+    owner_read = _data(execute_schema(_schema(), query, variables, user=bridge.owner))
+    assert owner_read["vcs_bridges_by_pk"]["can_resume"] is False
+    assert _data(execute_schema(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"]["can_resume"] is True
 
 
 def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
@@ -1235,8 +1103,8 @@ def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
           pause_integration(id: $id) { ok message }
         }
     """
-    assert _execute(console_schema, pause, {"id": integration_id}, user=plain).errors is not None
-    paused = _data(_execute(console_schema, pause, {"id": integration_id}, user=admin))["pause_integration"]
+    assert execute_schema(console_schema, pause, {"id": integration_id}, user=plain).errors is not None
+    paused = _data(execute_schema(console_schema, pause, {"id": integration_id}, user=admin))["pause_integration"]
     assert paused == {"ok": True, "message": "Paused integration."}
 
     with system_context(reason="test.integrate.integration_actions.seed_error"):
@@ -1244,7 +1112,7 @@ def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
         conn.report_status("error", "token expired")
 
     connected = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             mutation Connect($id: ID!) {
@@ -1252,7 +1120,7 @@ def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
             }
             """,
             {"id": integration_id},
-            user=admin,
+            user=admin
         )
     )["mark_integration_connected"]
     assert connected == {"ok": True, "message": "Connected integration."}
@@ -1263,7 +1131,7 @@ def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
         assert conn.last_error == ""
 
     disconnected = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             mutation Disconnect($id: ID!) {
@@ -1271,7 +1139,7 @@ def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
             }
             """,
             {"id": integration_id},
-            user=admin,
+            user=admin
         )
     )["mark_integration_disconnected"]
     assert disconnected == {"ok": True, "message": "Disconnected integration."}
@@ -1290,8 +1158,6 @@ def test_webhook_crud_secret_write_only(
     # ``secret`` is accepted on the input but never rendered on the output type.
     assert "secret" in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
     assert "secret" not in _sdl_block(console_sdl, "type WebhookSubscriptionType")
-    assert "event_kinds" not in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
-    assert "event_kinds" not in _sdl_block(console_sdl, "type WebhookSubscriptionType")
     # The creator owns a new subscription; ownership is never a client-written column.
     assert "owner" not in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
     # The create mutation is contributed to the console mutation root.
@@ -1302,7 +1168,7 @@ def test_webhook_crud_secret_write_only(
     owner = User.objects.create_user(username="webhook-owner", email="owner@example.com")
     # ``createWebhookSubscription`` is admin gated.
     assert (
-        _execute(
+        execute_schema(
             console_schema,
             """
         mutation CreateWebhook {
@@ -1313,7 +1179,7 @@ def test_webhook_crud_secret_write_only(
           }
         }
         """,
-            user=plain,
+            user=plain
         ).errors
         is not None
     )
@@ -1322,33 +1188,36 @@ def test_webhook_crud_secret_write_only(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="top-secret",
+            event_kinds=[_BRIDGE_SYNCED],
         )
     subscription_id = str(subscription.sqid)
 
     # The created row reads back without ever exposing the secret.
     read_back = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             query Webhook($id: String!) {
               webhook_subscriptions_by_pk(id: $id) {
                 target_url
                 enabled
+                event_kinds
                 owner { username }
               }
             }
             """,
             {"id": subscription_id},
-            user=admin,
+            user=admin
         )
     )["webhook_subscriptions_by_pk"]
     assert read_back == {
         "target_url": "https://hooks.example.test/events",
         "enabled": True,
+        "event_kinds": [_BRIDGE_SYNCED],
         "owner": {"username": "webhook-owner"},
     }
     # Querying the absent ``secret`` field is a schema error, proving it is write-only.
-    secret_query = _execute(
+    secret_query = execute_schema(
         console_schema,
         """
         query Webhook($id: String!) {
@@ -1356,7 +1225,7 @@ def test_webhook_crud_secret_write_only(
         }
         """,
         {"id": subscription_id},
-        user=admin,
+        user=admin
     )
     assert secret_query.errors is not None
     assert "secret" in secret_query.errors[0].message
@@ -1369,9 +1238,9 @@ def test_webhook_crud_secret_write_only(
         }
     """
 
-    assert _execute(console_schema, delete_webhook, {"id": subscription_id}, user=plain).errors is not None
+    assert execute_schema(console_schema, delete_webhook, {"id": subscription_id}, user=plain).errors is not None
 
-    deleted = _data(_execute(console_schema, delete_webhook, {"id": subscription_id}, user=admin))[
+    deleted = _data(execute_schema(console_schema, delete_webhook, {"id": subscription_id}, user=admin))[
         "delete_webhook_subscriptions_by_pk"
     ]
     assert deleted["id"] == subscription_id
@@ -1394,6 +1263,7 @@ def test_integration_action_mutations_are_admin_only(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="original-secret",
+            event_kinds=[_BRIDGE_SYNCED],
         )
     sub_id = str(subscription.sqid)
 
@@ -1403,7 +1273,7 @@ def test_integration_action_mutations_are_admin_only(
         ("mutation($id: ID!){ rotate_webhook_secret(id: $id){ ok } }", {"id": sub_id}),
     ]
     for query, variables in denied:
-        assert _execute(console_schema, query, variables, user=plain).errors is not None
+        assert execute_schema(console_schema, query, variables, user=plain).errors is not None
 
 
 def test_test_connection_probes_the_credential_of_a_parent_integration(
@@ -1416,13 +1286,13 @@ def test_test_connection_probes_the_credential_of_a_parent_integration(
     conn = make_integration("probe-run")
     mutation = "mutation($id: ID!){ test_connection(id: $id){ ok message } }"
 
-    result = _data(_execute(console_schema, mutation, {"id": _public_id(conn)}, user=admin))["test_connection"]
+    result = _data(execute_schema(console_schema, mutation, {"id": _public_id(conn)}, user=admin))["test_connection"]
     assert result == {"ok": True, "message": "Credential is usable."}
 
     with system_context(reason="test integrate detach credential"):
         conn.credential = None
         conn.save(update_fields=["credential"])
-    result = _data(_execute(console_schema, mutation, {"id": _public_id(conn)}, user=admin))["test_connection"]
+    result = _data(execute_schema(console_schema, mutation, {"id": _public_id(conn)}, user=admin))["test_connection"]
     assert result == {"ok": False, "message": "No credential is attached."}
 
 
@@ -1470,9 +1340,9 @@ def test_test_connection_reads_the_concrete_provider_without_syncing_models(
     monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: http_client)
     monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-be-used")
     with http_client:
-        result = _data(_execute(
+        result = _data(execute_schema(
             _schema(), "mutation($id: ID!){ test_connection(id: $id){ ok message } }",
-            {"id": _public_id(provider)}, user=admin,
+            {"id": _public_id(provider)}, user=admin
         ))["test_connection"]
 
     assert result == {"ok": True, "message": "Inference provider is reachable."}
@@ -1504,9 +1374,9 @@ def test_test_connection_bounds_provider_transport_failures(
         monkeypatch.setattr(
             "openai.OpenAI", lambda **kwargs: OpenAI(**kwargs, http_client=http_client, max_retries=0),
         )
-        result = _data(_execute(
+        result = _data(execute_schema(
             _schema(), "mutation($id: ID!){ test_connection(id: $id){ ok message } }",
-            {"id": _public_id(provider)}, user=admin,
+            {"id": _public_id(provider)}, user=admin
         ))["test_connection"]
 
     assert result == {"ok": False, "message": "Connection test failed."}
@@ -1527,9 +1397,9 @@ def test_test_connection_does_not_claim_unsupported_provider_connectivity(
     )
     monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-be-used")
     monkeypatch.setattr("openai.OpenAI", lambda **kwargs: pytest.fail("SDK client must not be constructed"))
-    result = _data(_execute(
+    result = _data(execute_schema(
         _schema(), "mutation($id: ID!){ test_connection(id: $id){ ok message } }",
-        {"id": _public_id(provider)}, user=admin,
+        {"id": _public_id(provider)}, user=admin
     ))["test_connection"]
 
     assert result == {"ok": False, "message": expected_message}
@@ -1544,11 +1414,11 @@ def test_sync_integration_runs_for_an_admin(
     admin = _platform_admin("sync-admin")
     conn = make_integration("sync-run")
     result = _data(
-        _execute(
+        execute_schema(
             console_schema,
             "mutation($id: ID!){ sync_integration(id: $id){ ok message } }",
             {"id": _public_id(conn)},
-            user=admin,
+            user=admin
         )
     )["sync_integration"]
     # No bridge rows exist, so the queue request finds nothing to run and reports success.
@@ -1574,14 +1444,16 @@ def test_sync_integration_queues_bridge_for_an_admin(
         queued_bridge.sync_progress = {"stage": queued_bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
         queued_bridge.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"])
 
-    monkeypatch.setattr(VcsBridge, "request_sync", fake_queue_bridge_sync)
+    monkeypatch.setattr(integrate_queue, "queue_bridge_sync", fake_queue_bridge_sync)
+    monkeypatch.setattr("angee.integrate.schema.queue_bridge_sync", fake_queue_bridge_sync)
+    monkeypatch.setattr("angee.integrate_vcs.schema.queue_bridge_sync", fake_queue_bridge_sync)
 
     result = _data(
-        _execute(
+        execute_schema(
             console_schema,
             "mutation($id: ID!){ sync_integration(id: $id){ ok message } }",
             {"id": _public_id(bridge)},
-            user=admin,
+            user=admin
         )
     )["sync_integration"]
 
@@ -1593,7 +1465,7 @@ def test_sync_integration_queues_bridge_for_an_admin(
     assert bridge.sync_stage == VcsBridge.SyncStage.QUEUED
 
     projected = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             query BridgeSyncState($id: String!) {
@@ -1607,7 +1479,7 @@ def test_sync_integration_queues_bridge_for_an_admin(
             }
             """,
             {"id": _public_id(bridge)},
-            user=admin,
+            user=admin
         )
     )["vcs_bridges_by_pk"]
     assert projected == {
@@ -1632,15 +1504,16 @@ def test_rotate_webhook_secret_changes_the_stored_secret(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="original-secret",
+            event_kinds=[_BRIDGE_SYNCED],
         )
     sub_id = str(subscription.sqid)
 
     result = _data(
-        _execute(
+        execute_schema(
             console_schema,
             "mutation($id: ID!){ rotate_webhook_secret(id: $id){ ok secret } }",
             {"id": sub_id},
-            user=admin,
+            user=admin
         )
     )["rotate_webhook_secret"]
     assert result["ok"] is True
@@ -1665,6 +1538,7 @@ def test_test_webhook_delivery_records_failure_status(
             owner=owner,
             target_url="https://hooks.example.test/events",
             secret="original-secret",
+            event_kinds=[_BRIDGE_SYNCED],
         )
 
     def fail_delivery(self: WebhookSubscription, body: bytes) -> str:
@@ -1677,11 +1551,11 @@ def test_test_webhook_delivery_records_failure_status(
     monkeypatch.setattr(WebhookSubscription, "deliver", fail_delivery)
 
     result = _data(
-        _execute(
+        execute_schema(
             console_schema,
             "mutation($id: ID!){ test_webhook_delivery(id: $id){ ok message } }",
             {"id": str(subscription.sqid)},
-            user=admin,
+            user=admin
         )
     )["test_webhook_delivery"]
 
@@ -1702,7 +1576,7 @@ def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
     admin = _platform_admin("lifecycle-admin")
     bridge = make_integration("lifecycle-set", model=VcsBridge, backend_class="stub")
     result = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             mutation($id: String!) {
@@ -1710,7 +1584,7 @@ def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
             }
             """,
             {"id": _public_id(bridge)},
-            user=admin,
+            user=admin
         )
     )["update_vcs_bridges_by_pk"]
     assert result["lifecycle"] == "DISCONNECTED"
@@ -1726,7 +1600,7 @@ def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(comp
     bridge = make_integration("owner-patch", model=VcsBridge, backend_class="stub")
     successor = User.objects.create_user(username="owner-patch-successor", email="successor@example.com")
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             """
             mutation($id: String!, $owner: ID!) {
@@ -1737,7 +1611,7 @@ def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(comp
             }
             """,
             {"id": _public_id(bridge), "owner": str(successor.sqid)},
-            user=admin,
+            user=admin
         )
     )["update_vcs_bridges_by_pk"]
     assert result == {"display_name": "Handed over", "owner": {"username": "owner-patch-successor"}}
@@ -1762,7 +1636,7 @@ def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(composed_tables: 
     post_save.connect(capture_update_fields, sender=VcsBridge, weak=False)
     try:
         result = _data(
-            _execute(
+            execute_schema(
                 console_schema,
                 """
                 mutation($id: String!) {
@@ -1770,7 +1644,7 @@ def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(composed_tables: 
                 }
                 """,
                 {"id": _public_id(bridge)},
-                user=admin,
+                user=admin
             )
         )["update_vcs_bridges_by_pk"]
     finally:
@@ -1790,7 +1664,7 @@ def test_update_vcs_bridge_lifecycle_accepts_the_graphql_enum_name(
     admin = _platform_admin("lifecycle-enum-admin")
     bridge = make_integration("lifecycle-enum", model=VcsBridge, backend_class="stub")
     result = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             mutation($id: String!) {
@@ -1798,7 +1672,7 @@ def test_update_vcs_bridge_lifecycle_accepts_the_graphql_enum_name(
             }
             """,
             {"id": _public_id(bridge)},
-            user=admin,
+            user=admin
         )
     )["update_vcs_bridges_by_pk"]
     assert result["lifecycle"] == "PAUSED"
@@ -1815,24 +1689,24 @@ def test_native_vcs_writes_remain_admin_only_for_owner(composed_tables: None) ->
         owner = bridge.owner
     console = _schema()
     assert (
-        _execute(
+        execute_schema(
             console,
             """mutation($id: String!) {
           update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {display_name: "Denied"}) { id }
         }""",
             {"id": str(bridge.sqid)},
-            user=owner,
+            user=owner
         ).errors
         is not None
     )
     assert (
-        _execute(
+        execute_schema(
             console,
             """mutation($vendor: ID!) {
           insert_vcs_bridges_one(object: {vendor: $vendor}) { id }
         }""",
             {"vendor": str(bridge.vendor.sqid)},
-            user=owner,
+            user=owner
         ).errors
         is not None
     )
@@ -1851,7 +1725,7 @@ def test_create_vcs_bridge_creates_child_row(
     admin = _platform_admin("vcs-create-admin")
     seed = make_integration("vcs-create")
     result = _data(
-        _execute(
+        execute_schema(
             console_schema,
             """
             mutation CreateVcs($vendor: ID!, $owner: ID!) {
@@ -1874,7 +1748,7 @@ def test_create_vcs_bridge_creates_child_row(
                 "vendor": _public_id(seed.vendor.sqid),
                 "owner": str(seed.owner.sqid),
             },
-            user=admin,
+            user=admin
         )
     )["insert_vcs_bridges_one"]
 
@@ -1902,7 +1776,7 @@ def test_update_vcs_bridge_merges_typed_config(
     }
     bridge = make_integration("vcs-config-patch", backend_class="local", model=VcsBridge, config=original)
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             """
             mutation UpdateConfig($id: String!, $config: JSON!) {
@@ -1910,7 +1784,7 @@ def test_update_vcs_bridge_merges_typed_config(
             }
             """,
             {"id": _public_id(bridge.sqid), "config": {"local_name": name}},
-            user=_platform_admin("vcs-config-patch-admin"),
+            user=_platform_admin("vcs-config-patch-admin")
         )
     )["update_vcs_bridges_by_pk"]
 
@@ -1931,7 +1805,7 @@ def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(composed_table
         config={"local_org": "kept"},
     )
     original = dict(bridge.config)
-    result = _execute(
+    result = execute_schema(
         _schema(),
         """
         mutation InvalidConfig($id: String!) {
@@ -1939,7 +1813,7 @@ def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(composed_table
         }
         """,
         {"id": _public_id(bridge.sqid)},
-        user=_platform_admin("vcs-config-patch-invalid-admin"),
+        user=_platform_admin("vcs-config-patch-invalid-admin")
     )
 
     assert result.errors is not None
@@ -1961,7 +1835,7 @@ def test_update_vcs_bridge_rejects_backend_switch(
     console_schema = _schema()
     admin = _platform_admin("vcs-update-admin")
     bridge = make_integration("vcs-update", backend_class="stub", model=VcsBridge)
-    result = _execute(
+    result = execute_schema(
         console_schema,
         """
             mutation UpdateVcs($id: String!) {
@@ -1971,7 +1845,7 @@ def test_update_vcs_bridge_rejects_backend_switch(
             }
             """,
         {"id": _public_id(bridge.sqid)},
-        user=admin,
+        user=admin
     )
 
     assert result.errors is not None
@@ -2067,7 +1941,7 @@ def test_update_vcs_bridge_rejects_unknown_backend_class(
     console_schema = _schema()
     admin = _platform_admin("vcs-update-invalid-backend-admin")
     bridge = make_integration("vcs-update-invalid-backend", backend_class="stub", model=VcsBridge)
-    result = _execute(
+    result = execute_schema(
         console_schema,
         """
         mutation UpdateVcs($id: String!) {
@@ -2077,7 +1951,7 @@ def test_update_vcs_bridge_rejects_unknown_backend_class(
         }
         """,
         {"id": _public_id(bridge.sqid)},
-        user=admin,
+        user=admin
     )
 
     assert result.errors is not None
@@ -2097,7 +1971,7 @@ def test_update_vcs_bridge_rejects_parent_impl_class(
     console_schema = _schema()
     admin = _platform_admin("vcs-update-parent-impl-admin")
     bridge = make_integration("vcs-update-parent-impl", backend_class="stub", model=VcsBridge)
-    result = _execute(
+    result = execute_schema(
         console_schema,
         """
         mutation UpdateVcs($id: String!) {
@@ -2107,7 +1981,7 @@ def test_update_vcs_bridge_rejects_parent_impl_class(
         }
         """,
         {"id": _public_id(bridge.sqid)},
-        user=admin,
+        user=admin
     )
 
     assert result.errors is not None
@@ -2128,26 +2002,6 @@ def _schemas() -> GraphQLSchemas:
         for module in (iam_schema, integrate_schema, integrate_vcs_schema)
     ]
     return GraphQLSchemas(addons)
-
-
-def _execute(
-    schema: Any,
-    query: str,
-    variables: dict[str, Any] | None = None,
-    *,
-    user: Any | None = None,
-) -> Any:
-    """Execute one GraphQL operation against the merged console schema."""
-
-    return execute_schema(schema, query, variables, request=_request(user or AnonymousUser()))
-
-
-def _request(user: Any) -> Any:
-    """Return a console-shaped POST request bound to ``user``."""
-
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user
-    return request
 
 
 def _public_id(value: Any) -> str:
@@ -2188,25 +2042,25 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
       resolveSyncFailure(stream: $stream, link: $link, slot: $slot, keep: $keep) { ok }
     }"""
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             query,
             {"stream": failure.stream_id, "link": failure.link_id, "slot": failure.slot, "keep": keep.upper()},
-            user=admin,
+            user=admin
         )
     )
     assert result["resolveSyncFailure"]["ok"]
     assert calls == [(failure.pk, keep)]
-    invalid = _execute(
+    invalid = execute_schema(
         _schema(),
         query,
         {"stream": failure.stream_id, "link": failure.link_id, "slot": failure.slot, "keep": "TYPO"},
-        user=admin,
+        user=admin
     )
     assert invalid.errors and "ConflictKeep" in invalid.errors[0].message
     assert len(calls) == 1
     missing = _data(
-        _execute(
+        execute_schema(
             _schema(), query, {"stream": failure.stream_id, "link": failure.link_id, "slot": failure.slot}, user=admin
         )
     )
@@ -2227,13 +2081,13 @@ def test_owner_credential_patch_refuses_foreign_credentials_as_not_found(compose
     schema = _schema()
 
     def patch(credential: Any) -> Any:
-        return _execute(
+        return execute_schema(
             schema,
             f'''mutation {{
           update_integrations_by_pk(pk_columns: {{id: "{_public_id(integration)}"}},
             _set: {{credential: "{_public_id(credential)}"}}) {{ id }}
         }}''',
-            user=integration.owner,
+            user=integration.owner
         )
 
     denied = patch(foreign)
@@ -2252,12 +2106,12 @@ def test_parent_typed_integration_uses_the_concrete_selector_for_admissions(comp
     with system_context(reason="test parent admission needs consent"):
         VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             f'''query {{
       integrations_by_pk(id: "{_public_id(bridge)}") {{ can_connect can_resume can_retry_discovery }}
     }}''',
-            user=bridge.owner,
+            user=bridge.owner
         )
     )["integrations_by_pk"]
     assert result == {"can_connect": True, "can_resume": False, "can_retry_discovery": False}
@@ -2269,9 +2123,9 @@ def test_connection_admission_query_count_does_not_grow_with_rows(composed_table
     actor = first.owner if actor_kind == "owner" else _platform_admin("batched-admission-admin")
     schema = _schema()
     query = "{ integrations { can_connect can_resume can_retry_discovery } }"
-    _data(_execute(schema, query, user=actor))  # Warm Django's model/content-type metadata.
+    _data(execute_schema(schema, query, user=actor))  # Warm Django's model/content-type metadata.
     with CaptureQueriesContext(connection) as single_queries:
-        rows = _data(_execute(schema, query, user=actor))["integrations"]
+        rows = _data(execute_schema(schema, query, user=actor))["integrations"]
     assert len(rows) == 1 and rows[0]["can_resume"] == (actor_kind == "admin")
     for index in range(1, 6):
         make_integration(
@@ -2282,7 +2136,7 @@ def test_connection_admission_query_count_does_not_grow_with_rows(composed_table
             lifecycle="paused",
         )
     with CaptureQueriesContext(connection) as many_queries:
-        rows = _data(_execute(schema, query, user=actor))["integrations"]
+        rows = _data(execute_schema(schema, query, user=actor))["integrations"]
     assert len(rows) == 6 and all(row["can_resume"] == (actor_kind == "admin") for row in rows)
     assert len(many_queries) <= len(single_queries) + 1
 
@@ -2303,14 +2157,14 @@ def test_connect_completion_returns_account_switch_as_a_typed_result(
 
     monkeypatch.setattr(integrate_schema._connect, "complete_account_connect", refuse)
     result = _data(
-        _execute(
+        execute_schema(
             _schema(),
             """mutation {
       connect_account_complete(code: "code", state: "state", redirect_uri: "https://app.example/callback") {
         error error_code account { id }
       }
     }""",
-            user=integration.owner,
+            user=integration.owner
         )
     )["connect_account_complete"]
     assert result == {
@@ -2342,7 +2196,7 @@ def test_credential_creation_reports_field_errors_and_accepts_corrected_retry(
         }
     """
     valid = {"name": "validation-retry", "kind": "ssh_key", "private_key": "synthetic-private-key"}
-    failure = _execute(schema, query, {"data": {**valid, **invalid}}, user=admin)
+    failure = execute_schema(schema, query, {"data": {**valid, **invalid}}, user=admin)
     assert failure.errors is not None
     assert len(failure.errors) == 1
     extensions = failure.errors[0].extensions
@@ -2353,7 +2207,7 @@ def test_credential_creation_reports_field_errors_and_accepts_corrected_retry(
     with system_context(reason="test refused credential creation"):
         assert not Credential.objects.filter(user=admin).exists()
 
-    created = _data(_execute(schema, query, {"data": valid}, user=admin))["create_credential"]
+    created = _data(execute_schema(schema, query, {"data": valid}, user=admin))["create_credential"]
     assert created["display_name"] == valid["name"]
     with system_context(reason="test corrected credential creation"):
         assert Credential.objects.filter(user=admin).count() == 1

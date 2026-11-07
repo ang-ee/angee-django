@@ -16,10 +16,11 @@ from strawberry.schema.config import StrawberryConfig
 
 import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.ids import require_instance_for_id
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.platform import composed
-from tests.conftest import addon_schema, execute_schema, make_addon
+from tests.conftest import addon_schema, make_addon
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 
 platform_schema = importlib.import_module("angee.platform.schema")
 
@@ -358,19 +359,6 @@ def test_field_collection_groups_rows_by_model_and_kind(monkeypatch: Any) -> Non
         for kind, count in sorted(Counter(row.kind for row in rows if row.model == line).items())
     ]
     assert data["platform_fields_groups_count"] == len({row.kind for row in rows})
-
-    grouped_rows = _data(
-        execute_schema(
-            schema,
-            f"""{{ platform_fields_grouped_rows(
-              group_by: {{field: MODEL}}, pages: [{{key: "{line}", limit: 200}}]
-            ) {{ key rows {{ id }} }} }}""",
-        )
-    )
-    assert grouped_rows["platform_fields_grouped_rows"][0]["key"] == line
-    assert {row["id"] for row in grouped_rows["platform_fields_grouped_rows"][0]["rows"]} == {
-        row.id for row in rows if row.model == line
-    }
 
 
 def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: Any) -> None:

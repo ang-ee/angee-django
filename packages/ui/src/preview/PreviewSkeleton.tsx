@@ -19,7 +19,7 @@ export function PreviewSkeleton({
 }: PreviewSkeletonProps): ReactElement {
   return (
     <SkeletonStatus
-      label={label}
+      loadingLabel={label}
       className={cn("h-full min-h-48 overflow-hidden bg-inset p-4", className)}
     >
       {variant === "text" ? (

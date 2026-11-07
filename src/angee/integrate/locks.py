@@ -6,9 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from rebac.database import write_alias
-
-from angee.base.locks import LockKey, record_lock_key, task_lock, task_lock_is_held
+from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_lock_is_held
 
 
 def bridge_lock_key(bridge: Any) -> LockKey:
@@ -29,9 +27,7 @@ def bridge_advisory_lock(bridge: Any) -> Iterator[bool]:
     if bridge.pk is None:
         yield False
         return
-    with task_lock(
-        bridge_lock_key(bridge), using=write_alias(type(bridge), using=bridge._state.db, instance=bridge)
-    ) as acquired:
+    with task_lock(bridge_lock_key(bridge)) as acquired:
         yield acquired
 
 
@@ -40,17 +36,13 @@ def bridge_is_locked(bridge: Any) -> bool:
 
     if bridge.pk is None:
         return False
-    return task_lock_is_held(
-        bridge_lock_key(bridge), using=write_alias(type(bridge), using=bridge._state.db, instance=bridge)
-    )
+    return task_lock_is_held(bridge_lock_key(bridge))
 
 
 def bridge_session_is_hosted(bridge: Any) -> bool:
     """Return whether a process host owns startup, execution, or child reaping."""
 
-    return bridge.pk is not None and task_lock_is_held(
-        bridge.live_session_host_lock_key(), using=write_alias(type(bridge), using=bridge._state.db, instance=bridge)
-    )
+    return bridge.pk is not None and task_lock_is_held(bridge.live_session_host_lock_key())
 
 
 __all__ = ["bridge_advisory_lock", "bridge_is_locked", "bridge_lock_key", "bridge_session_is_hosted"]

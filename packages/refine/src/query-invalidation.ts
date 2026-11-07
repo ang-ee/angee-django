@@ -1,6 +1,4 @@
-import { useCallback, useMemo } from "react";
-import { keys, pickDataProvider, useInvalidate, usePublish, useResourceParams, type LiveProvider, type BaseKey } from "@refinedev/core";
-import { CancelledError, matchQuery, useQueryClient, type Query, type QueryClient, type QueryKey, type Updater } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 
 import { recordValue } from "./dialect/wire";
 
@@ -25,17 +23,17 @@ export function authoredQueryReadsChange(meta: unknown, model: string, id: strin
   const records = metadata?.angeeRecords;
   const broadModels = metadata?.angeeBroadModels;
   if (Array.isArray(broadModels) && broadModels.includes(model)) return true;
-  if (Array.isArray(records) && records.some((value) => {
-    const record = recordValue(value);
-    return record?.model === model && record?.id === id;
-  })) return true;
   const relatedModels = metadata?.angeeRelatedModels;
   if (Array.isArray(relatedModels) && relatedModels.includes(model)) return false;
-  return !Array.isArray(records);
+  if (!Array.isArray(records)) return true;
+  return records.some((value) => {
+    const record = recordValue(value);
+    return record?.model === model && record?.id === id;
+  });
 }
 
 /** Match one live change: an exact row with its related rows, or a whole model. */
-export function authoredQueryReadsLiveChange(meta: unknown, change: AuthoredLiveChange): boolean {
+function authoredQueryReadsLiveChange(meta: unknown, change: AuthoredLiveChange): boolean {
   if (!change.id) return authoredQueryReadsAnyModel(meta, [change.model]);
   return authoredQueryReadsChange(meta, change.model, change.id)
     || authoredQueryReadsAnyModel(meta, [change.model]) && (change.relatedRecords ?? []).some((record) => {
@@ -49,7 +47,7 @@ export function authoredQueryReadsLiveChange(meta: unknown, change: AuthoredLive
 
 /** Refetch every active authored read registered against one of the moved models. */
 export async function invalidateAuthoredQueries(
-  queryClient: Pick<QueryClient, "getQueryCache" | "invalidateQueries">,
+  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
   modelLabels: readonly string[],
 ): Promise<void> {
   return invalidateAuthoredQueriesMatching(
@@ -58,12 +56,39 @@ export async function invalidateAuthoredQueries(
   );
 }
 
+/** Catch up retained authored reads; a retry restarts running data-holding refetches. */
+export async function catchUpAuthoredQueries(
+  queryClient: Pick<QueryClient, "invalidateQueries">,
+  modelLabels: readonly string[],
+  retainedAtStart: ReadonlySet<string> | undefined,
+  cancelRefetch: boolean,
+): Promise<void> {
+  return queryClient.invalidateQueries({
+    predicate: (query) => authoredQueryWithData(query, modelLabels)
+      && (retainedAtStart === undefined || retainedAtStart.has(query.queryHash)),
+    type: "all",
+    refetchType: "active",
+  }, { cancelRefetch });
+}
+
+/** Snapshot retained reads when an idle socket starts; later first loads are not stale. */
+export function retainedAuthoredQueryHashes(
+  queryClient: Pick<QueryClient, "getQueryCache">,
+  modelLabels: readonly string[],
+): Set<string> {
+  return new Set(queryClient.getQueryCache().findAll({
+    predicate: (query) => authoredQueryWithData(query, modelLabels),
+  }).map((query) => query.queryHash));
+}
+
+function authoredQueryWithData(query: Query, modelLabels: readonly string[]): boolean {
+  return query.state.data !== undefined && authoredQueryReadsAnyModel(query.meta, modelLabels);
+}
+
 /** One live change: an exact row with its related rows, or a whole model when ``id`` is absent. */
 export interface AuthoredLiveChange {
   model: string;
   id?: string;
-  /** Transport operation, when known; never a row revision. */
-  action?: string;
   relatedRecords?: readonly { model: string; id: string }[];
 }
 
@@ -72,533 +97,78 @@ const LIVE_WINDOW_MS = 300;
 /** Longest a continuous stream may defer its first buffered change. */
 const LIVE_MAX_WAIT_MS = 2000;
 
-function uniqueChanges(changes: readonly AuthoredLiveChange[]): AuthoredLiveChange[] {
-  return [...new Map(changes.map((change) => [JSON.stringify(change), change])).values()];
-}
-
-export interface QueryReconciliation {
-  changes: readonly AuthoredLiveChange[];
-  /** Native resource keys remain a distinct adapter from authored metadata. */
-  predicate?: (query: Query) => boolean;
-  /** Only complete projections actually accepted by this response are excluded. */
-  accepted?: ReadonlySet<string>;
-  /** Exact active reads supplied by their owner as automatic completion fallback. */
-  queryKeys?: readonly QueryKey[];
-  /** An accepted command settles before its derived reads. */
-  background?: boolean;
-}
-
-/** Explicit invocation-owned effect collection; never inferred from an async stack. */
-export interface MutationReconciliationScope {
-  reconcile: (request: QueryReconciliation) => Promise<void>;
-}
-
-/** Execution metadata stays outside GraphQL variables and authored wire arguments. */
-export interface MutationExecutionOptions {
-  reconciliation?: MutationReconciliationScope;
-}
-
 export interface AuthoredLiveInvalidation {
-  push: (change: AuthoredLiveChange, deliver?: () => void) => void;
-  /** Capture retained reads before one subscription operation starts. */
-  start: (model: string) => ReadonlyMap<Query, number>;
-  /** Recover only reads that preceded this operation without cancelling. */
-  ready: (started: ReadonlyMap<Query, number>) => void;
-  reconcile: (request: QueryReconciliation) => Promise<void>;
-  batch: <T>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>) => Promise<T>;
+  push: (change: AuthoredLiveChange) => void;
   clear: () => void;
-  readonly generation: number;
 }
-
-/** Provider-owned native publish extension; never a global registry or event sent upstream. */
-export const mutationReconciliation = Symbol("angee.mutationReconciliation");
-export type ReconciliationPublish = NonNullable<LiveProvider["publish"]> & {
-  [mutationReconciliation]?: Pick<AuthoredLiveInvalidation, "reconcile" | "batch" | "generation">;
-};
 
 /**
- * One native reconciliation owner. Explicit command collectors flush independently:
- * idle retained reads refetch at that flush, and in-flight reads get a coalesced
- * follow-up after settling. Live changes use a bounded queue with the same
- * idle and in-flight refresh rules. Ready recovers retained data older than the
- * subscription request only when a full read has not covered it, without cancellation.
- * Query owns retries, errors and row state.
+ * Coalesce live changes so each affected read refetches once per burst.
+ *
+ * A change cancels matching in-flight requests as it arrives, so a response
+ * read before the change never commits. Only the refetch is deferred: one flush
+ * applies the shared protocol to the union of the burst, so affected reads keep
+ * their last committed data for at most the max wait. Under a continuous stream
+ * a read slower than the max wait is restarted at each flush.
  */
 export function createAuthoredLiveInvalidation(
-  queryClient: Pick<QueryClient, "invalidateQueries" | "getQueryCache">,
-  nativeReadsChange: (query: Query, change: AuthoredLiveChange) => boolean = () => false,
+  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
 ): AuthoredLiveInvalidation {
-  type Request = QueryReconciliation & { fallbackAccepted?: ReadonlySet<string> };
-  type Round = { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void };
-  type Deferred = { changes: AuthoredLiveChange[]; full: boolean; dirty: boolean; active: boolean;
-    next: Round; current?: Round };
-  function round(): Round {
-    let resolve!: () => void;
-    let reject!: (error: unknown) => void;
-    const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
-    void promise.catch(() => undefined);
-    return { promise, resolve, reject };
-  }
-  let requests: Request[] = [];
-  let deliveries: (() => void)[] = [];
+  let changes: AuthoredLiveChange[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   let firstAt: number | undefined;
-  let generation = 0;
-  const pending = new Set<{ resolve: () => void; reject: (error: unknown) => void }>();
-  let waiting: { resolve: () => void; reject: (error: unknown) => void }[] = [];
-  const deferred = new Map<Query, Deferred>();
-  // A row-targeted round updates TanStack data without rereading feed membership.
-  const targetedCounts = new WeakMap<Query, number>();
-  const openRowRoundNeedsRecovery = (query: Query) => {
-    const changes = query.meta?.angeeChanges;
-    return Array.isArray(changes) && changes.length > 0
-      && (query.state.fetchStatus !== "idle" || query.meta?.angeeTargetedRound === changes);
-  };
-  const recordTargetedRound = (query: Query, changes: readonly AuthoredLiveChange[]) => {
-    if (query.meta?.angeeTargetedRound === changes) {
-      targetedCounts.set(query, query.state.dataUpdateCount);
-      delete query.meta.angeeTargetedRound;
-    }
-  };
-  const unchangedSince = (query: Query, count: number) => {
-    const current = query.state.dataUpdateCount;
-    return current === count || targetedCounts.get(query) === current
-      || recordValue(query.meta?.angeeAcceptedResponse)?.dataUpdateCount === current;
-  };
-  const needsRecovery = (query: Query, count: number) =>
-    openRowRoundNeedsRecovery(query) || (query.state.fetchStatus === "idle" && unchangedSince(query, count));
-  function retireDeferred(query: Query, entry: Deferred): void {
-    entry.active = false;
-    if (deferred.get(query) === entry) deferred.delete(query);
-    entry.current?.resolve();
-    entry.next.resolve();
-  }
-  const matches = (query: Query, request: Request) =>
-    !request.accepted?.has(query.queryHash) && (
-      request.queryKeys?.some((queryKey) => !request.fallbackAccepted?.has(query.queryHash)
-        && matchQuery({ queryKey, exact: true }, query))
-      || request.predicate?.(query) || request.changes.some((change) =>
-        authoredQueryReadsLiveChange(query.meta, change) || nativeReadsChange(query, change))
-    );
 
-  function prepare(request: Request): void {
-    const predicate = (query: Query) => matches(query, request);
-    void queryClient.invalidateQueries({ predicate, type: "all", refetchType: "none" });
-  }
-
-  function deferRefresh(query: Query, incoming: readonly AuthoredLiveChange[]): Promise<void> {
-    const queued = deferred.get(query);
-    if (queued) {
-      queued.changes.push(...incoming);
-      queued.full ||= incoming.length === 0;
-      queued.dirty = true;
-      return queued.next.promise;
-    }
-    const entry: Deferred = { changes: [...incoming], full: incoming.length === 0,
-      dirty: true, active: true, next: round() };
-    deferred.set(query, entry);
-    const started = generation;
-    const first = entry.next.promise;
-    void (async () => {
-      try {
-        // A paused offline fetch holds this follow-up until it resumes. A
-        // settled fetch may commit, fail, or be cancelled without covering
-        // changes that arrived after it began.
-        await query.promise?.catch(() => undefined);
-        while (entry.active && entry.dirty && started === generation) {
-          const current = entry.next;
-          entry.current = current;
-          entry.next = round();
-          entry.dirty = false;
-          const roundChanges = entry.full ? [] : uniqueChanges(entry.changes);
-          entry.changes = [];
-          entry.full = false;
-          if (query.meta) query.meta.angeeChanges = roundChanges;
-          try {
-            // Join a fetch started by another owner after settle instead of
-            // cancelling it; this round still completes after that fetch.
-            await queryClient.invalidateQueries({ predicate: (candidate) => candidate === query, type: "all", refetchType: "active" },
-              { cancelRefetch: false });
-            recordTargetedRound(query, roundChanges);
-            current.resolve();
-          } catch (error) {
-            current.reject(error);
-            entry.next.reject(error);
-            throw error;
-          } finally {
-            if (query.meta?.angeeTargetedRound === roundChanges) delete query.meta.angeeTargetedRound;
-            if (query.meta?.angeeChanges === roundChanges) delete query.meta.angeeChanges;
-            entry.current = undefined;
-          }
-        }
-      } finally {
-        // Remove in the same continuation that exits the loop. A new flush
-        // must never join an entry whose last round has already finished.
-        if (deferred.get(query) === entry) deferred.delete(query);
-        entry.active = false;
-        entry.next.resolve();
-      }
-    })().catch(() => undefined);
-    return first;
-  }
-
-  // One native refresh implementation serves independent command collections
-  // and the provider's bounded live queue. Neither waits for another transport.
-  async function refresh(batch: readonly Request[], callbacks: readonly (() => void)[] = []): Promise<void> {
-    if (!batch.length) return;
-    const predicate = (query: Query) => batch.some((request) => matches(query, request));
-    const queries = queryClient.getQueryCache().findAll({ predicate });
-    const changesByQuery = new Map(queries.map((query) => {
-      const effects = batch.filter((request) => matches(query, request)).map((request) => request.changes
-        .filter((change) => authoredQueryReadsLiveChange(query.meta, change)));
-      return [query, effects.some((group) => group.length === 0) ? [] : uniqueChanges(effects.flat())] as const;
-    }));
-    const isHeld = (query: Query) => deferred.has(query)
-      || query.state?.fetchStatus === "fetching" || query.state?.fetchStatus === "paused";
-    const held = queries.filter(isHeld);
-    const heldSet = new Set(held);
-    const immediate = queries.filter((query) => !heldSet.has(query));
-    // Round metadata can change ready's predicate; keep this flush's selected queries stable.
-    const immediateSet = new Set(immediate);
-    immediate.forEach((query) => { if (query.meta) query.meta.angeeChanges = changesByQuery.get(query); });
-    const refreshed = queryClient.invalidateQueries({ predicate: (query) => immediateSet.has(query)
-      || (!isHeld(query) && predicate(query)),
-      type: "all", refetchType: "active" }, { cancelRefetch: false });
-    const followUps = held.map((query) => deferRefresh(query, changesByQuery.get(query) ?? []));
-    try {
-      callbacks.forEach((deliver) => deliver());
-    } finally {
-      try {
-        await refreshed;
-        for (const query of immediate) {
-          recordTargetedRound(query, changesByQuery.get(query) ?? []);
-        }
-      } finally {
-        for (const query of immediate) {
-          const meta = query.meta;
-          if (meta && meta.angeeTargetedRound === changesByQuery.get(query)) delete meta.angeeTargetedRound;
-          if (meta && meta.angeeChanges === changesByQuery.get(query)) delete meta.angeeChanges;
-        }
-      }
-    }
-    await Promise.all(followUps);
-  }
-
-  async function flush(): Promise<void> {
-    if (!requests.length) return;
-    if (timer !== undefined) clearTimeout(timer);
-    const settled = waiting;
-    const batch = requests;
-    const callbacks = deliveries;
-    requests = [];
-    waiting = [];
-    deliveries = [];
+  function flush(): void {
+    const batch = changes;
+    changes = [];
     timer = undefined;
     firstAt = undefined;
-    try {
-      await refresh(batch, callbacks);
-      settled.forEach((waiter) => { pending.delete(waiter); waiter.resolve(); });
-    } catch (error) {
-      settled.forEach((waiter) => { pending.delete(waiter); waiter.reject(error); });
-      throw error;
-    }
-  }
-
-  function reconcile(request: QueryReconciliation): Promise<void> {
-    const queued = { ...request };
-    prepare(queued);
-    requests.push(queued);
-    const now = performance.now();
-    firstAt ??= now;
-    if (timer !== undefined) clearTimeout(timer);
-    timer = setTimeout(() => { void flush().catch(() => undefined); }, Math.max(0, Math.min(LIVE_WINDOW_MS, firstAt + LIVE_MAX_WAIT_MS - now)));
-    return new Promise<void>((resolve, reject) => {
-      const waiter = { resolve, reject };
-      waiting.push(waiter);
-      pending.add(waiter);
-    });
-  }
-
-  function awaitRefresh(refreshed: Promise<void>): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const waiter = { resolve, reject };
-      pending.add(waiter);
-      void refreshed.then(
-        () => { pending.delete(waiter); resolve(); },
-        (error) => { pending.delete(waiter); reject(error); },
-      );
-    });
+    void invalidateAuthoredQueriesMatching(
+      queryClient,
+      (query) => batch.some((change) => authoredQueryReadsLiveChange(query.meta, change)),
+    );
   }
 
   return {
-    get generation() { return generation; },
-    start(model) {
-      const change = { model };
-      return new Map(queryClient.getQueryCache().findAll({ predicate: (query) =>
-        query.state.data !== undefined
-        && (authoredQueryReadsLiveChange(query.meta, change) || nativeReadsChange(query, change))
-      }).map((query) => [query, query.state.dataUpdateCount] as const));
-    },
-    ready(started) {
-      // Only a full fetch covers a retained pre-start read. Targeted rounds
-      // and accepted mutation data can advance the data count without one.
-      const snapshot = new Map([...started].filter(([query, count]) =>
-        needsRecovery(query, count)));
-      if (snapshot.size) void reconcile({ changes: [], predicate: (query) => {
-        const seen = snapshot.get(query);
-        return seen !== undefined && needsRecovery(query, seen);
-      } }).catch(() => undefined);
-    },
     clear() {
-      generation++;
       if (timer !== undefined) clearTimeout(timer);
-      requests = [];
-      deliveries = [];
+      changes = [];
       timer = undefined;
       firstAt = undefined;
-      pending.forEach(({ resolve }) => resolve());
-      pending.clear();
-      waiting = [];
-      for (const [query, entry] of deferred) retireDeferred(query, entry);
     },
-    async batch<T>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>): Promise<T> {
-      const started = generation;
-      const collected: Request[] = [];
-      const accepted = new Set<string>();
-      let background = false;
-      let modelWide = false;
-      let collecting = true;
-      const scope: MutationReconciliationScope = {
-        reconcile(effect) {
-          if (started !== generation || !collecting) return Promise.resolve();
-          effect.accepted?.forEach((key) => accepted.add(key));
-          if (effect.background) background = true;
-          else if (!effect.queryKeys?.length) modelWide = true;
-          const request = { ...effect, fallbackAccepted: accepted };
-          prepare(request);
-          collected.push(request);
-          return Promise.resolve();
-        },
-      };
-      let failed = false;
-      try {
-        return await run(scope);
-      } catch (error) {
-        failed = true;
-        throw error;
-      } finally {
-        collecting = false;
-        if (started === generation) {
-          const refreshed = refresh(collected);
-          if (background && !modelWide) void refreshed.catch(() => undefined);
-          else {
-            try { await awaitRefresh(refreshed); }
-            catch (error) { if (!failed) throw error; }
-          }
-        }
-      }
-    },
-    reconcile,
-    push(change, deliver) {
-      if (deliver) deliveries.push(deliver);
-      void reconcile({ changes: [change] }).catch(() => undefined);
+    push(change) {
+      void queryClient.cancelQueries({
+        predicate: (query) => query.state.fetchStatus !== "idle"
+          && authoredQueryReadsLiveChange(query.meta, change),
+      });
+      changes.push(change);
+      const now = performance.now();
+      firstAt ??= now;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(flush, Math.max(0, Math.min(LIVE_WINDOW_MS, firstAt + LIVE_MAX_WAIT_MS - now)));
     },
   };
 }
 
-/** Ephemeral evidence: the exact native Query and its existing accepted-write marker. */
-export interface QueryDataAcceptance {
-  readonly query: Query;
-  readonly marker: { readonly complete: boolean; readonly dataUpdateCount: number };
-}
-
-/** Void callbacks can accept local state but prove no native projection exclusion. */
-export type QueryDataAcceptanceResult = void | QueryDataAcceptance | readonly (QueryDataAcceptance | undefined)[];
-
-/** Imperative exact acceptance with recovery from an older read; caller owns its actor/lifecycle scope. */
-export function acceptQueryData<TData>(
-  client: QueryClient,
-  queryKey: QueryKey,
-  data: Updater<TData | undefined, TData | undefined>,
-  options: { complete?: boolean } = {},
-): Promise<QueryDataAcceptance | undefined> {
-  return acceptScopedQueryData(client, queryKey, data, options, () => true);
-}
-
-async function acceptScopedQueryData<TData>(
-  client: QueryClient,
-  queryKey: QueryKey,
-  data: Updater<TData | undefined, TData | undefined>,
-  { complete = true }: { complete?: boolean },
-  isCurrent: () => boolean,
-): Promise<QueryDataAcceptance | undefined> {
-  if (!isCurrent()) throw new CancelledError({ silent: true });
-  const pendingRead = client.getQueryCache().find({ queryKey, exact: true })?.promise;
-  let adopted = false;
-  const acceptedValue = client.setQueryData<TData>(queryKey, (current) => {
-    const next = typeof data === "function"
-      ? (data as (current: TData | undefined) => TData | undefined)(current)
-      : data;
-    adopted = next !== undefined && next !== current;
-    return adopted ? next : undefined;
-  });
-  let evidence: QueryDataAcceptance | undefined;
-  if (adopted) {
-    const query = client.getQueryCache().find({ queryKey, exact: true });
-    if (query) {
-      const marker = { complete, dataUpdateCount: query.state.dataUpdateCount };
-      query.setOptions({ ...query.options, meta: { ...query.meta, angeeAcceptedResponse: marker } });
-      evidence = { query, marker };
-      if (pendingRead) {
-        // Accept now. The earlier fetch may still publish its old snapshot;
-        // restore accepted values in call order so a later acceptance wins.
-        void pendingRead.then(() => {
-          if (!isCurrent() || client.getQueryCache().find({ queryKey, exact: true }) !== query
-            || query.state.dataUpdateCount === marker.dataUpdateCount) return;
-          client.setQueryData<TData>(queryKey, acceptedValue);
-          marker.dataUpdateCount = query.state.dataUpdateCount;
-          query.setOptions({ ...query.options, meta: { ...query.meta, angeeAcceptedResponse: marker } });
-          // setQueryData clears invalidation; a partial projection still needs
-          // its exact authoritative revalidation after this older read settles.
-          if (!complete) void client.invalidateQueries({ queryKey, exact: true, refetchType: "none" })
-            .catch(() => undefined);
-        }, () => undefined);
-      }
-    }
-  }
-  if (!complete) await client.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
-  return evidence;
-}
-
-/** Capture the originating render's actor generation, including delayed callbacks. */
-export function useAcceptQueryData() {
-  const client = useQueryClient();
-  const publish = usePublish() as ReconciliationPublish | undefined;
-  const generation = publish?.[mutationReconciliation]?.generation;
-  return useCallback(<TData,>(
-    queryKey: QueryKey,
-    data: Updater<TData | undefined, TData | undefined>,
-    options: { complete?: boolean } = {},
-  ): Promise<QueryDataAcceptance | undefined> => acceptScopedQueryData(client, queryKey, data, options,
-    () => generation === publish?.[mutationReconciliation]?.generation),
-  [client, publish, generation]);
-}
-
-type NativeInvalidation = Parameters<ReturnType<typeof useInvalidate>>[0];
-/** Native mutation IDs are canonicalized into live wire identities at reconciliation. */
-type MutationRecordEffect = Omit<AuthoredLiveChange, "id" | "relatedRecords"> & {
-  id?: BaseKey;
-  relatedRecords?: readonly { model: string; id: BaseKey }[];
-};
-
-type Effects<TData, TVariables, TValue> = readonly TValue[] | ((data: TData, variables: TVariables) => readonly TValue[]);
-export interface MutationReconciliationOptions<TData, TVariables> extends MutationExecutionOptions {
-  acceptResponse?: (data: TData, variables: TVariables) => QueryDataAcceptanceResult | Promise<QueryDataAcceptanceResult>;
-  records?: Effects<TData, TVariables, MutationRecordEffect>;
-  invalidateModels?: readonly string[];
-  invalidates?: Effects<TData, TVariables, NativeInvalidation>;
-  /** Exact read owned by a form; batches coalesce this fallback with declared effects. */
-  queryKeys?: readonly QueryKey[];
-}
-
-function effectValues<TData, TVariables, TValue>(
-  effect: Effects<TData, TVariables, TValue> | undefined, data: TData, variables: TVariables,
-): readonly TValue[] {
-  return typeof effect === "function" ? effect(data, variables) : effect ?? [];
-}
-
-/** Shared action/authored/CRUD completion; default callers still await refresh. */
-export function useReconcileMutationResponse() {
-  const client = useQueryClient();
-  const invalidate = useInvalidate();
-  const publish = usePublish() as ReconciliationPublish | undefined;
-  const { resources } = useResourceParams();
-  const generation = publish?.[mutationReconciliation]?.generation;
-  const reconcile = useCallback(async <TData, TVariables>(
-    data: TData,
-    variables: TVariables,
-    options: MutationReconciliationOptions<TData, TVariables>,
-  ): Promise<void> => {
-    // A captured mutation completion belongs to the actor that started it.
-    if (generation !== publish?.[mutationReconciliation]?.generation) return;
-    const records: AuthoredLiveChange[] = effectValues(options.records, data, variables).map((record) => ({
-      ...record,
-      id: record.id === undefined ? undefined : String(record.id),
-      relatedRecords: record.relatedRecords?.map((related) => ({ ...related, id: String(related.id) })),
-    }));
-    const changes = [...records, ...(options.invalidateModels ?? [])
-      .filter((model) => !records.some((record) => record.model === model))
-      .map((model) => ({ model }))];
-    const targets = effectValues(options.invalidates, data, variables);
-    const accepted = new Set<string>();
-    if (options.acceptResponse) {
-      const result = await options.acceptResponse(data, variables);
-      if (generation !== publish?.[mutationReconciliation]?.generation) return;
-      const evidence = !result ? [] : "query" in result ? [result] : result;
-      evidence.forEach((entry) => {
-        if (!entry) return;
-        const { query, marker } = entry;
-        if (marker.complete && query.meta?.angeeAcceptedResponse === marker
-          && !query.state.isInvalidated && marker.dataUpdateCount === query.state.dataUpdateCount
-          && client.getQueryCache().find({ queryKey: query.queryKey, exact: true }) === query) accepted.add(query.queryHash);
-      });
-    }
-    // Explicit native policies retain useInvalidate's full selector/options
-    // contract; these are deliberate caller refreshes, not generic live effects.
-    const customTargets = targets.filter((target) => target.invalidationFilters || target.invalidationOptions);
-    const filters = targets.filter((target) => !target.invalidationFilters && !target.invalidationOptions).flatMap((target) => {
-      if (target.invalidates === false) return [];
-      const provider = pickDataProvider(target.resource, target.dataProviderName, resources);
-      const key = keys().data(provider).resource(target.resource ?? "");
-      return target.invalidates.flatMap((kind) => {
-        if (kind === "all") return [{ queryKey: keys().data(provider).get() }];
-        if (kind === "resourceAll") return [{ queryKey: key.get() }];
-        if (kind === "detail") return [{ queryKey: key.action("one").id(target.id ?? "").get() }];
-        if (kind === "list") return [{ queryKey: key.action("list").get() }, { queryKey: key.action("infinite").get() }];
-        if (kind === "many") return [{ queryKey: key.action("many").get() }];
-        return [];
-      });
-    });
-    if (changes.length === 0 && filters.length === 0 && customTargets.length === 0 && !options.queryKeys?.length && !options.acceptResponse) return;
-    const predicate = (query: Query) => filters.some((filter) => matchQuery(filter, query));
-    const exactFallback = (query: Query) => options.queryKeys?.some((queryKey) => matchQuery({ queryKey, exact: true }, query)) ?? false;
-    const request = { changes, predicate, accepted, queryKeys: options.queryKeys, background: Boolean(options.acceptResponse) };
-    const scheduler = publish?.[mutationReconciliation];
-    if (scheduler) {
-      const refresh = Promise.all([
-        ...(changes.length || filters.length || options.queryKeys?.length || options.acceptResponse ? [(options.reconciliation ?? scheduler).reconcile(request)] : []),
-        ...customTargets.map((target) => invalidate(target)),
-      ]);
-      if (options.acceptResponse) void refresh.catch(() => undefined);
-      else await refresh;
-      return;
-    }
-    const refresh = Promise.all([
-      ...customTargets.map((target) => invalidate(target)),
-      invalidateAuthoredQueriesMatching(client, (query) => !accepted.has(query.queryHash)
-        && (exactFallback(query) || predicate(query) || changes.some((change) => authoredQueryReadsLiveChange(query.meta, change)))),
-    ]);
-    if (options.acceptResponse) void refresh.catch(() => undefined);
-    else await refresh;
-  }, [client, invalidate, publish, resources, generation]);
-  return useMemo(() => Object.assign(reconcile, {
-    /** Explicit bulk command boundary; partial failures still flush in finally. */
-    batch: async <T,>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>): Promise<T> => {
-      if (generation !== publish?.[mutationReconciliation]?.generation) throw new CancelledError({ silent: true });
-      const scheduler = publish?.[mutationReconciliation];
-      return scheduler ? scheduler.batch(run) : run(undefined);
-    },
-  }), [reconcile, publish, generation]);
-}
-
-/** Model-wide and exact-row invalidation compose the same settle-then-refetch owner. */
+/**
+ * The cancelling protocol shared by model-wide, exact-row and live invalidation
+ * (mutations included); connection catch-up (`catchUpAuthoredQueries`) is the
+ * separate non-cancelling protocol on first and idle-reopen connections.
+ */
 async function invalidateAuthoredQueriesMatching(
-  queryClient: Pick<QueryClient, "getQueryCache" | "invalidateQueries">,
+  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
   predicate: (query: Query) => boolean,
 ): Promise<void> {
-  // This imperative helper receives only a QueryClient, not the provider's
-  // actor-scoped scheduler; its private batch owns this call's completion.
-  return createAuthoredLiveInvalidation(queryClient).batch(async (scope) => {
-    await scope?.reconcile({ changes: [], predicate });
+  // Native invalidation joins an initial in-flight request instead of restarting
+  // it. Cancel that snapshot first so an event cannot be lost when it settles.
+  await queryClient.cancelQueries({
+    predicate: (query) => predicate(query)
+      && query.state.data === undefined
+      && query.state.fetchStatus !== "idle",
+  });
+  return queryClient.invalidateQueries({
+    predicate,
+    type: "all",
+    refetchType: "active",
   });
 }

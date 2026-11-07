@@ -25,7 +25,7 @@ from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol, with_query
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
-from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
+from angee.integrate.oauth.registrations import OAuthRegistrationExtension, oauth_client_is_ready
 from angee.integrate.schema import IntegrationConnectionMixin, IntegrationOAuthMixin
 from tests.conftest import Credential, ExternalAccount, Feed, OAuthClient, create_user, make_integration
 
@@ -105,7 +105,9 @@ def test_registration_snapshot_uses_readiness_and_environment_priority_without_s
     next(operation)
     try:
         with CaptureQueriesContext(connection) as queries:
-            assert operation_registration_slugs() == frozenset()
+            assert not oauth_client_is_ready("preferred")
+            assert not oauth_client_is_ready("incomplete")
+            assert not oauth_client_is_ready("missing")
     finally:
         operation.close()
     reads = [query["sql"] for query in queries if query["sql"].startswith("SELECT")]
@@ -116,7 +118,7 @@ def test_registration_snapshot_uses_readiness_and_environment_priority_without_s
         production.save(update_fields=["is_enabled"])
         assert list(OAuthClient.objects.connectable()) == [production]
         assert OAuthClient.objects.enabled_for_slug("preferred") == production
-    assert "preferred" in operation_registration_slugs()
+    assert oauth_client_is_ready("preferred")
 
 
 @pytest.mark.usefixtures("composed_tables")
@@ -161,8 +163,6 @@ def test_non_admin_connection_projection_batches_health_and_restricts_credential
     }] * 4}
     feed_reads = [query["sql"] for query in queries if Feed._meta.db_table in query["sql"]]
     assert len(feed_reads) == 1
-    readiness_reads = [query for query in queries if f'FROM "{OAuthClient._meta.db_table}"' in query["sql"]]
-    assert len(readiness_reads) == 1
     assert "feed_backend_class" in feed_reads[0]
     assert "client_secret" not in " ".join(query["sql"] for query in queries)
     # Unexpired listing rows use only public health; no encrypted material is loaded.
@@ -197,20 +197,6 @@ def test_connection_health_listing_decrypts_only_the_expired_row(monkeypatch, ro
              and Credential._meta.db_table in query["sql"]]
     assert len(reads) == 1 + int(expired_row)
     assert len([query for query in queries if "material" in query["sql"]]) == int(expired_row)
-
-
-@pytest.mark.usefixtures("composed_tables")
-def test_connection_health_preserves_credential_selection():
-    with system_context(reason="test.connection_health.selection"):
-        first = make_integration("health-first", kind="oauth")
-        make_integration("health-second", kind="oauth")
-    selected = Credential.objects.filter(pk=first.credential_id).connection_health()
-    assert list(selected.values_list("pk", flat=True)) == [first.credential_id]
-    joined = Credential.objects.filter(oauth_client__slug="health-first").connection_health()
-    assert list(joined.values_list("pk", flat=True)) == [first.credential_id]
-    with actor_context(first.owner):
-        readable = Credential.objects.with_actor(first.owner).connection_health()
-        assert list(readable.values_list("pk", flat=True)) == [first.credential_id]
 
 
 @pytest.mark.parametrize("status,failed,expired,refreshable,expected", [
@@ -268,7 +254,6 @@ def test_material_and_client_changes_immediately_change_refreshability():
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("forced", [False, True])
 @pytest.mark.parametrize("not_sent", [False, True])
-@pytest.mark.django_db(transaction=True)
 def test_transport_failure_during_refresh_preserves_consent_health(monkeypatch, forced, not_sent):
     with system_context(reason="test transient refresh"):
         integration = make_integration(
@@ -351,7 +336,6 @@ def test_channel_typed_feed_resolves_the_feed_admission_selector():
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("status", [429, 503, None])
 @pytest.mark.parametrize("expired", [False, True])
-@pytest.mark.django_db(transaction=True)
 def test_preexpiry_refresh_failure_keeps_valid_access_token(monkeypatch, status, expired):
     with system_context(reason="test preexpiry refresh"):
         credential = make_integration(

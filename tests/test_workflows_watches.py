@@ -8,13 +8,14 @@ from django.db import transaction
 from django.db.models.functions import Now
 from rebac import actor_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks
 from angee.workflows.runner import runner
 from angee.workflows.steps import StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, StepWatch, WorkflowRun
-from tests.conftest import Vault, addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import Vault, addon_schema, create_user, vault_for
 from tests.workflow_steps import Echo, document
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]

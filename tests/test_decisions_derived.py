@@ -17,9 +17,10 @@ from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision, DecisionRecord
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.projects.testing.models import Task
 from angee.workflows import schema as workflow_schema
-from tests.conftest import SchemaAddon, create_platform_admin, create_user, execute_schema, result_data
+from tests.conftest import SchemaAddon, create_platform_admin, create_user
 from tests.extcontrib.models import Record
 
 

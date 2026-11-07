@@ -9,15 +9,14 @@ from threading import Barrier, Event
 from types import SimpleNamespace
 from unittest import skipUnless
 
-import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection, connections, models, transaction
-from django.test import RequestFactory
 from rebac import actor_context, system_context
 from rebac.backends import backend
 from rebac.schema.parser import parse_zed
 from rebac.testing import install_schema
 
+from angee.graphql.testing.documents import graphql_request
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -39,8 +38,7 @@ class TaskProjectOrderingTests(WorkCase):
         from angee.graphql.schema import GraphQLSchemas
 
         user = user or self.owner
-        request = RequestFactory().post("/graphql/")
-        request.user = user
+        request = graphql_request(user)
         with actor_context(user):
             return GraphQLSchemas.from_discovery().build("public").execute_sync(
                 _MOVE,
@@ -50,13 +48,6 @@ class TaskProjectOrderingTests(WorkCase):
                 },
                 context_value=SimpleNamespace(request=request),
             )
-
-    def test_graphql_move_under_system_context_refetches_related_fields(self):
-        row = self.ordered_task("Moving", 0)
-        with system_context(reason="tests.task_order.graphql_move"):
-            result = self.execute_move(row)
-        self.assertIsNone(result.errors, result.errors)
-        self.assertEqual(result.data["update_project_tasks_by_pk"]["id"], row.sqid)
 
     def test_hidden_other_assignee_rank_is_not_a_lane_midpoint_collision(self):
         before = self.ordered_task("Before", 0, assignee=self.owner)
@@ -364,7 +355,6 @@ class TaskProjectOrderingTests(WorkCase):
         self.assertEqual(ranks, [0, 2048, 3072, 4096])
 
 
-@pytest.mark.postgresql
 def test_task_project_ordering(tmp_path: Path):
     run_composed_tests(
         tmp_path,

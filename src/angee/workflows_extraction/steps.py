@@ -18,8 +18,7 @@ from angee.extraction.acquisition import (
     PartCarrier,
     PreparedDocument,
     RecognitionOutput,
-    prepare_pages,
-    text_part,
+    _text_part,
 )
 from angee.extraction.contracts import (
     ExtractionPartKind,
@@ -127,7 +126,7 @@ class PreparePagesStep(_IOStep, Step[ExtractionSourceInput, PreparePagesOutput, 
         parts = [ctx.load(apps.get_model("messaging.Part"), public_id) for public_id in value.message_parts]
         profile = apps.get_model("extraction.Extraction").profile.field.resolve_class(ctx.config.profile)()
         profile.parse_config(ctx.config.profile_config)
-        prepared = prepare_pages(
+        prepared = apps.get_model("extraction.Extraction").objects.prepare_pages(
             files, parts, profile=profile, config=ctx.config.acquisition, actor=ctx.actor, heartbeat=ctx.heartbeat,
         )
         return ctx.done(PreparePagesOutput(prepared=prepared, pages=prepared.recognition_pages), outcome="prepared")
@@ -159,7 +158,7 @@ class RecognizePageStep(_IOStep, Step[RecognizePageInput, RecognitionOutput, Inf
             response = recognize_page(value.page, file, model, config=ctx.config.request)
         except TransientInferenceError as error:
             raise Retryable(str(error)) from None
-        part = text_part(
+        part = _text_part(
             value.page.source_position,
             value.page.page_position,
             response.text,
@@ -398,16 +397,24 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
                 ),
                 outcome="superseded",
             )
+        profile = base.get_profile_impl()()
         output = ProcessEvidenceOutput.from_extraction(base).model_dump()
-        admission = base.inference_admission(
-            allow_inference=value.allow_inference, identity_mapping=value.identity_mapping,
+        # A held candidate the mapping model has not read still owes its
+        # inference; correspondence is judged on the inferred candidate.
+        corresponding = base.awaiting_correspondence and not (
+            value.allow_inference and not value.identity_mapping
+            and ExtractionRole.MAPPING not in base.used_model_roles
+            and profile.inference_required(base.result, base.unresolved_reasons)
         )
-        if admission in {"correspondence_required", "unchanged"}:
-            return ctx.done(InferEvidenceOutput(**output), outcome=admission)
-        corresponding = admission == "correspondence"
+        if corresponding and not value.identity_mapping:
+            return ctx.done(InferEvidenceOutput(**output), outcome="correspondence_required")
+        if not base.awaiting_correspondence and (
+            not value.allow_inference or not profile.inference_required(base.result, base.unresolved_reasons)
+        ):
+            return ctx.done(InferEvidenceOutput(**output), outcome="unchanged")
         sources = type(base).objects.authorized_document_sources(base, actor=ctx.actor)
-        parts = base.retained_inference_parts()
-        if not parts:
+        parts = base.document_parts()
+        if base.outcome.get("code") == "source_hold" or not parts:
             return ctx.done(
                 InferEvidenceOutput(
                     **output, inference_failure={"stage": "acquisition", "code": RETAINED_CARRIER_UNAVAILABLE}
@@ -452,7 +459,7 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
                 ctx.heartbeat()
                 ctx.begin_effect()
                 mapped = map_parts(parts, base.schema, inference_model, config=ctx.config.request)
-                result = base.get_profile_impl()().normalize_inference_candidate(
+                result = profile.normalize_inference_candidate(
                     sources,
                     parts,
                     base.schema,

@@ -12,7 +12,7 @@ import hashlib
 import ipaddress
 import json
 import xml.etree.ElementTree as ElementTree
-from collections.abc import Collection, Iterator
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
 from io import StringIO
@@ -28,7 +28,6 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection
-from django.db.models.fetch_modes import FetchMode
 from django.utils import timezone
 from rebac import system_context
 
@@ -78,8 +77,6 @@ from angee.storage.models import UploadState
 from tests.conftest import Backend, Drive, File, MimeType, current_stream, make_integration
 from tests.stream_adapters import applied_history, failure_state
 from tests.test_storage import PNG_BYTES
-
-pytestmark = pytest.mark.django_db(transaction=True)
 
 _BASE = "https://dav.example/"
 _BOOK = f"{_BASE}books/contacts/"
@@ -2407,12 +2404,9 @@ def test_generation_bump_deepcopies_nested_config(replica: Replica, monkeypatch:
     previous: list[Any] = []
     original_from_db = SyncStream.from_db
 
-    def capture_previous(
-        cls: type[SyncStream], db: str | None, field_names: Collection[str], values: Collection[object],
-        *, fetch_mode: FetchMode | None = None,
-    ) -> SyncStream:
+    def capture_previous(cls: Any, db: str, field_names: Any, values: Any) -> Any:
         del cls
-        row = original_from_db(db, field_names, values, fetch_mode=fetch_mode)
+        row = original_from_db(db, field_names, values)
         if row.pk == replica.stream.pk:
             previous.append(row)
         return row

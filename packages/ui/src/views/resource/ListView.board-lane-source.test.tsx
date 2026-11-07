@@ -10,7 +10,6 @@ import {
   type Row,
 } from "@angee/metadata";
 import type { ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { BoardViewProps } from "./BoardView";
@@ -33,7 +32,6 @@ const harness = vi.hoisted(() => ({
   updateOptions: null as unknown,
   updateCalls: [] as unknown[],
   mutateAsync: vi.fn(),
-  reconcile: vi.fn(async () => undefined),
   refetch: vi.fn(),
   toast: {
     danger: vi.fn(),
@@ -55,7 +53,6 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredQueryBatch: () => new Map(),
   useAngeeFacets: () => ({ facets: {} }),
   useOperationDocuments: () => ({}),
-  useReconcileMutationResponse: () => harness.reconcile,
 }));
 
 vi.mock("@refinedev/core", async (importOriginal) => {
@@ -128,7 +125,6 @@ beforeEach(() => {
     return { data: { id: "led_1" } };
   });
   harness.refetch.mockReset();
-  harness.reconcile.mockClear();
   harness.toast.danger.mockReset();
 });
 
@@ -286,11 +282,7 @@ describe("ListView board laneSource", () => {
     await act(async () => { finishMove(); await move; });
     expect(harness.boardProps?.optimisticPlacementByRowId?.size).toBe(0);
     expect(rowIdsByLane().stg_qualified).toEqual(["led_1"]);
-    expect(harness.refetch).not.toHaveBeenCalled();
-    expect(harness.reconcile).toHaveBeenCalledWith(expect.anything(), undefined, {
-      records: [{ model: "crm.Lead", id: "led_1" }],
-      invalidates: [{ resource: "console:crm.Lead", dataProviderName: "console", id: "led_1", invalidates: ["list", "many", "detail"] }],
-    });
+    expect(harness.refetch).toHaveBeenCalledTimes(1);
   });
 
   test("an older intent completion cannot clear a newer move of the same card", async () => {
@@ -310,7 +302,7 @@ describe("ListView board laneSource", () => {
     await act(async () => { finishes[0]!(); await first; });
     expect(harness.boardProps?.optimisticPlacementByRowId?.get("led_1")?.laneId).toBe("stg_proposal");
     await act(async () => { finishes[1]!(); await second; });
-    expect(harness.boardProps?.optimisticPlacementByRowId?.get("led_1")?.laneId).toBe("stg_proposal");
+    expect(harness.boardProps?.optimisticPlacementByRowId?.size).toBe(0);
   });
 
   test("reads a declared lane fold fact as the initial collapsed state", async () => {
@@ -380,8 +372,6 @@ describe("ListView board laneSource", () => {
 
     expect(harness.updateOptions).toMatchObject({
       resource: "crmLeads",
-      invalidates: [],
-      mutationMode: "pessimistic",
       successNotification: false,
       errorNotification: false,
     });
@@ -492,8 +482,7 @@ describe("ListView board laneSource", () => {
       title: "board.moveFailed",
       description: "write rejected",
     });
-    expect(harness.refetch).not.toHaveBeenCalled();
-    expect(harness.reconcile).toHaveBeenCalledOnce();
+    expect(harness.refetch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -510,7 +499,7 @@ function renderLeadBoard(options: {
     : { field: "stage" };
   const metadata = options.metadata ?? leadMetadata();
   return render(
-    <QueryClientProvider client={new QueryClient()}><ModelMetadataProvider metadata={metadata}>
+    <ModelMetadataProvider metadata={metadata}>
       <ListView<LeadRow>
         resource="crm.Lead"
         columns={options.columns ?? COLUMNS}
@@ -521,7 +510,7 @@ function renderLeadBoard(options: {
         cardActions={options.cardActions}
         scope="local"
       />
-    </ModelMetadataProvider></QueryClientProvider>,
+    </ModelMetadataProvider>,
   );
 }
 

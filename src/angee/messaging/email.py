@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from email.utils import formataddr, getaddresses, parseaddr
+from email.utils import formataddr, getaddresses
 from smtplib import SMTPRecipientsRefused, SMTPResponseException, SMTPServerDisconnected
 from typing import Any
 
@@ -19,10 +19,8 @@ from anymail.exceptions import (
 from anymail.message import AnymailMessage
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ValidationError
 from django.core.mail import mailers
 from django.core.mail.backends.base import BaseEmailBackend
-from django.core.validators import validate_email
 from django.utils.html import strip_tags
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
@@ -49,27 +47,10 @@ class AnymailEmailChannelBackend(ChannelBackend):
     label = "Email"
     icon = "mail"
 
-    @classmethod
-    def outbound_email_configured(cls) -> bool:
-        """Use the deployment's native email transport configuration decision."""
-        return bool(getattr(settings, "ANGEE_EMAIL_DELIVERY_CONFIGURED", False))
-
-    def outbound_sender(self) -> tuple[str, str]:
-        """Resolve and validate this email channel's configured default envelope."""
-        if not self.outbound_email_configured():
-            raise ValidationError("Outbound email delivery is not configured.")
-        config = self.bridge.config if isinstance(self.bridge.config, dict) else {}
-        name, address = parseaddr(str(config.get("from_email") or settings.DEFAULT_FROM_EMAIL))
-        try:
-            validate_email(address)
-        except ValidationError as error:
-            raise ValidationError("Configure a valid sender address for this email channel.") from error
-        return name, address
-
     def deliver(self, message: Any) -> DeliveryOutcome:
         """Render and send ``message`` when an email transport is configured."""
 
-        if not self.outbound_email_configured():
+        if not bool(getattr(settings, "ANGEE_EMAIL_DELIVERY_CONFIGURED", False)):
             logger.warning(
                 "Outbound email delivery is not configured; message %s was not sent.",
                 getattr(message, "pk", None),
@@ -209,7 +190,8 @@ class AnymailEmailChannelBackend(ChannelBackend):
         values = _metadata_addresses(message, "from")
         if values:
             return values[0]
-        return formataddr(self.outbound_sender())
+        config = self.bridge.config if isinstance(self.bridge.config, dict) else {}
+        return str(config.get("from_email") or getattr(settings, "DEFAULT_FROM_EMAIL", ""))
 
     def _recipients(self, message: Any, participants: list[Any]) -> dict[str, list[str]]:
         recipients: dict[str, list[str]] = {"to": [], "cc": [], "bcc": []}

@@ -12,10 +12,13 @@ export const StorageFileUploadBegin = graphql(`
     file_upload_begin(input: $input) {
       method
       upload_url
+      upload_token
       error
+      error_code
       file {
         id
         filename
+        upload_state
       }
     }
   }
@@ -25,9 +28,11 @@ export const StorageFileUploadFinalize = graphql(`
   mutation StorageFileUploadFinalize($input: FileUploadFinalizeInput!) {
     file_upload_finalize(input: $input) {
       error
+      error_code
       file {
         id
         filename
+        upload_state
       }
     }
   }

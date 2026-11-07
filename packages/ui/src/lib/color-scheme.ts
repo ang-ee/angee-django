@@ -2,10 +2,6 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { ColorScheme, ColorSchemePreference } from "../theme/runtime.mjs";
 export type { ColorScheme, ColorSchemePreference } from "../theme/runtime.mjs";
 
-/**
- * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
- */
 const COLOR_SCHEME_STORAGE_KEY = "angee:color-scheme";
 /**
  * @kind null
@@ -45,10 +41,6 @@ export function setColorSchemePreference(value: ColorSchemePreference): void {
   applyColorSchemePreference(value);
   if (typeof window !== "undefined") window.dispatchEvent(new Event(`${COLOR_SCHEME_CHANGE_EVENT}:applied`));
 }
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
 function applyColorSchemePreference(value: ColorSchemePreference, target?: Document): ColorScheme {
   const resolved = resolveColorSchemePreference(value);
   if (typeof document !== "undefined") {
@@ -58,15 +50,7 @@ function applyColorSchemePreference(value: ColorSchemePreference, target?: Docum
   }
   return resolved;
 }
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
 function resolveColorSchemePreference(value: ColorSchemePreference): ColorScheme { return value === "system" ? systemColorScheme() : value; }
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
 function systemColorScheme(): ColorScheme { return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
 /**
  * @owner AppearanceProvider

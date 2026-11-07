@@ -23,26 +23,6 @@ def test_statement_link_metadata_matches_the_declared_capability() -> None:
     assert isinstance(statement_model.link_field(), models.ForeignKey)
 
 
-def test_statement_source_attribution_is_distinct_from_historical_capture_metadata() -> None:
-    statement = Claimed.statements.model
-    source = statement._meta.get_field("changeset")
-    assert isinstance(source, models.ForeignKey)
-    assert source.remote_field.model._meta.label == "provenance.Changeset"
-    assert source.remote_field.on_delete is models.PROTECT
-    assert {"history_changeset", "history_source_complete"}.isdisjoint(
-        field.name for field in statement._meta.concrete_fields
-    )
-    historical = statement.history.model
-    copied = historical._meta.get_field("changeset")
-    captured = historical._meta.get_field("history_changeset")
-    assert isinstance(copied, models.ForeignKey)
-    assert isinstance(captured, models.ForeignKey)
-    assert copied.db_constraint is False
-    assert captured.db_constraint is True
-    assert copied.remote_field.on_delete is models.DO_NOTHING
-    assert captured.remote_field.on_delete is models.PROTECT
-
-
 def test_the_source_declaration_finalizes_one_table_carrying_every_donor_aspect() -> None:
     """Donors precede the source in composed bases; the source's options still own the table."""
 

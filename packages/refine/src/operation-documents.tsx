@@ -90,3 +90,27 @@ export function actionDocumentForSchema(
 ): unknown {
   return operationDocument(documents, schema, "actions", field);
 }
+
+export function aggregateDocumentForResource(
+  documents: OperationDocumentsBySchema,
+  schema: string,
+  resource: string,
+): unknown {
+  return operationDocument(documents, schema, "aggregates", resource);
+}
+
+export function deletePreviewDocumentForResource(
+  documents: OperationDocumentsBySchema,
+  schema: string,
+  resource: string,
+): unknown {
+  return operationDocument(documents, schema, "deletePreviews", resource);
+}
+
+export function groupDocumentForResource(
+  documents: OperationDocumentsBySchema,
+  schema: string,
+  resource: string,
+): unknown {
+  return operationDocument(documents, schema, "groups", resource);
+}

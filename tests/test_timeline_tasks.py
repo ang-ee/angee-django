@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import pytest
-from django.contrib.contenttypes.models import ContentType
-from django.db import connection, models
-from django.test.utils import CaptureQueriesContext
-from rebac import SubjectRef, actor_context, system_context
+from rebac import actor_context
 
 from angee.graphql.publishing import mute_changes
 from angee.projects.testing.models import ActivityType, Task
 from angee.projects.timeline import TaskKind
-from angee.timeline import reading
-from angee.timeline.reading import Timeline
-from tests.messaging_campaign import comment_record as comment_record
+from tests.messaging_campaign import comment_record as comment_record  # noqa: F401 - shared actor/record fixture
 from tests.test_timeline import read_timeline, timeline_entries
 
 pytestmark = [
@@ -78,130 +73,3 @@ def test_record_without_task_capability_has_an_empty_task_timeline(comment_recor
     data = read_timeline(record, comment_record.writer)
     assert data["timeline"]["entries"] == data["timeline"]["kinds"] == []
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 0
-
-
-def test_presentation_hydrates_native_task_rows_for_the_explicit_actor(comment_record, monkeypatch) -> None:
-    record, author, writer = comment_record.record, comment_record.author, comment_record.writer
-    with actor_context(writer):
-        task = Task.objects.schedule(record.with_actor(writer), title="Review this exact task", assignee=author)
-    native_queryset, native_present = TaskKind.queryset, TaskKind.present
-
-    def queryset(kind, target, actor):
-        assert target is record and actor is author
-        return native_queryset(kind, target, actor)
-
-    def present(kind, rows):
-        rows = list(rows)
-        assert [row.pk for row in rows] == [task.pk]
-        assert all(not any(name.startswith("_timeline_") for name in vars(row)) for row in rows)
-        with CaptureQueriesContext(connection) as relation_reads:
-            result = native_present(kind, rows)
-        assert list(relation_reads) == []
-        return result
-
-    monkeypatch.setattr(TaskKind, "queryset", queryset)
-    monkeypatch.setattr(TaskKind, "present", present)
-    with actor_context(comment_record.outsider):
-        entry, = timeline_entries(record, author)
-    assert entry.title == task.title and entry.actor == author.get_username()
-    assert entry.needs_me
-
-
-def test_task_waiting_projection_matches_filter_without_changing_scope(comment_record) -> None:
-    record, author, writer = comment_record.record, comment_record.author, comment_record.writer
-    with actor_context(writer):
-        assigned = Task.objects.schedule(record.with_actor(writer), title="Assigned", assignee=author)
-        unassigned = Task.objects.schedule(record.with_actor(writer), title="Unassigned")
-        closed = Task.objects.schedule(record.with_actor(writer), title="Closed", assignee=author)
-        closed.with_actor(writer).complete()
-        trashed = Task.objects.schedule(record.with_actor(writer), title="Trashed", assignee=author)
-        trashed.with_actor(writer).trash()
-    with system_context(reason="test.timeline.unassigned_task"):
-        Task.objects.filter(pk=unassigned.pk).update(assignee=None)
-    ids = [assigned.pk, unassigned.pk, closed.pk, trashed.pk]
-    rows = Task.objects.with_actor(writer).filter(pk__in=ids)
-    projected = dict(rows.annotate(waiting=rows.waiting_on_expression(author)).values_list("pk", "waiting"))
-    assert projected == {assigned.pk: True, unassigned.pk: False, closed.pk: False, trashed.pk: False}
-    assert list(rows.waiting_on(author).values_list("pk", flat=True)) == [assigned.pk]
-    assert not rows.exclude(pk=assigned.pk).waiting_on(author).exists()
-    assert not Task.objects.with_actor(comment_record.outsider).filter(pk__in=ids).waiting_on(author).exists()
-    for actor in (None, SubjectRef.of("non_user", "subject")):
-        assert rows.waiting_on(actor).query.is_empty()
-        assert not rows.waiting_on(actor).exists()
-        assert list(rows.annotate(waiting=rows.waiting_on_expression(actor)).values_list("waiting", flat=True)) == [
-            False,
-        ] * len(ids)
-
-
-@pytest.mark.parametrize("other_kind", [0, 1, 2])
-def test_shared_source_preserves_same_model_occurrences_without_parent_policy_copies(
-    comment_record, monkeypatch, other_kind,
-) -> None:
-    """A sparse non-admin source is shared, while kind identity owns self-folds."""
-    record, author, writer = comment_record.record, comment_record.author, comment_record.writer
-    assert not author.is_superuser
-    with actor_context(writer):
-        task = Task.objects.schedule(record.with_actor(writer), title="One source row", assignee=author)
-    task_type = ContentType.objects.get_for_model(Task)
-
-    class SelfFold(TaskKind):
-        id = "test.self_fold"
-
-        def fold(self, record):
-            return models.Value(task_type.pk, output_field=models.IntegerField()), models.F("pk")
-
-    class OtherTaskKind(TaskKind):
-        id = "test.other_task"
-
-    # Two leading kinds with no fold must not fix PostgreSQL's UNION column to text.
-    kinds = (*(TaskKind(), OtherTaskKind())[:other_kind], SelfFold())
-    monkeypatch.setattr(reading, "timeline_kinds", lambda: kinds)
-    with CaptureQueriesContext(connection) as construction:
-        timeline = Timeline(record, author)
-    table = connection.ops.quote_name(Task._meta.db_table)
-    assert not any(f"FROM {table}" in query["sql"] for query in construction)
-    with CaptureQueriesContext(connection) as queries:
-        page = timeline.page()
-    assert [entry.kind for entry in page.entries] == (
-        ["projects.task", "test.other_task"] if other_kind == 2
-        else ["projects.task"] if other_kind else ["test.self_fold"]
-    )
-    for entry in page.entries:
-        assert entry.target_id == task.sqid and entry.needs_me
-        assert [(child.kind, child.count) for child in entry.children] == (
-            [("test.self_fold", 1)] if other_kind else []
-        )
-    assert {kind.id: kind.count for kind in page.kinds} == (
-        {"projects.task": 1, "test.other_task": 1, "test.self_fold": 0} if other_kind == 2
-        else {"projects.task": 1, "test.self_fold": 0} if other_kind else {"test.self_fold": 1}
-    )
-    assert page.needs_me == max(1, other_kind) and not page.has_more and page.next_before is None
-    statements = [query["sql"] for query in queries if 'WITH RECURSIVE "timeline_source" AS' in query["sql"]]
-    assert len(statements) == 1
-    sql, = statements
-    assert sql.count('"timeline_source" AS') == 1
-    assert sql.count('"timeline_lines" AS') == 1
-    assert sql.count('"timeline_page" AS') == 1
-    assert sql.count("UNION ALL") == len(kinds) + 1  # source kinds and three tagged result branches
-    assert '"rebac_schemageneration"' in sql
-
-
-def test_child_groups_keep_the_original_source_database(comment_record, monkeypatch) -> None:
-    record, author, writer = comment_record.record, comment_record.author, comment_record.writer
-    with actor_context(writer):
-        Task.objects.schedule(record.with_actor(writer), title="Fold on source database")
-    task_type = ContentType.objects.get_for_model(Task)
-
-    class SelfFold(TaskKind):
-        id = "test.self_fold"
-
-        def fold(self, record):
-            return models.Value(task_type.pk, output_field=models.IntegerField()), models.F("pk")
-
-    monkeypatch.setattr(reading, "timeline_kinds", lambda: (TaskKind(), SelfFold()))
-    timeline = Timeline(record, author)
-    # The shared source executes on its first branch's database even when a
-    # folding branch has another alias.
-    timeline.branches["test.self_fold"] = timeline.branches["test.self_fold"].using("unselected_fold_alias")
-    page = timeline.page()
-    assert [(child.kind, child.count) for child in page.entries[0].children] == [("test.self_fold", 1)]

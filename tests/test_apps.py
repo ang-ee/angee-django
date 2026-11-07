@@ -582,12 +582,7 @@ def test_addon_identity_and_dependencies_are_owned_by_installed_metadata() -> No
 
     iam = apps.get_app_config("iam")
     assert iam is not None
-    # c7732c91a left IAM dependent on base, not GraphQL or resources.
-    dependencies = enabled_apps((iam.name,), group="angee.addons").dependencies
-    assert "angee.base" in dependencies[iam.name]
-    assert "angee.graphql" not in dependencies[iam.name]
-    assert "angee.resources" not in dependencies[iam.name]
-    assert "angee.iam" in enabled_apps(("angee.resources",), group="angee.addons").dependencies["angee.resources"]
+    assert "angee.graphql" in enabled_apps((iam.name,), group="angee.addons").dependencies[iam.name]
     config = apps.get_app_config("iam")
     assert "public" in schema_parts_for(config)
     assert WebRuntime((config,), dependencies={config.name: ()}).manifest["addonPackages"][0]["package"] == "@angee/iam"

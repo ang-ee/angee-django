@@ -8,9 +8,9 @@ from typing import Any, ClassVar, Self, TypeVar
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
-from django_compose.models import Composable
+from rebac.managers import RebacQuerySet, TrackedQuerySet
 
-from angee.base.querysets import AngeeQuerySetMixin, ClosedUpdateQuerySet
+from angee.base.querysets import ClosedUpdateQuerySet, _AngeeQuerySetMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -58,7 +58,7 @@ class _AppendOnlyWritesMixin(ClosedUpdateQuerySet[_ModelT]):
         raise self.immutable_error("_raw_delete")
 
 
-class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT]):
+class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT], RebacQuerySet[_ModelT]):
     """Close generic collection edits and deletion around owner-controlled writes.
 
     Compose before the domain's base queryset to preserve authorization.
@@ -69,6 +69,11 @@ class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT]):
     calling this queryset.
     """
 
+    def insert(self, obj: _ModelT) -> _ModelT:
+        """Validate one append before its ordinary authorized insertion."""
+
+        self.validate_insert()
+        return super().insert(obj)
 
 
 def _validate_model_insert(model: type[models.Model]) -> None:
@@ -82,7 +87,8 @@ def _validate_model_insert(model: type[models.Model]) -> None:
 
 class AppendOnlyBaseQuerySet(
     _AppendOnlyWritesMixin[_ModelT],
-    AngeeQuerySetMixin[_ModelT],
+    _AngeeQuerySetMixin[_ModelT],
+    TrackedQuerySet[_ModelT],
 ):
     """Unscoped rows for Django's own relation reads, with the same writes closed."""
 
@@ -99,7 +105,7 @@ class AppendOnlyBaseManager(_AppendOnlyBaseManagerBase):
     """The base manager an append-only model declares: unfiltered reads, closed writes."""
 
 
-class AppendOnlyModel(Composable, concrete=False):
+class AppendOnlyModel(models.Model):
     """Admit new rows while reserving retained-row changes for owner verbs.
 
     The model's default manager must compose :class:`AppendOnlyQuerySet`. An owner may

@@ -220,13 +220,14 @@
           }
         },
         "title": {
-          "$ref": "#/$defs/Annotations/properties/title"
+          "type": "string"
         },
         "description": {
-          "$ref": "#/$defs/Annotations/properties/description"
+          "type": "string",
+          "minLength": 1
         },
         "readOnly": {
-          "$ref": "#/$defs/Annotations/properties/readOnly"
+          "type": "boolean"
         },
         "nullable": {
           "type": "boolean"
@@ -270,43 +271,77 @@
           "additionalProperties": false
         },
         "propertyOrder": {
-          "$ref": "#/$defs/Annotations/properties/propertyOrder"
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "widget": {
-          "$ref": "#/$defs/Annotations/properties/widget"
+          "type": "string",
+          "minLength": 1
         },
         "label": {
-          "$ref": "#/$defs/Annotations/properties/label"
+          "type": "string",
+          "minLength": 1
         },
         "addLabel": {
-          "$ref": "#/$defs/Annotations/properties/addLabel"
+          "type": "string",
+          "minLength": 1
         },
         "removeLabel": {
-          "$ref": "#/$defs/Annotations/properties/removeLabel"
+          "type": "string",
+          "minLength": 1
         },
         "placeholder": {
-          "$ref": "#/$defs/Annotations/properties/placeholder"
+          "type": "string",
+          "minLength": 1
         },
         "hidden": {
-          "$ref": "#/$defs/Annotations/properties/hidden"
+          "type": "boolean"
         },
         "layout": {
-          "$ref": "#/$defs/Annotations/properties/layout"
+          "enum": [
+            "context",
+            "input"
+          ]
         },
         "omittable": {
-          "$ref": "#/$defs/Annotations/properties/omittable"
+          "type": "boolean"
         },
         "presenceRequired": {
-          "$ref": "#/$defs/Annotations/properties/presenceRequired"
+          "type": "boolean"
         },
         "defaultValue": {
-          "$ref": "#/$defs/Annotations/properties/defaultValue"
+          "$ref": "#/$defs/JsonValue"
         },
         "options": {
-          "$ref": "#/$defs/Annotations/properties/options"
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "disabled": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
         },
         "relation": {
-          "$ref": "#/$defs/Annotations/properties/relation"
+          "$ref": "#/$defs/Relation"
         },
         "minLength": {
           "type": "integer",

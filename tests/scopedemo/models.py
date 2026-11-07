@@ -1,4 +1,4 @@
-"""Installed test models for create gates and task composition regression tests.
+"""A locally scoped, create-gated document for create-gate regression tests.
 
 ``ScopedDoc`` composes this test app's local ``ScopeScopedMixin``. The blank-on-
 input ``scope`` FK defaults from the actor's sole direct scope membership and
@@ -10,45 +10,24 @@ without depending on any framework-owned business scope.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from rebac import RebacMixin, app_settings, current_actor, is_anonymous_actor, to_subject_ref
+from rebac import app_settings, current_actor, is_anonymous_actor, to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
-from angee.iam.managers import ProtectedManager
-from angee.iam.models.base import ProtectedDataModel
-from angee.iam.models.ownership import OwnerMixin
-from angee.iam.querysets import ProtectedQuerySet
-from angee.projects.models import Milestone as AbstractMilestone
-from angee.projects.models import Task as AbstractTask
-from angee.work.models import Stage as AbstractStage
-from angee.work.models import TaskWork
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.ownership import OwnerMixin
+from angee.base.querysets import AngeeQuerySet
 
 SCOPE_MEMBER_RELATION = "direct_member"
 """Direct membership relation on the local ``scopedemo/scope`` test resource."""
 
 
-def standalone_relation(source: type[models.Model], name: str) -> models.Field:
-    """Copy a test model's FK without its source's reverse accessor."""
-
-    field = deepcopy(source._meta.get_field(name))
-    field.remote_field.related_name = "+"
-    return field
-
-
-def _local_constraint(constraint: models.BaseConstraint) -> models.BaseConstraint:
-    """Retain an inherited rule under a test-app-unique database name."""
-
-    local = constraint.clone()
-    local.name = f"{constraint.name}_scopedemo"
-    return local
-
-
-class ProposalTarget(OwnerMixin, ProtectedDataModel):
+class ProposalTarget(OwnerMixin, AngeeDataModel):
     """A declared decision-method owner without an update timestamp."""
 
     sqid_prefix = "ptg_"
@@ -70,11 +49,11 @@ class ProposalTarget(OwnerMixin, ProtectedDataModel):
         rebac_resource_type = "scopedemo/proposal_target"
 
 
-class ScopeQuerySet(ProtectedQuerySet[Any]):
+class ScopeQuerySet(AngeeQuerySet[Any]):
     """Queryset vocabulary for local create-gate scopes."""
 
 
-class ScopeManager(ProtectedManager.from_queryset(ScopeQuerySet)):  # type: ignore[misc]
+class ScopeManager(AngeeManager.from_queryset(ScopeQuerySet)):  # type: ignore[misc]
     """Manager for the test-local scope resource."""
 
     def direct_memberships_of(self, actor: Any) -> ScopeQuerySet:
@@ -100,7 +79,7 @@ class ScopeManager(ProtectedManager.from_queryset(ScopeQuerySet)):  # type: igno
         return scope_free.filter(**{f"{id_attr}__in": scope_ids})
 
 
-class Scope(ProtectedDataModel):
+class Scope(AngeeDataModel):
     """A test-local REBAC scope with parent reach and direct membership."""
 
     sqid_prefix = "scp_"
@@ -116,7 +95,7 @@ class Scope(ProtectedDataModel):
 
     objects = ScopeManager()
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         """Concrete test scope used by generic create-gate and zed tests."""
 
         abstract = False
@@ -166,14 +145,14 @@ class ScopeScopedMixin(models.Model):
         )
 
 
-class ScopedDoc(ScopeScopedMixin, ProtectedDataModel):
+class ScopedDoc(ScopeScopedMixin, AngeeDataModel):
     """A locally scoped document whose ``create`` rides ``scope->member``."""
 
     sqid_prefix = "scd_"
 
     title = models.CharField(max_length=200, blank=True, default="")
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         """Concrete locally scoped, create-gated document for the gate tests."""
 
         abstract = False
@@ -182,7 +161,7 @@ class ScopedDoc(ScopeScopedMixin, ProtectedDataModel):
         rebac_resource_type = "scopedemo/doc"
 
 
-class FactoryDocQuerySet(ProtectedQuerySet["FactoryDoc"]):
+class FactoryDocQuerySet(AngeeQuerySet["FactoryDoc"]):
     """Keep a companion row in the same transaction as every document insert."""
 
     def insert(self, obj: FactoryDoc) -> FactoryDoc:
@@ -194,14 +173,14 @@ class FactoryDocQuerySet(ProtectedQuerySet["FactoryDoc"]):
         return obj
 
 
-class FactoryDoc(ScopeScopedMixin, ProtectedDataModel):
+class FactoryDoc(ScopeScopedMixin, AngeeDataModel):
     """A scoped document whose factory has a transactional companion invariant."""
 
     sqid_prefix = "fcd_"
     title = models.CharField(max_length=200)
-    objects = ProtectedManager.from_queryset(FactoryDocQuerySet)()
+    objects = AngeeManager.from_queryset(FactoryDocQuerySet)()
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/factory_doc"
@@ -216,110 +195,27 @@ class FactoryCompanion(models.Model):
         app_label = "scopedemo"
 
 
-class ProjectionDoc(ProtectedDataModel):
+class ProjectionDoc(AngeeDataModel):
     """A create policy depending on a forward-then-reverse candidate relation."""
 
     sqid_prefix = "pjd_"
     title = models.CharField(max_length=200)
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="children")
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/projection_doc"
 
 
-class SharedDoc(ProtectedDataModel):
+class SharedDoc(AngeeDataModel):
     """A candidate whose create permission reads its own sharing column."""
 
     sqid_prefix = "shd_"
     title = models.CharField(max_length=200)
     is_shared = models.BooleanField(default=False)
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/shared_doc"
-
-
-class NativeAttachmentTarget(RebacMixin):
-    """A native library row for generic attachment-lock coverage."""
-
-    class Meta:
-        rebac_resource_type = "scopedemo/native_attachment_target"
-
-
-class ProjectAccessTask(AbstractTask):
-    """Production task lifecycle with a small, independently protected project."""
-
-    sqid_prefix = "pat_"
-    owner_container = None
-    assignee = standalone_relation(AbstractTask, "assignee")
-    delegate = standalone_relation(AbstractTask, "delegate")
-    activity_type = standalone_relation(AbstractTask, "activity_type")
-    project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
-    milestone = None
-    milestone_id = None
-    links = None
-    file_attachments = None
-    thread_attachments = None
-    thread_create_autofollow_author = False
-
-    class Meta(AbstractTask.Meta):
-        abstract = False
-        app_label = "scopedemo"
-        rebac_resource_type = "scopedemo/project_access_task"
-
-
-class TaskPromotion(models.Model):
-    """Minimal relation target for the production task's phase expression."""
-
-    converted_from = models.ForeignKey(ProjectAccessTask, on_delete=models.CASCADE, related_name="promoted_projects")
-    current_milestone = models.ForeignKey(Scope, null=True, on_delete=models.SET_NULL)
-
-    class Meta:
-        app_label = "scopedemo"
-
-
-class FreshnessStage(AbstractStage):
-    queue = models.ForeignKey(Scope, on_delete=models.CASCADE)
-
-    class Meta(AbstractStage.Meta):
-        abstract = False
-        app_label = "scopedemo"
-        rebac_resource_type = "scopedemo/freshness_stage"
-
-
-class FreshnessMilestone(AbstractMilestone):
-    project = models.ForeignKey(Scope, on_delete=models.CASCADE)
-
-    class Meta(AbstractMilestone.Meta):
-        abstract = False
-        app_label = "scopedemo"
-        rebac_resource_type = "scopedemo/freshness_milestone"
-        constraints = tuple(_local_constraint(constraint) for constraint in AbstractMilestone.Meta.constraints)
-
-
-class FreshnessTask(TaskWork, AbstractTask):
-    """Task with persisted stage and milestone relations for freshness checks."""
-
-    # This scope intentionally supplies no item-ownership policy.
-    owner_container = None
-    assignee = standalone_relation(AbstractTask, "assignee")
-    delegate = standalone_relation(AbstractTask, "delegate")
-    activity_type = standalone_relation(AbstractTask, "activity_type")
-    project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
-    milestone = models.ForeignKey(FreshnessMilestone, null=True, blank=True, on_delete=models.SET_NULL)
-    queue = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
-    stage = models.ForeignKey(FreshnessStage, null=True, blank=True, on_delete=models.SET_NULL)
-    cycle = None
-    cycle_id = None
-    links = None
-    file_attachments = None
-    thread_attachments = None
-    thread_create_autofollow_author = False
-
-    class Meta(AbstractTask.Meta):
-        abstract = False
-        app_label = "scopedemo"
-        rebac_resource_type = "scopedemo/freshness_task"

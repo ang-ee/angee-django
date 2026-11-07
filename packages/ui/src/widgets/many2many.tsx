@@ -28,8 +28,6 @@ export interface Many2ManyEditProps extends WidgetRenderProps<readonly unknown[]
   onCreateAndEdit?: (query: string) => void;
   /** The typed query, for an owner that searches the options server-side. */
   onSearchChange?: (query: string) => void;
-  /** The relation owner enables its option read only while the picker is open. */
-  onOpenChange?: (open: boolean) => void;
 }
 
 export function Many2ManyEdit({
@@ -41,14 +39,13 @@ export function Many2ManyEdit({
   onCreate,
   onCreateAndEdit,
   onSearchChange,
-  onOpenChange,
 }: Many2ManyEditProps): ReactElement {
   if (field?.controlProps?.presentation === "cell") {
-    return <Many2ManyCellEdit value={value} onChange={onChange} field={field} readOnly={readOnly} controlRef={controlRef} onOpenChange={onOpenChange} />;
+    return <Many2ManyCellEdit value={value} onChange={onChange} field={field} readOnly={readOnly} controlRef={controlRef} />;
   }
   if (readOnly) return <Many2ManyRead value={relationIdList(value)} field={field} />;
   return <Many2ManyChipsEdit value={value} onChange={onChange} field={field} controlRef={controlRef}
-    onCreate={onCreate} onCreateAndEdit={onCreateAndEdit} onSearchChange={onSearchChange} onOpenChange={onOpenChange} />;
+    onCreate={onCreate} onCreateAndEdit={onCreateAndEdit} onSearchChange={onSearchChange} />;
 }
 
 /**
@@ -67,7 +64,6 @@ function Many2ManyChipsEdit({
   onCreate,
   onCreateAndEdit,
   onSearchChange,
-  onOpenChange,
 }: Many2ManyEditProps): ReactElement {
   const t = useUiT();
   const [query, setQuery] = useState("");
@@ -101,7 +97,7 @@ function Many2ManyChipsEdit({
   return (
     <Combobox.Root<string, true> multiple autoHighlight
       value={selected} items={[...selected, ...offered]} filteredItems={offered} filter={null}
-      open={shown} onOpenChange={(next) => { setOpen(next); onOpenChange?.(next); }}
+      open={shown} onOpenChange={setOpen}
       inputValue={query} onInputValueChange={search}
       itemToStringLabel={(item) => item === CREATE_ITEM || item === CREATE_AND_EDIT_ITEM
         ? text : optionTextLabel(optionLabel(options, item), item)}
@@ -114,7 +110,6 @@ function Many2ManyChipsEdit({
         search("");
         // A pick closes the list: the box may wrap onto another row, and the list reopens beneath it.
         setOpen(false);
-        onOpenChange?.(false);
       }}>
       <Combobox.Chips ref={boxRef} className={chipInputVariants({ ...sizing, focus: "within", invalid: Boolean(controlProps["aria-invalid"]) })}>
         {selected.map((id) => {
@@ -149,8 +144,7 @@ function Many2ManyCellEdit({
   field,
   readOnly,
   controlRef,
-  onOpenChange,
-}: WidgetRenderProps<readonly unknown[]> & Pick<Many2ManyEditProps, "onOpenChange">): ReactElement {
+}: WidgetRenderProps<readonly unknown[]>): ReactElement {
   const t = useUiT();
   const selected = relationIdList(value);
   const options = field?.options ?? [];
@@ -170,13 +164,12 @@ function Many2ManyCellEdit({
       multiple
       value={selected}
       items={choices}
-      onOpenChange={onOpenChange}
       onValueChange={(next) => onChange?.(next)}
     >
       <SelectPrimitive.Trigger
         ref={controlRef}
         {...field?.controlProps}
-        disabled={choices.length === 0 && !onOpenChange}
+        disabled={choices.length === 0}
         aria-label={widgetLabel(field, t("many2many.label"))}
         title={summary || undefined}
       >

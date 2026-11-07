@@ -10,39 +10,9 @@ import { useState } from "react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 
 const decide = vi.hoisted(() => vi.fn());
-const mutationOptions = vi.hoisted(() => vi.fn());
-vi.mock("@angee/ui", async (original) => ({ ...await original<typeof import("@angee/ui")>(),
-  useAuthoredResourceMutation: (_document: unknown, options: unknown) => { mutationOptions(options); return [decide]; },
-}));
+vi.mock("@angee/ui", async (original) => ({ ...await original<typeof import("@angee/ui")>(), useAuthoredResourceMutation: () => [decide] }));
 const { Provider, clearClients } = createUiTestProviders();
 afterEach(() => { cleanup(); clearClients(); vi.clearAllMocks(); });
-
-test("Decide declares exact decision, concern and chosen-action effects for record reconciliation", () => {
-  const decision = decisionFixture({ proposal: { alternatives: [
-    { key: "accept", label: "Accept", outcome: "accepted", actions: {
-      nte_chosen: { model: "notes.Note" },
-    } },
-    { key: "reject", label: "Reject", outcome: "rejected", actions: {
-      nte_unchosen: { model: "notes.Note" },
-    } },
-  ] } });
-  render(<Provider><DecisionCard decision={decision} /></Provider>);
-  const options = mutationOptions.mock.lastCall?.[0] as {
-    invalidateModels: string[];
-    records: (_data: unknown, variables: { chosen: string[] }) => unknown[];
-  };
-  expect(options.invalidateModels).toEqual(["decisions.Decision", "notes.Note"]);
-  expect(options.records(undefined, { chosen: ["accept"] })).toEqual([
-    { model: "decisions.Decision", id: "dcn_review", relatedRecords: [{ model: "notes.Note", id: "nte_7" }] },
-    { model: "notes.Note", id: "nte_7" },
-    { model: "notes.Note", id: "nte_chosen" },
-  ]);
-  expect(options.records(undefined, { chosen: ["reject"] })).toEqual([
-    { model: "decisions.Decision", id: "dcn_review", relatedRecords: [{ model: "notes.Note", id: "nte_7" }] },
-    { model: "notes.Note", id: "nte_7" },
-    { model: "notes.Note", id: "nte_unchosen" },
-  ]);
-});
 
 test("choices reset with the revision and an external answer leaves focus alone", () => {
   const decision = decisionFixture();
@@ -157,9 +127,8 @@ test.each([false, true])("a many-to-many choose renders the multi widget and sub
   render(<ChooseHarness initial={initial} dataProvider={{ getList }} />);
   fireEvent.click(screen.getByRole("radio", { name: /^Select contacts/ }));
   expect(confirmDisabled()).toBe(true);
-  const search = await screen.findByRole("combobox", { name: "Contacts" });
-  fireEvent.keyDown(search, { key: "ArrowDown" });
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0]).toMatchObject({ meta: { gqlVariables: { where } } }));
+  const search = await screen.findByRole("combobox", { name: "Contacts" });
   for (const contact of contacts) {
     // The chips field searches as the reader types and adds the picked option as a chip.
     fireEvent.input(search, { target: { value: contact.name }, inputType: "insertText" });

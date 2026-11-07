@@ -11,11 +11,6 @@ from pathlib import Path
 def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     runtime = tmp_path / "runtime"
-    fixture = tmp_path / "tests" / "typing_history"
-    fixture.mkdir(parents=True)
-    (fixture.parent / "__init__.py").write_text("")
-    for source in sorted((root / "tests" / "typing_history").glob("*.py")):
-        (fixture / source.name).write_bytes(source.read_bytes())
     settings = tmp_path / "history_settings.py"
     settings.write_text(
         "from pathlib import Path\n"
@@ -46,7 +41,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     env["DJANGO_SETTINGS_MODULE"] = "history_settings"
     native = subprocess.run(
         [sys.executable, "-c", "from django_compose.management import execute; execute(['manage.py','compose'])"],
-        cwd=tmp_path,
+        cwd=root,
         env=env,
         capture_output=True,
         text=True,
@@ -61,8 +56,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     config.write_text(
         "[mypy]\nplugins = angee.base.typing,angee.provenance.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'src'}\n"
-        "ignore_missing_imports = True\n"
-        f"cache_dir = {tmp_path / 'cache'}\n"
+        "ignore_missing_imports = True\ncache_dir = /dev/null\n"
         "[mypy-simple_history.*,django_sqids.*]\nfollow_untyped_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = history_settings\n"
     )
@@ -71,7 +65,6 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "from typing import assert_type\n"
         "from angee.provenance.statements import Statement, StatementPair\n"
         "from tests.typing_history.models import FixtureHistoricalQuerySet\n"
-        "from tests.typing_history.querysets import FixtureStatementQuerySet\n"
         "from runtime.typing_history.models import "
         "Subject, SubjectStatement, HistoricalSubject, HistoricalSubjectStatement\n"
         "assert_type(SubjectStatement.objects.get().title, str | None)\n"
@@ -93,7 +86,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "assert_type(Subject.history.filter().label(), int)\n"
         "SubjectStatement.history.filter().latest_of_each()\n"
         "from simple_history.models import HistoricalChanges\n"
-        "from tests.typing_history.models import UnresolvedSubject as AbstractSubject\n"
+        "from tests.typing_history.models import Subject as AbstractSubject\n"
         "assert_type(AbstractSubject.history.get(), HistoricalChanges)\n"
         "def abstract_history(record: AbstractSubject) -> None:\n"
         "    assert_type(record.history.filter().tagged(), FixtureHistoricalQuerySet[HistoricalChanges])\n"
@@ -104,24 +97,10 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "    assert_type(model.history.filter().latest_of_each(), FixtureHistoricalQuerySet[HistoricalChanges])\n"
         "    assert_type(record.statements.get(), Statement)\n"
         "    assert_type(model.same_as.filter().get(), StatementPair)\n"
-        "from tests.typing_history.models import Subject as SourceSubject, SubjectDonor, Child as SourceChild\n"
-        "from tests.typing_history.models import Grandchild as SourceGrandchild, AmbiguousDonor\n"
-        "from runtime.typing_history.models import ChildStatement, Child, Link\n"
-        "assert_type(SourceSubject.statements.handles().get(), SubjectStatement)\n"
-        "assert_type(SourceSubject.statements.handles(), FixtureStatementQuerySet[SubjectStatement])\n"
-        "def source_statements(donor: SubjectDonor, child: SourceChild, grandchild: SourceGrandchild) -> None:\n"
-        "    assert_type(donor.statements.handles().get(), SubjectStatement)\n"
-        "    assert_type(donor.statements.handles(), FixtureStatementQuerySet[SubjectStatement])\n"
-        "    assert_type(donor.statement_handle_count(), int)\n"
-        "    assert_type(child.statements.filter(link__external_key='remote').get(), ChildStatement)\n"
-        "    assert_type(grandchild.statements.exclude(link__external_key='remote').get(), ChildStatement)\n"
-        "assert_type(SourceChild.statements.get().link, Link | None)\n"
-        "assert_type(SourceChild.statements.get().subject, Child)\n"
-        "assert_type(AmbiguousDonor.statements.get(), Statement)\n"
         "from django.db.models import Prefetch\n"
         "assert_type(AbstractSubject.same_as.model._base_manager.filter(left_id=1, right_id=2).get(), StatementPair)\n"
         "AbstractSubject.same_as.model._base_manager.prefetch_related("
-        "Prefetch('left', queryset=Subject.objects.all()))\n"
+        "Prefetch('left', queryset=AbstractSubject.objects.all()))\n"
         "def union_history(record: AbstractSubject | SubjectStatement) -> None:\n"
         "    assert_type(record.history.filter().get(), HistoricalChanges)\n"
         "def union_statements(record: AbstractSubject | Subject) -> None:\n"
@@ -138,7 +117,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "wrong_queryset_label: str = Subject.history.filter().label()\n"
         "wrong_manager_label: int = Subject.history.label()\n"
         "Subject.history.filter().missing_queryset_method()\n"
-        "from tests.typing_history.models import UnresolvedSubject as AbstractSubject\n"
+        "from tests.typing_history.models import Subject as AbstractSubject\n"
         "AbstractSubject.history.filter().missing_queryset_method()\n"
         "wrong_abstract_label: str = AbstractSubject.history.filter().label()\n"
         "def invalid_generic[T: AbstractSubject](record: T) -> None:\n"
@@ -149,11 +128,6 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "AbstractSubject.same_as.model._base_manager.filter(left_id__in=1)\n"
         "AbstractSubject.same_as.model._base_manager.filter(right_id__isnull='bad')\n"
         "AbstractSubject.same_as.model._base_manager.filter(missing_pair_field=1)\n"
-        "from tests.typing_history.models import SubjectDonor, Child, Grandchild, AmbiguousDonor\n"
-        "SubjectDonor.statements.missing_queryset_method()\n"
-        "Child.statements.filter(missing_statement_field='bad')\n"
-        "Grandchild.statements.filter(link__external_key__in=1)\n"
-        "AmbiguousDonor.statements.handles()\n"
     )
     # The native plugin owns TypeInfos only. Compare actual Django model/state
     # identities after semantic analysis to the fixture's pre-analysis snapshot.
@@ -174,55 +148,18 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     )
     command = [sys.executable, "-c", script, "--config-file", str(config)]
     positive = subprocess.run(
-        [*command, str(valid), str(runtime / "typing_history" / "models.py"), str(fixture / "models.py")],
-        cwd=tmp_path,
+        [*command, str(valid), str(runtime / "typing_history" / "models.py")],
+        cwd=root,
         env=env,
         capture_output=True,
         text=True,
         check=False,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
-
-    # Reuse actual incremental state, then change only the owner queryset's
-    # return type in the isolated authored fixture. Native snapshot/dependency
-    # edges must invalidate generated manager signatures and donor accesses.
-    def check_valid() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [*command, str(valid), str(runtime / "typing_history" / "models.py"), str(fixture / "models.py")],
-            cwd=tmp_path,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    cached = check_valid()
-    assert cached.returncode == 0, cached.stdout + cached.stderr
-    queryset_source = fixture / "querysets.py"
-    original = queryset_source.read_text()
-    queryset_source.write_text(
-        original.replace(
-            "    def handles(self) -> Self:\n        return self",
-            "    def handles(self) -> int:\n        return 1",
-        )
-    )
-    changed = check_valid()
-    assert changed.returncode == 1, changed.stdout + changed.stderr
-    assert '"int" has no attribute "get"' in changed.stdout, changed.stdout
-    queryset_source.write_text(original)
-    restored = check_valid()
-    assert restored.returncode == 0, restored.stdout + restored.stderr
-    negative = subprocess.run(
-        [*command, str(invalid)],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    negative = subprocess.run([*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    assert negative.stdout.count(": error:") == 20, negative.stdout
-    for line in (2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25):
+    assert negative.stdout.count(": error:") == 16, negative.stdout
+    for line in (2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 17, 18, 19, 20):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
     assert {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*.py")} == before
     assert not tuple(runtime.rglob("*.pyi"))

@@ -18,7 +18,6 @@ from angee.base.fields.state import StateField
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions
-from angee.storage_integrate.managers import MountManager
 from angee.storage_integrate.mounts import MountBackend, MountEntry
 
 _PROGRESS_BATCH_SIZE = 200
@@ -49,10 +48,8 @@ class Mount(Bridge, inherits="integrate.Integration"):
     reads those current facts.
     """
 
-    Mode = MountMode
-    objects = MountManager()
-
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
+    live_impl_field = "backend_class"
 
     backend_class = ImplClassField(
         MountBackend,
@@ -82,7 +79,7 @@ class Mount(Bridge, inherits="integrate.Integration"):
     def backend(self) -> MountBackend:
         """Return the selected mount backend bound to this row."""
 
-        return cast(MountBackend, self.capability_impl)
+        return cast(MountBackend, self.live_impl)
 
     def _next_sync_at(self, *, now: Any) -> Any:
         """Keep manual mounts unscheduled unless polling is explicitly enabled."""
@@ -98,107 +95,104 @@ class Mount(Bridge, inherits="integrate.Integration"):
         if drive is None:
             raise ValidationError({"drive": "The mount requires a storage drive."})
         backend = self.backend
-        try:
-            backend.check_source()
-            file_model = apps.get_model("storage", "File")
-            folder_model = apps.get_model("storage", "Folder")
-            previous = self._freshness_map(file_model)
-            previous_present = {path for path, state in previous.items() if not state.is_trashed}
-            seen_paths: set[str] = set()
-            folder_cache: dict[tuple[str, ...], Any | None] = {(): None}
-            mime_cache: dict[str, Any | None] = {}
-            counts = {
-                "changed": 0,
-                "unchanged": 0,
-                "duplicates": 0,
-                "errors": 0,
-                "trashed": 0,
-                "vanished": 0,
-                "scanned": 0,
-            }
+        backend.check_source()
+        file_model = apps.get_model("storage", "File")
+        folder_model = apps.get_model("storage", "Folder")
+        previous = self._freshness_map(file_model)
+        previous_present = {path for path, state in previous.items() if not state.is_trashed}
+        seen_paths: set[str] = set()
+        folder_cache: dict[tuple[str, ...], Any | None] = {(): None}
+        mime_cache: dict[str, Any | None] = {}
+        counts = {
+            "changed": 0,
+            "unchanged": 0,
+            "duplicates": 0,
+            "errors": 0,
+            "trashed": 0,
+            "vanished": 0,
+            "scanned": 0,
+        }
 
-            self._mirror_directories(backend, drive=drive, folder_model=folder_model, cache=folder_cache, counts=counts)
+        self._mirror_directories(backend, drive=drive, folder_model=folder_model, cache=folder_cache, counts=counts)
 
-            for entry in backend.iter_entries():
-                counts["scanned"] += 1
-                seen_paths.add(entry.path)
-                prior = previous.get(entry.path)
-                if self._entry_unchanged(entry, prior):
-                    counts["unchanged"] += 1
-                    self._report_batch(counts)
-                    continue
+        for entry in backend.iter_entries():
+            counts["scanned"] += 1
+            seen_paths.add(entry.path)
+            prior = previous.get(entry.path)
+            if self._entry_unchanged(entry, prior):
+                counts["unchanged"] += 1
+                self._report_batch(counts)
+                continue
 
-                digest = ""
-                try:
-                    digest = backend.entry_hash(entry)
-                    folder = self._entry_folder(
-                        entry,
+            digest = ""
+            try:
+                digest = backend.entry_hash(entry)
+                folder = self._entry_folder(
+                    entry,
+                    drive=drive,
+                    folder_model=folder_model,
+                    cache=folder_cache,
+                )
+                if self.mode == MountMode.REFERENCE:
+                    file_model.objects.index_external(
                         drive=drive,
-                        folder_model=folder_model,
-                        cache=folder_cache,
+                        storage_path=entry.path,
+                        filename=PurePosixPath(entry.path).name,
+                        content_hash=digest,
+                        size_bytes=entry.size_bytes,
+                        mime_type=backend.entry_mime(entry),
+                        folder=folder,
+                        metadata={"mount": {"mtime_ns": entry.mtime_ns}},
+                        mime_cache=mime_cache,
+                        existing_pk=prior.pk if prior is not None else None,
+                        owner_id=self.owner_id,
                     )
-                    if self.mode == MountMode.REFERENCE:
-                        file_model.objects.index_external(
-                            drive=drive,
-                            storage_path=entry.path,
+                else:
+                    with contextlib.closing(backend.open_entry(entry)) as reader:
+                        file_model.objects.ingest_stream(
+                            reader,
                             filename=PurePosixPath(entry.path).name,
                             content_hash=digest,
                             size_bytes=entry.size_bytes,
-                            mime_type=backend.entry_mime(entry),
-                            folder=folder,
-                            metadata={"mount": {"mtime_ns": entry.mtime_ns}},
-                            mime_cache=mime_cache,
-                            existing_pk=prior.pk if prior is not None else None,
+                            metadata={
+                                "mount": {
+                                    "source_path": entry.path,
+                                    "mtime_ns": entry.mtime_ns,
+                                }
+                            },
                             owner_id=self.owner_id,
+                            drive_id=str(drive.public_id),
+                            folder_id=str(folder.public_id) if folder is not None else "",
                         )
-                    else:
-                        with contextlib.closing(backend.open_entry(entry)) as reader:
-                            file_model.objects.ingest_stream(
-                                reader,
-                                filename=PurePosixPath(entry.path).name,
-                                content_hash=digest,
-                                size_bytes=entry.size_bytes,
-                                metadata={
-                                    "mount": {
-                                        "source_path": entry.path,
-                                        "mtime_ns": entry.mtime_ns,
-                                    }
-                                },
-                                owner_id=self.owner_id,
-                                drive_id=str(drive.public_id),
-                                folder_id=str(folder.public_id) if folder is not None else "",
-                            )
-                    counts["changed"] += 1
-                except exceptions.ExternalDuplicate:
-                    counts["duplicates"] += 1
-                    self._report_batch(counts)
-                    continue
-                # Each manager write owns its atomic block; with no transaction
-                # around sync, a contained DataError is already rolled back.
-                except DataError, exceptions.UploadError, OSError, ValidationError:
-                    counts["errors"] += 1
-                    self._report_batch(counts)
-                    continue
-
+                counts["changed"] += 1
+            except exceptions.ExternalDuplicate:
+                counts["duplicates"] += 1
                 self._report_batch(counts)
+                continue
+            # Each manager write owns its atomic block; with no transaction
+            # around sync, a contained DataError is already rolled back.
+            except DataError, exceptions.UploadError, OSError, ValidationError:
+                counts["errors"] += 1
+                self._report_batch(counts)
+                continue
 
-            seen_paths.update(backend.observed_paths)
-            counts["scanned"] += backend.scan_errors
-            counts["errors"] += backend.scan_errors
-            counts["vanished"] = len(previous_present.difference(seen_paths))
-            if self.mode == MountMode.REFERENCE:
-                counts["trashed"] = file_model.objects.trash_missing_external(
-                    drive,
-                    seen_paths,
-                )
-                folder_model.objects.prune_missing(
-                    drive,
-                    [parts for parts in folder_cache if parts],
-                )
-            self._report_progress(counts, complete=True)
-            return counts["changed"]
-        finally:
-            backend.close()
+            self._report_batch(counts)
+
+        seen_paths.update(backend.observed_paths)
+        counts["scanned"] += backend.scan_errors
+        counts["errors"] += backend.scan_errors
+        counts["vanished"] = len(previous_present.difference(seen_paths))
+        if self.mode == MountMode.REFERENCE:
+            counts["trashed"] = file_model.objects.trash_missing_external(
+                drive,
+                seen_paths,
+            )
+            folder_model.objects.prune_missing(
+                drive,
+                [parts for parts in folder_cache if parts],
+            )
+        self._report_progress(counts, complete=True)
+        return counts["changed"]
 
     def _freshness_map(self, file_model: Any) -> dict[str, _MountFileState]:
         """Load this drive's File-owned mount freshness in one streamed query."""

@@ -1,13 +1,24 @@
 // @vitest-environment happy-dom
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
 
+import { baseIcons } from "../chrome/icon-registry";
+import { AppRuntimeProvider } from "../runtime";
+import { ToastProvider } from "./Toast";
 import { useBusyRun } from "./use-busy-run";
+
+/** A danger toast's title: Base UI stamps the toast type on it, never on the hidden announcer repeating it. */
+const DANGER_TOAST_TITLE = { selector: "[data-type='danger']" };
+
+function wrapper({ children }: { children: ReactNode }) {
+  return <AppRuntimeProvider runtime={{ icons: baseIcons }}><ToastProvider>{children}</ToastProvider></AppRuntimeProvider>;
+}
 
 describe("useBusyRun", () => {
   test("returns the action's value and fires onChanged once on success", async () => {
     const onChanged = vi.fn();
-    const { result } = renderHook(() => useBusyRun(onChanged));
+    const { result } = renderHook(() => useBusyRun(onChanged), { wrapper });
     expect(result.current.busy).toBe(false);
 
     let value: string | undefined;
@@ -21,7 +32,7 @@ describe("useBusyRun", () => {
   });
 
   test("is busy while the action is in flight, then clears", async () => {
-    const { result } = renderHook(() => useBusyRun());
+    const { result } = renderHook(() => useBusyRun(), { wrapper });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -41,7 +52,7 @@ describe("useBusyRun", () => {
   });
 
   test("stays busy until every overlapping action settles", async () => {
-    const { result } = renderHook(() => useBusyRun());
+    const { result } = renderHook(() => useBusyRun(), { wrapper });
     let releaseFirst!: () => void;
     let releaseSecond!: () => void;
     const first = new Promise<void>((resolve) => {
@@ -74,7 +85,7 @@ describe("useBusyRun", () => {
 
   test("clears busy and re-throws without firing onChanged on failure", async () => {
     const onChanged = vi.fn();
-    const { result } = renderHook(() => useBusyRun(onChanged));
+    const { result } = renderHook(() => useBusyRun(onChanged), { wrapper });
 
     await act(async () => {
       await expect(
@@ -86,5 +97,38 @@ describe("useBusyRun", () => {
 
     expect(onChanged).not.toHaveBeenCalled();
     expect(result.current.busy).toBe(false);
+  });
+
+  test("settle toasts a thrown failure once and resolves the fallback", async () => {
+    const onChanged = vi.fn();
+    const { result } = renderHook(() => useBusyRun(onChanged), { wrapper });
+
+    let settled: boolean | undefined;
+    await act(async () => {
+      settled = await result.current.settle(async () => {
+        throw new Error("Folder is not empty");
+      }, false);
+    });
+
+    expect(settled).toBe(false);
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(await screen.findAllByText("Folder is not empty", DANGER_TOAST_TITLE)).toHaveLength(1);
+    await act(async () => {
+      settled = await result.current.settle(async () => true, false);
+    });
+    expect(settled).toBe(true);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  test("settle titles a failure without a message with the caller's failure title", async () => {
+    const { result } = renderHook(() => useBusyRun(), { wrapper });
+
+    await act(async () => {
+      await result.current.settle(async () => {
+        throw null;
+      }, undefined, "Tags could not be saved");
+    });
+
+    expect(await screen.findAllByText("Tags could not be saved", DANGER_TOAST_TITLE)).toHaveLength(1);
   });
 });

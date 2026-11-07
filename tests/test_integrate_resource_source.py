@@ -30,7 +30,7 @@ def _entry(url: str) -> ResourceEntry:
 
 
 def _patch_get(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
-    monkeypatch.setattr("angee.integrate.resources.HttpClient.get", handler)
+    monkeypatch.setattr("angee.integrate.resource_source.HttpClient.get", handler)
 
 
 def test_url_source_is_registered() -> None:

@@ -10,22 +10,22 @@ from django.apps import apps
 from django.utils import timezone
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult
+from angee.graphql.actions import ActionResult, action_target, resolve_action_target, session_user
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.ids import PublicID, require_public_id
+from angee.graphql.ids import PublicID, public_id_field
+from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES
-from angee.iam.graphql.actions import action_target, resolve_action_target, session_user
-from angee.iam.graphql.node import ProtectedNode
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
+from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.schema import BridgeTypeMixin
 from angee.storage_integrate.connect import create_local_folder_mount
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import (
     MountBrowseResult,
+    browse_mount_source,
 )
 
 Mount = apps.get_model("storage_integrate", "Mount")
-Drive = apps.get_model("storage", "Drive")
 Credential = apps.get_model("integrate", "Credential")
 strawberry.enum(cast(Any, MountMode))
 
@@ -53,16 +53,11 @@ class MountBrowseResultType:
 
 
 @strawberry_django.type(Mount)
-class MountType(BridgeTypeMixin, ProtectedNode):
+class MountType(BridgeTypeMixin, AngeeNode):
     """Admin projection of an external storage Mount."""
 
     mode: auto
-
-    @strawberry_django.field(only=["drive_id"])
-    def drive(self) -> strawberry.ID:
-        """Return the dedicated drive's public id without exposing its backend."""
-
-        return require_public_id(Drive, cast(Any, self).drive_id)
+    drive = public_id_field("drive")
 
 
 _MOUNT_RESOURCE = hasura_model_resource(
@@ -125,7 +120,7 @@ class StorageIntegrateQuery:
             if credential_id is not None
             else None
         )
-        result: MountBrowseResult = Mount.objects.browse_source(
+        result: MountBrowseResult = browse_mount_source(
             backend_class,
             credential=credential,
             token=token,
@@ -160,7 +155,7 @@ class StorageIntegrateMutation:
         """Queue an immediate reconciliation of one Mount."""
 
         with action_target(Mount, id, reason="storage_integrate.graphql.sync_mount") as mount:
-            mount.request_sync(now=timezone.now())
+            queue_bridge_sync(mount, now=timezone.now())
         return ActionResult(ok=True, message="Queued mount sync.")
 
 

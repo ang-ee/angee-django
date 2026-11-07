@@ -16,7 +16,6 @@ from tests.test_workflows_triggers import trigger_resource_schema as trigger_res
 from tests.test_workflows_triggers import trigger_setup as trigger_setup
 
 pytestmark = [
-    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.usefixtures("workflow_step_classes"),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),

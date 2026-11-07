@@ -11,7 +11,7 @@ with source read access; result and outcome content require target read access.
 The base evidence admission check authorizes the source set at retention and
 again before inference. Profiles supply interpretation through
 `ExtractionProfile`;
-`extraction.acquisition.prepare_pages` acquires bytes, and recognition and mapping
+`ExtractionManager.prepare_pages` acquires bytes, and recognition and mapping
 use `agents.InferenceModel.infer`. Consumers hold a protected reference to
 `Extraction` and read documents, lines and facts through
 its typed accessors. An absent fact raises `KeyError`; a retained JSON null stays
@@ -23,8 +23,8 @@ retains processed evidence or a source hold. `infer_evidence` consumes that
 snapshot, using a pinned revision and explicit identity correspondence when
 structure changes. Retention serializes revision allocation on the lineage head
 and checks exact request reuse.
-Inference preserves source-grounded facts, any historical correction provenance,
-and retained carriers. Revisions reference the same digest-bound part files instead of copying
+Inference preserves source-grounded facts and retained
+carriers. Revisions reference the same digest-bound part files instead of copying
 the full carrier value into each part row. It rechecks source access before model work; explicit correspondence
 finalizes the held candidate without another inference call.
 An extraction reports whether a mapping model is configured. If a needed model
@@ -52,11 +52,6 @@ while its siblings' evidence is retained.
 
 `ExtractionProfile` owns its registry setting,
 `ANGEE_EXTRACTION_PROFILE_CLASSES`; the domain manifest
-owns native parser dependencies. [`schema.py`](schema.py) exposes read-only evidence through
+owns native parser dependencies. [`ExtractionManager`](managers.py) owns revision and
+authority validation. [`schema.py`](schema.py) exposes read-only evidence through
 the framework resource owner and actor-scoped relations.
-
-Carrier creation and verified reads precede lineage allocation. The short
-retention transaction rechecks carrier row identity, digest and READY state
-before retaining references. Failed or racing allocations dispose only newly
-created, still-unretained acquisitions through storage's locked removal owner;
-deduplicated and protected carriers survive.

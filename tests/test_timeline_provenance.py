@@ -31,7 +31,7 @@ def test_closure_admits_the_owner_history(composed_permissions) -> None:
     with open_changeset(fresh=True, change_reason="vault"):
         vault = vault_for(owner)
     event, = timeline_entries(vault, owner)
-    changeset = vault.history.latest("history_id").history_changeset
+    changeset = vault.history.latest("history_id").changeset
     assert event.target_id == public_id_of(changeset)
     assert changeset.state == changeset.State.CLOSED
     assert event.at == changeset.occurred_at
@@ -76,7 +76,7 @@ def test_notification_failure_keeps_the_closed_changeset_readable(
         vault.name = "Committed despite invalidation failure"
         vault.save(update_fields=["name"])
     vault.refresh_from_db()
-    changeset = vault.history.latest("history_id").history_changeset
+    changeset = vault.history.latest("history_id").changeset
     assert vault.name == "Committed despite invalidation failure"
     assert changeset.state == changeset.State.CLOSED
     assert "Timeline invalidation failed" in caplog.text
@@ -175,7 +175,7 @@ def test_machine_reason_never_reaches_a_user(composed_permissions) -> None:
     with open_changeset(fresh=True, change_reason="integrate.stream.advance"):
         vault = vault_for(owner)
     event, = timeline_entries(vault, owner)
-    changeset = vault.history.latest("history_id").history_changeset
+    changeset = vault.history.latest("history_id").changeset
     assert event.target_id == public_id_of(changeset)
     assert changeset.change_reason == "integrate.stream.advance"
     assert changeset.reason_display == ""
@@ -207,7 +207,7 @@ def test_noninteger_origin_does_not_break_a_readable_history_line(composed_permi
     owner = create_platform_admin("timeline-foreign-origin")
     with open_changeset(fresh=True, change_reason="External origin"):
         record = vault_for(owner)
-    boundary = record.history.latest("history_id").history_changeset
+    boundary = record.history.latest("history_id").changeset
     models.QuerySet(model=type(boundary)).filter(pk=boundary.pk).update(origin_object_id=origin_id)
     assert timeline_entries(record, owner)[0].detail == "External origin"
 
@@ -216,7 +216,7 @@ def test_self_origin_stays_visible_and_only_other_changes_fold_beneath_it(compos
     owner = create_platform_admin("timeline-self-origin")
     with actor_context(owner), open_changeset(fresh=True, change_reason="Parent"):
         record = vault_for(owner)
-    parent = record.history.latest("history_id").history_changeset
+    parent = record.history.latest("history_id").changeset
     content_type, pk = generic_pointer_target(parent)
     models.QuerySet(model=type(parent)).filter(pk=pk).update(
         origin_content_type=content_type, origin_object_id=str(pk),

@@ -152,7 +152,7 @@ function RepoCandidateList({
               label={pickable ? t("addRepo.pick") : undefined}
               onOpen={pickable ? () => onPick(candidate) : undefined}
               meta={isBusy ? (
-                <SkeletonStatus label={t("addRepo.searching")} className="shrink-0">
+                <SkeletonStatus loadingLabel={t("addRepo.searching")} className="shrink-0">
                   <Skeleton className="h-3 w-12" shape="text" />
                 </SkeletonStatus>
               ) : isPicked ? (
@@ -169,7 +169,7 @@ function RepoCandidateList({
 
 function CandidateListSkeleton({ label }: { label: React.ReactNode }): React.ReactElement {
   // The shape of three pane rows while the host answers.
-  return <SkeletonStatus label={label} className="grid gap-1 py-1">
+  return <SkeletonStatus loadingLabel={label} className="grid gap-1 py-1">
     {Array.from({ length: 3 }, (_, index) => <div key={index} className="flex items-center gap-2 px-1 py-1.5">
       <Skeleton className="size-4 rounded-full" />
       <div className="min-w-0 flex-1 space-y-2">

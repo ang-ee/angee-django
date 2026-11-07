@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,6 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 
 from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHandler
-from angee.integrate.errors import IntegrationError
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, TOKEN_EXCHANGE_FAILED, OAuthFlowError
@@ -33,10 +33,10 @@ from tests.conftest import (
 
 def _ensure_fresh_in_process(
     credential_pk: int,
-    release: Any,
+    start: Any,
     results: Any,
 ) -> None:
-    """Hold one provider exchange open while another process tries the grant."""
+    """Race one real database refresh transaction from a separate process."""
 
     import django
 
@@ -44,22 +44,17 @@ def _ensure_fresh_in_process(
 
     def refresh_once(self: Any, *, refresh_token: str) -> dict[str, Any]:
         results.put(("refresh", refresh_token))
-        if not release.wait(timeout=10):
-            raise TimeoutError("credential refresh race was not released")
+        time.sleep(0.3)
         return {"access_token": "process-fresh", "refresh_token": "process-rotated", "expires_in": 7200}
 
     OAuthClientProtocol.refresh_token = refresh_once
     try:
         with system_context(reason="test cross-process credential refresh"):
             credential = Credential.objects.sudo(reason="test cross-process credential load").get(pk=credential_pk)
-            try:
-                credential.ensure_fresh()
-            except IntegrationError as error:
-                if not error.transient:
-                    raise
-                results.put(("contended", str(error)))
-            else:
-                results.put(("result", credential.secret_value()))
+            if not start.wait(timeout=10):
+                raise TimeoutError("credential refresh race did not start")
+            credential.ensure_fresh()
+            results.put(("result", credential.secret_value()))
     finally:
         connections.close_all()
 
@@ -133,9 +128,8 @@ def test_install_fixture_seeds_anthropic_loopback_callback_path() -> None:
 
     import angee.agents_integrate_anthropic
 
-    fixture = (
-        Path(angee.agents_integrate_anthropic.__file__).parent / "resources/install/010_integrate.oauthclient.yaml"
-    )
+    fixture = (Path(angee.agents_integrate_anthropic.__file__).parent
+               / "resources/install/010_integrate.oauthclient.yaml")
     entries = {entry["slug"]: entry for entry in yaml.safe_load(fixture.read_text())}
     for slug in ("anthropic-platform", "anthropic-personal"):
         assert entries[slug]["loopback_redirect_path"] == "/callback"
@@ -193,9 +187,7 @@ def test_authorization_flow_needs_pkce_or_a_client_secret() -> None:
     """With neither, nothing authenticates the code exchange: refuse before the redirect."""
 
     endpoints = {
-        "slug": "provider",
-        "display_name": "Provider",
-        "client_id": "client-id",
+        "slug": "provider", "display_name": "Provider", "client_id": "client-id",
         "authorize_endpoint": "https://provider.example/oauth/authorize",
         "token_endpoint": "https://provider.example/oauth/token",
     }
@@ -626,15 +618,13 @@ def test_ensure_fresh_renews_an_expiring_oauth_credential(monkeypatch: pytest.Mo
     assert reloaded.reveal()["access_token"] == "new-access"  # persisted, not just in-memory
 
 
-@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
-    """One exchange wins; an expired contender retries and adopts its token."""
+    """Two consumers issue one refresh and both adopt its persisted token."""
 
     if connection.vendor != "postgresql":
         pytest.skip("PostgreSQL row-lock behavior")
     processes: list[multiprocessing.Process] = []
-    release: Any | None = None
     results: Any | None = None
     try:
         user = get_user_model().objects.create_user(username="refresh-process", email="process@example.com")
@@ -646,29 +636,24 @@ def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
         )
         connections.close_all()
         context = multiprocessing.get_context("fork")
-        release = context.Event()
+        start = context.Event()
         results = context.Queue()
         processes = [
-            context.Process(target=_ensure_fresh_in_process, args=(credential.pk, release, results)) for _ in range(2)
+            context.Process(target=_ensure_fresh_in_process, args=(credential.pk, start, results)) for _ in range(2)
         ]
-        processes[0].start()
-        assert results.get(timeout=10) == ("refresh", "process-old")
-        processes[1].start()
-        assert results.get(timeout=10) == ("contended", "Credential refresh is already running.")
-        release.set()
+        for process in processes:
+            process.start()
+        start.set()
         for process in processes:
             process.join(timeout=15)
             assert process.exitcode == 0
 
-        assert results.get(timeout=5) == ("result", "process-fresh")
+        events = [results.get(timeout=5) for _ in range(3)]
+        assert events.count(("refresh", "process-old")) == 1
+        assert events.count(("result", "process-fresh")) == 2
         reloaded = Credential.objects.sudo(reason="test cross-process credential verify").get(pk=credential.pk)
         assert reloaded.reveal()["refresh_token"] == "process-rotated"
-        with system_context(reason="test cross-process credential retry"):
-            credential.ensure_fresh()
-            assert credential.secret_value() == "process-fresh"
     finally:
-        if release is not None:
-            release.set()
         for process in processes:
             if process.is_alive():
                 process.terminate()
@@ -686,7 +671,7 @@ def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "sqlite", reason="SQLite locking floor")
 def test_ensure_fresh_uses_plain_select_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SQLite uses plain selects while external refresh stays outside atomic."""
+    """Django omits row-lock SQL on SQLite while refresh retains its transaction."""
 
     user = get_user_model().objects.create_user(username="refresh-sqlite", email="sqlite@example.com")
     call_command("rebac", "sync", verbosity=0)
@@ -697,7 +682,7 @@ def test_ensure_fresh_uses_plain_select_on_sqlite(monkeypatch: pytest.MonkeyPatc
     )
 
     def fake_refresh(self: Any, *, refresh_token: str) -> dict[str, Any]:
-        assert not connection.in_atomic_block
+        assert connection.in_atomic_block
         assert refresh_token == "old-refresh"
         return {"access_token": "sqlite-access", "refresh_token": "sqlite-refresh", "expires_in": 7200}
 

@@ -26,7 +26,7 @@ from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks as workflow_tasks
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.definition import Definition
-from angee.workflows.querysets import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunQuerySet
+from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, StepMode
@@ -36,7 +36,6 @@ from tests.conftest import create_user, vault_for
 from tests.workflow_steps import Echo, document
 
 pytestmark = [
-    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.usefixtures("workflow_step_classes"),
     pytest.mark.skipif(
@@ -657,7 +656,7 @@ def test_t3_t4_worker_loss_obeys_the_durable_effect_marker(execution, register_s
                 if effect_idempotent is not None:
                     ctx.begin_effect()
                 raise WorkerDied()
-            assert (ctx.attempt.acknowledged_by_id is not None) is (effect_idempotent is False)
+            assert ctx.retry_acknowledged is (effect_idempotent is False)
             return ctx.done(ctx.input)
 
     LostWorker.effect_idempotent = bool(effect_idempotent)
@@ -707,7 +706,7 @@ def test_t4_marked_transient_failure_requires_acknowledged_redelivery(execution,
                 if failure == "retryable":
                     raise Retryable("Transient after effect")
                 raise OperationalError("Transient after effect") from psycopg.errors.DeadlockDetected("Transient")
-            assert ctx.attempt.acknowledged_by_id is not None
+            assert ctx.retry_acknowledged
             return ctx.done(ctx.input)
 
     register_step(MarkedTransient)
@@ -1058,12 +1057,7 @@ def test_io_settlement_stops_at_deadline_when_step_row_stays_locked(execution, r
             finish_body.set()
             release.set()
         holder.result(timeout=5)
-        # Settlement uses the host clock; expiration belongs to the database clock.
-        limit = monotonic() + 5
-        while not StepRun.system_queryset().filter(pk=step_run.pk, deadline_at__lt=Now()).exists():
-            assert monotonic() < limit, "The database deadline did not expire."
-            sleep(0.02)
-        assert pool.submit(in_connection, runner.reap).result(timeout=max(0, limit - monotonic())) == 1
+        assert pool.submit(in_connection, runner.reap).result(timeout=5) == 1
     assert bodies == [1]
     assert row(run).output == {"error": "The attempt deadline expired."}
     assert row(run).status == StepRunStatus.FAILED

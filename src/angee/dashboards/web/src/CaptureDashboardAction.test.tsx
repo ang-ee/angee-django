@@ -8,8 +8,6 @@ import type { DashboardStore, DashboardStoreBinding, DashboardSaveResult } from 
 const mocks = vi.hoisted(() => ({
   store: null as DashboardStore | null,
   save: vi.fn<DashboardStoreBinding["save"]>(),
-  catalogue: vi.fn(),
-  dashboard: vi.fn(),
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => ({
@@ -46,27 +44,19 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
   mocks.save.mockReset().mockResolvedValue(saved);
-  mocks.catalogue.mockReset();
-  mocks.dashboard.mockReset();
   const write = vi.fn(async () => saved);
   mocks.store = {
-    useCatalogue: () => {
-      mocks.catalogue();
-      return {
-        summaries: [{ id: target.id, target, title: "My dashboard", resources: [],
-          revision: 1, customized: false, available: true, capabilities }],
-        loading: false, error: null, refresh: vi.fn(), createPersonal: write,
-      };
-    },
-    useDashboard: () => {
-      mocks.dashboard();
-      return {
-        state: { status: "ready", capabilities, persistedId: target.id, revision: 1,
-          name: "My dashboard", declarationRevision: "", snapshot: { ...snapshot, widgets: [] } },
-        reload: vi.fn(async () => {}), save: mocks.save, reset: vi.fn(async () => {}),
-        createPersonal: write, duplicate: write,
-      };
-    },
+    useCatalogue: () => ({
+      summaries: [{ id: target.id, target, title: "My dashboard", resources: [],
+        revision: 1, customized: false, available: true, capabilities }],
+      loading: false, error: null, refresh: vi.fn(), createPersonal: write,
+    }),
+    useDashboard: () => ({
+      state: { status: "ready", capabilities, persistedId: target.id, revision: 1,
+        name: "My dashboard", declarationRevision: "", snapshot: { ...snapshot, widgets: [] } },
+      reload: vi.fn(async () => {}), save: mocks.save, reset: vi.fn(async () => {}),
+      createPersonal: write, duplicate: write,
+    }),
   };
 });
 afterEach(async () => {
@@ -76,29 +66,6 @@ afterEach(async () => {
 });
 
 describe("CaptureDashboardAction", () => {
-  test("a closed capture menu does not read dashboards", async () => {
-    await React.act(async () => root.render(<CaptureDashboardAction />));
-    expect(mocks.catalogue).not.toHaveBeenCalled();
-    expect(mocks.dashboard).not.toHaveBeenCalled();
-    await React.act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
-    expect(mocks.catalogue).toHaveBeenCalled();
-    expect(mocks.dashboard).toHaveBeenCalled();
-  });
-
-  test.each([
-    { loading: true, label: "Loading dashboards…" },
-    { loading: false, label: "No editable dashboards" },
-  ])("shows a disabled $label item when no destination is ready", async ({ loading, label }) => {
-    const catalogue = mocks.store!.useCatalogue;
-    mocks.store = { ...mocks.store!, useCatalogue: () => ({ ...catalogue(), summaries: [], loading }) };
-    await React.act(async () => root.render(<CaptureDashboardAction />));
-    await React.act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
-    const item = document.querySelector<HTMLElement>('[role="menuitem"]')!;
-    expect(item.textContent).toBe(label);
-    expect(item.getAttribute("aria-disabled")).toBe("true");
-    expect(mocks.dashboard).not.toHaveBeenCalled();
-  });
-
   test("captures through a native action item and reports pending state on the toolbar", async () => {
     let finish!: (result: DashboardSaveResult) => void;
     mocks.save.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));

@@ -1,4 +1,4 @@
-"""Tests for the foundation advisory-lock owner."""
+"""Tests for the jobs app's task lock abstraction."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import pytest
 from django.db import connection
 from psycopg import sql
 
-from angee.base import locks
-from angee.base.locks import LocalLockBackend, LockKey, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
+from angee.jobs import locks
+from angee.jobs.locks import LocalLockBackend, LockKey, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
 from tests.task_lock_process import hold_postgres_advisory_lock
 
 
@@ -61,7 +61,6 @@ def test_postgres_advisory_pair_uses_positive_int4_values() -> None:
     assert all(0 <= value < 2**31 for value in pair)
 
 
-@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("key_kind", ["bridge", "account"])
 def test_postgres_advisory_probe_tracks_pair_lock_across_processes_only(key_kind: str) -> None:
@@ -112,7 +111,6 @@ def test_postgres_advisory_probe_tracks_pair_lock_across_processes_only(key_kind
             assert process.exitcode == 0
 
 
-@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 def test_postgres_advisory_probe_ignores_same_pair_in_other_database() -> None:
     """Advisory liveness is scoped to the current database OID."""
@@ -177,7 +175,6 @@ def test_task_lock_reports_held_state() -> None:
     assert task_lock_is_held(key) is False
 
 
-@pytest.mark.postgresql
 def test_task_lock_backend_matches_the_native_database() -> None:
     backend = locks.get_lock_backend()
     expected = locks.PostgresAdvisoryLockBackend if connection.vendor == "postgresql" else LocalLockBackend

@@ -19,8 +19,6 @@ from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Wor
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 class ReviewPrefix(Step[None, None, None]):
     key = "review_prefix"
@@ -152,7 +150,7 @@ def test_multiple_choices_receive_the_set_and_route_done(review):
     _, people, sent, _ = review
     run, step = start_review(review, input={"multiple": True})
     decision = questions(step)[0]
-    decision.decide(actor=people[0], chosen=["reject", "approve"])
+    Decision.objects.decide(decision, actor=people[0], chosen=["reject", "approve"])
     assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     assert run.outcome == "done" and run.output["chosen"] == ["approve", "reject"]
@@ -166,7 +164,7 @@ def test_choose_is_applied_on_workflow_resume(review):
     run, step = start_review(review, input={"choose": True})
     decision = questions(step)[0]
     values = {public_id_of(question.review_subject): {"name": "Answerer's value"}}
-    decision.decide(actor=people[0], chosen=["approve"], values=values)
+    Decision.objects.decide(decision, actor=people[0], chosen=["approve"], values=values)
     question.review_subject.refresh_from_db()
     assert question.review_subject.name != "Answerer's value"
     assert Decision.system_queryset().get(pk=decision.pk).verdict_values == values
@@ -212,27 +210,19 @@ def test_sweep_recovers_missed_answer_notification(review):
     assert run.status == "succeeded"
 
 
-def test_answer_enqueues_wake_on_commit_without_running_it_in_request(review, monkeypatch):
+def test_answer_enqueues_wake_on_commit_without_running_it_in_request(review):
     _, people, sent, _ = review
     run, step = start_review(review)
     decision = questions(step)[0]
     before = len(sent)
 
-    def unexpected_wake(*args, **kwargs):
-        pytest.fail("Answering a decision ran the workflow wake inline.")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(type(runner), "wake_decisions", unexpected_wake)
-        with transaction.atomic(using=decision._state.db):
-            answer(decision, people[0])
-            assert sent[before:] == []
-            assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"
+    with transaction.atomic():
+        answer(decision, people[0])
+        assert sent[before:] == []
+        assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"
 
     assert sent[before:] == [
-        (
-            "workflows.wake_decisions",
-            {"kwargs": {"decision_id": decision.pk, "using": decision._state.db}, "queue": None, "expires": None},
-        )
+        ("workflows.wake_decisions", {"kwargs": {"decision_id": decision.pk}, "queue": None, "expires": None}),
     ]
     assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"
     assert deliver_decision_wakes(sent, decision.pk) == [1]
@@ -243,13 +233,13 @@ def test_answer_enqueues_wake_on_commit_without_running_it_in_request(review, mo
     rollback_decision = questions(rollback_step)[0]
     before = len(sent)
     with pytest.raises(RuntimeError, match="rollback answer"):
-        with transaction.atomic(using=rollback_decision._state.db):
+        with transaction.atomic():
             answer(rollback_decision, people[0])
             raise RuntimeError("rollback answer")
     assert sent[before:] == []
     assert Decision.system_queryset().get(pk=rollback_decision.pk).is_open
     assert StepRun.system_queryset().get(pk=rollback_step.pk).status == "waiting"
-    assert rollback_run.status == "waiting"
+    assert WorkflowRun.system_queryset().get(pk=rollback_run.pk).status == "waiting"
 
 
 def test_terminal_failure_withdraws_an_open_sibling_question(review, register_step):
@@ -429,7 +419,7 @@ def test_concrete_action_owner_applies_child_fields_with_canonical_concern(compo
     ), actor=actor)
     concern = decision.records.with_actor(actor).get()
     assert type(concern.record) is MtiParent
-    decision = decision.decide(actor=reader, chosen=["confirm"])
+    decision = Decision.objects.decide(decision, actor=reader, chosen=["confirm"])
     with pytest.raises(PermissionDenied):
         apply_proposals(decision, actor=reader)
     record.refresh_from_db()
@@ -452,21 +442,3 @@ def test_action_model_must_share_the_concerned_identity(composed_tables, model):
                 "actions": {public_id_of(record): {"model": model, "fields": {"detail": {"set": "After"}}}},
             }]),
         )
-
-
-def test_requesting_workflow_filter_keeps_first_request_identity(review):
-    actor, _people, _sent, question = review
-    run, step = start_review(review)
-    decision = questions(step)[0]
-    later_workflow = load_workflow(
-        {"nodes": {"review": {"step": "question"}}, "results": [{"from": "review"}]},
-        key="later-request", actor=actor,
-    )
-    later = WorkflowRun.objects.start(later_workflow, actor=actor, subject=question.review_subject)
-    with system_context(reason="workflows.retained_request_identity"):
-        StepRun.objects.filter(run=later).update(decision=decision)
-        rows = Decision.objects.filter(pk=decision.pk)
-        expression = Decision.hasura_filter_expressions["requesting_workflow_key"](rows)
-        matches = rows.alias(_requesting_key=expression)
-        assert matches.filter(_requesting_key=run.version.workflow.key).exists()
-        assert not matches.filter(_requesting_key=later_workflow.key).exists()

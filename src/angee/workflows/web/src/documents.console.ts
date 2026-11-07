@@ -20,12 +20,12 @@ export const StepDecisionDocument = graphql(`
 `);
 
 export const RecordTimelineDocument = graphql(`
-  query RecordTimeline($records: [TimelineRecordInput!]!, $runLimit: Int = 20, $drillIn: Boolean! = false) {
+  query RecordTimeline($records: [TimelineRecordInput!]!, $runLimit: Int = 20) {
     record_timeline(records: $records, run_limit: $runLimit) {
-      open_decision_count @skip(if: $drillIn)
+      open_decision_count
       records {
       record_model record_id
-      decisions @skip(if: $drillIn) { ...DecisionCardFields }
+      decisions { ...DecisionCardFields }
       runs {
         id display_name status origin subject_model subject_id outcome_label failure_reason created_at finished_at stopped_at output can_cancel
         run_as { display_name }
@@ -36,24 +36,24 @@ export const RecordTimelineDocument = graphql(`
           edges { source outcome target taken }
           nodes {
             key label step_label rank body_key plan outcomes { outcome label }
-            item_counts { status count } item_attempts
-            step_run {
-              id status hold outcome outcome_label failure_reason wait_reason notes { tone message }
-              attempt page_index map_total map_settled created_at updated_at
-              can_retry requires_duplicate_acknowledgement
-              awaited_run { id display_name status }
-              child_runs { id display_name status }
-              records { id label operation record_model record_id }
-              decision { ...DecisionCardFields }
-              map_steps {
-                id node_label map_index status hold outcome_label failure_reason wait_reason notes { tone message }
-                can_retry requires_duplicate_acknowledgement updated_at
-                awaited_run { id display_name status }
-                child_runs { id display_name status }
-                records { id label operation record_model record_id }
-                decision { ...DecisionCardFields }
-              }
-            }
+            item_counts { status count } item_attempts step_run_id
+          }
+        }
+        graph_step_runs {
+          id status hold outcome outcome_label failure_reason wait_reason notes { tone message }
+          attempt page_index map_total map_settled created_at updated_at
+          can_retry requires_duplicate_acknowledgement
+          awaited_run { id display_name status }
+          child_runs { id display_name status }
+          records { id label operation record_model record_id }
+          decision { ...DecisionCardFields }
+          map_steps {
+            id node_label map_index status hold outcome_label failure_reason wait_reason notes { tone message }
+            can_retry requires_duplicate_acknowledgement updated_at
+            awaited_run { id display_name status }
+            child_runs { id display_name status }
+            records { id label operation record_model record_id }
+            decision { ...DecisionCardFields }
           }
         }
       }
@@ -86,14 +86,14 @@ export const WorkflowRunGraphDocument = graphql(`
   query WorkflowRunGraph($id: String!) {
     workflowrun_by_pk(id: $id) {
       id
+      graph_step_runs {
+        id status waiting_kind wait_reason outcome outcome_label failure_reason
+        attempt page_index map_total map_settled created_at updated_at deadline_at wake_at
+      }
       graph {
         nodes {
           key label step_label rank body_key outcomes { outcome label }
-          item_counts { status count } item_attempts
-          step_run {
-            id status waiting_kind wait_reason outcome outcome_label failure_reason
-            attempt page_index map_total map_settled created_at updated_at deadline_at wake_at
-          }
+          item_counts { status count } item_attempts step_run_id
         }
         edges { source outcome target taken }
       }
@@ -177,22 +177,10 @@ export const DecisionStepsDocument = graphql(`
   }
 `);
 
-export const RunDecisionsCountDocument = graphql(`
-  query RunDecisionsCount($run: String!) {
-    steprun_aggregate(where: { run: { _eq: $run }, decision: { _is_null: false } }) { aggregate { count } }
-  }
-`);
-
-export const DecisionRunCountDocument = graphql(`
-  query DecisionRunCount($decision: String!) {
-    steprun_aggregate(where: { decision: { _eq: $decision }, run: { _is_null: false } }) { aggregate { count } }
-  }
-`);
-
-/** The runs that worked on one record, through the run owner's read. */
+/** The newest runs that worked on one record, through the run owner's read and its record run limit. */
 export const RecordRelatedRunsDocument = graphql(`
   query RecordRelatedRuns($records: [TimelineRecordInput!]!) {
-    record_timeline(records: $records, run_limit: 20) {
+    record_timeline(records: $records) {
       records {
         record_model record_id
         runs { id display_name status outcome_label created_at finished_at version { workflow { display_name } } }

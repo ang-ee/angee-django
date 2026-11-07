@@ -35,7 +35,7 @@ export function KnowledgeSettingsPage(): ReactElement {
       }
       const data = await createFrom({
         template, name, owned: true, idempotency_key: pendingClone.current.key,
-      }, { reconciliation: context.reconciliation });
+      });
       const outcome = extractActionOutcome(data, "create_vault_from");
       if (outcome?.ok) pendingClone.current = null;
       return outcome;

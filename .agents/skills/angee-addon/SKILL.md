@@ -22,11 +22,11 @@ wires declarations only; the reference example throughout is `examples/src/examp
 | `pyproject.toml` | Identity, dependencies, declared capability seams | `examples/src/example/notes/pyproject.toml` |
 | `django_compose.components`, native `EntryPoint`, `Distribution`, `packaging.Requirement` | Component identity, requirement closure and package metadata | [Composition owners](../../../docs/backend/guidelines.md#composition-owners) |
 | `angee.base.addons` | Packaged `[tool.angee.*]` tables and optional addon-module discovery | [Base adapter](../../../src/angee/base/addons.py) |
-| `apps.py` (optional) | `name`, pinned `label`, `ready()` hooks, check registration | `src/angee/money/apps.py:17`, `src/angee/base/apps.py:22` |
-| `autoconfig.py` | Settings fragments merged by native `django_compose.conf` in dependency order | `examples/src/example/notes/autoconfig.py:5`, `src/angee/base/autoconfig.py:23,42` |
-| `testing/models.py`, `tests/settings.py`, `tests/conftest.py` | Concrete models and roster of the bare test host | `src/angee/tags/testing/models.py`, `tests/settings.py:29,144`, `tests/conftest.py:645` |
+| `apps.py` (optional) | `name`, pinned `label`, `ready()` hooks, check registration | `MoneyConfig` in `src/angee/money/apps.py`, `BaseConfig.label` in `src/angee/base/apps.py` |
+| `autoconfig.py` | Settings fragments merged by native `django_compose.conf` in dependency order | `SETTINGS` in `examples/src/example/notes/autoconfig.py`, `SETTINGS` and `settings` in `src/angee/base/autoconfig.py` |
+| `testing/models.py`, `tests/settings.py`, `tests/conftest.py` | Concrete models and roster of the bare test host | `src/angee/tags/testing/models.py`, `INSTALLED_APPS` in `tests/settings.py`, `tests/conftest.py` |
 | `web/package.json`, `web/src/{index.tsx,i18n.ts,index.test.ts}` | The rendered fragment and its namespace | `examples/src/example/notes/web/`, `templates/addons/web/template/` |
-| `src/angee/web/build.py` (`WebRuntime`), stack `pnpm-workspace.yaml` | Fragment discovery and `runtime/web/manifest.json`; which `web/` folders the JS install links | `src/angee/web/build.py:77,242`, `templates/stacks/dev/template/pnpm-workspace.yaml.jinja` |
+| `src/angee/web/build.py` (`WebRuntime`), stack `pnpm-workspace.yaml` | Fragment discovery and `runtime/web/manifest.json`; which `web/` folders the JS install links | `WebRuntime`, `WebIntegration` in `src/angee/web/build.py`, `templates/stacks/dev/template/pnpm-workspace.yaml.jinja` |
 
 ## Reuse first
 
@@ -37,12 +37,12 @@ wires declarations only; the reference example throughout is `examples/src/examp
   [GraphQL schema discovery](../../../src/angee/graphql/schema.py) owns schema references and
   [GraphQL ASGI](../../../src/angee/graphql/asgi.py) owns WebSocket contributions.
 - Native django-compose owns component graphs, generic lifecycle and optional hook dispatch:
-  `django_compose.conf` merges settings. The serving addon owns the serving seams:
-  `angee.server.urls` reads explicit `AppConfig.compose_urls` and `angee.server.asgi` composes
-  `compose_asgi()` contributions. Declare through those owners.
-- `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts:162,66`), `createNamespaceT`
-  (`packages/ui/src/i18n/index.ts:45`), `expectValidBaseAddon` (`packages/app/src/testing.tsx:101`),
-  `defineAngeeWebVitestConfig` (`packages/app/config/vitest.ts:90`) own fragment composition.
+  `django_compose.conf` merges settings. `angee.server.urls` includes an enabled addon's `urls` module
+  and `angee.server.asgi` reads its `asgi` module's `http_mounts`, `protocols()` and `lifespans`
+  ([Serving](../../../docs/composer.md#serving)). Declare through those owners.
+- `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts`), `createNamespaceT`
+  (`packages/ui/src/i18n/index.ts`), `expectValidBaseAddon` (`packages/app/src/testing.tsx`),
+  `defineAngeeWebVitestConfig` (`packages/app/config/vitest.ts`) own fragment composition.
 - Start an addon from `templates/addons/web` (Copier: manifest, model, gate, schema, demo row, test model, test and, with `include_web`, the fragment under `web/`), not from an older addon ([web build pitfalls](../angee-framework/references/web-pitfalls.md)).
 
 ## Steps
@@ -95,13 +95,13 @@ wires declarations only; the reference example throughout is `examples/src/examp
    an omitted source table.
 
 3. **Add `apps.py` only for native customization.** Notes has none. Add one for checks,
-   signals or a pinned label (shape: `src/angee/money/apps.py:17`):
+   signals or a pinned label (shape: `MoneyConfig` in `src/angee/money/apps.py`):
 
    ```python
    class MoneyConfig(AppConfig):
        default = True
        name = "angee.money"            # must equal the app entry-point key
-       # label = "base"                # only to pin an already persisted label (base/apps.py:22)
+       # label = "base"                # only to pin an already persisted label (BaseConfig in base/apps.py)
 
        def ready(self) -> None:
            super().ready()
@@ -126,8 +126,8 @@ wires declarations only; the reference example throughout is `examples/src/examp
 
    Implementation contributors add to the base's named setting; bound fields validate their mapping.
    A rowless contract owner registers a stable native Django system check using `check_impl_registry`. If a value derives from the host → a `settings(namespace)` hook reading only
-   its namespace (`src/angee/base/autoconfig.py:42`). Contribute only what the addon owns: `angee.base`
-   already appends `PermissionIntegration` (`src/angee/base/autoconfig.py:24`); a second registration is refused
+   its namespace (`settings` in `src/angee/base/autoconfig.py`). Contribute only what the addon owns: `angee.base`
+   already appends `PermissionIntegration` (`SETTINGS` in `src/angee/base/autoconfig.py`); a second registration is refused
    (`django_compose.declarations.resolve_integrations`). **Owner rule:**
    [Autoconfig](../../../docs/composer.md#autoconfig) owns merge semantics; settings loading never imports models.
 
@@ -136,9 +136,9 @@ wires declarations only; the reference example throughout is `examples/src/examp
 5. **Register test models.** Framework addons add `testing/__init__.py` and `testing/models.py`: one
    concrete subclass per abstract source model (`abstract = False`, `app_label = "<label>"`, `db_table =
    "test_<label>_<model>"`, same `rebac_resource_type`); list the addon in `tests/settings.py` `INSTALLED_APPS`
-   (`:29`) and import the module once in `tests/conftest.py` (`# noqa: F401`, `:645`); tests go in
+   and import the module once in `tests/conftest.py` (`# noqa: F401`); tests go in
    `tests/test_<name>*.py` (`angee-tests` owns their shapes). A consumer addon keeps `tests/` inside the addon (notes:
-   `examples/src/example/notes/tests/`; `pyproject.toml:205` puts `examples/src` on the test path).
+   `examples/src/example/notes/tests/`; `[tool.pytest.ini_options]` in `pyproject.toml` puts `examples/src` on the test path).
    **Owner rule:** [source-addon test models](../../../docs/checks.md#source-addon-test-models) own
    adoption; never register a second concrete model for a resource type.
 
@@ -159,7 +159,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
    export default notes;
    ```
 
-   `i18n.ts` exports the bundle and `useNotesT = createNamespaceT("notes", enNotesMessages)` (`web/src/i18n.ts:28`);
+   `i18n.ts` exports the bundle and `useNotesT = createNamespaceT("notes", enNotesMessages)` (`web/src/i18n.ts`);
    `tsconfig.json` extends `src/angee/tsconfig.base.json` by relative path. The template's `index.test.ts`
    calls `expectValidBaseAddon(addon)`; its `vitest.config.ts` passes `gqlAlias: []` until the fragment consumes
    `@angee/gql`. The stack's `pnpm-workspace.yaml` globs match `src/angee/*/web`, stack-local `src/*/*/web`
@@ -172,20 +172,20 @@ wires declarations only; the reference example throughout is `examples/src/examp
 
 ## Do not
 
-- A package fact (requirements, capability paths, a label that merely repeats the folder name) mirrored on `AppConfig`: the manifest owns it and installed entry points establish identity (native installed index); `label` belongs on `AppConfig` only to pin an already persisted label (`src/angee/base/apps.py:22`) ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
+- A package fact (requirements, capability paths, a label that merely repeats the folder name) mirrored on `AppConfig`: the manifest owns it and installed entry points establish identity (native installed index); `label` belongs on `AppConfig` only to pin an already persisted label (`BaseConfig.label` in `src/angee/base/apps.py`) ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
 - An addon-local registry, loader or settings parser for a fact native `django_compose.conf` or the manifest readers already read: the existing owner takes one explicit line instead ([keep policy above detail](../../../docs/guidelines.md#keep-policy-above-detail)).
-- A second registration of a framework-owned integration such as `PermissionIntegration` when the base already appends it (`src/angee/base/autoconfig.py:24`; duplicates refused at `django_compose.declarations.resolve_integrations`).
+- A second registration of a framework-owned integration such as `PermissionIntegration` when the base already appends it (`SETTINGS` in `src/angee/base/autoconfig.py`; duplicates refused at `django_compose.declarations.resolve_integrations`).
 - Model or `django.conf.settings` imports at `apps.py`/`autoconfig.py` module scope: settings merge runs before apps are ready, so only `ready()` and `settings(namespace)` may import ([Autoconfig](../../../docs/composer.md#autoconfig)).
 - A module named for a noun (`statements.py`) when the concern already has an owning module (`models.py`, `managers.py`, a verb module) ([Naming](../../../docs/backend/guidelines.md#naming)).
 - Customer, deployment or product names in framework-level code or fixtures; a consumer addon names its own product ([naming](../../../docs/guidelines.md#name-so-code-can-be-found-not-guessed)).
-- Caveated REBAC subjects in `permissions.zed`: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`src/angee/iam/checks.py:37`); use field-backed conditional relations.
+- Caveated REBAC subjects in `permissions.zed`: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`check_rebac_caveats` in `src/angee/base/checks.py`); use field-backed conditional relations.
 - An addon bundle under the `ui` i18n namespace or keys that override shared copy: the addon namespace equals its id and `ui` is reserved ([reserved namespace](../../../docs/frontend/guidelines.md#reserved-translation-namespace)).
 - A manifest typed by annotation (`const x: BaseAddon = {…}`) instead of `defineBaseAddon`, which owns validation of the declared shape ([frontend rules](../../../docs/frontend/guidelines.md#rules)).
 
 ## Verify
 
 Done means: package metadata parses, the app entry-point key agrees with its native config, the bare host imports with the addon listed; the
-fragment's `index.test.ts` passes; `runtime/web/manifest.json` (`src/angee/web/build.py:149`) lists the package.
+fragment's `index.test.ts` passes; `runtime/web/manifest.json` (`WebRuntime.manifest_json` in `src/angee/web/build.py`) lists the package.
 
 - In a lane (jj workspace: no host, database or JS install): focused pytest, ruff and mypy on touched files,
   `tests/test_layering.py`, `tests/test_base_layering.py` — [Python and composition contracts](../../../docs/checks.md#python-and-composition-contracts).

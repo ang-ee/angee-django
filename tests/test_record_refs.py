@@ -5,16 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.sessions.backends.db import SessionStore
-from django.contrib.sessions.models import Session
 from django.core.exceptions import ValidationError
-from django.db import connection, connections, models, transaction
+from django.db import connection, models
 from django.db.models.deletion import ProtectedError
 from django.db.models.signals import pre_delete
 from django.test.utils import CaptureQueriesContext, isolate_apps
-from django.utils import timezone
 from django.utils.module_loading import import_string
 from rebac import ObjectRef, generic_target, system_context
 from rebac.resources import model_resource_type
@@ -22,10 +20,8 @@ from rebac.resources import model_resource_type
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.models import refs as record_refs
-from angee.base.models.refs import delete_record_refs
-from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target, record_view_refs
-from angee.iam.models.refs import ProtectedRecordRefMixin, record_edges_by_target
-from angee.iam.refs import ancestor_object_refs
+from angee.base.models.refs import RecordRefMixin, delete_record_refs, record_edges_by_target
+from angee.base.refs import RecordRef, ancestor_object_refs, generic_pointer_model, generic_pointer_target
 from angee.knowledge import schema as knowledge_schema
 from angee.projects.testing.models import Link, Task
 from angee.storage import schema as storage_schema
@@ -37,7 +33,6 @@ from tests.mtidemo.models import (
     MtiParentProxy,
 )
 from tests.recordrefdemo.models import (
-    CustomColumnEdge,
     RecordRefCustomEdge,
     RecordRefNullableEdge,
     RecordRefPlainTarget,
@@ -101,11 +96,13 @@ def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tab
         model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=typed.pk,
         public_id=typed.public_id,
+        resource_type="tests/record-ref-target",
     )
     assert RecordRef.from_instance(plain) == RecordRef(
         model_label="recordrefdemo.RecordRefPlainTarget",
         object_id=plain.pk,
         public_id=plain.sqid,
+        resource_type="",
     )
 
 
@@ -131,6 +128,7 @@ def test_record_ref_mixin_projects_default_target_fields_with_cached_contenttype
         model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=target.pk,
         public_id=target.public_id,
+        resource_type="tests/record-ref-target",
     )
     assert any("django_content_type" in query["sql"] for query in first_access.captured_queries)
 
@@ -152,7 +150,7 @@ def test_record_ref_mixin_keeps_resource_type_empty_for_untyped_targets(record_r
         object_id=target.pk,
     )
 
-    assert edge.record_resource_type == ""
+    assert edge.record_ref.resource_type == ""
 
 
 def test_record_ref_mixin_returns_empty_ref_for_unset_pointer(record_ref_tables: None) -> None:
@@ -161,7 +159,7 @@ def test_record_ref_mixin_returns_empty_ref_for_unset_pointer(record_ref_tables:
     del record_ref_tables
     edge = RecordRefNullableEdge.objects.create(content_type=None, object_id=42)
 
-    assert edge.record_ref == RecordRef(model_label="", object_id=42, public_id="")
+    assert edge.record_ref == RecordRef(model_label="", object_id=42, public_id="", resource_type="")
 
 
 def test_record_ref_mixin_returns_empty_ref_for_stale_contenttype(record_ref_tables: None) -> None:
@@ -171,7 +169,7 @@ def test_record_ref_mixin_returns_empty_ref_for_stale_contenttype(record_ref_tab
     stale_content_type = ContentType.objects.create(app_label="missing", model="recordrefghost")
     edge = RecordRefTargetEdge.objects.create(content_type=stale_content_type, object_id=43)
 
-    assert edge.record_ref == RecordRef(model_label="", object_id=43, public_id="")
+    assert edge.record_ref == RecordRef(model_label="", object_id=43, public_id="", resource_type="")
 
 
 def test_record_ref_mixin_uses_the_declared_subject_relation(record_ref_tables: None) -> None:
@@ -189,6 +187,7 @@ def test_record_ref_mixin_uses_the_declared_subject_relation(record_ref_tables: 
         model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=target.pk,
         public_id=target.public_id,
+        resource_type="tests/record-ref-target",
     )
     assert edge.record_model_label == "recordrefdemo.RecordRefTypedTarget"
     assert edge.record_public_id == target.public_id
@@ -255,7 +254,7 @@ def test_record_ref_mixin_projects_each_source_addon_reference(
 def test_record_ref_mixin_rejects_a_missing_generic_foreign_key() -> None:
     """A missing relation is an invalid declaration, not an empty record pointer."""
 
-    class MissingReference(ProtectedRecordRefMixin):
+    class MissingReference(RecordRefMixin):
         """Invalid reference model without a generic relation."""
 
         class Meta:
@@ -273,7 +272,7 @@ def test_record_ref_mixin_rejects_a_missing_generic_foreign_key() -> None:
 def test_record_ref_mixin_rejects_ambiguous_generic_foreign_keys() -> None:
     """Two generic relations cannot silently choose which record to project."""
 
-    class AmbiguousReference(ProtectedRecordRefMixin):
+    class AmbiguousReference(RecordRefMixin):
         """Invalid reference model with two otherwise valid generic relations."""
 
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
@@ -305,7 +304,7 @@ def test_record_ref_mixin_accepts_its_declared_generic_pointer() -> None:
 def test_record_ref_mixin_rejects_unknown_target_delete_policy() -> None:
     """An edge must use one of Django's three supported target-delete policies."""
 
-    class InvalidPolicy(ProtectedRecordRefMixin):
+    class InvalidPolicy(RecordRefMixin):
         on_target_delete = models.DO_NOTHING
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
         object_id = models.PositiveBigIntegerField()
@@ -323,7 +322,7 @@ def test_record_ref_mixin_rejects_unknown_target_delete_policy() -> None:
 def test_record_ref_mixin_requires_nullable_columns_for_set_null() -> None:
     """SET_NULL cannot leave half of a generic pointer behind."""
 
-    class NonNullableSetNull(ProtectedRecordRefMixin):
+    class NonNullableSetNull(RecordRefMixin):
         on_target_delete = models.SET_NULL
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
         object_id = models.PositiveBigIntegerField()
@@ -372,104 +371,6 @@ def test_target_delete_protects_declared_record_edges(
     assert RecordRefSubjectEdge.objects.filter(pk=edge.pk).exists()
 
 
-def test_collected_target_batch_rolls_back_edge_cleanup_on_protection(
-    record_ref_tables: None,
-    record_ref_delete_receiver: None,
-) -> None:
-    """A protected member refuses the whole collected batch and keeps nullable edges."""
-    del record_ref_tables, record_ref_delete_receiver
-    with system_context(reason="record-ref collected protection"):
-        targets = [RecordRefTypedTarget.objects.create(name=f"batch-{index}") for index in range(2)]
-        nullable = RecordRefNullableEdge.objects.create(target=targets[0])
-        protected = RecordRefSubjectEdge.objects.create(subject=targets[1])
-        with pytest.raises(ProtectedError):
-            RecordRefTypedTarget._base_manager.filter(pk__in=[target.pk for target in targets]).delete()
-
-    assert RecordRefTypedTarget._base_manager.filter(pk__in=[target.pk for target in targets]).count() == 2
-    nullable.refresh_from_db()
-    content_type, object_id = generic_pointer_target(targets[0])
-    assert (nullable.content_type_id, nullable.object_id) == (content_type.pk, object_id)
-    assert RecordRefSubjectEdge.objects.filter(pk=protected.pk).exists()
-
-
-def test_collected_protection_names_first_target_and_only_its_blockers(
-    record_ref_tables: None,
-    record_ref_delete_receiver: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A collected refusal keeps the first target's first declared blocking edge."""
-    del record_ref_tables, record_ref_delete_receiver
-    monkeypatch.setattr(
-        record_refs,
-        "record_edges_by_target",
-        lambda: {RecordRefTypedTarget: (RecordRefCustomEdge, RecordRefSubjectEdge)},
-    )
-    with system_context(reason="record-ref collected protection order"):
-        first = RecordRefTypedTarget.objects.create(name="first")
-        second = RecordRefTypedTarget.objects.create(name="second")
-        first_edge = RecordRefSubjectEdge.objects.create(subject=first)
-        custom_edge = RecordRefCustomEdge.objects.create(linked=second)
-        with pytest.raises(ProtectedError) as refusal, transaction.atomic():
-            RecordRefTypedTarget._base_manager.filter(pk__in=[first.pk, second.pk]).delete()
-        assert refusal.value.args[0] == f"{RecordRefSubjectEdge._meta.label} rows still refer to {first}."
-        assert refusal.value.protected_objects == {first_edge}
-
-        first_edge.delete()
-        custom_edge.delete()
-        second_edge = RecordRefSubjectEdge.objects.create(subject=second)
-        first_edge = RecordRefSubjectEdge.objects.create(subject=first)
-        with pytest.raises(ProtectedError) as refusal, transaction.atomic():
-            RecordRefTypedTarget._base_manager.filter(pk__in=[first.pk, second.pk]).delete()
-        assert refusal.value.args[0] == f"{RecordRefSubjectEdge._meta.label} rows still refer to {first}."
-        assert refusal.value.protected_objects == {first_edge}
-        assert second_edge not in refusal.value.protected_objects
-
-
-def test_collected_protection_uses_pk_order_when_collector_set_order_differs(
-    record_ref_tables: None,
-    record_ref_delete_receiver: None,
-) -> None:
-    """The first refusal follows Django's sorted pre_delete order, not set order."""
-    del record_ref_tables, record_ref_delete_receiver
-    with system_context(reason="record-ref collector order"):
-        pool = [RecordRefTypedTarget.objects.create(name=f"order-{index}") for index in range(24)]
-        pair = next(
-            (
-                (low, high)
-                for index, low in enumerate(pool)
-                for high in pool[index + 1:]
-                if next(iter({low, high})) is high
-            ),
-            None,
-        )
-        assert pair is not None
-        low, high = pair
-        low_edge = RecordRefSubjectEdge.objects.create(subject=low)
-        high_edge = RecordRefSubjectEdge.objects.create(subject=high)
-
-        with pytest.raises(ProtectedError) as refusal, transaction.atomic():
-            RecordRefTypedTarget._base_manager.filter(pk__in=[low.pk, high.pk]).delete()
-
-    assert refusal.value.args[0] == f"{RecordRefSubjectEdge._meta.label} rows still refer to {low}."
-    assert refusal.value.protected_objects == {low_edge}
-    assert high_edge not in refusal.value.protected_objects
-    assert RecordRefTypedTarget._base_manager.filter(pk__in=[low.pk, high.pk]).count() == 2
-
-
-def test_collected_delete_chunks_run_lookup_beyond_sqlite_expression_depth(
-    record_ref_tables: None,
-) -> None:
-    """More than 1,000 admitted targets use bounded run-lookup statements."""
-    del record_ref_tables
-    with system_context(reason="record-ref large collected delete"):
-        targets = RecordRefTypedTarget.objects.bulk_create(
-            [RecordRefTypedTarget(name=f"large-{index}") for index in range(1_101)],
-        )
-        ids = [target.pk for target in targets]
-        RecordRefTypedTarget._base_manager.filter(pk__in=ids).delete()
-    assert not RecordRefTypedTarget._base_manager.filter(pk__in=ids).exists()
-
-
 def test_target_delete_nulls_declared_record_edges_from_a_queryset(
     record_ref_tables: None,
     record_ref_delete_receiver: None,
@@ -486,39 +387,6 @@ def test_target_delete_nulls_declared_record_edges_from_a_queryset(
     assert (edge.content_type_id, edge.object_id) == (None, None)
 
 
-def test_target_delete_skips_edges_with_incompatible_object_id_fields(
-    record_ref_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Deleting a string-keyed session must not query a numeric generic pointer."""
-
-    del record_ref_tables
-    monkeypatch.setattr(record_refs, "record_edges_by_target", lambda: {Session: (RecordRefTargetEdge,)})
-    session = Session.objects.create(session_key="non_numeric_session_key", session_data="", expire_date=timezone.now())
-
-    session.delete()
-
-    assert not Session.objects.filter(pk=session.pk).exists()
-
-
-def test_auth_session_delete_keeps_compatible_string_edge_protection(record_ref_tables: None) -> None:
-    """A string generic pointer can protect the same opaque session key."""
-
-    del record_ref_tables
-    store = SessionStore()
-    store["actor"] = "test"
-    store.save(must_create=True)
-    session = Session.objects.get(session_key=store.session_key)
-    with system_context(reason="record-ref auth session protection"):
-        edge = CustomColumnEdge.objects.create(target=session)
-        with pytest.raises(ProtectedError):
-            session.delete()
-        edge.delete()
-        session.delete()
-
-    assert not Session.objects.filter(session_key=store.session_key).exists()
-
-
 def test_declared_target_models_read_the_schema_target_relations(composed_permissions: None) -> None:
     """An edge's accepted target types are the schema's `target`-backed relations, by label."""
 
@@ -531,7 +399,7 @@ def test_declared_target_models_read_the_schema_target_relations(composed_permis
 
 
 def test_record_edges_invert_the_declared_targets_into_resource_metadata(composed_permissions: None) -> None:
-    """IAM's declared-target index matches the edges in protected resource metadata."""
+    """A type carries every edge accepting its canonical type; its resource lists them."""
 
     del composed_permissions
     index = record_edges_by_target()
@@ -542,8 +410,7 @@ def test_record_edges_invert_the_declared_targets_into_resource_metadata(compose
         "messaging.ThreadAttachment",
         "projects.Link",
         "projects.Task",
-        "storage.FileAttachment",
-        "tags.TagAssignment",
+        "storage.FileAttachment", "tags.TagAssignment",
     ]
     assert FileAttachment.declares_target(MtiChild) and FileAttachment.declares_target(MtiChildProxy)
     assert not FileAttachment.declares_target(File) and not RecordBinding.declares_target(RecordRefPlainTarget)
@@ -564,49 +431,6 @@ def test_record_edges_invert_the_declared_targets_into_resource_metadata(compose
     pages = {item.model_label: item for item in addon_schema(knowledge_schema.schemas, "public").angee_resources}
     edges = pages["knowledge.Page"].record_edges
     assert "messaging.ThreadAttachment" in edges and "messaging.ThreadAttachment:chatter" in edges
-
-
-def test_record_edge_index_reuses_one_effective_schema(composed_permissions: None) -> None:
-    """One build asks for the effective policy once across every edge model."""
-
-    del composed_permissions
-    record_refs._target_edge_index.clear()
-    with CaptureQueriesContext(connection) as queries:
-        first = record_refs.record_edges_by_target()
-        for _ in range(10):
-            assert record_refs.record_edges_by_target() is first
-    revision_reads = [query for query in queries if "rebac_schemageneration" in query["sql"].lower()]
-    # A cold schema load may validate the revision twice; later calls read once.
-    assert len(revision_reads) <= 12
-    assert RecordRefTypedTarget in first
-    legacy: dict[type[models.Model], list[type[record_refs.RecordRefMixin]]] = {}
-    for edge in sorted(record_refs.apps.get_models(), key=lambda model: model._meta.label):
-        if issubclass(edge, record_refs.RecordRefMixin):
-            for target in edge.accepted_target_models().values():
-                legacy.setdefault(target, []).append(edge)
-    assert first == {target: tuple(edges) for target, edges in legacy.items()}
-
-
-def test_record_edge_index_rebuilds_when_a_target_model_registers(composed_permissions: None) -> None:
-    """A late model joins the target set even when the schema snapshot is unchanged."""
-
-    del composed_permissions
-    before = record_refs.record_edges_by_target()
-    registered_models = record_refs.apps.get_models()
-
-    class LateRecordRefTarget(models.Model):
-        class Meta:
-            app_label = "recordrefdemo"
-
-    try:
-        assert record_refs.apps.get_models() is not registered_models
-        after = record_refs.record_edges_by_target()
-        assert after is not before
-        assert RecordRefNullableEdge in after[LateRecordRefTarget]
-    finally:
-        record_refs.apps.all_models["recordrefdemo"].pop("laterecordreftarget")
-        record_refs.apps.clear_cache()
-        record_refs._target_edge_index.clear()
 
 
 def test_concrete_child_uses_parent_link_and_prefetched_child(record_ref_tables: None) -> None:
@@ -689,39 +513,22 @@ def test_ancestor_object_refs_fails_fast_at_the_call_on_an_untyped_row(record_re
         ancestor_object_refs(plain)
 
 
-def test_concrete_child_keeps_the_loaded_parents_database(record_ref_tables, django_db_blocker):
-    """An uncached child lookup uses its parent's connection without a model router."""
+def test_concrete_child_of_a_loaded_parent_costs_one_query(record_ref_tables):
+    """An uncached child lookup from a loaded parent reads the child row once."""
 
-    alias = "lineage_secondary"
-    connections.databases[alias] = {**connections.databases["default"]}
-    selected = connections[alias]
-    with django_db_blocker.unblock():
-        selected.ensure_connection()
-    try:
-        with system_context(reason="test.lineage.secondary"):
-            child = MtiChild.objects.create(title="Parent", detail="Selected child")
-            parent = MtiParent._base_manager.using(alias).get(pk=child.pk)
-            with CaptureQueriesContext(connection) as default_queries, CaptureQueriesContext(selected) as queries:
-                found = concrete_child(parent, MtiChild)
-            assert found is not None and found.detail == "Selected child"
-            assert found._state.db == alias
-            assert len(queries) == 1
-            assert len(default_queries) == 0
-    finally:
-        selected.close()
-        del connections[alias]
-        del connections.databases[alias]
+    with system_context(reason="test.lineage.child"):
+        child = MtiChild.objects.create(title="Parent", detail="Child detail")
+        parent = MtiParent._base_manager.get(pk=child.pk)
+        with CaptureQueriesContext(connection) as queries:
+            found = concrete_child(parent, MtiChild)
+        assert found is not None and found.detail == "Child detail"
+        assert found._state.db == parent._state.db
+        assert len(queries) == 1
 
 
-@pytest.mark.postgresql
-def test_inherited_record_refs_obey_the_native_parameter_budget(composed_tables, monkeypatch):
-    """SQLite chunks parameters; PostgreSQL binds the identities as one array."""
-    with system_context(reason="test.refs.parameter_batches"):
-        children = [MtiChild.objects.create(title=f"Parent {index}", detail="Child") for index in range(5)]
-        identities = [RecordRef.from_model(MtiParent, child.pk) for child in children]
-        with monkeypatch.context() as features:
-            features.setattr(type(connection.features), "max_query_params", 2)
-            with CaptureQueriesContext(connection) as captured:
-                expanded = record_view_refs(*identities)
-    assert set(expanded) == {*identities, *(RecordRef.from_instance(child) for child in children)}
-    assert len(captured) == (1 if connection.vendor == "postgresql" else 3)
+def test_record_targets_read_pointer_ids_in_the_target_key_type() -> None:
+    """A pointer id is coerced to the target's primary key; one the key cannot hold names no row."""
+
+    user = get_user_model()
+    assert record_refs._target_pks(user, {"42", "7", "not-a-key", ""}) == {42, 7}
+    assert record_refs._target_pks(user, {"not-a-key"}) == set()

@@ -12,6 +12,7 @@ from django.core import checks
 from django.db import connection
 from rebac import system_context
 
+from angee.graphql.testing.documents import execute_schema
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient
 from angee.messaging.testing.models import Directory, Handle, Party, Person
@@ -29,7 +30,7 @@ from angee.parties_integrate_carddav.backend import (
     _parse_vcard,
 )
 from tests import test_parties_graphql as parties_graphql
-from tests.conftest import Credential, Integration, Vendor, addon_schema, execute_schema
+from tests.conftest import Credential, Integration, Vendor, addon_schema
 
 _CONNECT_CARDDAV_MUTATION = """
 mutation ConnectCardDav(
@@ -148,7 +149,6 @@ def test_photo_download_is_capped_and_uses_the_collection_origin(settings: Any) 
     assert resolved.photo == ParsedPhoto(data=b"photo", mime="image/jpeg")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_connect_probe_failure_writes_no_rows(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -177,7 +177,6 @@ def test_connect_probe_failure_writes_no_rows(
             assert not model._base_manager.exists(), model._meta.label
 
 
-@pytest.mark.django_db(transaction=True)
 def test_connect_probe_success_commits_every_owned_row_atomically(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,

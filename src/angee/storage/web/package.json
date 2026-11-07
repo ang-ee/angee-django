@@ -19,7 +19,6 @@
     "@angee/metadata": "workspace:*",
     "@angee/ui": "workspace:*",
     "@refinedev/core": "^5.0.12",
-    "@tanstack/react-query": "^5.101.2",
     "@noble/hashes": "^2.0.1",
     "@vidstack/react": "^1.12.13",
     "heic-to": "^1.2.1",

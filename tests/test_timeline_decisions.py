@@ -5,22 +5,13 @@ from __future__ import annotations
 import pytest
 from django.db import models, transaction
 from django.utils import timezone
-from rebac import (
-    RelationshipTuple,
-    SubjectRef,
-    actor_context,
-    system_context,
-    to_object_ref,
-    to_subject_ref,
-    write_relationships,
-)
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.projects.testing.models import Task
 from angee.tags.testing.models import Tag
-from angee.workflows.timeline import TimelineSelection
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.test_timeline import read_timeline, timeline_entries
 
@@ -71,7 +62,7 @@ def test_ask_then_decide_updates_the_line_and_live_attention(people) -> None:
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 1
     assert not read_timeline(subject, requester, needsMe=True)["timeline"]["entries"]
 
-    question.decide(actor=reviewer, chosen=["complete"], revision=question.revision)
+    Decision.objects.decide(question, actor=reviewer, chosen=["complete"], revision=question.revision)
     original_key = event.key
     event, = timeline_entries(subject, reviewer)
     assert event.key == original_key
@@ -93,19 +84,6 @@ def test_record_reader_without_decision_read_sees_no_line_identity_or_count(peop
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 0
 
 
-def test_open_decision_count_keeps_record_attention_when_question_is_unreadable(composed_tables) -> None:
-    issuer = create_platform_admin("timeline-count-issuer")
-    reader = create_user("timeline-count-reader")
-    assignee = create_platform_admin("timeline-count-assignee")
-    record = vault_for(reader)
-    decision = Decision.objects.ask(DecisionRequest(
-        kind="confirm_record", records=(record,), requester=None, assignees=(assignee,),
-        proposal=DecisionProposal(alternatives=[{"key": "confirm", "label": "Confirm", "outcome": "done"}]),
-    ), actor=issuer)
-    assert not Decision.objects.with_actor(reader).filter(pk=decision.pk).exists()
-    assert TimelineSelection([record], reader, run_limit=1).open_decision_count == 1
-
-
 def test_unassigned_attention_uses_answer_permission_without_claiming_others_assignments(people) -> None:
     requester, reviewer, bystander, subject = people
     admin = create_platform_admin("timeline-unassigned-admin")
@@ -116,44 +94,10 @@ def test_unassigned_attention_uses_answer_permission_without_claiming_others_ass
     assert read_timeline(subject, admin)["timeline_attention"] == 1
     assert read_timeline(subject, requester)["timeline_attention"] == 0
     assert read_timeline(subject, bystander)["timeline"]["entries"] == []
-    decision.decide(actor=admin, revision=decision.revision, chosen=["done"])
+    Decision.objects.decide(decision, actor=admin, revision=decision.revision, chosen=["done"])
     ask(people)
     assert read_timeline(subject, admin)["timeline_attention"] == 0
     assert read_timeline(subject, reviewer)["timeline_attention"] == 1
-
-
-
-def test_waiting_expression_matches_filter_without_multiplying_assignments(people) -> None:
-    requester, reviewer, second_assignee, subject = people
-    admin = create_platform_admin("waiting-projection-admin")
-    proposal = DecisionProposal(alternatives=[{"key": "done", "label": "Done", "outcome": "done"}])
-    assigned = Decision.objects.ask(DecisionRequest(
-        kind="note_review", records=(subject,), assignees=(reviewer, second_assignee),
-        requester=requester, proposal=proposal,
-    ), actor=requester)
-    unassigned = Decision.objects.ask(DecisionRequest(
-        kind="unassigned_review", records=(subject,), requester=requester, proposal=proposal,
-    ), actor=requester)
-    expected_by_actor = (
-        (requester, {assigned.pk: False, unassigned.pk: False}),
-        (reviewer, {assigned.pk: True}),
-        (second_assignee, {assigned.pk: True}),
-        (admin, {assigned.pk: False, unassigned.pk: True}),
-    )
-    for actor, expected in expected_by_actor:
-        rows = Decision.objects.with_actor(actor).filter(pk__in=(assigned.pk, unassigned.pk))
-        projected = list(rows.annotate(waiting=rows.waiting_on_expression(actor)).values_list("pk", "waiting"))
-        assert len(projected) == len(expected)
-        assert dict(projected) == expected
-        assert set(rows.waiting_on(actor).values_list("pk", flat=True)) == {
-            pk for pk, waiting in expected.items() if waiting
-        }
-    rows = Decision.objects.with_actor(admin).filter(pk__in=(assigned.pk, unassigned.pk))
-    for actor in (None, SubjectRef.of("angee/role", "admin")):
-        assert rows.waiting_on(actor).query.is_empty()
-        assert list(rows.annotate(waiting=rows.waiting_on_expression(actor)).values_list("waiting", flat=True)) == [
-            False, False,
-        ]
 
 
 def test_subscribers_read_committed_sources_at_the_change_broadcast(people, monkeypatch) -> None:
@@ -174,7 +118,7 @@ def test_withdraw_publishes_the_owner_update_and_clears_attention(people) -> Non
     requester, reviewer, _, subject = people
     question = ask(people)
     with system_context(reason="test.timeline.withdraw"):
-        question.withdraw(actor=requester)
+        Decision.objects.withdraw(question, actor=requester)
     assert timeline_entries(subject, reviewer)[0].detail == "Withdrawn"
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
 
@@ -198,7 +142,7 @@ def test_merge_keeps_one_occurrence_on_the_survivor(composed_permissions, both_r
     with actor_context(requester):
         survivor.with_actor(requester).merge(records=[public_id_of(duplicate)])
     event, = timeline_entries(survivor, reviewer)
-    question.decide(actor=reviewer, chosen=["complete"])
+    Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
     current, = timeline_entries(survivor, reviewer)
     assert current.key == event.key
     assert current.detail == "Complete"
@@ -217,7 +161,7 @@ def test_rollback_discards_invalidations_and_source_rows(people, monkeypatch):
         assert timeline_entries(subject, reviewer) == []
         assert broadcasts == []
         question = ask(people)
-        question.decide(actor=reviewer, chosen=["complete"])
+        Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
         assert broadcasts == []
     assert broadcasts
     assert timeline_entries(subject, reviewer)[0].detail == "Complete"

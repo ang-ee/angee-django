@@ -10,7 +10,6 @@ import strawberry
 from django.contrib.auth.models import AnonymousUser, Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
-from django.test import RequestFactory
 from graphql import GraphQLError
 from rebac import (
     PermissionDenied,
@@ -23,18 +22,21 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
-import angee.iam.graphql.actions as protected_actions_module
 from angee.base.exceptions import RecordAccessSubjectRefused, TransitionNotAllowed
 from angee.base.models.locks import StaleRevisionError
-from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard, many_actions
-from angee.graphql.schema import AngeeSchema
-from angee.iam.graphql.actions import (
+from angee.graphql.actions import (
+    ActionResult,
+    ActionSelectionInput,
+    action_guard,
     action_target,
     authorized_action_target,
     authorized_permission_target,
+    many_actions,
     resolve_action_target,
 )
-from angee.provenance.engine.exceptions import CreationKeyConflict
+from angee.graphql.schema import AngeeSchema
+from angee.graphql.testing.documents import graphql_request
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import create_user
 from tests.linesdemo.models import Document
 
@@ -312,7 +314,7 @@ def test_resolve_action_target_elevates_lookup(
         reasons.append(reason)
         return Context()
 
-    monkeypatch.setattr(protected_actions_module, "system_context", system_context)
+    monkeypatch.setattr(actions_module, "system_context", system_context)
 
     target = resolve_action_target(
         Group,
@@ -392,7 +394,7 @@ def test_action_target_wraps_lookup_and_body_in_system_context(
 
         return Context(reason)
 
-    monkeypatch.setattr(protected_actions_module, "system_context", system_context)
+    monkeypatch.setattr(actions_module, "system_context", system_context)
 
     with action_target(Group, str(group.pk), reason="tests.action.context") as target:
         assert target == group
@@ -425,8 +427,7 @@ def _grant(document: Document, relation: str, user: Any) -> None:
 def _info_for(user: Any) -> Any:
     """Return a Strawberry-Info-shaped stub carrying a request with ``user``."""
 
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user
+    request = graphql_request(user)
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 

@@ -50,35 +50,11 @@ def test_one_question_lifecycle_and_audit(people):
     question = Decision.objects.ask(request_for(people), actor=requester)
     assert question.requester_id == requester.pk and question.is_open and question.verdict is None
     assert question.records.with_actor(reviewer).get().object_id == subject.pk
-    answered = question.decide(actor=reviewer, chosen=["complete"], revision=question.revision)
+    answered = Decision.objects.decide(question, actor=reviewer, chosen=["complete"], revision=question.revision)
     assert answered.verdict == ["complete"] and not answered.is_open
     assert answered.answered_by_id == reviewer.pk and answered.answered_at
     assert answered.revision == question.revision + 1
     assert Decision.system_queryset().count() == 1
-
-
-@pytest.mark.parametrize("empty_values", (None, {}))
-def test_direct_decide_still_checks_act_and_skips_records_when_values_empty(people, monkeypatch, empty_values):
-    requester, reviewer, _other, outsider, _subject = people
-    question = Decision.objects.ask(request_for(people), actor=requester)
-    require_access = Decision.require_access
-    checked = []
-
-    def check(self, permission, actor=None):
-        checked.append(permission)
-        return require_access(self, permission, actor)
-
-    def unexpected_record_read(*_args, **_kwargs):
-        pytest.fail("An empty verdict's record links must not be loaded")
-
-    monkeypatch.setattr(Decision, "require_access", check)
-    monkeypatch.setattr(type(question.records), "with_actor", unexpected_record_read)
-    with pytest.raises(PermissionDenied):
-        question.decide(actor=outsider, chosen=["complete"], values=empty_values)
-    assert checked == ["act"]
-    answered = question.decide(actor=reviewer, chosen=["complete"], values=empty_values)
-    assert answered.verdict == ["complete"]
-    assert checked == ["act", "act"]
 
 
 @pytest.mark.parametrize("assignments", [{}, {"assignees": ()}])
@@ -94,10 +70,10 @@ def test_unassigned_question_accepts_only_an_active_admin_answer(people, assignm
     assert not question.assignees.with_actor(admin).exists()
     for person in (requester, reviewer, other, outsider):
         with pytest.raises(PermissionDenied):
-            question.decide(actor=person, chosen=["complete"])
+            Decision.objects.decide(question, actor=person, chosen=["complete"])
     question.refresh_from_db()
     assert question.is_open and question.revision == 1
-    answered = question.decide(actor=admin, chosen=["complete"])
+    answered = Decision.objects.decide(question, actor=admin, chosen=["complete"])
     assert answered.verdict == ["complete"] and answered.answered_by_id == admin.pk
 
 
@@ -109,10 +85,13 @@ def test_unassigned_actorless_question_still_requires_an_admission_reader(people
     assert not Decision.system_queryset().exists()
 
 
-def test_actorless_question_does_not_return_an_assignee_pin(people):
-    with system_context(reason="test actorless question return scope"):
-        question = Decision.objects.ask(request_for(people), actor=None)
-    assert question.actor() is None
+def test_ask_returns_no_assignee_pin(people):
+    requester, *_ = people
+    with system_context(reason="test.actorless_question.return_scope"):
+        actorless = Decision.objects.ask(request_for(people), actor=None)
+    assert actorless.actor() is None
+    asked = Decision.objects.ask(request_for(people), actor=requester)
+    assert asked.actor() == to_subject_ref(requester)
 
 
 @pytest.mark.parametrize("chosen", [[], ["unknown"], ["complete", "complete"], ["complete", "decline"], "complete"])
@@ -120,7 +99,7 @@ def test_invalid_choices_never_close_or_increment(people, chosen):
     requester, reviewer, *_ = people
     question = Decision.objects.ask(request_for(people), actor=requester)
     with pytest.raises(ValidationError):
-        question.decide(actor=reviewer, chosen=chosen, revision=question.revision)
+        Decision.objects.decide(question, actor=reviewer, chosen=chosen, revision=question.revision)
     question.refresh_from_db()
     assert question.verdict is None and question.revision == 1
 
@@ -129,12 +108,12 @@ def test_multiple_verdict_has_authored_order_and_one_audit(people):
     requester, reviewer, *_ = people
     proposal = request_for(people).proposal.model_copy(update={"multiple": True})
     question = Decision.objects.ask(request_for(people, proposal=proposal), actor=requester)
-    answered = question.decide(actor=reviewer, chosen=["decline", "complete"])
+    answered = Decision.objects.decide(question, actor=reviewer, chosen=["decline", "complete"])
     assert answered.verdict == ["complete", "decline"]
     with pytest.raises(ValidationError):
-        question.decide(actor=reviewer, chosen=["decline"])
+        Decision.objects.decide(question, actor=reviewer, chosen=["decline"])
     with pytest.raises(StaleRevisionError):
-        question.decide(actor=reviewer, chosen=["decline"], revision=question.revision)
+        Decision.objects.decide(question, actor=reviewer, chosen=["decline"], revision=question.revision)
 
 
 def test_composed_verdict_policy_refuses_without_retaining_an_answer(people, monkeypatch):
@@ -147,7 +126,7 @@ def test_composed_verdict_policy_refuses_without_retaining_an_answer(people, mon
 
     monkeypatch.setattr(Decision, "validate_verdict", refuse)
     with pytest.raises(ValidationError, match="Correct the record"):
-        question.decide(actor=reviewer, chosen=["complete"])
+        Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
     question.refresh_from_db()
     assert question.is_open and question.revision == 1 and question.answered_by is None
 
@@ -168,11 +147,11 @@ def test_readers_requesters_and_removed_assignees_cannot_answer(people):
     assert question.with_actor(requester).has_access("read")
     for person in (requester, other, outsider):
         with pytest.raises(PermissionDenied):
-            question.decide(actor=person, chosen=["complete"])
+            Decision.objects.decide(question, actor=person, chosen=["complete"])
     with system_context(reason="test.remove_assignee"):
         Decision.system_queryset().get(pk=question.pk).assignees.remove(reviewer)
     with pytest.raises(PermissionDenied):
-        question.decide(actor=reviewer, chosen=["complete"])
+        Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
     subject.with_actor(requester).name = "A direct edit"
     subject.save(update_fields=["name"])
     question.refresh_from_db()
@@ -182,9 +161,9 @@ def test_readers_requesters_and_removed_assignees_cannot_answer(people):
 def test_two_assignees_still_answer_one_question(people):
     requester, reviewer, other, *_ = people
     question = Decision.objects.ask(request_for(people, assignees=(reviewer, other)), actor=requester)
-    question.decide(actor=reviewer, chosen=["complete"])
+    Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
     with pytest.raises(StaleRevisionError):
-        question.decide(actor=other, chosen=["decline"], revision=question.revision)
+        Decision.objects.decide(question, actor=other, chosen=["decline"], revision=question.revision)
     assert Decision.system_queryset().get(pk=question.pk).answered_by_id == reviewer.pk
 
 
@@ -229,13 +208,13 @@ def test_answer_owner_runs_inside_the_verdict_transaction(people):
     decision_answered.connect(collect, weak=False)
     try:
         with pytest.raises(RuntimeError), transaction.atomic():
-            question.decide(actor=reviewer, chosen=["complete"])
+            Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
             assert received == [(question.pk, to_subject_ref(reviewer), False)]
             raise RuntimeError("Roll back")
         question.refresh_from_db()
         assert question.is_open
         received.clear()
-        question.decide(actor=reviewer, chosen=["complete"])
+        Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
         assert received == [(question.pk, to_subject_ref(reviewer), False)]
     finally:
         decision_answered.disconnect(collect)
@@ -254,7 +233,7 @@ def test_supplied_values_cannot_be_stored_on_open_or_withdrawn_decisions(people,
     question = Decision.objects.ask(request_for(people), actor=requester)
     if withdrawn:
         with system_context(reason="test.withdraw"):
-            question = question.withdraw(actor=requester)
+            question = Decision.objects.withdraw(question, actor=requester)
     with pytest.raises(IntegrityError), transaction.atomic():
         Decision.system_queryset().filter(pk=question.pk).owner_update(verdict_values={"record": {"name": "value"}})
     question.refresh_from_db()
@@ -278,7 +257,7 @@ def test_system_withdrawal_retains_time_without_inventing_a_user(people):
     requester, *_ = people
     question = Decision.objects.ask(request_for(people), actor=requester)
     with system_context(reason="tests.decisions.system_withdrawal"):
-        withdrawn = question.withdraw(actor=None)
+        withdrawn = Decision.objects.withdraw(question, actor=None)
     assert withdrawn.verdict == []
     assert withdrawn.answered_by_id is None
     assert withdrawn.answered_at is not None

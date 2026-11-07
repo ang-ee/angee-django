@@ -12,18 +12,10 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.roles import grant
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge.retrieval import LexicalRetrievalBackend
 from angee.provenance.context import changeset_model
-from tests.conftest import (
-    MarkdownPage,
-    Page,
-    Vault,
-    addon_schema,
-    create_user,
-    execute_schema,
-    result_data,
-    vault_for,
-)
+from tests.conftest import MarkdownPage, Page, Vault, addon_schema, create_user, vault_for
 from tests.knowledge_retrieval import ReverseRetrieval
 from tests.test_knowledge import _grant
 
@@ -86,7 +78,7 @@ def test_navigation_relations_batch_narrow_lists_without_disclosing_hidden_pages
     variables = {"ids": [str(source.sqid) for source in sources]}
     result_data(execute_schema(schema, query, variables, user=reader))
     counts = []
-    for size in (1, 2, len(sources)):
+    for size in (1, len(sources)):
         with CaptureQueriesContext(connection) as captured:
             data = result_data(execute_schema(schema, query, {"ids": variables["ids"][:size]}, user=reader))["pages"]
         counts.append(len(captured))
@@ -100,8 +92,7 @@ def test_navigation_relations_batch_narrow_lists_without_disclosing_hidden_pages
                 {"title": "Missing target", "page": None},
                 {"title": "Visible target", "page": str(visible_target.sqid)},
             ]
-    # Native exact-point and population plans differ; population work must stay constant.
-    assert counts[0] <= counts[1] == counts[2], counts
+    assert counts[1] == counts[0], counts
 
 
 def test_ancestor_prefetch_preserves_the_supplied_actor_and_deferred_model_fields(composed_tables: None) -> None:
@@ -149,7 +140,7 @@ def test_nested_ancestor_selections_batch_shared_paths_and_aliases(composed_tabl
     ids = [str(child.sqid) for child in children]
     result_data(execute_schema(schema, query, {"ids": ids}, user=reader))
     counts = []
-    for size in (1, 2, len(children)):
+    for size in (1, len(children)):
         with CaptureQueriesContext(connection) as captured:
             rows = result_data(execute_schema(schema, query, {"ids": ids[:size]}, user=reader))["pages"]
         counts.append(len(captured))
@@ -164,8 +155,7 @@ def test_nested_ancestor_selections_batch_shared_paths_and_aliases(composed_tabl
                     ]},
                 ],
             }
-    # Native exact-point and population plans differ; population work must stay constant.
-    assert counts[0] <= counts[1] == counts[2], counts
+    assert counts[1] == counts[0], counts
 
 
 @pytest.mark.django_db
@@ -613,7 +603,7 @@ def test_search_projection_batches_relations_and_preserves_backend_rank_and_acce
     }"""
     result_data(execute_schema(schema, query, {"first": len(pages)}, user=reader))
     counts = []
-    for size in (1, 2, len(pages)):
+    for size in (1, len(pages)):
         with CaptureQueriesContext(connection) as captured:
             rows = result_data(execute_schema(schema, query, {"first": size}, user=reader))["search_pages"]
         counts.append(len(captured))
@@ -623,8 +613,7 @@ def test_search_projection_batches_relations_and_preserves_backend_rank_and_acce
             "ancestors": [{"title": "Folder", "has_children": True}],
             "wikilinks": [{"title": "Target", "page": str(target.sqid)}],
         } for page in expected]
-    # Native exact-point and population plans differ; population work must stay constant.
-    assert counts[0] <= counts[1] == counts[2], counts
+    assert counts[1] == counts[0], counts
 
 
 def test_page_backlinks_list_resolved_sources(composed_tables: None) -> None:
@@ -714,7 +703,7 @@ def test_delete_vault_previews_blast_radius(composed_tables: None) -> None:
     assert preview["total_deleted_count"] >= 2
     assert preview["has_blockers"] is False
     assert {group["label"] for group in preview["deleted"]} >= {"vaults", "pages"}
-    assert Vault.objects.with_actor(alice).exists()
+    assert Vault.objects.as_user(alice).exists()
 
     result_data(
         execute_schema(
@@ -728,7 +717,7 @@ def test_delete_vault_previews_blast_radius(composed_tables: None) -> None:
             user=alice,
         )
     )
-    assert not Vault.objects.with_actor(alice).exists()
+    assert not Vault.objects.as_user(alice).exists()
 
 
 @pytest.mark.parametrize("resource", ["vault", "page"])
@@ -761,7 +750,7 @@ def test_knowledge_delete_preview_requires_delete_permission(
     assert result.errors is not None
     assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
     assert result.data is None
-    assert type(target).objects.with_actor(owner).filter(pk=target.pk).exists()
+    assert type(target).objects.as_user(owner).filter(pk=target.pk).exists()
 
 
 def test_schema_exposes_subscriptions(composed_tables: None) -> None:
@@ -844,12 +833,11 @@ def test_markdown_relations_batch_selected_bodies_for_a_non_admin_reader(compose
       pages(where: {id: {_in: $ids}}, order_by: [{title: asc}]) { id kind markdown { body body_hash } }
     }"""
     counts = []
-    for size in (1, 2, 4):
+    for size in (1, 4):
         variables = {"ids": [str(page.sqid) for page in pages[:size]]}
         result_data(execute_schema(schema, query, variables, user=reader))
         with CaptureQueriesContext(connection) as captured:
             data = result_data(execute_schema(schema, query, variables, user=reader))["pages"]
         counts.append(len(captured))
         assert [row["markdown"]["body"] for row in data] == [f"Body {index}" for index in range(size)]
-    # Native exact-point and population plans differ; population work must stay constant.
-    assert counts[0] <= counts[1] == counts[2], counts
+    assert counts[0] == counts[1]

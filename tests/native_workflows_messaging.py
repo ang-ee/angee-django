@@ -15,12 +15,12 @@ from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.fields.implementation import impl_choices_enum
+from angee.base.querysets import AngeeQuerySet
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.querysets import ProtectedQuerySet
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedMessage, ParsedPart
-from angee.messaging.events import historical_import, message_ingested
+from angee.messaging.events import message_ingested
 from angee.workflows import triggers
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
@@ -377,14 +377,14 @@ class MessageTriggerTests(TransactionTestCase):
             )
         refined = Trigger.objects.enable(refined, actor=self.admin)
         locked = []
-        lock = ProtectedQuerySet.select_for_update
+        lock = AngeeQuerySet.select_for_update
 
         def count_lock(rows, **kwargs):
             locked.append(rows.model)
             return lock(rows, **kwargs)
 
         with (
-            patch.object(ProtectedQuerySet, "select_for_update", count_lock),
+            patch.object(AngeeQuerySet, "select_for_update", count_lock),
             patch.object(type(StepWatch.objects), "record_change", autospec=True) as observed,
         ):
             self.ingest()
@@ -404,8 +404,7 @@ class MessageTriggerTests(TransactionTestCase):
             self.assertEqual(TriggerEvent.system_queryset().count(), 1)
             raise ValueError("rollback")
         self.assertFalse(TriggerEvent.system_queryset().exists())
-        with historical_import():
-            self.ingest("historical-message")
+        self.ingest("historical-message", historical=True)
         self.assertFalse(TriggerEvent.system_queryset().exists())
         self.ingest()
         changed = TriggerEvent.system_queryset().get().changed_at

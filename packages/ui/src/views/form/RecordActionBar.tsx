@@ -1,7 +1,6 @@
-import { useReconcileMutationResponse } from "@angee/refine";
 import * as React from "react";
 import { holdsPermission, rowPublicId, type Row } from "@angee/metadata";
-import { useMutation, type QueryKey } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "../../ui/button";
 import { DropdownMenu } from "../../ui/dropdown-menu";
@@ -13,7 +12,6 @@ import { ActionMenu, ActionTrigger } from "../../toolbars/ActionMenu";
 import { ActionMenuContext } from "../../ui/action-menu-context";
 import type { ActionConfirm, ActionDescriptor, ActionResult } from "../page";
 import { useRuntimeViewAs } from "../../runtime";
-import { refreshRecordAction } from "../resource/record-action";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import { useUiT } from "../../i18n";
@@ -51,7 +49,6 @@ export function RecordActionBar({
   actions,
   applyPatch = unavailablePatch,
   reload = noop,
-  refreshQueryKey,
   deleteAction,
   contributedActions,
   blocked: blockedByForm = false,
@@ -61,8 +58,6 @@ export function RecordActionBar({
   actions: readonly RecordActionDescriptor[];
   applyPatch?: (patch: Record<string, unknown>) => Promise<Row | null>;
   reload?: () => void | Promise<Row | null>;
-  /** Exact read supplied by the form owner; absent for custom reloads. */
-  refreshQueryKey?: QueryKey;
   deleteAction?: RecordDeleteAction;
   /** Addon-contributed verbs rendered inside this same Actions menu. */
   contributedActions?: React.ReactNode;
@@ -71,7 +66,6 @@ export function RecordActionBar({
   /** Where the Actions menu sits: an icon-only `⋮` before the verbs (the command band), or a labeled menu after them. */
   menuPlacement?: "leading" | "trailing";
 }): React.ReactElement | null {
-  const reconcile = useReconcileMutationResponse();
   const preview = useRuntimeViewAs();
   const t = useUiT();
   const descriptionId = React.useId();
@@ -103,7 +97,6 @@ export function RecordActionBar({
           record,
           values,
           refresh: reload,
-          refreshQueryKey,
           update: applyPatch,
           prompt,
         });
@@ -197,7 +190,7 @@ export function RecordActionBar({
       }}
       open
       onOpenChange={(open) => { if (!open) setFormAction(null); }}
-      onSucceeded={(_outcome, execution) => refreshRecordAction({ ...execution, refresh: reload, refreshQueryKey }, reconcile)}
+      onSucceeded={reload}
     />
   ) : null;
   const deleteTrigger = visibleDeleteAction !== undefined ? (

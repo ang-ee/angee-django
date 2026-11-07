@@ -24,7 +24,7 @@ export function TaskResponderShareAction(): ReactElement | null {
     run: async (context) => {
       const id = context.record?.id;
       if (typeof id !== "string") return;
-      await settle(() => change(id, { revision: context.record?.revision, shared: !shared }, { reconciliation: context.reconciliation }));
+      await settle(() => change(id, { revision: context.record?.revision, shared: !shared }));
     },
   }]} />;
 }

@@ -29,8 +29,6 @@ export function RemovedTasks({ queue, parent, className }: RemovedTasksProps): R
   const settle = useActionResultRun();
   const [restore, restoreState] = useAuthoredResourceMutation(RestoreTaskDocument, {
     invalidateModels: [TASK_MODEL],
-    records: (_data, input) => [{ model: TASK_MODEL, id: input.task,
-      relatedRecords: parent ? [{ model: TASK_MODEL, id: parent }] : [] }],
     shouldInvalidate: (data) => data?.restore_task.ok === true,
   });
   const rows = removed.data?.removed_tasks ?? [];

@@ -7,16 +7,14 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import PermissionDenied
 from rebac import current_actor
 from strawberry import auto
 
-from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.base.permissions import actor_user_id
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
+from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
-from angee.iam.permissions import actor_user_id
 from angee.nexus.inbox_schema import NexusInboxQuery
 from angee.parties.schema import PartyType
 
@@ -33,7 +31,7 @@ def _viewer_user_id() -> Any | None:
 
 
 @strawberry_django.type(Tie)
-class TieType(ProtectedNode):
+class TieType(AngeeNode):
     """GraphQL projection of one fully derived canonical party edge."""
 
     party_a: PartyType
@@ -51,7 +49,7 @@ class TieType(ProtectedNode):
 
 
 @strawberry_django.type(Cadence)
-class CadenceType(ProtectedNode):
+class CadenceType(AngeeNode):
     """GraphQL projection of one viewer-owned party cadence."""
 
     party: PartyType
@@ -139,15 +137,12 @@ class NexusQuery:
 
         if (root_id is None) == (circle_id is None):
             raise ValueError("party_graph requires exactly one root_id or circle_id")
-        party = (
-            Party.objects.all().scoped().with_concrete_kind().from_public_id(str(root_id))
-            if root_id is not None else None
-        )
+        party = Party.objects.all().scoped().from_public_id(str(root_id)) if root_id is not None else None
         circle = Circle.objects.all().scoped().from_public_id(str(circle_id)) if circle_id is not None else None
         if root_id is not None and party is None:
-            raise PermissionDenied("party not found")
+            raise ValueError("party not found")
         if circle_id is not None and circle is None:
-            raise PermissionDenied("circle not found")
+            raise ValueError("circle not found")
         graph = Tie.objects.party_graph(
             root=party,
             circle=circle,
@@ -227,7 +222,7 @@ _CADENCE_RESOURCE = hasura_model_resource(
     insertable=["party", "cadence_days"],
     updatable=["cadence_days"],
     field_id_decode={"party": public_pk_decoder(Party)},
-    write_backend=ProtectedHasuraWriteBackend(Cadence, public_id_fields=("party",)),
+    write_backend=AngeeHasuraWriteBackend(Cadence, public_id_fields=("party",)),
 )
 
 _NEXUS_SCHEMA_BUCKET: dict[str, list[type]] = {

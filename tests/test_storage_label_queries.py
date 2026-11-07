@@ -9,8 +9,9 @@ from rebac import system_context
 
 import tests.test_storage  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.storage import schema as storage_schema
-from tests.conftest import Drive, File, addon_schema, create_user, execute_schema, result_data
+from tests.conftest import Drive, File, addon_schema, create_user
 from tests.test_storage import drive as drive
 
 

@@ -61,7 +61,7 @@ def test_merge_context_refuses_joining_a_different_database_before_entering() ->
     record._state.db = "different-database"
     with changeset(fresh=True):
         parent = current_changeset(record=True)
-        with pytest.raises(ValidationError, match="A fold must share the database of its changeset"):
+        with pytest.raises(ValidationError, match="A fold and its changeset must be routed to one database"):
             with merge_context(record, join=True):
                 pytest.fail("A cross-database fold entered its persistence body.")
         assert current_changeset() is parent

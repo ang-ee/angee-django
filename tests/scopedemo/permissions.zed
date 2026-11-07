@@ -1,7 +1,7 @@
 // Authorization schema for the local-scope create-gate demo (test-only).
 // @rebac_package: scopedemo
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 6
 
 definition scopedemo/proposal_target {
     relation owner: auth/user // rebac:field=owner
@@ -62,6 +62,3 @@ definition scopedemo/shared_doc {
     permission create = shared->shared_reader
     permission read = shared->shared_reader
 }
-
-// An identity-only target for the native attachment-lock fixture.
-definition scopedemo/native_attachment_target {}

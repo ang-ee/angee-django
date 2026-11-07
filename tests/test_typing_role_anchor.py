@@ -16,7 +16,7 @@ def test_generated_role_anchor_alias_survives_cold_and_warm_analysis(tmp_path: P
     declaration = app / "models.py"
     declaration.write_text(
         "from django.conf import settings\n"
-        'from angee.iam.models.roles import role_anchor\n'
+        'from angee.base.models.roles import role_anchor\n'
         "ProbeRole = role_anchor('probe/role')\n"
     )
     (tmp_path / "role_settings.py").write_text(
@@ -31,7 +31,7 @@ def test_generated_role_anchor_alias_survives_cold_and_warm_analysis(tmp_path: P
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.iam.typing\n"
+        "[mypy]\nplugins = angee.base.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'src'}\ncache_dir = {tmp_path / 'cache'}\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = role_settings\n"
     )

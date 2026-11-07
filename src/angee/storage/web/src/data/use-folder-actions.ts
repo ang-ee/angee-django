@@ -1,8 +1,8 @@
 import { type Row, } from "@angee/metadata";
 import {
-  useCreate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
+  useCreate, useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  refineFieldsFromPaths, useReconcileMutationResponse, } from "@angee/refine";
+  refineFieldsFromPaths, } from "@angee/refine";
 import {
   refineResourceName, } from "@angee/metadata";
 import { useBusyRun, useDeleteWithPreview } from "@angee/ui";
@@ -10,6 +10,7 @@ import {
   useModelMetadata,
   useResourceInvalidates,
 } from "@angee/metadata";
+
 
 export interface FolderActions {
   busy: boolean;
@@ -21,47 +22,47 @@ export interface FolderActions {
   }) => Promise<void>;
   /** Rename a folder. */
   rename: (id: string, name: string) => Promise<void>;
-  /** Delete a folder; its files fall back to the drive root. */
-  remove: (id: string, options?: Parameters<ReturnType<typeof useDeleteWithPreview>["remove"]>[1]) => Promise<boolean>;
+  /** Delete a folder, its files falling back to the drive root; resolves whether it was deleted, settling failures once. */
+  remove: (id: string) => Promise<boolean>;
 }
 
 /**
  * Folder write verbs over the Hasura resource mutations; folder creation is
- * backed by the storage manager factory server-side. Shared reconciliation
- * covers both the authored tree and native resource views.
+ * backed by the storage manager factory server-side. `remove` settles its
+ * failures through `useBusyRun`'s `settle`, the verbs' one error surface.
+ * `onChanged` fires after each so the navigator can refetch its tree.
  */
-export function useFolderActions(): FolderActions {
+export function useFolderActions(
+  options: { onChanged?: () => void } = {},
+): FolderActions {
+  const { onChanged } = options;
   const metadata = useModelMetadata(FOLDER_MODEL);
   const resource = metadata?.resource ?? null;
-  const reconcile = useReconcileMutationResponse();
-  const folderInvalidations = useResourceInvalidates([FOLDER_MODEL]);
-  const fileInvalidations = useResourceInvalidates([FILE_MODEL]);
-  const affectedInvalidations = useResourceInvalidates([FOLDER_MODEL, FILE_MODEL],
-    (_data: unknown, input: { id?: string | number }) => [{ model: FOLDER_MODEL, id: String(input.id) }]);
+  const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
+  const fileInvalidations = useResourceInvalidates(fileResource ? [fileResource.modelLabel] : undefined);
   const resourceName = refineResourceName(resource);
-  const fields = refineFieldsFromPaths(["id", "name"]);
+  const fields = refineFieldsFromPaths(["name"]);
   const createFolder = useCreate<RowRecord, HttpError, Record<string, unknown>>({
     resource: resourceName,
     dataProviderName: resource?.schemaName,
     meta: { fields },
-    invalidates: [],
-    mutationOptions: { onSuccess: (result) => reconcile(result.data, undefined, {
-      records: [{ model: FOLDER_MODEL, id: String(result.data.id), action: "create" }],
-      invalidates: folderInvalidations,
-    }) },
+    invalidates: ["list", "many"],
   });
   const updateFolder = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: resourceName,
     dataProviderName: resource?.schemaName,
     meta: { fields },
-    invalidates: [],
-    mutationOptions: { onSuccess: (result, input) => reconcile(result.data, input, {
-      records: [{ model: FOLDER_MODEL, id: String(input.id) }],
-      invalidateModels: [FILE_MODEL], invalidates: affectedInvalidations,
-    }) },
+    invalidates: ["list", "many", "detail"],
   });
   const deleteWithPreview = useDeleteWithPreview(resource);
-  const { busy, run } = useBusyRun();
+  const invalidate = useInvalidate();
+  const { busy, run, settle } = useBusyRun(onChanged);
+  const invalidateFiles = async () => {
+    if (!fileResource) {
+      throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
+    }
+    await Promise.all(fileInvalidations.map((target) => invalidate(target)));
+  };
 
   return {
     busy,
@@ -74,18 +75,15 @@ export function useFolderActions(): FolderActions {
       run(async () => {
         requireFolderResource(resource);
         await updateFolder.mutateAsync({ id, values: { name } });
+        await invalidateFiles();
       }),
-    remove: (id, options) =>
-      run(async () => {
+    remove: (id) =>
+      settle(async () => {
         requireFolderResource(resource);
-        return reconcile.batch(async (reconciliation) => {
-          if (!(await deleteWithPreview.remove(id, { ...options, reconciliation }))) return false;
-          await reconcile(undefined, undefined, {
-            invalidateModels: [FILE_MODEL], invalidates: fileInvalidations, reconciliation,
-          });
-          return true;
-        });
-      }),
+        if (!(await deleteWithPreview.remove(id, { errorNotification: false }))) return false;
+        await invalidateFiles();
+        return true;
+      }, false),
   };
 }
 

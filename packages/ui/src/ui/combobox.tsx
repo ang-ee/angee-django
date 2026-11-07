@@ -11,6 +11,7 @@ import type {
   ComboboxListProps as BaseComboboxListProps,
   ComboboxPopupProps as BaseComboboxPopupProps,
   ComboboxPositionerProps as BaseComboboxPositionerProps,
+  ComboboxStatusProps as BaseComboboxStatusProps,
   ComboboxTriggerProps as BaseComboboxTriggerProps,
 } from "@base-ui/react/combobox";
 
@@ -19,6 +20,7 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { PORTALED_CONTROL_LAYER } from "./popover";
 import { selectVariants, type SelectSize } from "./select";
+import { Skeleton } from "./skeleton";
 import { textRoleVariants } from "./text";
 import { widgetControlPresentationProps, widgetControlSurface, type WidgetControlSurfaceProps } from "./widget-control";
 
@@ -299,6 +301,39 @@ export const ComboboxEmpty = React.forwardRef<HTMLDivElement, ComboboxEmptyProps
 );
 ComboboxEmpty.displayName = "ComboboxEmpty";
 
+export type ComboboxStatusProps = Omit<BaseComboboxStatusProps, "className"> & {
+  className?: string;
+  /** The options are loading: skeleton option lines hold the list's place. */
+  loading?: boolean;
+  /** Screen-reader text while `loading`; no loading copy is visible. */
+  loadingLabel?: string;
+};
+
+const OPTION_SKELETON_WIDTHS = ["w-3/4", "w-1/2", "w-2/3"] as const;
+
+/** The popup's live status over Base UI's, which stays mounted so its changes announce: skeleton
+ * option lines while `loading`, otherwise its children.
+ * @owner Combobox
+ */
+export const ComboboxStatus = React.forwardRef<HTMLDivElement, ComboboxStatusProps>(
+  function ComboboxStatus({ loading = false, loadingLabel, children, className, ...props }, ref) {
+    const t = useUiT();
+    return (
+      <BaseCombobox.Status ref={ref} className={cn(loading && "p-1", className)} {...props}>
+        {loading ? <>
+          <span className="sr-only">{loadingLabel ?? t("loading.default")}</span>
+          {OPTION_SKELETON_WIDTHS.map((width) => (
+            <div key={width} aria-hidden="true" className="flex h-8 items-center px-2">
+              <Skeleton shape="text" size="sm" className={width} />
+            </div>
+          ))}
+        </> : children}
+      </BaseCombobox.Status>
+    );
+  },
+);
+ComboboxStatus.displayName = "ComboboxStatus";
+
 /**
  * @kind primitive
  */
@@ -320,4 +355,5 @@ export const Combobox = Object.assign(ComboboxRoot, {
   GroupLabel: ComboboxGroupLabel,
   Collection: ComboboxCollection,
   Empty: ComboboxEmpty,
+  Status: ComboboxStatus,
 });

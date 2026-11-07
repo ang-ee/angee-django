@@ -1,11 +1,12 @@
 """Run contracts needing the complete Task graph in the shared composed host."""
 
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
 def test_composed_work_contracts(tmp_path):
@@ -20,4 +21,4 @@ def test_composed_work_contracts(tmp_path):
         cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT, check=False,
     )
     assert result.returncode == 0, f"composed work campaign failed:\n{result.stdout}\n{result.stderr}"
-    assert_composed_report(report, vendor="sqlite")
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

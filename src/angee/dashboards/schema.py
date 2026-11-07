@@ -7,9 +7,10 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.db.models import Q
 from rebac import PermissionDenied, current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -18,19 +19,17 @@ from strawberry_django.utils.requests import get_request
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.locks import StaleRevisionError
 from angee.base.serialization import ASCII_JSON, canonical_json_sha256
-from angee.dashboards.exceptions import DashboardConflictError
 from angee.dashboards.models import Dashboard as DashboardModel
-from angee.dashboards.validators import widget_visibility_answers
+from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
+from angee.graphql.actions import session_user
+from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.ids import PublicID, require_public_id, to_public_id
+from angee.graphql.ids import PublicID, public_id_field, require_public_id
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
-from angee.iam.graphql.actions import session_user
-from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.identity import user_display_label, user_public_id
-from angee.provenance.engine.exceptions import CreationKeyConflict
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 
 Dashboard = apps.get_model("dashboards", "Dashboard")
 DashboardWidget = apps.get_model("dashboards", "DashboardWidget")
@@ -53,8 +52,7 @@ class DashboardWidgetVisibilityInput:
 
 
 @strawberry_django.type(DashboardWidget)
-class DashboardWidgetType(ProtectedNode):
-    dashboard: DashboardType = actor_scoped_to_one("dashboard")
+class DashboardWidgetType(AngeeNode):
     widget_key: auto
     definition_ref: auto
     spec_version: auto
@@ -73,7 +71,12 @@ class DashboardWidgetType(ProtectedNode):
 
 
 @strawberry_django.type(Dashboard)
-class DashboardType(TrashedRefMixin, ProtectedNode):
+class DashboardType(TrashedRefMixin, AngeeNode):
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["name"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
     scope: auto
     scope_key: auto
     name: auto
@@ -88,9 +91,7 @@ class DashboardType(TrashedRefMixin, ProtectedNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["owner_id"])
-    def owner(self) -> strawberry.ID | None:
-        return cast(strawberry.ID | None, to_public_id(get_user_model(), cast(Any, self).owner_id))
+    owner = public_id_field("owner", nullable=True)
 
     @strawberry_django.field(only=["owner_id"])
     def owner_label(self, info: strawberry.Info) -> str | None:
@@ -280,11 +281,11 @@ class DashboardQuery:
         if not 1 <= limit <= 100:
             raise ValidationError({"limit": "Dashboard summary pages contain from 1 to 100 items."})
         rows = list(
-            Dashboard.objects.catalogue(user)
+            Dashboard.objects.filter(Q(scope="personal") | Q(owner=user) | Q(is_baseline=True))
             .annotate(**permission_annotations(Dashboard, ("write", "delete")))
             .select_related("owner")
             .prefetch_related("widgets")
-            [:5_001]
+            .order_by("sqid")[:5_001]
         )
         if len(rows) > 5_000:
             return DashboardSummaryPageType(status="limit", total=len(rows))
@@ -393,7 +394,7 @@ class DashboardMutation:
         if row is None or addressed is None or row.pk != addressed.pk:
             return DashboardPayload(status="conflict", message="The persisted dashboard identity is no longer current.")
         try:
-            row.reset_snapshot(expected_revision=expected_revision)
+            Dashboard.objects.reset_snapshot(row, expected_revision=expected_revision)
         except StaleRevisionError as error:
             return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
@@ -416,13 +417,33 @@ class DashboardMutation:
         if source is None:
             return DashboardPayload(status="unavailable")
         try:
-            saved = Dashboard.objects.duplicate_personal(
-                user,
-                source=source,
-                name=name,
-                idempotency_key=idempotency_key,
-                snapshot=snapshot,
-            )
+            visible = canonical_dashboard_snapshot(snapshot)
+            duplicated_widgets = []
+            for index, widget in enumerate(visible["widgets"]):
+                if widget["isArchived"]:
+                    continue
+                duplicate = {**widget, "id": f"copy-{index + 1}"}
+                duplicate.pop("definitionRef", None)
+                duplicated_widgets.append(duplicate)
+            visible["widgets"] = duplicated_widgets
+            canonical = canonical_dashboard_snapshot(visible)
+            with transaction.atomic():
+                created = Dashboard.objects.create_personal(
+                    user,
+                    name=name,
+                    idempotency_key=idempotency_key,
+                )
+                if created.revision > 1:
+                    return _payload(created)
+                saved = Dashboard.objects.save_snapshot(
+                    user,
+                    scope="personal",
+                    scope_key=None,
+                    persisted_id=created.pk,
+                    expected_revision=created.revision,
+                    snapshot=canonical,
+                    name=created.name,
+                )
         except StaleRevisionError as error:
             return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:

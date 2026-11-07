@@ -3,7 +3,6 @@
 from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import AgentSession as AbstractAgentSession
 from angee.agents.models import AgentTurn as AbstractAgentTurn
-from angee.agents.models import AgentTurnUpdate as AbstractAgentTurnUpdate
 from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import MCPServer as AbstractMCPServer
@@ -15,9 +14,6 @@ from angee.integrate.testing.integration import Integration
 
 class InferenceProvider(AbstractInferenceProvider, Integration):
     """Concrete inference capability over the shared integration."""
-
-    created_at = Integration.created_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
-    updated_at = Integration.updated_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
 
     class Meta(AbstractInferenceProvider.Meta):
         abstract = False
@@ -112,13 +108,3 @@ class AgentTurn(AbstractAgentTurn):
         app_label = "agents"
         db_table = "test_agents_turn"
         rebac_resource_type = "agents/turn"
-
-
-class AgentTurnUpdate(AbstractAgentTurnUpdate):
-    """Concrete retained update batch for source-addon tests."""
-
-    class Meta(AbstractAgentTurnUpdate.Meta):
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_turn_update"
-        rebac_resource_type = "agents/turn_update"

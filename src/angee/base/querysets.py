@@ -8,8 +8,11 @@ from typing import Any, Self, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, ValidationError
 from django.db import connections, models
-from django.db.models.functions import Coalesce
-from django.db.models.query import ModelIterable
+from django.db.models.functions import Coalesce, RowNumber
+from rebac import current_actor
+from rebac.managers import RebacQuerySet, TrackedQuerySet
+from rebac.watch import KEY_CHUNK
+from rebac.watch import by_key as native_by_key
 
 from angee.base.models.identity import instance_from_public_id
 from angee.base.pagination import KeysetOrder, KeysetPage, keyset_signer
@@ -54,24 +57,24 @@ def query_batch_size(queryset: models.QuerySet[Any], *, width: int = 1) -> int:
 
     limit = connections[queryset.db].features.max_query_params
     if limit is None:
-        return 5000
+        return KEY_CHUNK
     try:
         _, params = queryset.query.get_compiler(using=queryset.db).as_sql()
     except EmptyResultSet:
         params = ()
-    size = min(5000, (limit - len(params)) // width)
+    size = min(KEY_CHUNK, (limit - len(params)) // width)
     if size < 1:
         raise ValueError("The query leaves no database parameters for its keys.")
     return size
 
 
 def by_key(queryset: _QuerySetT, keys: Sequence[Any]) -> Iterator[_QuerySetT]:
-    """Batch primary-key filtering with the database's native parameter budget."""
+    """Compose REBAC key filtering with the database's native parameter budget."""
 
     if not keys:
-        yield queryset.filter(pk__in=())
+        yield from native_by_key(queryset, keys)
     for chunk in batched(keys, query_batch_size(queryset)):
-        yield queryset.filter(pk__in=chunk)
+        yield from native_by_key(queryset, chunk)
 
 
 def row_lock_paths(model: type[models.Model], of: tuple[str, ...] = ("self",)) -> tuple[str, ...]:
@@ -99,10 +102,6 @@ def _parent_link_paths(model: type[models.Model], prefix: str = "") -> tuple[str
 
 class CanonicalQuerySet(models.QuerySet[_ModelT]):
     """Terminal operational scope for cooperative queryset capabilities."""
-
-    def attributed_user_id(self) -> Any:
-        """A normal Django queryset carries no implicit user attribution."""
-        return None
 
     def canonical(self) -> Self:
         """All rows until an owning capability narrows the operational scope."""
@@ -145,13 +144,7 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
         bounded or per-row lookup; a corpus-wide join keys on :meth:`survivor_ids`.
         """
 
-        return self.redirect_groups((survivor,))
-
-    def redirect_groups(self, survivors: Sequence[_ModelT]) -> Self:
-        """Return each survivor and its one-hop redirects in one query."""
-
-        ids = [survivor.pk for survivor in survivors]
-        return self.filter(models.Q(pk__in=ids) | models.Q(merged_into_id__in=ids))
+        return self.filter(models.Q(pk=survivor.pk) | models.Q(merged_into_id=survivor.pk))
 
     def survivor_ids(self) -> models.QuerySet[Any]:
         """Return each row's :meth:`survivor_id` as ``survivor``.
@@ -163,7 +156,7 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
         return self.order_by().values(survivor=self.survivor_id())
 
 
-class AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
+class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
     """Shared native lookup and locking, preserving each manager's policy."""
 
     model: type[_ModelT]
@@ -187,37 +180,96 @@ class AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
 
         return cast(models.QuerySet[_ModelT], self.lock_if_supported()).get(*args, **kwargs)
 
+    def first_per_group(
+        self,
+        *partition_by: str | models.Expression | models.F,
+        order_by: Sequence[str | models.Expression | models.F],
+        limit: int,
+    ) -> Self:
+        """Keep the first ``limit`` rows of each group, ranked by one SQL window.
+
+        A group is one distinct value of ``partition_by`` (field paths, annotations
+        or expressions). ``order_by`` ranks the rows inside each group and should end
+        in a unique column so the kept rows are deterministic. The result keeps this
+        queryset's scope, annotations and selection but not its ordering, so an
+        inherited ``Meta.ordering`` never joins a grouped selection's ``GROUP BY``;
+        callers order the kept rows. Filters chained afterwards apply before the
+        ranking, as Django wraps a window filter in an outer query.
+
+        The rank is a selected annotation (``_group_rank``), so that outer query reads
+        the ranked rows whole. A masked rank makes Django re-select the rows by one
+        column per distinct select expression: an annotation equal to a selected
+        column (a partition key over the model's own field) collapses into it, and
+        every later value is read through the previous field's converter.
+        """
+
+        if not partition_by:
+            raise ValueError("first_per_group needs at least one partition.")
+        if limit < 1:
+            raise ValueError("first_per_group keeps at least one row per group.")
+        rank = models.Window(RowNumber(), partition_by=list(partition_by), order_by=list(order_by))
+        return cast(Self, self.order_by().annotate(_group_rank=rank).filter(_group_rank__lte=limit))
+
 
 class AngeeQuerySet(
-    AngeeQuerySetMixin[_ModelT],
+    _AngeeQuerySetMixin[_ModelT],
+    RebacQuerySet[_ModelT],
 ):
     """QuerySet API shared by Angee source and runtime models."""
 
-    def with_page_hook(self, prepare: Callable[[models.QuerySet[_ModelT], list[_ModelT]], None]) -> Self:
-        """Prepare a selected page once after Django materializes its model rows.
+    def readable_scalar_subquery(
+        self,
+        field: str,
+        *,
+        actor: Any = None,
+        default: Any = None,
+        output_field: models.Field | None = None,
+        aggregate: bool = False,
+    ) -> models.Expression | models.Subquery:
+        """Project one correlated readable value, including under an elevated parent.
 
-        Hooks chain: a later hook runs after the hooks already attached to this
-        queryset, over the same materialized rows, so every owner that prepares
-        a projection keeps it when another owner adds its own.
+        Add correlation predicates before calling. No actor yields no value;
+        callers own domain fallbacks and may explicitly coalesce an absent value.
+        ``aggregate`` reads under REBAC's eager aggregate scope
+        (``scoped_for_aggregate``), the row authorization the aggregate roots
+        use, instead of the row scope.
         """
 
-        base = self._iterable_class
-        if not issubclass(base, ModelIterable):
-            raise TypeError("with_page_hook() prepares model rows; this queryset yields another row shape.")
+        actor = actor or self.actor() or current_actor()
+        readable = self
+        if actor is not None:
+            bound = self.with_actor(actor)
+            readable = bound.scoped_for_aggregate() if aggregate else bound.scoped()
+        # The selected field owns the scalar type; only the outer fallback needs
+        # a common output type (overriding Subquery changes empty-set compilation).
+        scalar = models.Subquery(readable.values(field)[:1])
+        if actor is None:
+            return models.Value(default, output_field=output_field or scalar.output_field)
+        if default is None:
+            return scalar
+        return Coalesce(
+            scalar,
+            models.Value(default),
+            output_field=output_field or scalar.output_field,
+        )
 
-        class PageHookIterable(base):  # type: ignore[valid-type,misc]
-            def __iter__(self) -> Iterator[_ModelT]:
-                rows = list(super().__iter__())
-                prepare(cast(models.QuerySet[_ModelT], self.queryset), rows)
-                return iter(rows)
+    def readable_count_subquery(
+        self, *, actor: Any = None, aggregate: bool = False,
+    ) -> models.Expression | models.Subquery:
+        """Count a correlated actor-scoped row set's distinct rows, returning zero when empty.
 
-        rows = self.all()
-        rows._iterable_class = PageHookIterable
-        return rows
+        ``aggregate`` counts under the aggregate roots' eager row scope, as
+        :meth:`readable_scalar_subquery` reads.
+        """
 
-    def _keyset_cursor_scope(self, scope: tuple[Any, ...]) -> tuple[Any, ...]:
-        """Own collection identity; optional capabilities contribute their audience."""
-        return scope
+        rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
+        return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
+            "_count",
+            actor=actor,
+            default=0,
+            output_field=models.IntegerField(),
+            aggregate=aggregate,
+        )
 
     def keyset_page(
         self,
@@ -235,23 +287,22 @@ class AngeeQuerySet(
 
         The caller supplies a prepared, scoped queryset and canonical effective
         query identity in ``cursor_scope`` (root, filters and any variable order).
-        Database and model are always included; callers supply any audience identity. The salt versions the
+        Database, model and actor are always included. The salt versions the
         ordering contract. Cuts authorize nothing: each call reevaluates the
         readable queryset, including rows whose anchor was deleted or moved.
 
         ``before`` is exclusive; ``through`` is an inclusive fixed lower cut.
         ``after`` discovers the nearest newer page and cannot combine with either.
         Return rows newest-first and distinguish an exhausted fixed window from
-        history below that window, even when the window is now empty. Metadata
-        describes the authorized page/cut observations; these separate reads do
-        not promise one database snapshot or the latest concurrent changes.
+        history below that window, even when the window is now empty.
         """
 
         if after_cursor is not None and (before_cursor is not None or through_cursor is not None):
             raise ValueError("after_cursor cannot combine with before_cursor or through_cursor.")
         limit = max(1, min(int(limit), 200))
+        actor = self.actor() or current_actor()
         signer = keyset_signer(
-            [self.db, self.model._meta.label_lower, *self._keyset_cursor_scope(cursor_scope)], salt=cursor_salt,
+            [self.db, self.model._meta.label_lower, *cursor_scope, str(actor)], salt=cursor_salt,
         )
         cursor = before_cursor if before_cursor is not None else after_cursor
         anchor = order.unsign(cursor, signer, self.model._meta.pk) if cursor is not None else None
@@ -265,16 +316,12 @@ class AngeeQuerySet(
         if around is not None and before_cursor is None and after_cursor is None:
             # Bound the first window around an already authorized record. The
             # domain resolves a message/date; this owner only handles tuple order.
-            newer = list(
-                self.filter(order.after(order.position(around))).order_by(*order.ordering).reverse()[: limit // 2]
-            )
+            oldest_first = order.ordering(oldest_first=True)
+            newer = list(self.filter(order.after(order.position(around))).order_by(*oldest_first)[: limit // 2])
             upper = order.position(newer[-1] if newer else around)
             window = window.exclude(order.after(upper))
         ascending = after_cursor is not None
-        window = window.order_by(*order.ordering)
-        if ascending:
-            window = window.reverse()
-        selected = list(window[: limit + 1])
+        selected = list(window.order_by(*order.ordering(oldest_first=ascending))[: limit + 1])
         has_more = len(selected) > limit
         rows = selected[:limit]
         if ascending:
@@ -292,27 +339,14 @@ class AngeeQuerySet(
                 has_older_than_through=below,
                 has_newer_than_before=self.filter(order.after(anchor)).exists() if anchor is not None else False,
             )
-        if ascending or (
-            has_more and not below and (
-                selected[limit].pk == rows[-1].pk
-                or order.position(selected[limit]) == order.position(rows[-1])
-            )
-        ):
-            # Join multiplicity can repeat an identity with SQL-equal collated
-            # annotations, or repeat the complete tuple, without proving older.
-            has_older = self.filter(order.before(order.position(rows[-1]))).exists()
-        else:
-            # A descending window covers the older suffix down to its inclusive
-            # lower cut. Extra rows or the authorized below-cut probe cover it.
-            has_older = has_more or below
         # Re-fetch the bounded identities through the original queryset so callers
         # retain a composable queryset instead of inheriting this method's probe list.
         return KeysetPage(
-            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(*order.ordering),
+            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(*order.ordering()),
             count=count,
             older_cursor=order.sign(rows[-1], signer),
             newer_cursor=order.sign(rows[0], signer),
-            has_older=has_older,
+            has_older=self.filter(order.before(order.position(rows[-1]))).exists(),
             has_newer=self.filter(order.after(order.position(rows[0]))).exists(),
             has_more_in_window=has_more,
             has_older_than_through=below,
@@ -320,5 +354,26 @@ class AngeeQuerySet(
         )
 
 
-class MergeableUnscopedQuerySet(MergeableQuerySet[_ModelT], AngeeQuerySet[_ModelT]):
+class AngeeUnscopedQuerySet(
+    _AngeeQuerySetMixin[_ModelT],
+    TrackedQuerySet[_ModelT],
+):
+    """Angee queryset API for intentionally permission-naive managers.
+
+    Used by models without REBAC row policy and explicit Django base managers
+    whose unfiltered relation reads must retain native Django semantics. It
+    composes the library's tracked writes required by a declared base manager.
+    """
+
+    def scoped_for_aggregate(self) -> Self:
+        """Return this queryset for permission-naive aggregation.
+
+        The manager deliberately supplies no row authorization; aggregation
+        preserves that same explicit unscoped policy.
+        """
+
+        return self
+
+
+class MergeableUnscopedQuerySet(MergeableQuerySet[_ModelT], AngeeUnscopedQuerySet[_ModelT]):
     """Explicit operational identity API for a model that owns merge redirects."""

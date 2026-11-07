@@ -3,7 +3,7 @@
 import strawberry_django
 from django.apps import apps
 
-from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.graphql.relations import actor_scoped_to_one
 from angee.messaging.schema import ChannelType
 
 

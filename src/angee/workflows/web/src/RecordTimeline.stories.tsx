@@ -36,14 +36,14 @@ const runtime = {
 };
 
 /** The real read and inline mutation owners over a neutral, disposable transport. */
-export function TimelineStory({ appearance, state = "decision", collapsed = false, duplicateRisk = false, data, onRequest, runId }: {
+export function TimelineStory({ appearance, state = "decision", collapsed = false, duplicateRisk = false, data, onRequest }: {
   appearance?: RuntimeFixtureProps["appearance"];
   state?: TimelineState; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
-  data?: TimelineSelection; runId?: string;
+  data?: TimelineSelection;
 }) {
   const schemas = useMemo(() => {
     let current = data ?? timelineFixture(state);
-    if (duplicateRisk) current.records[0]!.runs[0]!.graph.nodes[7]!.step_run!.requires_duplicate_acknowledgement = true;
+    if (duplicateRisk) current.records[0]!.runs[0]!.graph_step_runs.find((step) => step.id === "wsr_review")!.requires_duplicate_acknowledgement = true;
     const fixture = storySchema(async (_input, init) => {
       const request = v.parse(Request, JSON.parse(String(init?.body ?? "{}"))); onRequest?.(request);
       if (request.query.includes("decide(")) { current = timelineFixture("clean"); return jsonResponse({ data: { decide: { ok: true, id: "dcn_review", message: "Answer recorded.", validation_errors: {} } } }); }
@@ -53,9 +53,6 @@ export function TimelineStory({ appearance, state = "decision", collapsed = fals
         current = timelineFixture("decision");
         return jsonResponse({ data: { [action]: { ok: true, id: "wsr_review", message: "Retry requested.", validation_errors: {} } } });
       }
-      if (request.variables.drillIn === true) return jsonResponse({ data: { record_timeline: {
-        records: current.records.map(({ record_model, record_id, runs }) => ({ record_model, record_id, runs })),
-      } } });
       if (request.query.includes("record_timeline")) return jsonResponse({ data: { record_timeline: { ...current, has_runs: current.records.some((entry) => entry.runs.length > 0) } } });
       if (request.query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: { id: "usr_river", display_name: "River" } } });
       return jsonResponse({ data: { notes_by_pk: { id: "nte_7", revision: 1, display_name: current.open_decision_count ? "Review notes" : "Reviewed notes", body: "A record to check.", permissions: ["write"] } } });
@@ -63,12 +60,12 @@ export function TimelineStory({ appearance, state = "decision", collapsed = fals
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [resource, decisionResourceFixture, decisionLinkFixture, decisionUserFixture, runResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, watchResourceFixture] } } } };
   }, [state, duplicateRisk, data, onRequest]);
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>
-    <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><TimelineLayout set={state === "set"} runId={runId} /></ChatterProvider></RecordFieldMarksProvider>
+    <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><TimelineLayout set={state === "set"} /></ChatterProvider></RecordFieldMarksProvider>
   </RoutedRuntimeFixture>;
 }
 
 /** The run body as the aside's drill-in renders it, beside the form it belongs to. */
-function TimelineLayout({ set, runId }: { set: boolean; runId?: string }) {
+function TimelineLayout({ set }: { set: boolean }) {
   const record = useMemo(() => set ? [{ model: "notes.Note", id: "nte_7" }, { model: "notes.Note", id: "nte_8" }] : { model: "notes.Note", id: "nte_7" }, [set]);
   useRecordTimelineAttention(record);
   const chatter = useChatter();
@@ -77,7 +74,7 @@ function TimelineLayout({ set, runId }: { set: boolean; runId?: string }) {
       <Button onClick={() => chatter.setCollapsed(!chatter.collapsed)}>Toggle timeline</Button>
     </main>
     <aside data-testid="timeline-aside" data-state={`${chatter.collapsed}:${chatter.activeTab}`} className="min-h-0 border-l border-border-subtle">
-      <ScrollArea className="h-full" viewportClassName="p-4"><RecordTimeline record={record} runId={runId} /></ScrollArea>
+      <ScrollArea className="h-full" viewportClassName="p-4"><RecordTimeline record={record} /></ScrollArea>
     </aside>
   </div>;
 }

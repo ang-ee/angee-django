@@ -6,11 +6,6 @@ import { useRecordSourceThreads } from "./useRecordSourceThreads";
 
 const THREAD_MODEL = "messaging.Thread";
 
-/** Derive the count from rows only while the Links pane is rendered. */
-export function useRecordConversationsPaneCount(context: ChatterViewContext): number | undefined {
-  return useRecordSourceThreads(context).data?.record_source_threads.length;
-}
-
 /** The conversations the record came from (source-role thread attachments), each a row to its thread. */
 export function RecordConversationsGroup({ context }: { context: ChatterViewContext }): React.ReactElement | null {
   const t = useMessagingT();

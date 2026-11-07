@@ -3,10 +3,8 @@
 Storage contributes a **Files** group in Related on the record routes of types that
 accept attachments: those whose resource metadata lists `storage.FileAttachment`
 in `recordEdges`. `record_files` returns attachments only when the actor can read
-the record and each file. For record-visible files, a declared record arm supplies
-file read; other files retain their own read check. The edge projects file name,
-size, type and attribution. Its download token re-checks the parent, attachment
-and file. Attaching a private or inherited file never grants file access.
+the record and each file. The file keeps its own permissions; attaching it never
+grants file access.
 
 A record type accepts attachments once its owner declares it on
 `storage/file_attachment` from its `permissions.extends.zed`: one relation backed
@@ -18,8 +16,6 @@ path must target that model, and the arm must filter `visibility: record`. For
 example, if `example/record` owns the canonical row:
 
 ```python
-from angee.base.fields.relations import GenericRelation
-
 file_attachments = GenericRelation("storage.FileAttachment", related_query_name="example_record")
 ```
 
@@ -31,7 +27,7 @@ definition storage/file_attachment {
 
 definition storage/file {
     relation record: example/record // rebac:field={"path":"attachments__example_record","filters":{"visibility":"record"}}
-    permission read_granted = record->read
+    permission read = record->read
     permission write = record->write
 }
 ```
@@ -66,20 +62,3 @@ navigation, and the shared explorer keeps its mounted tree and selection.
 Folders compose the native hierarchy and transferable ownership, scoped to their
 drive. Files, folders and FileAttachment edges retain changeset history; a merge
 can restore an attachment's former target without moving the file's bytes.
-
-Native row declarations live in `models/`; factories and chainable scopes live in
-`managers.py` and `querysets.py`. Existing `angee.storage.models` imports remain
-explicit exports. File metadata merges and dedup reach belong to the File row.
-`get_or_ingest_bytes` and `get_or_ingest_stream` return `(file, created)`;
-`created` identifies this attempt's inserted winner, not exclusive future use.
-Automatic acquisition cleanup uses the native grant lock and honors direct
-sharing, committed row edits, and every live reverse FK or one-to-one relation
-targeting `storage.File` whose `on_delete` is not `DO_NOTHING`, including
-`FileAttachment.file`. Referencing owners declare the field on their own model;
-storage discovers it from the concrete File model's relation metadata without
-importing the owner. History rows with `DO_NOTHING` and generic content-type
-references do not retain a file. The reference check uses the write database and
-the referencing model's base manager, so a restricted default queryset cannot
-hide a live reference. A creation flag alone never authorizes removal of a
-shared carrier. Direct `purge()` remains the deliberate hard-delete operation
-and follows each relation's `on_delete` policy.

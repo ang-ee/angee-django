@@ -29,7 +29,12 @@ class _Message:
         return self.transport
 
 
-def test_capture_runs_on_the_messages_transport_channel() -> None:
+@pytest.fixture
+def composed_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(signals.apps, "get_model", lambda app_label, name: object())
+
+
+def test_capture_runs_on_the_messages_transport_channel(composed_models: None) -> None:
     captured: list[Any] = []
     message = _Message(type("Channel", (), {"capture_ingested_message": staticmethod(captured.append)})())
 
@@ -40,6 +45,7 @@ def test_capture_runs_on_the_messages_transport_channel() -> None:
 
 @pytest.mark.parametrize("error", [ValidationError("No triage stage"), RecordAccessSubjectRefused()])
 def test_capture_refusal_retains_primary_ingest(
+    composed_models: None,
     caplog: pytest.LogCaptureFixture,
     error: Exception,
 ) -> None:
@@ -48,10 +54,8 @@ def test_capture_refusal_retains_primary_ingest(
     assert "Skipped intake capture" in caplog.text
 
 
-@pytest.mark.parametrize(
-    "error", [AttributeError("Missing accessor"), TypeError("Wrong contract"), LookupError("Missing required model")],
-)
-def test_programming_errors_propagate(error: Exception) -> None:
+@pytest.mark.parametrize("error", [AttributeError("Missing accessor"), TypeError("Wrong contract")])
+def test_programming_errors_propagate(composed_models: None, error: Exception) -> None:
     with pytest.raises(type(error), match=str(error)):
         signals.capture_channel_message(sender=None, instance=_Message(error))
 

@@ -18,7 +18,7 @@ from rebac import (
 from rebac.models import active_relationship_model
 from rebac.relationships import write_relationships
 
-from angee.iam.graphql.sharing import RecordAccessMutation, _grant_subject
+from angee.graphql.sharing import RecordAccessMutation, _grant_subject
 from angee.projects.testing.models import Project
 from tests.conftest import Backend, Drive, Folder
 from tests.iam_models import Group

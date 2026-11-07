@@ -1,4 +1,4 @@
-"""Native ASGI events exercise routing and resource lifetime."""
+"""Native ASGI events exercise the server's routing and resource lifetime."""
 
 import os
 import subprocess
@@ -7,18 +7,7 @@ import sys
 import pytest
 
 
-def test_post_setup_url_import_guard():
-    script = """
-from django.conf import settings
-settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0)
-from django.core.exceptions import AppRegistryNotReady
-try:
-    __import__("angee.server.urls")
-except AppRegistryNotReady:
-    pass
-else:
-    raise AssertionError("post-setup seam imported before setup")
-"""
+def run(script):
     result = subprocess.run(
         [sys.executable, "-c", script],
         env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)),
@@ -28,15 +17,52 @@ else:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_asgi_composition():
-    script = """
-import asyncio, sys
+# Fake app configs expose their conventional asgi module without packaged distributions.
+SETUP = """
 from types import ModuleType
-from contextlib import asynccontextmanager
+import angee.base.addons
+angee.base.addons.optional_addon_module = (
+    lambda config, name, index=None: getattr(config, "modules", {}).get(name)
+)
 from django.conf import settings
-settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0)
+settings.configure(
+    INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
+    DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+)
 import django
 django.setup()
+from django.apps import apps, AppConfig
+class Contribution(AppConfig):
+    path = "/tmp"
+def contributor(name, mounts=(), lifespans=(), protocols=None):
+    module = ModuleType(name + ".asgi")
+    module.http_mounts = lambda: list(mounts)
+    module.lifespans = lambda: list(lifespans)
+    module.protocols = lambda: dict(protocols or {})
+    config = Contribution(name, ModuleType(name))
+    config.modules = {"asgi": module}
+    return config
+"""
+
+
+def test_post_setup_url_import_guard():
+    run("""
+from django.conf import settings
+settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0)
+from django.core.exceptions import AppRegistryNotReady
+try:
+    __import__("angee.server.urls")
+except AppRegistryNotReady:
+    pass
+else:
+    raise AssertionError("post-setup seam imported before setup")
+""")
+
+
+def test_asgi_composition():
+    run(SETUP + """
+import asyncio, sys
+from contextlib import asynccontextmanager
 class Block:
     def find_spec(self, fullname, path=None, target=None):
         if fullname.startswith((
@@ -44,8 +70,7 @@ class Block:
         )):
             raise AssertionError(fullname)
 sys.meta_path.insert(0, Block())
-from django.apps import apps, AppConfig
-from angee.server.asgi import AsgiContribution, _Application
+from angee.server.asgi import _Application
 from asgiref.testing import ApplicationCommunicator
 from django.core.exceptions import ImproperlyConfigured
 seen = []
@@ -63,15 +88,11 @@ async def second():
     seen.append("enter second")
     try: yield
     finally: seen.append("exit second")
-class Config(AppConfig):
-    name = "one"
-    path = "/tmp"
-    def compose_asgi(self): return self.value
-one = Config("one", ModuleType("one"))
-two = Config("two", ModuleType("two"))
-one.value = AsgiContribution({"/api": mounted, "/api/deep": mounted}, (first,))
-two.value = AsgiContribution(lifespans=(second,))
-apps.get_app_configs = lambda: [one, two]
+configs = [
+    contributor("one", mounts=[("/api", mounted), ("/api/deep", mounted)], lifespans=[first]),
+    contributor("two", lifespans=[second]),
+]
+apps.get_app_configs = lambda: configs
 app = _Application()
 async def main():
     scope = {"type": "http", "path": "/base/api/deep/item", "root_path": "/base", "query_string": b"a=1"}
@@ -86,7 +107,7 @@ async def main():
     comm = ApplicationCommunicator(app, dict(scope, path="/base/apix"))
     assert (await comm.receive_output())["status"] == 299
     await comm.wait()
-    one.value = AsgiContribution({"/": mounted, "/api": mounted, "/api/deep": mounted})
+    configs[0] = contributor("one", mounts=[("/", mounted), ("/api", mounted), ("/api/deep", mounted)])
     root_app = _Application()
     async def unexpected_fallback(scope, receive, send):
         raise AssertionError("root mount did not handle unmatched path")
@@ -148,30 +169,57 @@ async def main():
     except ValueError: pass
     else: raise AssertionError("unsupported scope accepted")
 asyncio.run(main())
-two.value = AsgiContribution({"/api": mounted})
+configs[1] = contributor("two", mounts=[("/api", mounted)])
 try: _Application()
 except ImproperlyConfigured as error: assert "one" in str(error) and "two" in str(error)
 else: raise AssertionError("duplicate mount accepted")
-two.value = AsgiContribution(protocols={"http": mounted})
+configs[1] = contributor("two", protocols={"http": mounted})
 try: _Application()
 except ImproperlyConfigured as error: assert "Django HTTP fallback" in str(error) and "two" in str(error)
 else: raise AssertionError("reserved protocol accepted")
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)),
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+""")
+
+
+def test_server_application_loads_the_native_application_once_off_the_event_loop():
+    """Construction may read the database, so the first ASGI call builds it off the loop, once."""
+
+    run(SETUP + """
+import asyncio
+from asgiref.testing import ApplicationCommunicator
+from django.db import connection
+import angee.server
+loads = []
+async def mounted(scope, receive, send):
+    await send({"type": "http.response.start", "status": 204, "headers": []})
+    await send({"type": "http.response.body", "body": b""})
+def http_mounts():
+    # On the event loop this raises SynchronousOnlyOperation.
+    loads.append(connection.get_autocommit())
+    return [("/probe", mounted)]
+config = contributor("probe")
+config.modules["asgi"].http_mounts = http_mounts
+apps.get_app_configs = lambda: [config]
+async def main():
+    for _ in range(2):
+        scope = {"type": "http", "path": "/probe", "root_path": ""}
+        comm = ApplicationCommunicator(angee.server.application, scope)
+        assert (await comm.receive_output())["status"] == 204
+        await comm.receive_output()
+        await comm.wait()
+asyncio.run(main())
+from angee.server.asgi import application as native
+assert loads == [True], loads
+assert angee.server._native_application is native
+""")
 
 
 def test_graphql_and_mcp_contribute_through_server_asgi():
-    script = '''
+    run('''
 import asyncio
 import sys
 from contextlib import asynccontextmanager
 from importlib import import_module
+from importlib.machinery import ModuleSpec
 from types import ModuleType
 from django.conf import settings
 settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0)
@@ -199,7 +247,9 @@ class MCP:
         finally: seen.append('stop mcp')
 mcp = MCP()
 graphql_asgi = ModuleType('angee.graphql.asgi')
-graphql_asgi.websocket_application = lambda: websocket
+# A module in sys.modules carries a spec, so the addon owner finds the submodule natively.
+graphql_asgi.__spec__ = ModuleSpec(graphql_asgi.__name__, None)
+graphql_asgi.protocols = lambda: {'websocket': websocket}
 sys.modules[graphql_asgi.__name__] = graphql_asgi
 mcp_asgi.has_tools = lambda: True
 mcp_asgi.mcp_app = lambda: mcp
@@ -227,33 +277,15 @@ async def main():
     await communicator.wait()
 asyncio.run(main())
 assert seen == [('websocket', 'websocket'), ('mcp', '/mcp'), 'start mcp', 'stop mcp']
-'''
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)),
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+''')
 
 
 @pytest.mark.parametrize("prefix", ["", "mcp", "/mcp/", 1])
 def test_asgi_invalid_mount_prefix_has_configuration_diagnostic(prefix):
-    script = f"""
-from types import ModuleType
-from django.conf import settings
-settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0)
-import django
-django.setup()
-from django.apps import apps, AppConfig
+    run(SETUP + f"""
 from django.core.exceptions import ImproperlyConfigured
-from angee.server.asgi import AsgiContribution, _Application
-class Config(AppConfig):
-    name = "mount_owner"
-    path = "/tmp"
-    def compose_asgi(self):
-        return AsgiContribution(http_mounts={{{prefix!r}: object()}})
-config = Config("mount_owner", ModuleType("mount_owner"))
+from angee.server.asgi import _Application
+config = contributor("mount_owner", mounts=[({prefix!r}, object())])
 apps.get_app_configs = lambda: [config]
 try:
     _Application()
@@ -261,11 +293,4 @@ except ImproperlyConfigured as error:
     assert str(error) == "mount_owner: invalid HTTP mount " + repr({prefix!r}), str(error)
 else:
     raise AssertionError("noncanonical mount accepted")
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)),
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+""")

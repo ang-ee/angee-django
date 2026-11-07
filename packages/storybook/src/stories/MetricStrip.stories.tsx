@@ -42,7 +42,7 @@ export const Prominent: Story = {
 };
 
 export const Loading: Story = {
-  render: () => <MetricStrip loading loadingMessage="Loading metrics…" className="max-w-5xl" />,
+  render: () => <MetricStrip loading loadingLabel="Loading metrics…" className="max-w-5xl" />,
 };
 
 export const SelectableSummary: Story = { render: () => <Summary /> };

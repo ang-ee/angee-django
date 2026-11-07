@@ -20,11 +20,6 @@ class PublicIdentity(models.Model):
     class Meta:
         abstract = True
 
-    @classmethod
-    def generic_pointer_model(cls) -> type[models.Model]:
-        """Use Django's concrete contenttype identity for a generic pointer."""
-        return cls._meta.concrete_model or cls
-
     @property
     def public_id(self) -> str:
         """Return the stable public identifier for this model instance."""

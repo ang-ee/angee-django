@@ -14,7 +14,6 @@ from tests.messaging_campaign import audience_record as audience_record
 from tests.test_spaces import spaces_tables as spaces_tables
 
 pytestmark = [
-    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(
         connection.vendor != "postgresql", reason="PostgreSQL notification row-lock and two-writer contract",

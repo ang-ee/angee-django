@@ -93,8 +93,7 @@ test("real Refine transport sends fixed cuts and revalidation documents through 
   await act(async () => { await feed.client.invalidateQueries({ predicate: (query) => authoredQueryReadsAnyModel(query.meta, ["messaging.Reaction"]) }); });
   await waitFor(() => expect(messageFeedRows(result.current.data).map((message) => message.id)).toEqual(["message-4", "message-3", "message-1"]));
   const revalidations = feed.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === ThreadTranscriptRevalidateDocument);
-  // Full window rows cover retained 3 and 1; only missing 2 needs a partition.
-  expect(revalidations.map(([request]) => request.meta?.gqlVariables?.ids)).toEqual([["message-2"]]);
+  expect(revalidations.map(([request]) => request.meta?.gqlVariables?.ids)).toEqual([["message-3", "message-2"], ["message-1"]]);
   expect(feed.custom.mock.calls[2]?.[0].meta?.gqlVariables).toMatchObject({ beforeCursor: null, throughCursor: "opaque-message-2" });
   expect(feed.client.getQueryCache().findAll({ queryKey: ["angee", "authored"] })).toHaveLength(1);
   expect(feed.subscribe).toHaveBeenCalledWith(expect.objectContaining({ params: { models: [
@@ -113,9 +112,7 @@ test("an exact message anchor accompanies continuation and retained ID revalidat
   feed.refresh();
   await act(async () => { await result.current.refetch(); });
   const revalidations = feed.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === ThreadTranscriptRevalidateDocument);
-  // Both full windows preserve their own retained survivors; only 2 is absent.
-  expect(revalidations).toHaveLength(1);
-  expect(revalidations[0]?.[0].meta?.gqlVariables?.ids).toEqual(["message-2"]);
+  expect(revalidations).toHaveLength(2);
   for (const [request] of feed.custom.mock.calls) {
     expect(request.meta?.gqlVariables).toMatchObject({ threadId: "thread-a", anchor, allCopies: false });
   }

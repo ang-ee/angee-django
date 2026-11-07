@@ -16,7 +16,7 @@ export function RoundComparisonBody({ data, proposalHref, labels }: {
 }): ReactElement {
   const t = useProposalsT();
   if (data.error) return <ErrorBanner title={t("comparison.error")} description={data.error.message} />;
-  if (data.fetching && !data.proposals.length) return <SkeletonStatus label={t("comparison.loading")} className="grid gap-3 p-5">
+  if (data.fetching && !data.proposals.length) return <SkeletonStatus loadingLabel={t("comparison.loading")} className="grid gap-3 p-5">
     <Skeleton shape="text" className="h-4 w-1/2" />
     <Skeleton className="h-12 w-full" />
     <Skeleton className="h-10 w-full" />

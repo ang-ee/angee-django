@@ -2,9 +2,9 @@
 
 Enabled addons contribute a conventional ``mcp_tools.register(server)`` callable.
 The server authenticates inbound bearers through RebacTokenVerifier and carries
-the actor through ActorMiddleware. MCPConfig supplies the HTTP mount and native
-FastMCP lifespan to ``angee.server.asgi``. The inner HTTP application serves its
-root; the server mount owns the external ``/mcp`` prefix.
+the actor through ActorMiddleware. ``angee.mcp.asgi`` supplies the HTTP mount and
+native FastMCP lifespan to ``angee.server.asgi``. The inner HTTP application serves
+its root; the server mount owns the external ``/mcp`` prefix.
 
 ``stateless_http`` keeps each call independent and ``json_response`` returns a
 buffered JSON body the agent's HTTP client folds without an SSE reader (both passed
@@ -21,16 +21,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import cache
+from types import ModuleType
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django_compose.components import InstalledComponents, installed_components
 from fastmcp import FastMCP
 
-from angee.base.addons import optional_addon_module
+from angee.base.addons import addon_modules, optional_addon_module
 from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
 
@@ -44,13 +44,12 @@ Non-GraphQL tools must explicitly declare ``ToolAnnotations.readOnlyHint``.
 Compiled GraphQL tools carry their root ``op_type`` as the structural actor-posture
 fact (their annotation must agree). Builtins also run through the in-process
 pydantic runtime, so their callable may not depend on FastMCP's request-scoped
-``Context`` or ``get_access_token``. Declare
-``meta={"angee": {"execution_context": "actor"}}`` for that capability;
-MCP's public actor_tool_read_only contract validates it before advertisement.
+``Context`` or ``get_access_token``; the native toolset asserts these contracts
+when it advertises a granted tool.
 """
 
 MOUNT_PATH = "/mcp"
-"""The external StreamableHTTP path contributed by MCPConfig.compose_asgi."""
+"""The external StreamableHTTP path contributed by ``angee.mcp.asgi.http_mounts``."""
 
 
 @cache
@@ -102,20 +101,23 @@ def _registrars() -> tuple[ToolRegistrar, ...]:
     deterministic.
     """
 
-    index = installed_components("angee.addons")
     return tuple(
-        registrar for config in apps.get_app_configs()
-        if (registrar := tool_registrar(config, index=index)) is not None
+        registrar for _config, module in addon_modules('mcp_tools')
+        if (registrar := _module_registrar(module)) is not None
     )
 
 
-def tool_registrar(app_config: AppConfig, *, index: InstalledComponents | None = None) -> ToolRegistrar | None:
+def tool_registrar(app_config: AppConfig) -> ToolRegistrar | None:
     """Load the conventional registrar only from an enabled addon."""
 
-    module = optional_addon_module(app_config, 'mcp_tools', index=index)
-    if module is None or not hasattr(module, 'register'):
+    module = optional_addon_module(app_config, 'mcp_tools')
+    return _module_registrar(module) if module is not None else None
+
+
+def _module_registrar(module: ModuleType) -> ToolRegistrar | None:
+    if not hasattr(module, 'register'):
         return None
     registrar = module.register
     if not callable(registrar):
-        raise ImproperlyConfigured(f'{app_config.name}.mcp_tools.register must be callable')
+        raise ImproperlyConfigured(f'{module.__name__}.register must be callable')
     return registrar

@@ -193,9 +193,9 @@ export function RuntimeFixture({
         >
           <OperationDocumentsProvider documents={operationDocuments}>
             <ModelMetadataProvider metadata={fieldMetadata}>
-                <QueryStateAdapter>
-                  <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
-                </QueryStateAdapter>
+              <QueryStateAdapter>
+                <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
+              </QueryStateAdapter>
             </ModelMetadataProvider>
           </OperationDocumentsProvider>
         </Refine>

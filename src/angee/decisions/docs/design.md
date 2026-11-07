@@ -67,16 +67,15 @@ How the ontology maps to this addon.
   A model declares callable proposal methods once in its class-level
   `decision_methods` tuple. Ask-time validation requires a declared method with
   arguments supplied by the proposal, rejects `delete`, and checks declared keyword
-  `arguments`. The workflow chooses proposed fields without a Decisions allowlist
-  or a GraphQL write-exposure requirement. Field values, readable foreign-key
-  identities and editability are validated when asking; state and server-owned
-  fields cannot be written, and declared per-field write permissions apply to the asking actor. A field action
+  `arguments`. Field values, readable foreign-key identities and editability are
+  validated when asking; state and server-owned fields cannot be written, and
+  declared per-field write permissions apply to the asking actor. A field action
   of `{}` confirms its current value without writing; `{"set": value}` proposes a value;
   `{"choose": {}}` leaves the value to the answerer, with an optional `filter` for the relation picker.
   Supplied values pass through the same field resolution as `set` under the answering actor, including
   related-record read access, validators and write permissions. Every chosen `choose` field needs a value,
   and no other field may receive one. Multiple alternatives cannot overlap a field write.
-  Editable many-to-many fields replace their set with related public ids (an empty list clears it); one-to-many writes remain refused, and `choose` does not apply inside method arguments.
+  Updatable many-to-many fields replace their set with related public ids (an empty list clears it); one-to-many writes remain refused, and `choose` does not apply inside method arguments.
 - **Attention query:** one queryset helper and one GraphQL filter over `Decision.records`, usable on any model
   with no per-model declaration: records with open decisions, and the open decisions of a record.
 - **Readers:**

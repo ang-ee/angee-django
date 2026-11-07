@@ -73,30 +73,11 @@ class IosBackup:
         """Return the backup-relative ``<fileID[:2]>/<fileID>`` blob location."""
 
         file_id = self.blob_id(domain, relative_path)
-        try:
-            return self._blob_location(file_id)
-        except BackupError as error:
-            raise BackupError(f"Manifest file id for {domain}/{relative_path} is not a SHA1 digest.") from error
-
-    @staticmethod
-    def _blob_location(file_id: str) -> PurePosixPath:
-        """Validate one manifest file identity and project its physical shard."""
-
         if len(file_id) != 40 or any(character not in string.hexdigits for character in file_id):
-            raise BackupError("Manifest file id is not a SHA1 digest.")
+            raise BackupError(
+                f"Manifest file id for {domain}/{relative_path} is not a SHA1 digest."
+            )
         return PurePosixPath(file_id[:2], file_id)
-
-    def has_sqlite_file(self, domain: str, relative_path: str) -> bool:
-        """Probe only SQLite's fixed header; missing or unreadable blobs are absent."""
-
-        blob = self.blob_path(domain, relative_path)
-        if blob is None:
-            return False
-        try:
-            with blob.open("rb") as stream:
-                return is_sqlite_header(stream.read(SQLITE_HEADER_LENGTH))
-        except OSError:
-            return False
 
     def blob_id(self, domain: str, relative_path: str) -> str:
         """Return one file's manifest id or its deterministic fallback id."""
@@ -132,11 +113,9 @@ class IosBackup:
             )
         for raw_file_id, raw_domain, raw_relative_path in cursor:
             file_id = str(raw_file_id)
-            try:
-                relative_blob = self._blob_location(file_id)
-            except BackupError:
+            if len(file_id) != 40 or any(character not in string.hexdigits for character in file_id):
                 continue
-            blob = self.path / relative_blob
+            blob = self.path / file_id[:2] / file_id
             if not blob.is_file():
                 continue
             yield ManifestFile(
@@ -176,30 +155,13 @@ class IosBackup:
 def logical_key(domain: str, relative_path: str) -> str:
     """Return the canonical ``domain/relativePath`` key for one backup entry."""
 
-    raw_domain = validate_domain(domain)
+    raw_domain = str(domain)
     raw_relative_path = str(relative_path)
     key = f"{raw_domain}/{raw_relative_path}"
     parsed_domain, parsed_relative_path = split_logical_key(key)
     if parsed_domain != raw_domain or parsed_relative_path != raw_relative_path:
         raise BackupError(f"Invalid iPhone backup logical key: {key!r}")
     return key
-
-
-def validate_domain(domain: str) -> str:
-    """Return one canonical iPhone backup domain segment."""
-
-    raw_domain = str(domain)
-    segment = PurePosixPath(raw_domain)
-    if (
-        not raw_domain
-        or raw_domain == ".."
-        or segment.is_absolute()
-        or len(segment.parts) != 1
-        or "\\" in raw_domain
-        or segment.as_posix() != raw_domain
-    ):
-        raise BackupError(f"Invalid iPhone backup domain: {raw_domain!r}")
-    return raw_domain
 
 
 def split_logical_key(key: str) -> tuple[str, str]:

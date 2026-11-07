@@ -21,7 +21,7 @@ from rebac.testing import install_schema
 from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
 from tests.tables import model_tables
 
-from angee.iam.models.base import ProtectedModel
+from angee.base.models.base import AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
@@ -87,7 +87,7 @@ def test_load_result_counts_import_export_totals() -> None:
 def test_resource_condition_q_evaluator_supported_lookup_set(tmp_path: Path) -> None:
     """Resource adoption conditions intentionally support exact/isnull on concrete fields."""
 
-    class ConditionThing(ProtectedModel):
+    class ConditionThing(AngeeModel):
         """Model used to exercise resource adoption condition matching."""
 
         name = models.CharField(max_length=40)
@@ -647,7 +647,7 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
 ) -> None:
     """Resource rows load with label-form FK xrefs on a fresh ledger."""
 
-    class ImportUser(ProtectedModel):
+    class ImportUser(AngeeModel):
         """User-like model loaded from resources."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -659,7 +659,7 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
             app_label = "base"
             rebac_resource_type = "base/import-user"
 
-    class ImportNote(ProtectedModel):
+    class ImportNote(AngeeModel):
         """Note-like model referencing a resource-loaded user."""
 
         title = models.CharField(max_length=80)
@@ -716,7 +716,7 @@ def test_resource_manager_keeps_same_path_groups_addon_scoped(
 ) -> None:
     """Same-named files in separate addons keep addon-local ledger ownership."""
 
-    class SharedUser(ProtectedModel):
+    class SharedUser(AngeeModel):
         """User-like model loaded from multiple addon resource files."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -726,7 +726,7 @@ def test_resource_manager_keeps_same_path_groups_addon_scoped(
 
             app_label = "base"
 
-    class SharedNote(ProtectedModel):
+    class SharedNote(AngeeModel):
         """Note-like model referencing an addon-local resource user."""
 
         title = models.CharField(max_length=80)
@@ -816,7 +816,7 @@ def test_resource_load_rejects_existing_xref_for_another_model(
 ) -> None:
     """A later load cannot reuse an addon xref for another target model."""
 
-    class CollisionUser(ProtectedModel):
+    class CollisionUser(AngeeModel):
         """First target model for ledger collision tests."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -826,7 +826,7 @@ def test_resource_load_rejects_existing_xref_for_another_model(
 
             app_label = "base"
 
-    class CollisionNote(ProtectedModel):
+    class CollisionNote(AngeeModel):
         """Second target model for ledger collision tests."""
 
         title = models.CharField(max_length=80)
@@ -881,7 +881,7 @@ def test_resource_load_rejects_existing_xref_for_another_model(
 def test_resource_load_moves_a_parent_xref_onto_its_child(tmp_path: Path) -> None:
     """An xref recorded on a concrete parent updates its child row and re-targets."""
 
-    class MovedPage(ProtectedModel):
+    class MovedPage(AngeeModel):
         """Parent the xref was first recorded on."""
 
         title = models.CharField(max_length=40)
@@ -943,7 +943,7 @@ def test_resource_validate_cleans_rows_and_resolves_xrefs(
 ) -> None:
     """Validation runs widget cleaning inside a rolled-back import."""
 
-    class ValidateNote(ProtectedModel):
+    class ValidateNote(AngeeModel):
         """Note-like model with an FK that must resolve by xref."""
 
         title = models.CharField(max_length=80)
@@ -957,7 +957,7 @@ def test_resource_validate_cleans_rows_and_resolves_xrefs(
 
             app_label = "base"
 
-    class ValidateUser(ProtectedModel):
+    class ValidateUser(AngeeModel):
         """User-like model referenced by validation rows."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -1003,7 +1003,7 @@ def test_resource_validate_cleans_rows_and_resolves_xrefs(
 def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
     """Rows without ledgers adopt existing targets only when requested."""
 
-    class AdoptUser(ProtectedModel):
+    class AdoptUser(AngeeModel):
         """Model with a unique natural key suitable for adoption."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -1080,7 +1080,7 @@ def test_resource_adoption_uses_explicit_unique_field(
 ) -> None:
     """A named adoption field resolves ambiguity between unique fields."""
 
-    class ExplicitAdoptUser(ProtectedModel):
+    class ExplicitAdoptUser(AngeeModel):
         """Model with multiple unique fields."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -1144,7 +1144,7 @@ def test_resource_adoption_uses_explicit_unique_field(
 def test_resource_adoption_repairs_stale_ledger_target(tmp_path: Path) -> None:
     """A stale ledger target is repaired through the declared adoption key."""
 
-    class StaleLedgerUser(ProtectedModel):
+    class StaleLedgerUser(AngeeModel):
         """Model with a unique natural key and a mutable seeded value."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -1233,7 +1233,7 @@ def test_stale_ledger_pointer_to_wrong_live_row_is_repaired(tmp_path: Path) -> N
     the seed is re-created and the ledger repointed.
     """
 
-    class StalePointerUser(ProtectedModel):
+    class StalePointerUser(AngeeModel):
         """Model with a unique natural key for wrong-live-row repair tests."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -1314,7 +1314,7 @@ def test_stale_ledger_pointer_to_wrong_live_row_is_repaired(tmp_path: Path) -> N
 def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> None:
     """Resource adoption can match existing rows by a composite unique key."""
 
-    class CompositeClient(ProtectedModel):
+    class CompositeClient(AngeeModel):
         """Model whose public identity is a composite natural key."""
 
         slug = models.SlugField()
@@ -1405,7 +1405,7 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
 def test_resource_adoption_accepts_mti_parent_unique_fields(tmp_path: Path) -> None:
     """A child can adopt through a natural key constrained on its concrete parent."""
 
-    class ParentDocument(ProtectedModel):
+    class ParentDocument(AngeeModel):
         """Parent owns the natural key."""
 
         vault = models.CharField(max_length=40)
@@ -1458,7 +1458,7 @@ def test_resource_adoption_accepts_mti_parent_unique_fields(tmp_path: Path) -> N
 def test_resource_adoption_accepts_a_single_conditional_unique_field(tmp_path: Path) -> None:
     """String adoption selects only the row inside a conditional key's scope."""
 
-    class ConditionalKeyRow(ProtectedModel):
+    class ConditionalKeyRow(AngeeModel):
         """Lineage-shaped row whose stable key is unique only on its head."""
 
         key = models.SlugField(blank=True, default="")
@@ -1540,7 +1540,7 @@ def test_resource_adoption_accepts_a_single_conditional_unique_field(tmp_path: P
 def test_resource_adoption_rejects_ambiguous_conditional_key_matches(tmp_path: Path) -> None:
     """A corrupted conditional-key scope fails fast instead of declining adoption."""
 
-    class AmbiguousConditionalKeyRow(ProtectedModel):
+    class AmbiguousConditionalKeyRow(AngeeModel):
         """Row whose database constraint is removed to simulate corrupt legacy data."""
 
         key = models.SlugField(blank=True, default="")
@@ -1610,7 +1610,7 @@ def test_resource_adoption_rejects_ambiguous_conditional_key_matches(tmp_path: P
 def test_resource_adoption_rejects_an_uncovered_string_field(tmp_path: Path) -> None:
     """String adoption still rejects fields without either supported uniqueness form."""
 
-    class UncoveredAdoptRow(ProtectedModel):
+    class UncoveredAdoptRow(AngeeModel):
         """Row whose key has no uniqueness guarantee."""
 
         key = models.SlugField()
@@ -1661,7 +1661,7 @@ def test_resource_adoption_rejects_an_uncovered_string_field(tmp_path: Path) -> 
 def test_resource_adoption_accepts_conditional_composite_unique_fields(tmp_path: Path) -> None:
     """Resource adoption can reuse rows governed by a conditional composite unique key."""
 
-    class ConditionalOwner(ProtectedModel):
+    class ConditionalOwner(AngeeModel):
         """Model addressed by xref from the conditional adoption key."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -1671,7 +1671,7 @@ def test_resource_adoption_accepts_conditional_composite_unique_fields(tmp_path:
 
             app_label = "base"
 
-    class ConditionalCredential(ProtectedModel):
+    class ConditionalCredential(AngeeModel):
         """Model whose local identity is unique only for provider-less rows."""
 
         user = models.ForeignKey(ConditionalOwner, on_delete=models.CASCADE)
@@ -1777,7 +1777,7 @@ def test_resource_adoption_rejects_ambiguous_unique_fields(
 ) -> None:
     """Implicit adoption fails when a row has multiple unique candidates."""
 
-    class AmbiguousAdoptUser(ProtectedModel):
+    class AmbiguousAdoptUser(AngeeModel):
         """Model with multiple unique fields."""
 
         username = models.CharField(max_length=40, unique=True)
@@ -1887,7 +1887,7 @@ def test_grant_tuple_resolves_xref_const_role_and_wildcard(tmp_path: Path) -> No
 
     from rebac import ObjectRef, SubjectRef, anonymous_actor, to_object_ref
 
-    class GrantDoc(ProtectedModel):
+    class GrantDoc(AngeeModel):
         """Row addressed by xref from the resource side of a grant."""
 
         title = models.CharField(max_length=40)
@@ -2061,7 +2061,7 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
 
     hooks = []
 
-    class GrantDependentRow(ProtectedModel):
+    class GrantDependentRow(AngeeModel):
         """A row whose domain validation requires a preceding membership grant."""
 
         title = models.CharField(max_length=80)
@@ -2137,7 +2137,7 @@ def test_unchanged_grant_batches_use_one_native_key_read(
     from rebac import ObjectRef, RelationshipTuple, to_subject_ref, write_relationships
     from rebac.models import PermissionAuditEvent
 
-    from angee.iam.identity import public_subject_ref
+    from angee.base.identity import public_subject_ref
 
     settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     user = get_user_model().objects.create_user(username="grant-batch-reader")
@@ -2390,7 +2390,7 @@ def test_resource_factory_defaults_and_model_declared_native_subclass(tmp_path: 
         def before_import_row(self, row: Any, **kwargs: Any) -> None:
             super().before_import_row(row, **kwargs)
 
-    class DefaultModel(ProtectedModel):
+    class DefaultModel(AngeeModel):
         name = models.CharField(max_length=30)
 
         class Meta:

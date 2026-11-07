@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -22,6 +23,7 @@ from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from django.test import Client, RequestFactory
 from rebac import (
+    RebacMixin,
     RelationshipTuple,
     SubjectRef,
     actor_context,
@@ -34,33 +36,23 @@ from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.middleware import ActorMiddleware
 from rebac.roles import grant
+from strawberry.django.views import GraphQLView
 
 from angee.base.models.identity import public_id_of
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
+from angee.base.permissions import DirectRecordAccess
+from angee.graphql import records
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.graphql.views import graphql_endpoint
-from angee.iam.graphql import records
-from angee.iam.graphql.views import IAMGraphQLView
-from angee.iam.permissions import DirectRecordAccess
 from angee.storage import exceptions
-from angee.storage.choices import FileVisibility
+from angee.storage import models as storage_models
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
-from tests.conftest import (
-    Backend,
-    Drive,
-    File,
-    FileAttachment,
-    Folder,
-    MimeType,
-    addon_schema,
-    create_platform_admin,
-    execute_schema,
-    result_data,
-)
+from tests.conftest import Backend, Drive, File, FileAttachment, Folder, MimeType, addon_schema, create_platform_admin
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.scopedemo.models import NativeAttachmentTarget
+from tests.tables import model_tables
 
 # A real 1x1 PNG — libmagic classifies it as image/png; a fake signature would not.
 PNG_BYTES = bytes.fromhex(
@@ -328,8 +320,8 @@ def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
         Drive._meta.get_field("backend").delete_cached_value(drive)
     row = File(drive=drive) if cached_drive else File(drive_id=drive.pk)
     with system_context(reason="test storage resolution") if system else actor_context(drive.alice):
-        # Only the already cached drive's own backend lookup enters its native system context.
-        with django_assert_num_queries(2 if cached_drive else 1):
+        # Native contexts audit each entry, including nested system contexts.
+        with django_assert_num_queries(2):
             backend = row.storage
             assert row.drive.backend.pk == drive.backend_id
         with django_assert_num_queries(0):
@@ -375,13 +367,28 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
 
 @pytest.mark.django_db(transaction=True)
 def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> None:
-    """The generic target lock does not require an Angee queryset or model base."""
+    """The generic target lock does not require an Angee queryset or model base.
+
+    The probe joins the installed storage registry, where the lock resolves its
+    content type, and leaves it afterwards: a left-over ``storage/file`` model
+    without the owner column would fail every later all-models ownership check.
+    """
 
     del composed_tables
-    with system_context(reason="test native attachment target"):
-        target = NativeAttachmentTarget.objects.create()
-        with transaction.atomic():
-            FileAttachment.objects._lock_target(generic_target(target))
+    class NativeTarget(RebacMixin):
+        class Meta:
+            app_label = "storage"
+            db_table = "test_storage_native_attachment_target"
+            rebac_resource_type = "storage/file"
+
+    try:
+        with model_tables((NativeTarget,)), system_context(reason="test native attachment target"):
+            target = NativeTarget.objects.create()
+            with transaction.atomic():
+                FileAttachment.objects._lock_target(generic_target(target))
+    finally:
+        del apps.all_models["storage"][NativeTarget._meta.model_name]
+        apps.clear_cache()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -409,7 +416,6 @@ def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, driv
         assert FileAttachment._base_manager.count() == 1
 
 
-@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(
     connection.vendor != "postgresql",
@@ -717,7 +723,7 @@ def test_storage_delete_preview_requires_delete_permission(drive: Any, resource:
     assert result.errors is not None
     assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
     assert result.data is None
-    assert type(target).objects.with_actor(drive.alice).filter(pk=target.pk).exists()
+    assert type(target).objects.as_user(drive.alice).filter(pk=target.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1172,10 +1178,10 @@ def test_file_factory_validates_hidden_constraint_rows_before_insert(drive: Any)
             filename="hidden.txt",
             content_hash=digest,
             storage_path="hidden/reservation",
-            visibility=FileVisibility.RECORD,
+            visibility=storage_models.FileVisibility.RECORD,
         )
     assert not hidden.with_actor(drive.alice).has_access("read")
-    with actor_context(drive.alice), patch("angee.storage.managers.secrets.token_hex", return_value=digest):
+    with actor_context(drive.alice), patch("angee.storage.models.secrets.token_hex", return_value=digest):
         with pytest.raises(exceptions.UploadError, match="invalid file request") as raised:
             File.objects.draft(filename="new.txt", drive_id=str(drive.sqid))
     assert isinstance(raised.value.__cause__, ValidationError)
@@ -1197,7 +1203,6 @@ def test_file_draft_rebinds_returned_row_to_actor(drive: Any) -> None:
     assert not row.is_sudo()
     assert row.actor() == to_subject_ref(drive.alice)
     assert row.created_by_id == drive.alice.pk
-    assert row._state.db == drive._state.db
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1414,7 +1419,7 @@ def test_backend_storage_cache_is_bounded(
 
     del transactional_db
 
-    monkeypatch.setattr("angee.storage.models.backend._STORAGE_CACHE_MAX_SIZE", 2)
+    monkeypatch.setattr(storage_models, "_STORAGE_CACHE_MAX_SIZE", 2)
     Backend._storage_cache.clear()
     with system_context(reason="test storage setup"):
         backends = [
@@ -1848,7 +1853,7 @@ def test_storage_preview_does_not_mint_download_urls(
     settings.ROOT_URLCONF = "angee.storage.urls"
     row = _proxy_upload(drive, PNG_BYTES)
     admin = create_platform_admin("storage-preview-admin")
-    view = IAMGraphQLView.as_view(schema_name="public", schema=addon_schema(storage_schema.schemas, "public"))
+    view = GraphQLView.as_view(schema=addon_schema(storage_schema.schemas, "public"))
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
     payload = {
         "query": "query PreviewFile($id: String!) { files_by_pk(id: $id) { id url } }",

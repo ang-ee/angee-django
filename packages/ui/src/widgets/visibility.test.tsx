@@ -42,7 +42,7 @@ test("view-as previews cannot invoke audience verbs", () => {
   render(<Provider><ToastProvider><AppRuntimeProvider runtime={{ auth: {
     user: { id: "u1", name: "Person" }, status: "authenticated", hasRole: () => false,
     viewAs: { viewAs: { userId: "u1" }, currentUser: { id: "u1", name: "Person" }, realUser: null,
-      enter: vi.fn(), exit: vi.fn() },
+      viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
   } }}><VisibilityControl value="private" options={options} allowedValues={["team"]} onSelect={onSelect} />
   </AppRuntimeProvider></ToastProvider></Provider>);
   expect((screen.getByRole("button", { name: "Change visibility to Team" }) as HTMLButtonElement).disabled).toBe(true);

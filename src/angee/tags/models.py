@@ -4,7 +4,8 @@ A :class:`Tag` is one label in a vocabulary; a :class:`TagAssignment` is the
 polymorphic edge attaching a tag to a record of a taggable type: a
 ``content_type``/``object_id`` pair with a
 :class:`~django.contrib.contenttypes.fields.GenericForeignKey` ``target``, stored
-at :func:`rebac.generic_target`. Tags reach every taggable model without a FK back to it.
+at :func:`rebac.generic_target`. Tags depend on nothing but ``angee.iam`` and
+reach every taggable model without a FK back to it.
 
 **Scope.** Tags are reference vocabulary readable by every non-anonymous actor
 through the native ``authenticated`` permission; tag administrators curate it.
@@ -33,9 +34,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from operator import attrgetter
-from typing import Any, ClassVar, Self
+from typing import Any, Self
 
-from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.db import models
@@ -43,28 +44,21 @@ from rebac import GenericTarget, generic_target
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
 
-from angee.base.fields.relations import GenericRelation
 from angee.base.fields.text import ColorField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.identity import instance_from_public_id, instances_from_public_ids
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.identity import instance_from_public_id
 from angee.base.models.inputs import InputExtensionsMixin
+from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.scope import DefaultedScopeMixin
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.base.permissions import declared_rebac_definition
 from angee.base.querysets import MergeableQuerySet
-from angee.iam.models.base import ProtectedDataModel
-from angee.iam.models.merge import ProtectedMergeableMixin
-from angee.iam.models.refs import ProtectedRecordRefMixin
-from angee.iam.models.roles import role_anchor
-from angee.iam.permissions import declared_rebac_definition
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
-
-TagRole = role_anchor("tags/role", name="TagRole")
-"""The ``tags/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective tags manager. See :func:`angee.iam.models.roles.role_anchor`.
-"""
 
 
 class TagQuerySet[TagT: Tag](
@@ -78,15 +72,8 @@ class TagQuerySet[TagT: Tag](
 TagManager = AngeeHistoryManager.from_queryset(TagQuerySet)
 
 
-class Tag(DefaultedScopeMixin, HistoryMixin, ProtectedMergeableMixin, ArchiveMixin, ProtectedDataModel, concrete=True):
+class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """One label in a vocabulary shared by every non-anonymous actor."""
-
-    hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("id", "name", "attention", "is_archived")
-    hasura_sortable_fields: ClassVar[tuple[str, ...]] = ("name", "created_at", "updated_at")
-    hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ("id",)
-    hasura_groupable_fields: ClassVar[tuple[str, ...]] = ("attention", "is_archived")
-    hasura_insertable_fields: ClassVar[tuple[str, ...]] = ("name", "color", "attention", "is_archived")
-    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
@@ -180,7 +167,7 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
         target = self.resolve_target(target_type, target_id)
         if target is None:
             raise ValueError("tag target not found")
-        tag_rows = self._tags_for_ids(tag_ids)
+        tag_rows = [self._tag_for_id(tag_id) for tag_id in tag_ids]
         lookups = target.lookups(self.model, "target")
         return [self.get_or_create(tag=tag_row, **lookups)[0] for tag_row in tag_rows]
 
@@ -194,7 +181,7 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
         target = self.resolve_target(target_type, target_id)
         if target is None:
             raise ValueError("tag target not found")
-        tag_pks = [tag.pk for tag in self._tags_for_ids(tag_ids)]
+        tag_pks = [self._tag_for_id(tag_id).pk for tag_id in tag_ids]
         deleted, _by_model = self.filter(tag_id__in=tag_pks, **target.lookups(self.model, "target")).delete()
         return deleted
 
@@ -206,26 +193,24 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
         for each tag added or removed.
         """
 
-        wanted = {tag.pk for tag in self._tags_for_ids(tag_ids)}
+        wanted = {self._tag_for_id(tag_id).pk for tag_id in tag_ids}
         lookups = generic_target(record).lookups(self.model, "target")
         current = set(self.filter(**lookups).values_list("tag_id", flat=True))
         self.filter(tag_id__in=current - wanted, **lookups).delete()
         for tag_pk in sorted(wanted - current):
             self.create(tag_id=tag_pk, **lookups)
 
-    def _tags_for_ids(self, tag_ids: Iterable[str]) -> list[Tag]:
-        """Resolve actor-readable tags in one batch, preserving input order."""
+    def _tag_for_id(self, tag_id: str) -> Tag:
+        """Return the actor-readable tag row for one public id, or fail fast."""
 
-        ids = [str(tag_id) for tag_id in tag_ids]
         tag_model = self.model.tag.field.related_model
-        rows = instances_from_public_ids(tag_model, ids)
-        for tag_id in ids:
-            if tag_id not in rows:
-                raise ValueError(f"tag {tag_id!r} not found")
-        return [rows[tag_id].canonical() for tag_id in ids]
+        tag_row = instance_from_public_id(tag_model, str(tag_id))
+        if tag_row is None:
+            raise ValueError(f"tag {str(tag_id)!r} not found")
+        return tag_row.canonical()
 
 
-class TagAssignment(HistoryMixin, AuditMixin, ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
+class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
     """Polymorphic edge attaching one :class:`Tag` to a record of a taggable type.
 
     The ``target`` generic foreign key stores :func:`rebac.generic_target`. Each
@@ -351,3 +336,9 @@ class TaggedModel(InputExtensionsMixin):
             assert assignment_model is not None and issubclass(assignment_model, TagAssignment)
             assignment_model.objects.set_for(self, tags)
         super().apply_input_extensions(**values)
+
+
+TagRole = role_anchor("tags/role", name="TagRole")
+"""The ``tags/role`` anchor: its const ``admin`` arm resolves a platform admin as
+an effective tags manager. See :func:`angee.base.models.roles.role_anchor`.
+"""

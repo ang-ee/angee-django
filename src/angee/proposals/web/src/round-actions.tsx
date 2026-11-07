@@ -73,10 +73,10 @@ export function useRoundCeremonyActions(
   const [widen] = useAuthoredResourceMutation(WIDEN_ROUND, options);
   const settle = useActionResultRun();
   const open = useRecordAction(async (round, context) => {
-    await settle(async () => extractActionOutcome(await openRound({ round, revision: recordRevision(context.record) }, { reconciliation: context.reconciliation }), "open_proposal_round"));
+    await settle(async () => extractActionOutcome(await openRound({ round, revision: recordRevision(context.record) }), "open_proposal_round"));
   });
   const cancel = useRecordAction(async (round, context) => {
-    await settle(async () => extractActionOutcome(await cancelRound({ round, revision: recordRevision(context.record) }, { reconciliation: context.reconciliation }), "cancel_proposal_round"));
+    await settle(async () => extractActionOutcome(await cancelRound({ round, revision: recordRevision(context.record) }), "cancel_proposal_round"));
   });
 
   const closeSubmit = React.useCallback<
@@ -89,7 +89,7 @@ export function useRoundCeremonyActions(
         outcome: closeOutcome(closeOutcomeOptions, values.outcome, t("round.action.invalidOutcome")) as CloseOutcome,
         accepted: idList(values.accepted),
         partial: idList(values.partial),
-      }, { reconciliation: context.reconciliation }), "close_proposal_round");
+      }), "close_proposal_round");
     },
     [closeOutcomeOptions, closeRound, t],
   );
@@ -105,7 +105,7 @@ export function useRoundCeremonyActions(
           values.facilitator,
           t("round.action.invalidFacilitator"),
         ),
-      }, { reconciliation: context.reconciliation }), "transfer_proposal_round_facilitation");
+      }), "transfer_proposal_round_facilitation");
     },
     [t, transferRound],
   );
@@ -121,7 +121,7 @@ export function useRoundCeremonyActions(
         submit: async (values, context) => extractActionOutcome(await admit({
           round: actionRecordId(context.record, t("round.action.failed")),
           responder: requiredId(values.responder, t("round.action.responder")), track: values.track === true,
-        }, { reconciliation: context.reconciliation }), "admit_proposal_round_responder"),
+        }), "admit_proposal_round_responder"),
         visibleWhen: (record) => record.can_admit === true,
       },
       remove: {
@@ -130,7 +130,7 @@ export function useRoundCeremonyActions(
         submit: async (values, context) => extractActionOutcome(await remove({
           round: actionRecordId(context.record, t("round.action.failed")), revision: recordRevision(context.record),
           responder: requiredId(values.responder, t("round.action.responder")),
-        }, { reconciliation: context.reconciliation }), "remove_proposal_round_responder"),
+        }), "remove_proposal_round_responder"),
         visibleWhen: (record) => holdsPermission(record, "manage"),
       },
       widen: {
@@ -141,7 +141,7 @@ export function useRoundCeremonyActions(
         submit: async (values, context) => extractActionOutcome(await widen({
           round: actionRecordId(context.record, t("round.action.failed")), revision: recordRevision(context.record),
           policy: openingPolicyValue(values.policy, t("round.action.invalidPolicy")),
-        }, { reconciliation: context.reconciliation }), "widen_proposal_round_opening_policy"),
+        }), "widen_proposal_round_opening_policy"),
         visibleWhen: (record) => holdsPermission(record, "write") && isOpenedRound(record),
       },
       open: {

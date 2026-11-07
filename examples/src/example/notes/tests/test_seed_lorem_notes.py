@@ -59,7 +59,7 @@ class SeedLoremNotesTests(TransactionTestCase):
         self._seed(count=50, owner="alice", fresh=True)
 
         # Visible to alice via REBAC scope — not merely present in the table.
-        alice_notes = list(Note.objects.with_actor(self.alice))
+        alice_notes = list(Note.objects.as_user(self.alice))
         self.assertGreaterEqual(len(alice_notes), 50)
         self.assertTrue(all(n.owner_id == self.alice.pk for n in alice_notes))
 
@@ -80,8 +80,8 @@ class SeedLoremNotesTests(TransactionTestCase):
 
     def test_owner_isolation(self) -> None:
         self._seed(count=30, owner="alice", fresh=True)
-        alice_sqids = {n.sqid for n in Note.objects.with_actor(self.alice)}
-        bob_sqids = {n.sqid for n in Note.objects.with_actor(self.bob)}
+        alice_sqids = {n.sqid for n in Note.objects.as_user(self.alice)}
+        bob_sqids = {n.sqid for n in Note.objects.as_user(self.bob)}
         self.assertGreaterEqual(len(alice_sqids), 30)
         self.assertFalse(alice_sqids & bob_sqids)
 

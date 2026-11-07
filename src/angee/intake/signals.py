@@ -11,7 +11,7 @@ from rebac import PermissionDenied, system_context
 
 from angee.base.exceptions import DomainError
 from angee.decisions.signals import decision_answered
-from angee.messaging.events import message_landed
+from angee.messaging.events import message_ingested
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +20,9 @@ def connect() -> None:
     """Listen for ingested messages without adding another messaging hook."""
 
     decision_answered.connect(apply_access_answer, dispatch_uid="intake.apply_access_answer")
-    message_landed.connect(
+    message_ingested.connect(
         capture_channel_message,
-        dispatch_uid="intake.capture_channel_message.message_landed",
+        dispatch_uid="intake.capture_channel_message.message_ingested",
     )
 
 
@@ -34,21 +34,18 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
     retain primary ingest; programming errors propagate so retries can recover.
     """
 
-    del sender
-    channel = kwargs.get("channel")
-    for message in kwargs.get("created_batch") or (instance,):
-        _capture_channel_message(message, channel=channel)
-
-
-def _capture_channel_message(instance: Any, *, channel: Any = None) -> None:
-    """Capture one admitted channel message within its ingest transaction."""
+    del sender, kwargs
     if instance.channel_id is None:
         return
     try:
-        if channel is None:
-            channel = instance.transport_channel(reason="intake.capture.channel")
-        if channel is not None:
-            channel.capture_ingested_message(instance)
+        apps.get_model("messaging", "Channel")
+        apps.get_model("intake", "Need")
+    except LookupError:
+        # Source-only test graphs may install addon declarations without emitted
+        # concrete runtime models. The global messaging seam must remain inert.
+        return
+    try:
+        instance.transport_channel(reason="intake.capture.channel").capture_ingested_message(instance)
     except (DomainError, ValidationError, PermissionDenied) as error:
         logger.warning(
             "Skipped intake capture for message %s on channel %s: %s",
@@ -64,6 +61,6 @@ def apply_access_answer(sender: Any, decision: Any, **kwargs: Any) -> None:
         return
     need = apps.get_model("intake", "Need")
     with system_context(reason="intake.answer.current_need"):
-        rows = list(need.objects.db_manager(decision._state.db).filter(access_decision=decision))
+        rows = list(need.objects.filter(access_decision=decision))
     for row in rows:
         row.with_actor(decision.answered_by).apply_access_answer(decision)

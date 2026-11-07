@@ -1,4 +1,4 @@
-"""Sender and party avatars batch their reads across populated pages."""
+"""Sender and party avatars cost the same per page however many rows the page shows."""
 
 from __future__ import annotations
 
@@ -8,13 +8,13 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.base.models.identity import public_id_of
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.messaging.testing.models import Channel, Handle, Message, Party, Person
-from tests.conftest import File, execute_schema, make_integration, result_data
+from tests.conftest import File, make_integration
 from tests.test_nexus import _schema
 from tests.test_storage import PNG_BYTES, drive, image_drive  # noqa: F401 -- the image drive avatars land on
 
@@ -36,8 +36,7 @@ def test_message_lists_the_inbox_navigator_and_same_as_pairs_batch_their_avatars
     owner = get_user_model().objects.create_user(username="sender-avatar-owner")
     channel = make_integration(owner.username, model=Channel, owner=owner)
     schema = _schema()
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
+    request = graphql_request(owner)
     shown: dict[str, str] = {}
 
     def seed(start: int, count: int) -> None:
@@ -52,7 +51,7 @@ def test_message_lists_the_inbox_navigator_and_same_as_pairs_batch_their_avatars
                 )
                 Party.objects.assert_handle(person, sender, asserted_by=owner)
                 picture = File.objects.ingest_image(PNG_BYTES + bytes([100 + index]))
-                sender.set_avatar(picture)
+                Handle.objects.set_avatar(sender, picture)
                 shown[public_id_of(person)] = public_id_of(own or picture)
                 twin = Person._base_manager.create(display_name=f"Twin {index}", created_by=owner)
                 for party, value in ((person, f"+1858342{index:04d}"), (twin, f"+1 858 342 {index:04d}")):
@@ -75,28 +74,20 @@ def test_message_lists_the_inbox_navigator_and_same_as_pairs_batch_their_avatars
             data = result_data(execute_schema(schema, query, request=request))
         return len(queries.captured_queries), data
 
-    counts: list[dict[str, int]] = []
-    for start, added in ((0, 1), (1, 3), (4, 4)):
-        seed(start, added)
-        pages = {name: read(query) for name, query in PAGES.items()}
-        counts.append({name: count for name, (count, _data) in pages.items()})
+    seed(0, 1)
+    one = {name: read(query)[0] for name, query in PAGES.items()}
+    seed(1, 3)
+    four = {name: read(query) for name, query in PAGES.items()}
+    assert {name: count for name, (count, _data) in four.items()} == one
 
-        messages = pages["messages"][1]["messages"]
-        assert {
-            row["sender"]["party"]["id"]: row["sender"]["party"]["display_avatar"]["id"] for row in messages
-        } == shown
-        navigator = pages["inbox_navigator"][1]["inbox_navigator"]["rows"]
-        assert {
-            row["handle"]["party"]["id"]: row["handle"]["party"]["display_avatar"]["id"] for row in navigator
-        } == shown
-        pairs = pages["same_as_pairs"][1]["same_as_pairs"]
-        assert {
-            side["id"]: side["display_avatar"]["id"]
-            for pair in pairs
-            for side in (pair["left"], pair["right"])
-            if side["display_avatar"] is not None
-        } == shown
-
-    # Singleton related prefetches can use native point-source preparation.
-    # Compare populated pages while retaining exact output checks at every size.
-    assert counts[1] == counts[2], counts
+    messages = four["messages"][1]["messages"]
+    assert {row["sender"]["party"]["id"]: row["sender"]["party"]["display_avatar"]["id"] for row in messages} == shown
+    navigator = four["inbox_navigator"][1]["inbox_navigator"]["rows"]
+    assert {row["handle"]["party"]["id"]: row["handle"]["party"]["display_avatar"]["id"] for row in navigator} == shown
+    pairs = four["same_as_pairs"][1]["same_as_pairs"]
+    assert {
+        side["id"]: side["display_avatar"]["id"]
+        for pair in pairs
+        for side in (pair["left"], pair["right"])
+        if side["display_avatar"] is not None
+    } == shown

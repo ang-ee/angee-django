@@ -23,16 +23,6 @@ describe("ActionMenu", () => {
     expect(menu.closest("[data-align]")?.getAttribute("data-align")).toBe("end");
   });
 
-  test("defers contributed content until the menu is opened", async () => {
-    const mounted = vi.fn();
-    function ReadOnMount() { React.useEffect(() => { mounted(); }, []); return <ActionTrigger>Inspect</ActionTrigger>; }
-    render(<ActionMenu label="Actions"><ReadOnMount /></ActionMenu>);
-    expect(mounted).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    await screen.findByRole("menuitem", { name: "Inspect" });
-    expect(mounted).toHaveBeenCalledOnce();
-  });
-
   test("uses UI vocabulary and adapts toolbar actions into native menu items", async () => {
     const run = vi.fn();
     render(
@@ -148,7 +138,6 @@ describe("ActionMenu", () => {
     );
     const { rerender } = render(menu(true, true));
     const trigger = screen.getByRole<HTMLButtonElement>("button", { name: "Connect" });
-    fireEvent.click(trigger);
     expect(trigger.getAttribute("aria-busy")).toBe("true");
     expect(trigger.disabled).toBe(true);
     rerender(menu(false, true));

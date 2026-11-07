@@ -64,7 +64,6 @@ const RootsSchema = v.objectWithRest({
   aggregate: OptionalString,
   groups: OptionalString,
   groupsCount: OptionalString,
-  groupedRows: OptionalString,
   create: OptionalString,
   update: OptionalString,
   save: OptionalString,
@@ -81,7 +80,6 @@ const TypeNamesSchema = v.objectWithRest({
   grouped: OptionalString,
   groupKey: OptionalString,
   groupBySpec: OptionalString,
-  groupedRowPage: OptionalString,
   groupOrder: OptionalString,
   having: OptionalString,
   createInput: OptionalString,
@@ -116,8 +114,6 @@ const ResourceSchema = v.looseObject({
   mergeable: v.optional(v.boolean()),
   /** Whether the provenance `history` surface serves this resource: its model keeps native history. */
   history: v.optional(v.boolean()),
-  /** Whether the provenance field surface serves declared field statements for this resource. */
-  fieldProvenance: v.optional(v.boolean()),
   roots: RootsSchema,
   typeNames: TypeNamesSchema,
   rowModel: v.optional(v.picklist(["client", "server"])),

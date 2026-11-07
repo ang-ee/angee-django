@@ -12,8 +12,6 @@ import { useCollectionQueryBatch } from "../collection-source";
 import { EMPTY_ARRAY } from "./types";
 export function useResourceViewSurface<TRow extends Row = Row>({
   source,
-  records,
-  relatedModels,
   columns,
   fields,
   filter,
@@ -72,7 +70,6 @@ export function useResourceViewSurface<TRow extends Row = Row>({
       pageSize: paginationState.pageSize,
     },
     fields: requestedFields,
-    records, relatedModels,
     enabled: active && !source,
   });
   const sourceRequests = React.useMemo(
@@ -111,6 +108,11 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   const settled = source
     ? authored?.data !== undefined && !error
     : listQuery.query.isSuccess && !listQuery.query.isPlaceholderData;
+  useSettledPageClamp(
+    resourceView,
+    total === undefined ? undefined : Math.max(1, Math.ceil(total / paginationState.pageSize)),
+    active && settled && !fetching,
+  );
   const table: Table<TRow> = useReactTable<TRow>({
     data: rows,
     columns: tableColumns as ColumnDef<TRow>[],
@@ -146,12 +148,8 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     modelMetadata,
     rows,
     enabled: active && resourceView.state.view === "board",
+    refetchRows: refetchRows ?? (() => {}),
   });
-  useSettledPageClamp(
-    resourceView,
-    total === undefined ? undefined : Math.max(1, table.getPageCount()),
-    active && settled && !fetching,
-  );
   const list = React.useMemo(
     () => ({
       ...listResultFromTable(table, {
@@ -178,7 +176,6 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   );
   const listState = useResourceRowsSnapshot<TRow>(list, {
     navigation: { filter: mergedFilter, order: sortOrder },
-    queryFields: source ? undefined : requestedFields,
     onListStateChange,
   });
 

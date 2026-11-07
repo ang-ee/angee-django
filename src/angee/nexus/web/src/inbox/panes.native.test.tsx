@@ -10,7 +10,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { InboxNavigatorPane } from "./Navigator";
 import { InboxResultsPane } from "./Results";
 import { InboxRelatedPane } from "./Related";
-import { InboxAccounts, InboxConnections, InboxNavigator, InboxNavigatorGroups, InboxRelatedTarget, InboxResultGroups, InboxResultsBatch, InboxSelection } from "./documents";
+import { InboxAccounts, InboxConnections, InboxNavigator, InboxNavigatorGroups, InboxRelatedTarget, InboxResultGroups, InboxResults, InboxSelection } from "./documents";
 import { COLLECTION_INITIAL, RESULTS_INITIAL, useInboxNavigation } from "./state";
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://nexus-panes", providerNames: [],
@@ -23,41 +23,53 @@ const message = {
   sender: { display_name: "Ada", value: "ada@example.com", party: null }, thread: { id: "thread-one", title: { text: "A conversation" } },
 };
 
-function fixture(pane: "navigator" | "results" | "related", initialSearch = "", status = false, standalone = false) {
-  const rowMessage = standalone ? { ...message, thread: null } : status ? { ...message, platform: "WHATSAPP", channel: { display_name: "Alexis" },
+/** `pending` documents never resolve, so a pane stays in its loading shape. */
+function fixture(pane: "navigator" | "results" | "related", initialSearch = "", status = false, pending: readonly unknown[] = []) {
+  const rowMessage = status ? { ...message, platform: "WHATSAPP", channel: { display_name: "Alexis" },
     thread: { ...message.thread, modality: "STATUS" } } : message;
   let view: ResourceViewContextValue;
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     const variables = meta?.gqlVariables ?? {};
     const document = meta?.gqlQuery;
+    if (pending.includes(document)) return new Promise<never>(() => undefined);
     if (document === InboxAccounts) return { data: { inbox_accounts: [], inbox_platforms: ["email"], inbox_relation_kinds: [] } };
     if (document === InboxSelection) return { data: { inbox_selection: { id: "party:ada", label: "Ada" } } };
-    if (document === InboxNavigator) return { data: { inbox_navigator: { count: 60, message_count: 60, rows: [{
+    const navigatorRow = {
       id: variables.parent ? "circle:child" : "party:ada", label: variables.parent ? "Child circle" : "Ada", count: 60,
       latest: rowMessage.sent_at, first: rowMessage.sent_at, preview: "A preview", handle: null, party: null,
       thread: variables.options?.lens === "groups" ? rowMessage.thread : null,
       circle: variables.options?.lens === "circles" ? { id: variables.parent ? "child" : "root", name: "Circle" } : null,
       parent_id: variables.parent ? "party:ada" : null, has_children: !variables.parent,
-    }] } } };
-    if (document === InboxNavigatorGroups || document === InboxResultGroups) {
-      return { data: { [document === InboxNavigatorGroups ? "inbox_navigator_groups" : "inbox_result_groups"]: {
-        count: 30, record_count: 60, message_count: 60,
-        rows: [{ value: standalone ? "message:msg-one" : "thread:thread-one", label: standalone ? "Standalone message" : status ? "Status updates" : `Conversation ${variables.page}`, modality: status ? "status" : "direct", count: 60, message_count: 60 }],
-      } } };
-    }
+    };
     const content = variables.options?.lens === "attachments" || variables.options?.lens === "text";
-    if (document === InboxResultsBatch) return { data: { inbox_results_batch: variables.pages.map((page: { key: string; page: number }) => ({ key: page.key, result: { count: 60, message_count: 60, rows: [{
+    // A leaf read pages one group; the groups read carries each group's page 1.
+    const resultPage = variables.leaf_size ? 1 : variables.page;
+    const resultRow = {
       id: content ? "file:attachment" : "result-one", latest: rowMessage.sent_at, count: 2, part_count: content ? 2 : 0,
-      message: { ...rowMessage, title: `Message page ${page.page}` },
+      message_id: rowMessage.id,
       part: content ? { id: "part-one", name: "Report.pdf", role: "BODY" } : null,
       file: content ? { id: "attachment", filename: "Report.pdf", url: "/report.pdf", mime_type: { mime_type: "application/pdf" }, size_bytes: "20" } : null,
       fragment: null,
-    }] } })) } };
+    };
+    const resultMessages = [{ ...rowMessage, title: `Message page ${resultPage}` }];
+    if (document === InboxNavigator) return { data: { inbox_navigator: { count: 60, message_count: 60, rows: [navigatorRow] } } };
+    if (document === InboxNavigatorGroups || document === InboxResultGroups) {
+      const results = document === InboxResultGroups;
+      return { data: { [results ? "inbox_result_groups" : "inbox_navigator_groups"]: {
+        count: 30, record_count: 60, message_count: 60,
+        rows: [{ value: "thread:thread-one", label: status ? "Status updates" : `Conversation ${variables.page}`, modality: status ? "status" : "direct", count: 60, message_count: 60,
+          rows: results ? [resultRow] : [navigatorRow] }],
+        ...(results ? { messages: resultMessages } : {}),
+      } } };
+    }
+    if (document === InboxResults) return { data: { inbox_results: { count: 60, message_count: 60, rows: [resultRow], messages: resultMessages } } };
     if (document === InboxRelatedTarget) return { data: { inbox_related_target: {
       id: "file:one", label: "Pinned file", count: 60, unit: "messages", source: null, part: null, file: null, fragment: null,
     } } };
     if (document === InboxConnections) return { data: { inbox_connections: {
-      count: 60, message_count: 60, rows: [{ id: "connection-one", message: rowMessage, part: null, handle: null, src: null, dst: null }],
+      count: 60, message_count: 60,
+      rows: [{ id: "connection-one", message_id: rowMessage.id, part: null, handle: null, src_id: null, dst_id: null }],
+      messages: [rowMessage],
     } } };
     throw new Error("Unexpected inbox operation");
   }) } satisfies RefineTestDataProvider;
@@ -110,28 +122,19 @@ test("result pane labels expand native groups and page members independently", a
   fireEvent.click(screen.getByRole("button", { name: "Message details" }));
   await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
   const pager = screen.getByRole("navigation", { name: /Conversation 1/ });
+  // Page 1 came with the groups read; only a later page reads the group's rows.
+  expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResults)).toBe(false);
+  expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResultGroups
+    && request.meta.gqlVariables?.leaf_size === 3)).toBe(true);
   fireEvent.click(within(pager).getByRole("button", { name: /Next/ }));
   await screen.findByRole("button", { name: /Message page 2/ });
-  expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResultsBatch
-    && request.meta.gqlVariables?.pages?.some((page: { page: number; size: number }) => page.page === 2 && page.size === 3))).toBe(true);
+  expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResults
+    && request.meta.gqlVariables?.page === 2 && request.meta.gqlVariables?.size === 3)).toBe(true);
   expect(f.view.state.pagination.pageIndex).toBe(0);
   fireEvent.click(screen.getByRole("button", { name: "Collapse Conversation 1" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: /Message page 2/ })).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Conversation 1" }));
   await waitFor(() => expect(f.router.state.location.search).toHaveProperty("thread", "thread-one"));
-});
-
-test("an admitted message without thread renders as a standalone section", async () => {
-  const f = fixture("results", "", false, true);
-  await screen.findByRole("button", { name: "Collapse Standalone message" });
-  expect(screen.queryByTitle("Open conversation")).toBeNull();
-  const row = await screen.findByRole("button", { name: /Message page 1/ });
-  fireEvent.click(row);
-  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
-  expect(f.router.state.location.search).not.toHaveProperty("thread");
-  fireEvent.click(screen.getByRole("button", { name: "Standalone message" }));
-  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
-  expect(f.router.state.location.search).not.toHaveProperty("thread");
 });
 
 test("related pointers open their message while its pager stays in r", async () => {
@@ -143,14 +146,6 @@ test("related pointers open their message while its pager stays in r", async () 
   fireEvent.click(row);
   await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
   expect(f.router.state.location.search).toHaveProperty("related", "file:one");
-});
-
-test("Related keeps a standalone message readable without a conversation link", async () => {
-  const f = fixture("related", "?related=file:one", false, true);
-  fireEvent.click(await screen.findByRole("button", { name: /A message/ }));
-  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
-  expect(f.router.state.location.search).not.toHaveProperty("thread");
-  expect(screen.queryByRole("button", { name: "Open conversation" })).toBeNull();
 });
 
 test("circle labels leave focus and activation to the tree", async () => {
@@ -193,7 +188,8 @@ test("result lenses retain filters, selection and pinned content while resetting
     expect(f.view.state.pagination.pageIndex).toBe(0);
     expect(f.view.state.groupStack).toEqual(field ? [{ field }] : []);
     expect(f.view.state.filter).toEqual(filter);
-    await waitFor(() => expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResultsBatch
+    // A grouped lens reads its first pages through the groups document; a flat lens through rows.
+    await waitFor(() => expect(f.custom.mock.calls.some(([request]) => (field ? InboxResultGroups : InboxResults) === request.meta?.gqlQuery
       && request.meta.gqlVariables?.options?.lens === lens && request.meta.gqlVariables?.sender === "party:ada"
       && request.meta.gqlVariables?.search?.text === "renewal")).toBe(true));
   }
@@ -235,4 +231,23 @@ test("status rows name their author and account and open an update instead of th
   await waitFor(() => expect(f.router.state.location.search).toMatchObject({ lens: "timeline", sender: "party:ada" }));
   expect(f.view.state.filter).toMatchObject({ account: { exact: "acc_one" }, kind: { exact: "updates" } });
   expect(f.router.state.location.search).not.toHaveProperty("message");
+});
+
+/** The skeleton rows a pending status draws; loading copy lives only in its screen-reader label. */
+const skeletonRows = (status: HTMLElement) => [...status.children].filter((child) => child.getAttribute("aria-hidden") === "true");
+
+test("a pending selection and results read load as a title skeleton and pane-row skeletons, never loading copy", async () => {
+  fixture("results", "?sender=party:ada", false, [InboxSelection, InboxResults, InboxResultGroups]);
+  await waitFor(() => expect(screen.getAllByRole("status").some((status) =>
+    status.textContent === "Loading…" && skeletonRows(status).length > 0)).toBe(true));
+  expect(screen.getAllByRole("status").some((status) => status.textContent === "Loading inbox…")).toBe(true);
+  expect(screen.queryAllByText(/Loading/, { ignore: ".sr-only, script, style" })).toEqual([]);
+});
+
+test("a pending Links target keeps its label slot as a skeleton while its uses list", async () => {
+  fixture("related", "?related=file:one&sender=party:ada", false, [InboxRelatedTarget]);
+  await screen.findByRole("button", { name: /A message/ });
+  expect(screen.getAllByRole("status").some((status) => status.textContent === "Loading inbox…")).toBe(true);
+  expect(screen.queryByText("Pinned file")).toBeNull();
+  expect(screen.queryAllByText(/Loading/, { ignore: ".sr-only, script, style" })).toEqual([]);
 });

@@ -9,6 +9,7 @@ from django.db.models.signals import post_delete, pre_delete
 
 from angee.agents.models import ACTIVE_TURN_DELETE_MESSAGE, Agent, AgentSession, AgentTurn
 from angee.base.signals import connect_for_models
+from angee.iam.service_users import deactivate_service_user
 
 
 def connect() -> None:
@@ -38,7 +39,7 @@ def refuse_agent_delete(sender: Any, instance: Agent, *, origin: Any, **kwargs: 
     current = type(instance)._base_manager.filter(pk=instance.pk).first() if origin is instance else instance
     if current is None:
         return
-    if blocker := current.get_delete_blocker():
+    if blocker := current.delete_blocker():
         raise ValidationError(blocker)
 
 
@@ -66,4 +67,4 @@ def refuse_active_turn_delete(sender: Any, instance: AgentTurn, *, origin: Any, 
 def deactivate_agent_service_user(sender: Any, instance: Agent, **kwargs: Any) -> None:
     """Deactivate the agent's service account after every supported delete path."""
 
-    instance.deactivate_service_user()
+    deactivate_service_user(instance)

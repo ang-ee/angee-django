@@ -116,7 +116,7 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
   const sendingRef = React.useRef(false);
   const viewRef = useLatestRef(view);
   const statusRef = useLatestRef(status);
-  const [mintEndpoint] = useAuthoredMutation(AgentChatEndpointMutation, { transient: true });
+  const [mintEndpoint] = useAuthoredMutation(AgentChatEndpointMutation);
   const [renderPrompt] = useAuthoredMutation(RenderAgentPrompt);
   const queryKey = React.useMemo(() => [dataProviderName, "acp", "agents", agentId, "sessions"] as const, [dataProviderName, agentId]);
   const listOptions = {

@@ -1,8 +1,4 @@
-"""Initial-admin bootstrap delegates all selected storage to native owners.
-
-Known gap: User.update_account and the resource loader still validate uniqueness
-through Django's read alias; this lane fixes only the person factory.
-"""
+"""Initial-admin bootstrap delegates storage to native owners."""
 
 from __future__ import annotations
 
@@ -12,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-def test_bootstrap_admin_selected_database_and_explicit_provision_intent():
+def test_bootstrap_admin_and_explicit_provision_intent():
     script = r'''
 import os
 from io import StringIO
@@ -30,95 +26,59 @@ class TestIAMConfig(IAMConfig):
             class Meta(AbstractUser.Meta):
                 abstract = False
                 app_label = 'iam'
-class DefaultRouter:
-    def db_for_read(self, model, **hints):
-        return 'default'
-    db_for_write = db_for_read
 settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee.base',
                     '__main__.TestIAMConfig'],
     AUTH_USER_MODEL='iam.User',
     SECRET_KEY='iam-selected', ANGEE_MERGE_GUARDS=[],
     REBAC_LOCAL_BACKEND_STORAGE='registry', REBAC_UNIVERSAL_ADMIN_ROLE='angee/role:admin',
-    ANGEE_REBAC_FORCE_OVERWRITE=False,
-    DATABASE_ROUTERS=[DefaultRouter()],
-    DATABASES={alias: {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}
-               for alias in ('default', 'selected')},
+    DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}},
 )
 import django
 django.setup()
 from django.core.management import call_command
-from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
-from rebac import backend, database_context, system_context
+from rebac import backend, system_context
 from rebac.models import PermissionAuditEvent, SchemaDefinition, SchemaRelation, active_relationship_model
 from rebac.models.schema_write import schema_changes
 from angee.iam.apps import IAMConfig
 from angee.iam.management.commands.bootstrap_admin import Command
-for alias in ('default', 'selected'):
-    call_command('migrate', database=alias, run_syncdb=True, verbosity=0)
-with schema_changes(using='selected'):
-    SchemaDefinition.objects.using('selected').create(resource_type='auth/user')
-    definition = SchemaDefinition.objects.using('selected').create(resource_type='angee/role')
-    SchemaRelation.objects.using('selected').create(
+call_command('migrate', run_syncdb=True, verbosity=0)
+with schema_changes():
+    SchemaDefinition.objects.create(resource_type='auth/user')
+    definition = SchemaDefinition.objects.create(resource_type='angee/role')
+    SchemaRelation.objects.create(
         definition_id=definition.pk, name='member', allowed_subjects=[{'type': 'auth/user'}])
 User = get_user_model()
-User.objects.db_manager('default').create_user(username='admin', email='default@example.test')
-User.objects.db_manager('default').create_user(username='default-only', email='default-only@example.test')
-User.objects.db_manager('selected').create_user(username='selected-only', email='selected-only@example.test')
 command = Command(stdout=StringIO())
-with database_context('default'), system_context(reason='test.iam.bootstrap'):
-    # Fixture creation and this test's system context legitimately audit on default.
-    default_audit = list(PermissionAuditEvent.objects.using('default').order_by('pk').values())
-    user, created = User.objects.db_manager('selected').ensure_bootstrap_admin(
-        'admin', email='selected@example.test', password='initial-secret')
-    assert created
-    assert user._state.db == 'selected'
-    try:
-        User.objects.db_manager('selected').create_person_as_system(
-            username='selected-only', email='another@example.test', reason='tests.iam.duplicate_username')
-    except ValidationError as error:
-        assert list(error.error_dict) == ['username']
-        assert error.error_dict['username'][0].code == 'unique'
-    else:
-        raise AssertionError('Selected database username collision was not validated')
-    first_hash = user.password
-    command.handle(database='selected', username='admin', email='selected@example.test', password='ignored-secret')
-    user.refresh_from_db(using='selected')
-    assert user.password == first_hash and user.check_password('initial-secret')
-    assert backend().schema().get_definition('angee/role') is None
-    assert list(PermissionAuditEvent.objects.using('default').order_by('pk').values()) == default_audit
-assert user.is_staff and user.is_superuser and user.is_active
-assert user.email == 'selected@example.test'
 with system_context(reason='test.iam.bootstrap'):
-    assert User.objects.using('default').get(username='admin').email == 'default@example.test'
+    user, created = User.objects.ensure_bootstrap_admin(
+        'admin', email='admin@example.test', password='initial-secret')
+    assert created
+    assert user._state.db == 'default'
+    first_hash = user.password
+    command.handle(username='admin', email='admin@example.test', password='ignored-secret')
+    user.refresh_from_db()
+    assert user.password == first_hash and user.check_password('initial-secret')
+    assert backend().schema().get_definition('angee/role') is not None
+assert user.is_staff and user.is_superuser and user.is_active
+assert user.email == 'admin@example.test'
 assert 'initial-secret' not in command.stdout.getvalue()
 assert 'ignored-secret' not in command.stdout.getvalue()
-assert active_relationship_model().objects.using('selected').filter(
+assert active_relationship_model().objects.filter(
     resource_type='angee/role', resource_id='admin', relation='member').count() == 1
-assert not active_relationship_model().objects.using('default').exists()
-assert PermissionAuditEvent.objects.using('selected').filter(
+assert PermissionAuditEvent.objects.filter(
     kind=PermissionAuditEvent.KIND_RELATIONSHIP_GRANT).exists()
-with database_context('selected'), system_context(reason='test.iam.selected_person'):
-    accepted = User.objects.db_manager('selected').create_person_as_system(
-        username='default-only', email='new-selected@example.test', reason='tests.iam.default_only_username')
-    assert accepted._state.db == 'selected'
-    assert User.objects.using('selected').get(username='default-only').pk == accepted.pk
-    assert User.objects.using('default').get(username='default-only').email == 'default-only@example.test'
 import angee.iam
 config = IAMConfig('angee.iam', angee.iam)
 calls = []
-context = SimpleNamespace(database='selected', call=lambda *args, **kwargs: calls.append((args, kwargs)))
-sync_call = (('rebac', 'sync'), {
-    'database': 'selected', 'prune_stale': True, 'yes': True,
-    'force_overwrite': False, 'skip_checks': True,
-})
+context = SimpleNamespace(database='default', call=lambda *args, **kwargs: calls.append((args, kwargs)))
 config.compose_provision(context)
-assert calls == [sync_call]
-calls.clear()
+assert calls == []
 settings.ANGEE_BOOTSTRAP_ADMIN_PASSWORD = 'explicit-secret'
 config.compose_provision(context)
-assert calls == [sync_call, (('bootstrap_admin',), {'database': 'selected'})]
+# The command writes through the default manager: the router places the admin.
+assert calls == [(('bootstrap_admin',), {})]
 '''
     result = subprocess.run(
         [sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[1],

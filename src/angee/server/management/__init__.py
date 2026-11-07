@@ -1,4 +1,10 @@
-"""Command contexts around Django's native command execution."""
+"""The project launcher: django-compose's ``execute`` with a server ManagementUtility.
+
+Enabled addons contribute command contexts through ``ANGEE_SERVER_COMMAND_CONTEXT``:
+dotted factories called as ``factory(command, argv, options)`` after Django setup
+and native parsing, entered in order around the winning command's ``execute``.
+Serving commands first run the ``SERVING_TAG`` checks.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +13,14 @@ from types import MappingProxyType
 from typing import Any
 
 from django.apps import apps
-from django.conf import settings
 from django.core.management import ManagementUtility
-from django.utils.module_loading import import_string
 from django_compose import management as compose_management
+
+from angee.base.hooks import resolve_hooks
+from angee.server.checks import SERVING_TAG
+
+SERVING_COMMANDS = frozenset({"check", "runserver", "serve"})
+"""Commands that run ``SERVING_TAG`` checks unless they skip checks or name their own tags."""
 
 
 class _Dispatch:
@@ -38,11 +48,13 @@ class _Dispatch:
             with ExitStack() as stack:
                 # Native runserver recovery fabricates ready flags, but not ready_event.
                 if apps.ready_event.is_set():
+                    if original_argv[1] in SERVING_COMMANDS and not any(
+                        options.get(name) for name in ("skip_checks", "tags", "deploy")
+                    ):
+                        self.command.check(tags=[SERVING_TAG], include_deployment_checks=True)
                     parsed_options = MappingProxyType(options.copy())
-                    for dotted in getattr(settings, "ANGEE_SERVER_COMMAND_CONTEXT", ()):
-                        stack.enter_context(
-                            import_string(dotted)(original_argv[1], original_argv, parsed_options)
-                        )
+                    for factory in resolve_hooks("ANGEE_SERVER_COMMAND_CONTEXT"):
+                        stack.enter_context(factory(original_argv[1], original_argv, parsed_options))
                 return original_execute(*args, **options)
 
         self.command.execute = execute

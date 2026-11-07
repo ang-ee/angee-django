@@ -25,30 +25,21 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
+from angee.base.build import extension_source_map
+from angee.base.testing.permissions import emit_permissions, installed_field_owners
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.graphql.capabilities import permissions_field
-from angee.iam.graphql.node import ProtectedNode
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Channel, Message, Person, Thread, ThreadAttachment
 from angee.projects.testing.models import Project, ProjectBinding, Task
 from angee.spaces.testing.models import Group, Membership
-from tests.conftest import (
-    Backend,
-    Drive,
-    File,
-    Folder,
-    SchemaAddon,
-    Vault,
-    Vendor,
-    create_platform_admin,
-    create_user,
-    execute_schema,
-    result_data,
-)
+from tests.conftest import Backend, Drive, File, Folder, SchemaAddon, Vault, Vendor, create_platform_admin, create_user
 
 
 @strawberry_django.type(Task)
-class TaskPermissionsType(ProtectedNode):
+class TaskPermissionsType(AngeeNode):
     """Exercise the shared field on the real project/work permission graph."""
 
     permissions = permissions_field(("write", "share", "delete"))
@@ -107,7 +98,7 @@ def test_task_permissions_are_typed_actor_scoped_and_batched(project_access_sche
             for limit in (1, 10, 50):
                 with (
                     patch(
-                        "angee.iam.graphql.capabilities.permission_annotations",
+                        "angee.graphql.capabilities.permission_annotations",
                         side_effect=AssertionError("Per-row permission fallback"),
                     ),
                     CaptureQueriesContext(connection) as queries,
@@ -118,9 +109,7 @@ def test_task_permissions_are_typed_actor_scoped_and_batched(project_access_sche
                 assert len(rows) == limit
                 assert all(row["permissions"] == expected for row in rows)
                 counts.append(len(queries))
-            # Post-fetch clarification-asker guards use a point for one Task;
-            # the native population scope is fixed for ten and fifty Tasks.
-            assert counts[0] <= counts[1] == counts[2], counts
+            assert counts[0] == counts[1] == counts[2], counts
 
 
 def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
@@ -128,7 +117,6 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
 
     projects = Path(apps.get_app_config("projects").path, "permissions.extends.zed").read_text()
     messaging = Path(apps.get_app_config("messaging").path, "permissions.zed").read_text()
-    knowledge = Path(apps.get_app_config("projects_knowledge").path, "permissions.extends.zed").read_text()
 
     for definition in (
         "storage/drive",
@@ -136,13 +124,10 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
         "storage/file",
         "integrate/integration",
         "messaging/thread",
+        "knowledge/vault",
+        "knowledge/record_binding",
     ):
         assert f"definition {definition}" in projects
-    for definition in ("knowledge/vault", "knowledge/record_binding", "projects/project_binding", "projects/task"):
-        assert f"definition {definition}" in knowledge
-    assert "permission read_granted = project->read" in knowledge
-    assert "permission target_read = task->read + project->read" in knowledge
-    assert "permission target_share = vault->share" in knowledge
     assert "relation channel: messaging/channel // rebac:field=channel" in messaging
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
 
@@ -170,10 +155,24 @@ def test_task_chatter_inherits_live_record_read(project_access_schema: Any, stor
 
 
 @pytest.fixture
-def project_access_schema(transactional_db: None, composed_permissions: None) -> None:
-    """Use the shared composed schema with committed project access rows."""
+def project_access_schema(tmp_path: Path, transactional_db: None) -> Any:
+    """Load composed permission extensions and restore app schema paths afterward."""
 
-    del transactional_db, composed_permissions
+    configs = list(apps.get_app_configs())
+    originals = {config: getattr(config, "rebac_schema", None) for config in configs}
+    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
+    runtime = tmp_path / "project-access-runtime"
+    emit_permissions(configs, runtime, sources=sources)
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        yield
+    finally:
+        for config, original in originals.items():
+            if original is None:
+                if hasattr(config, "rebac_schema"):
+                    delattr(config, "rebac_schema")
+            else:
+                config.rebac_schema = original
 
 
 @pytest.mark.parametrize("storage", ("denormalized", "registry"))

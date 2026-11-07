@@ -70,7 +70,7 @@ function renderInRouter(ui: ReactElement, initialEntries = ["/"]): void {
 // virtualizer reports zero items, so `FlatListBody` takes its "render all"
 // fallback; this does not exercise the virtualized count/padding.
 describe("RowsListView grouping", () => {
-  test("groups are open by default and a header click collapses only that group", async () => {
+  test("groups are collapsed by default and a header click expands only that group", async () => {
     renderInRouter(
       <RowsListView<Item>
         query={query}
@@ -80,25 +80,25 @@ describe("RowsListView grouping", () => {
       />,
     );
 
-    // Both group headers render with their rows (open by default, as grouped lists are).
+    // Both group headers render; their bodies do not (collapsed by default).
     const east = (await screen.findByText("East")).closest("button");
     const west = screen.getByText("West").closest("button");
-    expect(east?.getAttribute("aria-expanded")).toBe("true");
-    expect(west?.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Alpha")).toBeTruthy();
-    expect(screen.getByText("Gamma")).toBeTruthy();
+    expect(east?.getAttribute("aria-expanded")).toBe("false");
+    expect(west?.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Alpha")).toBeNull();
+    expect(screen.queryByText("Gamma")).toBeNull();
 
-    // Collapsing East hides only its rows; West stays open.
+    // Expanding East reveals only its rows; West stays collapsed.
+    fireEvent.click(east as HTMLElement);
+    expect(east?.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Alpha")).toBeTruthy();
+    expect(screen.getByText("Beta")).toBeTruthy();
+    expect(screen.queryByText("Gamma")).toBeNull();
+
+    // Toggling it again collapses it back.
     fireEvent.click(east as HTMLElement);
     expect(east?.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("Alpha")).toBeNull();
-    expect(screen.queryByText("Beta")).toBeNull();
-    expect(screen.getByText("Gamma")).toBeTruthy();
-
-    // Toggling it again opens it back.
-    fireEvent.click(east as HTMLElement);
-    expect(east?.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Alpha")).toBeTruthy();
   });
 });
 

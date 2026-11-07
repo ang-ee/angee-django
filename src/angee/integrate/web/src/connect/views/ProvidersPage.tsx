@@ -20,9 +20,15 @@ const providerList = (
   </List>
 );
 
-// The registration owner resolves discovery-backed readiness at flow startup.
+// Connect-readiness is an OAuth concern: an enabled client with credentials and an
+// authorize/token endpoint pair. Discovery can fill those endpoints, but the
+// actual connect flow requires the resolved transport fields.
 function canConnectAccount(record: Record<string, unknown>): boolean {
-  return record.configuration_state === "ready";
+  if (record.is_enabled !== true) return false;
+  if (!fieldString(record.client_id)) return false;
+  return Boolean(
+    fieldString(record.authorize_endpoint) && fieldString(record.token_endpoint),
+  );
 }
 
 function fieldString(value: unknown): string {
@@ -33,7 +39,7 @@ function fieldString(value: unknown): string {
 export function ProvidersPage(): React.ReactElement {
   const t = useIntegrateT();
   const routeHref = useRouteHref();
-  const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart, { transient: true });
+  const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart);
   const { authorize } = useOAuthAuthorization();
   // Fill and persist transport endpoints from the client's discovery URL.
   const [discover] = useRecordActionMutation<ActionFieldName>(
@@ -48,7 +54,7 @@ export function ProvidersPage(): React.ReactElement {
         id,
         redirectUri: connectCallbackRedirectUri(),
         next: routeHref("integrate.accounts"),
-      }, { reconciliation: ctx.reconciliation });
+      });
       const payload = result?.connect_account_start;
       if (!payload?.authorize_url) {
         throw new Error(payload?.error ?? t("providers.connect.startError"));

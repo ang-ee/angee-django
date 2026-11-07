@@ -10,7 +10,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import active_relationship_model
 
 from angee.provenance.context import changeset_model
-from angee.provenance.engine.exceptions import CreationKeyConflict
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import Link, MarkdownPage, Page, RecordBinding, Vault, create_platform_admin, create_user
 from tests.knowledge_campaign import clone_template as clone_template
 from tests.test_knowledge import _grant
@@ -86,7 +86,7 @@ def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clo
         assert MarkdownPage.objects.get(pk=fixture.note.pk).body == originals[fixture.note.pk].body
         MarkdownPage.objects.write_body(fixture.note, "Changed template")
         assert MarkdownPage.objects.get(pk=copies["Guide"].pk).body == "Changed copy"
-    assert not Vault.objects.with_actor(fixture.reader).filter(pk=clone.pk).exists()
+    assert not Vault.objects.as_user(fixture.reader).filter(pk=clone.pk).exists()
 
 
 def test_ownerless_clone_is_private_until_a_grant_reaches_it(clone_template):
@@ -94,13 +94,13 @@ def test_ownerless_clone_is_private_until_a_grant_reaches_it(clone_template):
     admin = create_platform_admin("clone-admin")
     with actor_context(fixture.actor):
         clone = Vault.objects.create_from(fixture.source, name="Ownerless", owned=False)
-    assert not Vault.objects.with_actor(fixture.actor).filter(pk=clone.pk).exists()
-    assert not Vault.objects.with_actor(fixture.reader).filter(pk=clone.pk).exists()
-    assert Vault.objects.with_actor(admin).filter(pk=clone.pk).exists()
+    assert not Vault.objects.as_user(fixture.actor).filter(pk=clone.pk).exists()
+    assert not Vault.objects.as_user(fixture.reader).filter(pk=clone.pk).exists()
+    assert Vault.objects.as_user(admin).filter(pk=clone.pk).exists()
     with actor_context(fixture.actor), pytest.raises(PermissionDenied):
         clone.save(update_fields=("name",))
     _grant(clone, "viewer", fixture.reader)
-    assert Vault.objects.with_actor(fixture.reader).filter(pk=clone.pk).exists()
+    assert Vault.objects.as_user(fixture.reader).filter(pk=clone.pk).exists()
 
 
 def test_transfer_and_clear_preserve_creator_but_end_former_owner_access(clone_template):
@@ -110,15 +110,15 @@ def test_transfer_and_clear_preserve_creator_but_end_former_owner_access(clone_t
         clone.transfer_ownership(fixture.reader)
     assert clone.owner_id == fixture.reader.pk
     assert clone.created_by_id == fixture.actor.pk
-    assert not Vault.objects.with_actor(fixture.actor).filter(pk=clone.pk).exists()
+    assert not Vault.objects.as_user(fixture.actor).filter(pk=clone.pk).exists()
     with actor_context(fixture.actor), pytest.raises(PermissionDenied):
         clone.transfer_ownership(None)
     with actor_context(fixture.reader):
-        clone.with_actor(fixture.reader).transfer_ownership(None)
+        clone.as_user(fixture.reader).transfer_ownership(None)
     clone.refresh_from_db()
     assert clone.owner_id is None
     assert clone.created_by_id == fixture.actor.pk
-    assert not Vault.objects.with_actor(fixture.reader).filter(pk=clone.pk).exists()
+    assert not Vault.objects.as_user(fixture.reader).filter(pk=clone.pk).exists()
 
 
 def test_deleting_owner_retains_the_vault_and_clears_ownership(clone_template):
@@ -146,7 +146,7 @@ def test_exact_replay_survives_unreadable_or_deleted_template_and_changed_owners
             clone.transfer_ownership(fixture.reader)
     if owned:
         with actor_context(fixture.reader):
-            clone.with_actor(fixture.reader).transfer_ownership(None)
+            clone.as_user(fixture.reader).transfer_ownership(None)
     template_identity = Vault(pk=fixture.source.pk)
     with system_context(reason="test.template.unavailable"):
         if unavailable == "deleted":
@@ -180,7 +180,7 @@ def test_reusing_key_with_changed_request_conflicts_even_after_template_deletion
     request[changed] = {"name": "Changed", "template": Vault(pk=clone.pk), "owned": False}[changed]
     with actor_context(fixture.actor), pytest.raises(CreationKeyConflict):
         Vault.objects.create_from(**request)
-    assert Vault.objects.with_actor(fixture.actor).count() == 1
+    assert Vault.objects.as_user(fixture.actor).count() == 1
 
 
 def test_template_edits_do_not_change_completed_replay_content(clone_template):
@@ -287,7 +287,7 @@ def test_clone_page_tree_queries_do_not_grow_with_depth(composed_tables, record_
 
     actor = create_user("tree-depth-owner")
     counts = []
-    # F35 enforces the inherited varchar(255) path: 19 levels fit, 20 do not.
+    # HierarchyMixin enforces the inherited varchar(255) path: 19 levels fit, 20 do not.
     for depth in (2, 19):
         with actor_context(actor):
             source = Vault.objects.create_for(actor, name=f"Depth {depth}")

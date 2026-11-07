@@ -8,11 +8,10 @@ producers retain their writes. Reactions remain nested message projections.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import fields
 from datetime import datetime
 from enum import StrEnum
-from functools import cached_property
-from typing import Any, Generic, Self, TypeVar, cast
+from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
@@ -20,61 +19,63 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
-from django.db.models import prefetch_related_objects
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
 from rebac import PermissionDenied, current_actor
-from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_resource_type
 from strawberry import auto
-from strawberry_django.optimizer import OptimizerStore
-from strawberry_django.resolvers import django_resolver
 from strawberry_django.utils.requests import get_request
 
-from angee.base.models.identity import instance_from_public_id, public_id_of
-from angee.base.models.persistence import require_projection
-from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard
+from angee.base.models.identity import instance_from_public_id
+from angee.base.models.trash import TrashQuerySet
+from angee.graphql.actions import (
+    ActionResult,
+    ActionSelectionInput,
+    action_guard,
+    action_target,
+    authorized_permission_target,
+    resolve_action_target,
+)
+from angee.graphql.capabilities import held_permissions, permissions_field
 from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
     SortAlias,
     declared_hasura_resource_fields,
     hasura_model_resource,
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
-from angee.graphql.ids import PublicID, instance_for_id, public_id_field, require_instance_for_id
-from angee.graphql.introspection import selected_field
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
-from angee.graphql.relations import RecordPointerType
-from angee.graphql.subscriptions import changes
-from angee.iam.audit import TrashedRefMixin
-from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES
-from angee.iam.graphql.actions import action_target, authorized_permission_target, resolve_action_target
-from angee.iam.graphql.capabilities import held_permissions, permissions_field
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import (
+from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.related_counts import RelatedCount
+from angee.graphql.relations import (
+    RecordPointerType,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
-    record_reference_field,
+    with_record_reference_access,
 )
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
-from angee.iam.querysets import structural_prefetch
+from angee.graphql.subscriptions import changes
+from angee.iam.audit import TrashedRefMixin
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
 from angee.messaging.managers import (
+    ChannelQuerySet,
+    MessageQuerySet,
+    ThreadQuerySet,
     message_subtype_options,
+    strip_null_bytes,
 )
 from angee.messaging.models import Message as MessageModel
 from angee.messaging.models import Part as PartModel
 from angee.messaging.models import Thread as ThreadModel
 from angee.messaging.models import ThreadedModelMixin, chatter_record
-from angee.messaging.models.threads import chatter_record_with_attachment
-from angee.messaging.querysets import _UNRESOLVED, ChannelQuerySet, MessageQuerySet, PartQuerySet, ThreadQuerySet
-from angee.parties.schema import HandleType, PartyIdentity
-from angee.storage.schema import FileIdentity
+from angee.parties.schema import HandleType, PartyType
+from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Integration = apps.get_model("integrate", "Integration")
@@ -93,21 +94,6 @@ MessageEdge = apps.get_model("messaging", "MessageEdge")
 Participant = apps.get_model("messaging", "Participant")
 Reaction = apps.get_model("messaging", "Reaction")
 MessageStar = apps.get_model("messaging", "MessageStar")
-
-
-def _needaction_expression(info: strawberry.Info, *, structural: bool = False) -> Any:
-    """Project the unread receipt rule in the selected message query."""
-
-    return Message.objects.all().needaction_expression(_request_user(info), structural=structural)
-
-
-def _needaction(message: Any, info: strawberry.Info) -> bool:
-    """Read a projected badge, with an explicit single-message fallback in production."""
-
-    if "_current_user_needaction" in message.__dict__:
-        return bool(message.__dict__["_current_user_needaction"])
-    require_projection(message, "_current_user_needaction")
-    return bool(ThreadFollower.objects.needaction_for_message(message, user=_request_user(info)))
 
 _CHANNEL_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
     Channel,
@@ -139,7 +125,7 @@ _CHANNEL_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 
 
 @strawberry_django.type(Channel)
-class ChannelType(BridgeTypeMixin, ProtectedNode):
+class ChannelType(BridgeTypeMixin, AngeeNode):
     """GraphQL projection of a connected message channel (e.g. an email account)."""
 
     @strawberry_django.field
@@ -206,7 +192,7 @@ class MessagingPairingQuery:
             queryset=Channel.objects.of_concrete_type(),
             reason="messaging.graphql.channel_pairing",
         )
-        return _pairing_result(channel.pairing)
+        return _pairing_result(connect.channel_pairing, channel)
 
 
 @strawberry.type
@@ -220,7 +206,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.resume_channel_pairing"
         ) as channel:
-            _pairing_result(channel.resume_pairing)
+            _pairing_result(connect.resume_channel_pairing, channel)
         return ActionResult(ok=True, message="Channel connection started.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -231,7 +217,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.submit_channel_password"
         ) as channel:
-            _pairing_result(channel.submit_pairing_password, password)
+            _pairing_result(connect.submit_channel_password, channel, password)
         return ActionResult(ok=True, message="Password submitted.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -241,7 +227,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.skip_channel_password"
         ) as channel:
-            _pairing_result(channel.skip_pairing_password)
+            _pairing_result(connect.skip_channel_password, channel)
         return ActionResult(ok=True, message="Password skipped.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -261,7 +247,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.disconnect_channel"
         ) as channel:
-            _pairing_result(channel.disconnect_pairing)
+            _pairing_result(connect.disconnect_channel, channel)
         return ActionResult(ok=True, message="Disconnected channel.")
 
 
@@ -312,29 +298,20 @@ attach_delete_preview_metadata(
 
 
 @strawberry_django.type(Fragment)
-class FragmentType(ProtectedNode):
+class FragmentType(AngeeNode):
     """GraphQL projection of a content-addressed text fragment."""
-
 
     kind: auto
     hash: auto
     text: auto
 
-    @strawberry_django.field(
-        name="part_count",
-        annotate={"_part_count": lambda info: Fragment.use_count_expression(current_actor())},
-    )
+    @strawberry.field(name="part_count")
     def part_count(self) -> int:
         """How many actor-readable parts share this fragment."""
 
         return cast(Any, self).part_count()
 
-    @strawberry_django.field(
-        name="message_count",
-        annotate={
-            "_message_count": lambda info: Fragment.use_count_expression(current_actor(), distinct_messages=True),
-        },
-    )
+    @strawberry.field(name="message_count")
     def message_count(self) -> int:
         """How many distinct messages reference this fragment through their parts."""
 
@@ -342,10 +319,9 @@ class FragmentType(ProtectedNode):
 
 
 @strawberry_django.type(Part)
-class PartType(ProtectedNode):
+class PartType(AngeeNode):
     """GraphQL projection of one message body part."""
 
-    message: PublicID = public_id_field("message")
     position: auto
     type: auto
     disposition: auto
@@ -354,26 +330,13 @@ class PartType(ProtectedNode):
     name: auto
     parent: "PartType | None" = actor_scoped_to_one("parent")
     fragment: FragmentType | None
-
-    @strawberry_django.field(only=["file_id"])
-    def file(self) -> FileIdentity | None:
-        """Project an admitted part's attachment; its URL retains the part proof."""
-
-        row = cast(Any, self)
-        if row.file_id is None:
-            return None
-        file = row._state.fields_cache.get("file")
-        if file is None:
-            file = File._base_manager.select_related("mime_type").filter(pk=row.file_id).first()
-        return FileIdentity(file=file, parent=row) if file is not None else None
-
+    file: FileType | None = actor_scoped_to_one("file")
     created_at: auto
 
 
 @strawberry_django.type(MessageSubtype)
-class MessageSubtypeType(ProtectedNode):
+class MessageSubtypeType(AngeeNode):
     """GraphQL projection of an Odoo-style message subtype."""
-
 
     key: auto
     model_label: auto
@@ -386,7 +349,7 @@ class MessageSubtypeType(ProtectedNode):
 
 
 @strawberry_django.type(Participant)
-class ParticipantType(ProtectedNode):
+class ParticipantType(AngeeNode):
     """GraphQL projection of a thread/message participant."""
 
     role: auto
@@ -406,7 +369,7 @@ class MessageReactionGroupType:
 
 
 @strawberry_django.type(Handle)
-class RecordHandleType(ProtectedNode):
+class RecordHandleType(AngeeNode):
     """Envelope identity exposed by record chatter, without party backedges."""
 
     platform: auto
@@ -425,9 +388,12 @@ class RecordMessageReactionGroupType:
 
 
 @strawberry_django.type(Message)
-class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
+class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     """GraphQL projection of a message; its managers see trash stamps and ``delete``."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
 
     @strawberry_django.field(only=["sent_at", "created_at"])
     def feed_order_key(self) -> str:
@@ -483,11 +449,8 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
         return cast(Any, self).channel_vendor_name()
 
     parent: "MessageType | None" = actor_scoped_to_one("parent")
-    merged_into: "MessageType | None" = actor_scoped_to_one("merged_into")
     subtype: MessageSubtypeType | None
-
-    thread: ThreadType | None = actor_scoped_to_one("thread")
-
+    thread: "ThreadType | None" = actor_scoped_to_one("thread")
     channel: ChannelType | None = actor_scoped_to_one("channel")
     participants: list[ParticipantType] = actor_scoped_to_many("participants")
     created_at: auto
@@ -498,64 +461,18 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
     )
     @staticmethod
     def parts(parent: strawberry.Parent[MessageModel]) -> list[PartModel]:
-        """Return actor-admitted MIME parts with their readable parents and files cached."""
+        """Return this message's MIME parts in depth-first reading order."""
 
-        actor = current_actor()
-        if actor is None:
-            return Part.objects.reading_order_for_message(parent)
+        return Part.objects.reading_order_for_message(parent)
 
-        cache = getattr(parent, "_prefetched_objects_cache", {}).get("parts")
-        cached_rows = cache._result_cache if cache is not None else None
-        used_part_prefetch = cached_rows is not None and all(
-            getattr(part, "_rebac_actor", None) == actor
-            and not {"parent_id", "position", "sqid"} & part.get_deferred_fields()
-            for part in cached_rows
-        )
-        if used_part_prefetch:
-            ordered = Part.objects.reading_order_for_message(parent)
-        else:
-            rows = list(Part.objects.with_actor(actor).filter(message_id=parent.pk).select_related("fragment"))
-            ordered = Part.objects.reading_order_for_message(parent, rows=rows)
-        by_id = {part.pk: part for part in ordered}
-        for part in ordered:
-            if part.parent_id in by_id:
-                part._state.fields_cache["parent"] = by_id[part.parent_id]
-
-        file_ids = {part.file_id for part in ordered if part.file_id is not None}
-        if (
-            getattr(parent, "_inbox_part_files_actor", None) == actor
-            and file_ids <= getattr(parent, "_inbox_part_file_ids", set())
-        ):
-            readable_files = cast(dict[Any, Any], getattr(parent, "_inbox_part_files"))
-        else:
-            uncached = object()
-            prefetched_files: dict[Any, Any] = {}
-            files_prefetched = used_part_prefetch
-            if files_prefetched:
-                for part in ordered:
-                    if part.file_id is None:
-                        continue
-                    file = part._state.fields_cache.get("file", uncached)
-                    if file is uncached or (file is not None and getattr(file, "_rebac_actor", None) != actor):
-                        files_prefetched = False
-                        break
-                    if file is not None:
-                        prefetched_files[part.file_id] = file
-            if files_prefetched:
-                readable_files = prefetched_files
-            else:
-                file_rows = File._base_manager.select_related("mime_type")
-                readable_files = {file.pk: file for file in file_rows.filter(pk__in=file_ids or {0})}
-        for part in ordered:
-            if part.file_id is not None:
-                part._state.fields_cache["file"] = readable_files.get(part.file_id)
-        return ordered
-
-    @strawberry_django.field(annotate={"_title_text": lambda info: Message.objects.title_text_expression()})
+    @strawberry.field
     def title(self) -> str:
         """Return the message's title text — its ``TITLE`` part's fragment, or ``""``.
 
-        Select the sparse title through the model's query expression for lists.
+        No optimizer prefetch hint here: a query that also selects ``parts`` makes
+        the optimizer build its own ``Prefetch("parts", …)``, and Django rejects a
+        second queryset for the same lookup. The model method rides an existing
+        parts prefetch when one is loaded and otherwise costs one indexed probe.
         """
 
         return cast(Any, self).title()
@@ -585,14 +502,11 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
 
         return bool(MessageStar.objects.is_starred(self, user=_request_user(info)))
 
-    @strawberry_django.field(
-        only=["thread_id", "is_trashed", "subtype_id", "sent_at", "created_at"],
-        annotate={"_current_user_needaction": _needaction_expression},
-    )
+    @strawberry.field
     def needaction(self, info: strawberry.Info) -> bool:
         """Return whether this message sits past the current user's read receipt."""
 
-        return _needaction(self, info)
+        return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
 
     @strawberry_django.field(
         only=["thread_id", "sender_id", "created_by_id", "message_type", "direction"],
@@ -612,37 +526,21 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
 
 
 @strawberry_django.type(Message)
-class RecordMessageParentType(ProtectedNode):
+class RecordMessageParentType(AngeeNode):
     """Minimal parent-message context shown in record chatter."""
-
 
     preview: auto
     message_type: auto
     subtype: MessageSubtypeType | None
 
 
-def _record_parts_prefetch(info: strawberry.Info) -> models.Prefetch:
-    """Keep trusted parent membership while native hints project selected part fields."""
-
-    rows = Part._base_manager
-    include_file = selected_field(info.selected_fields, "file")
-    only = ["message_id", "parent_id", "position", "sqid"]
-    selected = optimize(rows, info, store=OptimizerStore(only=[*only, "file_id"] if include_file else only))
-    if include_file:
-        selected = selected.prefetch_related(models.Prefetch(
-            "file", queryset=File._base_manager.select_related("mime_type"),
-        ))
-    return structural_prefetch("parts", queryset=selected)
-
-
 @strawberry_django.type(Message)
-class RecordMessageType(TrashedRefMixin, ProtectedNode):
+class RecordMessageType(TrashedRefMixin, AngeeNode):
     """Record-gated message projection without generic inbox relation backedges.
 
     A trashed message appears only in its moderators' removed list, where the
     trash stamps say who removed it, when and why.
     """
-
 
     direction: auto
     status: auto
@@ -654,11 +552,6 @@ class RecordMessageType(TrashedRefMixin, ProtectedNode):
     sender: "RecordHandleType | None" = actor_scoped_to_one("sender")
     parent: "RecordMessageParentType | None" = actor_scoped_to_one("parent")
     subtype: MessageSubtypeType | None
-
-    @strawberry_django.field(only=["sent_at", "created_at"])
-    def feed_order_key(self) -> str:
-        """The same opaque chronology key used by the domain's fixed windows."""
-        return cast(Any, self).feed_order_key
 
     @strawberry_django.field(only=["edit_history"])
     def edited_at(self) -> datetime | None:
@@ -689,41 +582,36 @@ class RecordMessageType(TrashedRefMixin, ProtectedNode):
 
         return cast(Any, self).sender_name() or None
 
-    @strawberry_django.field(
-        graphql_type=list[PartType], prefetch_related=[_record_parts_prefetch],
-    )
+    @strawberry.field(graphql_type=list[PartType])
     @staticmethod
     def parts(parent: strawberry.Parent[MessageModel]) -> list[PartModel]:
         """Return this record message's MIME parts in depth-first reading order."""
 
         return Part.objects.reading_order_for_message(parent)
 
-    @strawberry_django.field(annotate={"_title_text": lambda info: Message.objects.title_text_expression()})
+    @strawberry.field
     def title(self) -> str:
         """Return the message title text from its sparse title part."""
 
         return cast(Any, self).title()
 
-    @strawberry_django.field
+    @strawberry.field
     def reaction_groups(self, info: strawberry.Info) -> list[RecordMessageReactionGroupType]:
         """Return reaction groups with record-safe handle projections."""
 
         return _record_message_reaction_groups(self, _request_user(info))
 
-    @strawberry_django.field(prefetch_related=[lambda info: MessageStar.objects.prefetch_for(_request_user(info))])
+    @strawberry.field
     def starred(self, info: strawberry.Info) -> bool:
         """Return whether the current user has starred this message."""
 
         return bool(MessageStar.objects.is_starred(self, user=_request_user(info)))
 
-    @strawberry_django.field(
-        only=["thread_id", "is_trashed", "subtype_id", "sent_at", "created_at"],
-        annotate={"_current_user_needaction": lambda info: _needaction_expression(info, structural=True)},
-    )
+    @strawberry.field
     def needaction(self, info: strawberry.Info) -> bool:
         """Return whether this message sits past the current user's read receipt."""
 
-        return _needaction(self, info)
+        return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
 
     @strawberry_django.field(
         only=["thread_id", "sender_id", "created_by_id", "message_type", "direction"],
@@ -751,18 +639,18 @@ class RecordMessageType(TrashedRefMixin, ProtectedNode):
 
 
 @strawberry_django.type(Thread)
-class ThreadType(TaggedNode, ProtectedNode):
+class ThreadType(TaggedNode, AngeeNode):
     """GraphQL projection of a thread."""
 
     display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name,
-        only=["title__text", "modality"],
+        resolver=AngeeNode.display_name,
+        only=Thread.display_title_fields(),
         select_related=["title"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )
 
     @strawberry_django.field(
-        only=["title__text", "modality"],
+        only=Thread.display_title_fields(),
         select_related=["title"],
         description=(
             "The thread title, else the people in the conversation for this viewer; empty when "
@@ -794,7 +682,7 @@ class ThreadType(TaggedNode, ProtectedNode):
 
 
 @strawberry_django.type(Thread)
-class RecordThreadType(ProtectedNode):
+class RecordThreadType(AngeeNode):
     """Record-gated thread summary without generic inbox backedges."""
 
     platform: auto
@@ -803,62 +691,47 @@ class RecordThreadType(ProtectedNode):
     title: FragmentType | None
     @strawberry_django.field(only=["merged_into_id"])
     def message_count(self) -> int:
-        return int(_record_thread_totals(self)["count"] or 0)
+        return int(cast(Any, self).chatter_totals()["count"] or 0)
 
     @strawberry_django.field(only=["merged_into_id"])
     def last_message_at(self) -> datetime | None:
-        return cast(datetime | None, _record_thread_totals(self)["latest"])
-
-    @strawberry_django.field(graphql_type=list[RecordMessageType])
-    def messages(self, info: strawberry.Info) -> list[Any]:
-        """Readable messages, bound to the record context so reaction groups batch."""
-
-        thread = cast(Any, self)
-        rows = list(optimize(Message.objects.filter(thread=thread), info))
-        context = getattr(thread, "_record_thread_context", None)
-        return context.bind_messages(rows) if context is not None else rows
-
+        return cast(Any, self).chatter_totals()["latest"]
+    messages: list[RecordMessageType]
     created_at: auto
     updated_at: auto
 
 
-def _record_thread_totals(thread: Any) -> dict[str, Any]:
-    context = getattr(thread, "_record_thread_context", None)
-    return context.thread_totals if context is not None else thread.chatter_totals()
+_FOLLOWER_PARTY_FIELD = actor_scoped_to_one("party")
+_PERSON_USER_FIELD = actor_scoped_to_one("user")
 
 
 @strawberry.type
 class FollowerIdentity:
-    """Identity projected from an admitted follower, without party page reach."""
+    """Party identity and an optional readable account, shared by follower projections."""
 
-    @strawberry_django.field(only=["party_id"])
-    def party(self) -> PartyIdentity | None:
-        """Return only the followed party's public display identity."""
+    party: PartyType | None = _FOLLOWER_PARTY_FIELD
 
-        follower = cast(Any, self)
-        party = getattr(follower, "_follower_party", None)
-        if party is None:
-            party = apps.get_model("parties", "Party")._base_manager.filter(pk=follower.party_id).first()
-        return PartyIdentity(party=party) if party is not None else None
-
-    @strawberry_django.field(only=["party_id"])
+    @strawberry_django.field(only=["party_id"], prefetch_related=["party__person__user"])
     def user(self) -> UserType | None:
-        """Keep the account's own read gate; following grants no account detail."""
+        """Project the person's account through the shared relation guard; never store it."""
 
-        follower = cast(Any, self)
-        if hasattr(follower, "_follower_user"):
-            return cast(UserType | None, follower._follower_user)
-        person = apps.get_model("parties", "Person")._base_manager.filter(pk=follower.party_id).first()
-        if person is None or person.user_id is None:
+        party = _FOLLOWER_PARTY_FIELD.base_resolver(self)
+        if party is None:
             return None
-        return cast(
-            UserType | None,
-            get_user_model().objects.with_actor(current_actor()).filter(pk=person.user_id).first(),
-        )
+        cached_person = party._state.fields_cache.get("person")
+        if "person" not in party._state.fields_cache or (
+            cached_person is not None and getattr(cached_person, "_rebac_actor", None) != current_actor()
+        ):
+            person = apps.get_model("parties", "Person").objects.with_actor(current_actor()).filter(pk=party.pk).first()
+            party._meta.get_field("person").set_cached_value(party, person)
+        person = party._state.fields_cache["person"]
+        if person is None:
+            return None
+        return cast(UserType | None, _PERSON_USER_FIELD.base_resolver(person))
 
 
 @strawberry_django.type(ThreadFollower)
-class RecordThreadFollowerType(FollowerIdentity, ProtectedNode):
+class RecordThreadFollowerType(FollowerIdentity, AngeeNode):
     """Record-scoped follower projection without message or thread backedges."""
 
     notification_policy: auto
@@ -869,17 +742,14 @@ class RecordThreadFollowerType(FollowerIdentity, ProtectedNode):
 
 
 @strawberry_django.type(ThreadNotification)
-class RecordThreadNotificationType(ProtectedNode):
+class RecordThreadNotificationType(AngeeNode):
     """Record-scoped notification projection with narrowed message context."""
 
     message: "RecordMessageParentType | None" = actor_scoped_to_one("message")
     follower: "RecordThreadFollowerType | None" = actor_scoped_to_one("follower")
     user: "UserType | None" = actor_scoped_to_one("user")
     notification_type: auto
-    notification_status: auto
     read_at: auto
-    failure_type: auto
-    failure_reason: auto
     metadata: strawberry.scalars.JSON
     created_at: auto
     updated_at: auto
@@ -899,12 +769,16 @@ class ThreadAttachmentType(RecordReferenceNode):
     created_at: auto
     updated_at: auto
 
-    record_model: str | None = record_reference_field(ThreadAttachment, resolver=RecordReferenceNode.reference_model)
-    record_id: PublicID | None = record_reference_field(ThreadAttachment, resolver=RecordReferenceNode.reference_id)
+    record_model: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+    )
+    record_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+    )
 
 
 @strawberry_django.type(ThreadFollower)
-class ThreadFollowerType(FollowerIdentity, ProtectedNode):
+class ThreadFollowerType(FollowerIdentity, AngeeNode):
     """GraphQL projection of a party's thread subscription — policy plus read receipt."""
 
     thread: "ThreadType | None" = actor_scoped_to_one("thread")
@@ -921,7 +795,7 @@ class ThreadFollowerType(FollowerIdentity, ProtectedNode):
 class NotificationMessagePointerType:
     """Record-readable inbox context without message bodies or generic backedges."""
 
-    id: PublicID = strawberry.field(resolver=ProtectedNode.id)
+    id: PublicID = strawberry.field(resolver=AngeeNode.id)
     message_type: auto
     subtype: MessageSubtypeType | None
     created_at: auto
@@ -936,37 +810,39 @@ class NotificationMessagePointerType:
         )
 
 
+def _notification_message_pointers(info: strawberry.Info) -> Any:
+    """Read the listed notifications' message context once for the request's reader."""
+
+    del info
+    return ThreadNotification.message_pointers_prefetch(current_actor())
+
+
 @strawberry_django.type(ThreadNotification)
-class ThreadNotificationType(ProtectedNode):
+class ThreadNotificationType(AngeeNode):
     """GraphQL projection of a recipient's delivery and per-item acknowledgement."""
 
-    thread: ThreadType | None = actor_scoped_to_one("thread")
-
+    thread: "ThreadType | None" = actor_scoped_to_one("thread")
     attachment: "ThreadAttachmentType | None" = actor_scoped_to_one("attachment")
     follower: "ThreadFollowerType | None" = actor_scoped_to_one("follower")
 
-    @strawberry_django.field(only=["message_id", "attachment_id", "thread_id", "user_id"])
+    @strawberry_django.field(
+        only=["message_id", "attachment_id", "thread_id", "user_id"], prefetch_related=[_notification_message_pointers],
+    )
     def message(self) -> NotificationMessagePointerType | None:
         """Project only recipient context authorized by the attached record's read owner."""
 
-        row = cast(Any, self)
-        if not hasattr(row, "_inbox_message_pointer"):
-            ThreadNotification.objects.prime_message_pointers([row], current_actor())
-        return cast(NotificationMessagePointerType | None, row._inbox_message_pointer)
+        return cast(NotificationMessagePointerType | None, cast(Any, self).message_pointer(current_actor()))
 
     user: "UserType | None" = actor_scoped_to_one("user")
     notification_type: auto
-    notification_status: auto
     read_at: auto
-    failure_type: auto
-    failure_reason: auto
     metadata: strawberry.scalars.JSON
     created_at: auto
     updated_at: auto
 
 
 @strawberry_django.type(MessageEdge)
-class MessageEdgeType(ProtectedNode):
+class MessageEdgeType(AngeeNode):
     """GraphQL projection of a cross-message edge (quote/mention/crosspost/forward)."""
 
     kind: auto
@@ -978,7 +854,7 @@ class MessageEdgeType(ProtectedNode):
 
 
 @strawberry_django.type(Reaction)
-class ReactionType(ProtectedNode):
+class ReactionType(AngeeNode):
     """GraphQL projection of an attributed reaction."""
 
     reaction: auto
@@ -987,7 +863,7 @@ class ReactionType(ProtectedNode):
 
 
 @strawberry_django.type(MessageStar)
-class MessageStarType(ProtectedNode):
+class MessageStarType(AngeeNode):
     """GraphQL projection of a user's starred message marker."""
 
     message: "MessageType | None" = actor_scoped_to_one("message")
@@ -1140,214 +1016,25 @@ class RecordErrorPayload:
         return cls(error=message, error_code=code)
 
 
-@dataclass(kw_only=True)
-class _RecordThreadContext:
-    """One authorized record/role/request shared by selected response fields."""
-
-    record: Any
-    info: strawberry.Info | None
-    _attachment: Any = _UNRESOLVED
-    role: str = "chatter"
-    search: str = ""
-    message_limit: int = 50
-    before: strawberry.ID | None = None
-    after: strawberry.ID | None = None
-    around: strawberry.ID | None = None
-    message_types: tuple[str, ...] = ()
-    _unprimed_reactions: list[Any] = field(default_factory=list, init=False, repr=False)
-
-    @cached_property
-    def user(self) -> Any:
-        return _request_user(self.info)
-
-    @cached_property
-    def attachment(self) -> Any:
-        return (ThreadAttachment.objects.readable_for_record(self.record, role=self.role)
-                if self._attachment is _UNRESOLVED else self._attachment)
-
-    @cached_property
-    def thread(self) -> Any:
-        thread = self.attachment.thread if self.attachment is not None else None
-        if thread is not None:
-            thread._record_thread_context = self
-        return thread
-
-    @cached_property
-    def thread_totals(self) -> dict[str, Any]:
-        return self.thread.chatter_totals() if self.thread is not None else {"count": 0, "latest": None}
-
-    @cached_property
-    def access(self) -> tuple[bool, bool]:
-        return _record_message_access(self.record, self.user)
-
-    def bind_messages(self, messages: list[Any]) -> list[Any]:
-        """Carry the parent context to selected capability fields without evaluating it."""
-
-        self._unprimed_reactions.extend(messages)
-        for message in messages:
-            message._record_thread_context = self
-        return messages
-
-    def prime_reaction_groups(self) -> None:
-        """Read every bound, not yet primed message's reactions in one batch."""
-
-        if self._unprimed_reactions:
-            batch, self._unprimed_reactions = self._unprimed_reactions, []
-            Message.prime_reaction_groups(batch, self.user)
-
-    @cached_property
-    def page(self) -> tuple[models.QuerySet, int]:
-        return Message.objects.record_window(
-            self.record, role=self.role, search=self.search, limit=self.message_limit,
-            before=self.before, after=self.after, around=self.around, message_types=self.message_types,
-        )
-
-    @cached_property
-    def message_result_count(self) -> int:
-        if "page" in self.__dict__:
-            return self.page[1]
-        return Message.objects.record_scope(
-            self.record, role=self.role, search=self.search, message_types=self.message_types,
-        ).count()
-
-    @cached_property
-    def followers(self) -> list[Any]:
-        followers = list(ThreadFollower.objects.for_attachment(self.attachment)) if self.attachment is not None else []
-        _prime_follower_identities(followers, current_actor())
-        return followers
-
-    @cached_property
-    def self_follower(self) -> Any:
-        return next((row for row in self.followers if row.party_id == self.party_id), None)
-
-    @cached_property
-    def party_id(self) -> Any:
-        return ThreadFollower.objects.get_party_id(user=self.user) if self.user is not None else None
-
-    @cached_property
-    def unread_count(self) -> int:
-        return (ThreadFollower.objects.unread_count_for_attachment(self.attachment, party_id=self.party_id)
-                if self.user is not None else 0)
-
-    @cached_property
-    def message_has_error_counter(self) -> int:
-        return (ThreadNotification.objects.error_count_for_attachment(self.attachment, user=self.user)
-                if self.user is not None else 0)
-
-    @cached_property
-    def removed_message_count(self) -> int | None:
-        if not self.access[1]:
-            return None
-        return (Message._base_manager.filter(MessageQuerySet.thread_filter(self.thread), is_trashed=True).count()
-                if self.thread is not None else 0)
-
-
 @strawberry.type
 class RecordThreadStatePayload:
-    """Thread projections resolve only when selected, sharing the authorized context."""
+    """Refreshed thread state shared by reads and message write results."""
 
-    _context: strawberry.Private[_RecordThreadContext | None] = None
+    thread: ThreadModel | None = strawberry.field(graphql_type=RecordThreadType | None, default=None)
+    followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
+    follower_count: int = strawberry.field(name="follower_count", default=0)
+    is_following: bool = strawberry.field(name="is_following", default=False)
+    notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
+    unread_count: int = strawberry.field(name="unread_count", default=0)
+    needaction_count: int = strawberry.field(name="needaction_count", default=0)
+    attachment_count: int = strawberry.field(name="attachment_count", default=0)
 
-    @strawberry.field(graphql_type=RecordThreadType | None)
-    @django_resolver
-    def thread(self) -> ThreadModel | None:
-        return self._context.thread if self._context is not None else None
+    @classmethod
+    def from_thread_state(cls, state: RecordThreadStatePayload, **overrides: Any) -> Self:
+        """Shallowly project declared thread fields; preserve model/queryset values."""
 
-    @strawberry.field
-    @django_resolver
-    def followers(self) -> list[RecordThreadFollowerType]:
-        return self._context.followers if self._context is not None else []
-
-    @strawberry.field(name="follower_count")
-    @django_resolver
-    def follower_count(self) -> int:
-        return len(self._context.followers) if self._context is not None else 0
-
-    @strawberry.field(name="is_following")
-    @django_resolver
-    def is_following(self) -> bool:
-        return self._context is not None and self._context.self_follower is not None
-
-    @strawberry.field
-    @django_resolver
-    def notifications(self) -> list[RecordThreadNotificationType]:
-        if self._context is None or self._context.user is None:
-            return []
-        return list(ThreadNotification.objects.for_attachment_for_user(
-            self._context.attachment, user=self._context.user,
-        ).select_related("thread", "attachment", "follower", "message", "message__subtype", "user")[:50])
-
-    @strawberry.field(name="unread_count")
-    @django_resolver
-    def unread_count(self) -> int:
-        return self._context.unread_count if self._context is not None else 0
-
-    @strawberry.field(name="needaction_count")
-    @django_resolver
-    def needaction_count(self) -> int:
-        return self._context.unread_count if self._context is not None else 0
-
-    @strawberry.field(name="message_has_error")
-    @django_resolver
-    def message_has_error(self) -> bool:
-        return self._context is not None and self._context.message_has_error_counter > 0
-
-    @strawberry.field(name="message_has_error_counter")
-    @django_resolver
-    def message_has_error_counter(self) -> int:
-        return self._context.message_has_error_counter if self._context is not None else 0
-
-    @strawberry.field(name="attachment_count")
-    @django_resolver
-    def attachment_count(self) -> int:
-        """Count transcript parts under the enclosing record's read gate.
-
-        Readers of the record see the same attachments in the transcript even
-        when they do not hold the thread's independent read permission.
-        """
-
-        thread = self._context.thread if self._context is not None else None
-        if thread is None:
-            return 0
-        rows = Part._base_manager.using(thread._state.db).filter(
-            message__thread_id__in=thread.member_threads().values("pk"), message__is_trashed=False,
-        )
-        return PartQuerySet.attachments(cast(Any, rows)).count()
-
-
-@strawberry.type
-class RecordThreadMessagesPayload(RecordThreadStatePayload):
-    """Legacy transcript fields remain available without eager mutation reads."""
-
-    @strawberry.field
-    @django_resolver
-    def messages(self, info: strawberry.Info) -> list[RecordMessageType]:
-        if self._context is None:
-            return []
-        return self._context.bind_messages(list(optimize(self._context.page[0], info)))
-
-    @strawberry.field(name="message_result_count")
-    @django_resolver
-    def message_result_count(self) -> int:
-        return self._context.message_result_count if self._context is not None else 0
-
-
-@strawberry.type
-class RecordAcceptedMessagePayload(RecordThreadStatePayload, RecordErrorPayload):
-    """Resolve only the accepted row, never the surrounding transcript."""
-
-    _message: strawberry.Private[Any] = None
-
-    @strawberry.field
-    @django_resolver
-    def message(self, info: strawberry.Info) -> RecordMessageType | None:
-        if self._context is None or self._message is None:
-            return None
-        rows = Message.objects.record_scope(
-            self._context.record, role=self._context.role, trashed=self._message.is_trashed,
-        ).filter(pk=self._message.pk)
-        message = optimize(rows, info).first()
-        return self._context.bind_messages([message])[0] if message is not None else None
+        values = {field.name: getattr(state, field.name) for field in fields(RecordThreadStatePayload)}
+        return cls(**(values | overrides))
 
 
 @strawberry.enum
@@ -1359,175 +1046,153 @@ class RecordPostKind(StrEnum):
 
 
 @strawberry.type
-class RecordThreadPayload(RecordThreadMessagesPayload, RecordErrorPayload):
-    """A record chatter thread, resolved through the parent record's read gate."""
+class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
+    """A record chatter thread, or the error that prevented resolving it."""
 
-    @strawberry.field(name="thread_post_access")
-    @django_resolver
-    def thread_post_access(self) -> str | None:
-        return self._context.record.thread_post_access if self._context is not None else None
-
-    @strawberry.field
-    @django_resolver
-    def permissions(self) -> list[str]:
-        context = self._context
-        return [context.record.thread_post_access] if context is not None and context.access[0] else []
+    # The record model is polymorphic: project its own posting permission name,
+    # rather than assuming every threaded model uses "write".
+    thread_post_access: str | None = strawberry.field(name="thread_post_access", default=None)
+    permissions: list[str] = strawberry.field(default_factory=list)
+    messages: list[RecordMessageType] = strawberry.field(default_factory=list)
+    message_result_count: int = strawberry.field(name="message_result_count", default=0)
+    _page_record: strawberry.Private[Any] = None
+    _page_role: strawberry.Private[str] = "chatter"
 
     @strawberry.field(name="has_older_messages")
-    @django_resolver
     def has_older_messages(self) -> bool:
         return self._window_continues(newer=False)
 
     @strawberry.field(name="has_newer_messages")
-    @django_resolver
     def has_newer_messages(self) -> bool:
         return self._window_continues(newer=True)
 
     def _window_continues(self, *, newer: bool) -> bool:
-        context = self._context
-        return context is not None and bool(Message.objects.record_window_continues(
-            context.record, list(context.page[0].only("pk", "sent_at", "created_at")), newer=newer, role=context.role,
-            search=context.search, message_types=context.message_types,
+        if self._page_record is None:
+            return False
+        return bool(Message.objects.record_window_continues(
+            self._page_record, self.messages, newer=newer, role=self._page_role,
+            search=self._reply_search, message_types=self._reply_message_types,
         ))
 
-    @strawberry.field(name="audience_label")
-    @django_resolver
-    def audience_label(self) -> str | None:
-        return None
-
-    @strawberry.field(name="post_kinds")
-    @django_resolver
-    def post_kinds(self) -> list[RecordPostKind]:
-        return ([RecordPostKind.COMMENT, RecordPostKind.NOTE]
-                if self._context is not None and self._context.access[0] else [])
-
-    @strawberry.field(name="self_follower")
-    @django_resolver
-    def self_follower(self) -> RecordThreadFollowerType | None:
-        return self._context.self_follower if self._context is not None else None
-
-    @strawberry.field(name="suggested_recipients")
-    @django_resolver
-    def suggested_recipients(self) -> list[SuggestedRecipientType]:
-        if self._context is None:
-            return []
-        return [SuggestedRecipientType(user=row["user"], reason=str(row["reason"]), source=str(row["source"]))
-                for row in self._context.record.message_suggested_recipients(
-                    role=self._context.role, user=self._context.user, attachment=self._context.attachment,
-                )]
-
-    @strawberry.field
-    @django_resolver
-    def subtypes(self) -> list[MessageSubtypeOptionType]:
-        return ([MessageSubtypeOptionType(**option)
-                 for option in message_subtype_options(self._context.record._meta.label)]
-                if self._context is not None else [])
-
-    @strawberry.field(name="removed_message_count")
-    @django_resolver
-    def removed_message_count(self) -> int | None:
-        return self._context.removed_message_count if self._context is not None else None
+    _reply_search: strawberry.Private[str] = ""
+    _reply_message_types: strawberry.Private[tuple[str, ...]] = ()
+    audience_label: str | None = strawberry.field(name="audience_label", default=None)
+    post_kinds: list[RecordPostKind] = strawberry.field(name="post_kinds", default_factory=list)
+    self_follower: RecordThreadFollowerType | None = strawberry.field(name="self_follower", default=None)
+    suggested_recipients: list[SuggestedRecipientType] = strawberry.field(
+        name="suggested_recipients",
+        default_factory=list,
+    )
+    subtypes: list[MessageSubtypeOptionType] = strawberry.field(default_factory=list)
+    removed_message_count: int | None = strawberry.field(name="removed_message_count", default=None)
+    """Trashed comments awaiting moderation; null for readers who do not moderate the record."""
 
     @strawberry.field(name="reply_count")
-    @django_resolver
     def reply_count(self) -> int:
-        context = self._context
-        if context is None:
+        """Count matching replies only when a caller selects this annotation."""
+
+        if self.thread is None:
             return 0
-        return Message.objects.record_scope(
-            context.record, role=context.role, search=context.search, message_types=context.message_types,
-        ).filter(parent__isnull=False).count()
+        replies = Message.objects.sudo(reason="messaging.record_thread.reply_count").for_thread(self.thread)
+        kinds = {
+            strip_null_bytes(value or "").strip().lower()
+            for value in self._reply_message_types
+            if strip_null_bytes(value or "").strip()
+        }
+        if kinds:
+            replies = replies.filter(message_type__in=kinds)
+        for term in strip_null_bytes(self._reply_search or "").split():
+            replies = replies.searching(term)
+        return replies.untrashed().filter(parent__isnull=False).distinct().count()
 
 
 @strawberry.type
-class RecordMessagePostPayload(RecordAcceptedMessagePayload):
+class RecordMessagePostPayload(RecordThreadStatePayload, RecordErrorPayload):
     """A posted chatter message, or the error that prevented posting it."""
 
+    message: RecordMessageType | None = None
+
 
 @strawberry.type
-class RecordMessageUpdatePayload(RecordAcceptedMessagePayload):
+class RecordMessageUpdatePayload(RecordThreadStatePayload, RecordErrorPayload):
     """An updated chatter message, or the error that prevented editing it."""
 
+    message: RecordMessageType | None = None
+
 
 @strawberry.type
-class RecordMessageDeletePayload(RecordThreadMessagesPayload, RecordErrorPayload):
-    """A deleted chatter message id plus selected thread state, or an error."""
+class RecordMessageDeletePayload(RecordThreadStatePayload, RecordErrorPayload):
+    """A deleted chatter message id plus refreshed thread state, or an error."""
 
     deleted_message_id: strawberry.ID | None = strawberry.field(name="deleted_message_id", default=None)
-
-
-@strawberry.type
-class RecordMessageTrashPayload(RecordAcceptedMessagePayload, RecordThreadMessagesPayload):
-    """A trashed/restored comment plus selected thread state, or an error."""
-
-    @strawberry.field(name="removed_message_count")
-    @django_resolver
-    def removed_message_count(self) -> int | None:
-        return self._context.removed_message_count if self._context is not None else None
-
-
-_FeedMessage = TypeVar("_FeedMessage")
-
-
-@strawberry.type
-class MessageProjection(Generic[_FeedMessage]):
-    """Native optimizer prepares only selected fields before message rows materialize."""
-
-    _rows: strawberry.Private[Any] = None
-    _context: strawberry.Private[_RecordThreadContext | None] = None
-
-    @strawberry.field
-    @django_resolver
-    def messages(self, info: strawberry.Info) -> list[_FeedMessage]:
-        if self._rows is None:
-            return []
-        rows = list(optimize(self._rows, info)) if isinstance(self._rows, models.QuerySet) else list(self._rows)
-        return self._context.bind_messages(rows) if self._context is not None else rows
-
-
-@strawberry.type
-class RecordRemovedMessagesPayload(MessageProjection[RecordMessageType], RecordErrorPayload):
-    """A record's trashed comments for its moderators, newest last, or an error."""
-
+    messages: list[RecordMessageType] = strawberry.field(default_factory=list)
     message_result_count: int = strawberry.field(name="message_result_count", default=0)
 
 
 @strawberry.type
-class RecordMessageReactionPayload(RecordAcceptedMessagePayload):
-    """A reacted chatter message, or the error that prevented reacting."""
+class RecordMessageTrashPayload(RecordThreadStatePayload, RecordErrorPayload):
+    """A trashed or restored chatter comment plus refreshed thread state, or an error."""
 
-    @strawberry.field(name="reaction_groups")
-    @django_resolver
-    def reaction_groups(self) -> list[RecordMessageReactionGroupType]:
-        if self._context is None or self._message is None:
-            return []
-        message = self._context.bind_messages([self._message])[0]
-        return _record_message_reaction_groups(message, self._context.user)
+    message: RecordMessageType | None = None
+    messages: list[RecordMessageType] = strawberry.field(default_factory=list)
+    message_result_count: int = strawberry.field(name="message_result_count", default=0)
+    removed_message_count: int | None = strawberry.field(name="removed_message_count", default=None)
 
 
 @strawberry.type
-class RecordMessageStarPayload(RecordAcceptedMessagePayload):
+class RecordRemovedMessagesPayload(RecordErrorPayload):
+    """A record's trashed comments for its moderators, newest last, or an error."""
+
+    messages: list[RecordMessageType] = strawberry.field(default_factory=list)
+    message_result_count: int = strawberry.field(name="message_result_count", default=0)
+
+
+@strawberry.type
+class RecordMessageReactionPayload(RecordErrorPayload):
+    """A reacted chatter message, or the error that prevented reacting."""
+
+    message: RecordMessageType | None = None
+    reaction_groups: list[RecordMessageReactionGroupType] = strawberry.field(
+        name="reaction_groups",
+        default_factory=list,
+    )
+
+
+@strawberry.type
+class RecordMessageStarPayload(RecordErrorPayload):
     """A starred/unstarred chatter message result, or the error that prevented it."""
 
+    message: RecordMessageType | None = None
     starred: bool = False
 
 
 @strawberry.type
-class RecordMessageDonePayload(RecordAcceptedMessagePayload):
+class RecordMessageDonePayload(RecordErrorPayload):
     """A message marked done for the user, or the error that prevented it."""
 
+    message: RecordMessageType | None = None
+    thread: ThreadModel | None = strawberry.field(graphql_type=RecordThreadType | None, default=None)
+    notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
+    unread_count: int = strawberry.field(name="unread_count", default=0)
+    needaction_count: int = strawberry.field(name="needaction_count", default=0)
+
 
 @strawberry.type
-class RecordFollowPayload(RecordThreadStatePayload, RecordErrorPayload):
-    """A record follower update plus selected thread state, or an error."""
+class RecordFollowPayload(RecordErrorPayload):
+    """A record follower update result, or the error that prevented it."""
 
     follower: RecordThreadFollowerType | None = None
+    thread: ThreadModel | None = strawberry.field(graphql_type=RecordThreadType | None, default=None)
+    followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
+    follower_count: int = strawberry.field(name="follower_count", default=0)
+    is_following: bool = strawberry.field(name="is_following", default=False)
 
 
 @strawberry.type
-class MessageFeedWindow(MessageProjection[_FeedMessage], Generic[_FeedMessage]):
-    """One domain-scoped keyset window, parameterized by its authorized projection."""
+class MessageFeedPage:
+    """A newest-first, currently authorized message page with stable cursors."""
 
+    messages: list[MessageType]
     count: int
     older_cursor: str | None
     newer_cursor: str | None
@@ -1538,12 +1203,12 @@ class MessageFeedWindow(MessageProjection[_FeedMessage], Generic[_FeedMessage]):
     has_newer_than_before: bool
 
     @classmethod
-    def from_scope(cls, queryset: models.QuerySet[Any], **options: Any) -> Self:
+    def from_scope(cls, queryset: MessageQuerySet, **options: Any) -> Self:
         """Project a domain-scoped message window without re-deciding its scope."""
 
-        page = MessageQuerySet.feed_page(cast(Any, queryset), **options)
+        page = queryset.feed_page(**options)
         return cls(
-            _rows=page.rows,
+            messages=cast(list[MessageType], page.rows),
             count=page.count,
             older_cursor=page.older_cursor,
             newer_cursor=page.newer_cursor,
@@ -1556,42 +1221,22 @@ class MessageFeedWindow(MessageProjection[_FeedMessage], Generic[_FeedMessage]):
 
 
 @strawberry.type
-class MessageFeedPartition(MessageProjection[_FeedMessage], Generic[_FeedMessage]):
+class MessageFeedRevalidation:
     """Complete survivor/absent partition under the current feed scope."""
 
+    messages: list[MessageType]
     absent_ids: list[strawberry.ID]
 
     @classmethod
     def from_scope(
-        cls, queryset: models.QuerySet[Any], ids: list[strawberry.ID], *, search: str = "", all_copies: bool = False,
+        cls, queryset: MessageQuerySet, ids: list[strawberry.ID], *, search: str = "", all_copies: bool = False,
         anchor: str = "",
     ) -> Self:
         """Revalidate the same readable domain scope using public message IDs."""
 
-        partition = MessageQuerySet.feed_revalidate(cast(Any, queryset),
+        return cls(**queryset.feed_revalidate(
             [str(value) for value in ids], search=search, all_copies=all_copies, anchor=anchor,
-        )
-        return cls(_rows=partition["messages"], absent_ids=partition["absent_ids"])
-
-
-@strawberry.type
-class MessageFeedPage(MessageFeedWindow[MessageType]):
-    """An actor-authorized inbox window."""
-
-
-@strawberry.type
-class MessageFeedRevalidation(MessageFeedPartition[MessageType]):
-    """Current inbox survivors and explicit absences."""
-
-
-@strawberry.type
-class RecordMessageFeedPage(MessageFeedWindow[RecordMessageType]):
-    """A parent-authorized chatter window using the same keyset contract."""
-
-
-@strawberry.type
-class RecordMessageFeedRevalidation(MessageFeedPartition[RecordMessageType]):
-    """Current chatter survivors/absences under the same parent read gate."""
+        ))
 
 
 @strawberry.type
@@ -1674,63 +1319,19 @@ class MessagingQuery:
         survivor = require_instance_for_id(Message, id, queryset=rows).canonical()
         return rows.redirect_group(survivor).order_by("channel_id", "pk")
 
-    @strawberry.field
-    @django_resolver
-    def record_message_feed(
-        self, info: strawberry.Info, input: RecordThreadInput,
-        before_cursor: str | None = None, through_cursor: str | None = None,
-        after_cursor: str | None = None, limit: int = 50,
-    ) -> RecordMessageFeedPage:
-        """Read fixed chatter windows only through the current parent read gate."""
-        record = chatter_record(input.model_label, input.record_id)
-        if record is None:
-            raise ValueError("record not found")
-        context = _RecordThreadContext(record=record, info=info, role=input.role)
-        page = RecordMessageFeedPage.from_scope(
-            Message.objects.record_scope(record, role=input.role, message_types=tuple(input.message_types)),
-            scope=(f"record:{record._meta.label_lower}:{input.role}:{','.join(sorted(input.message_types))}",
-                   public_id_of(record)),
-            search=input.search, all_copies=True,
-            anchor=f"message:{input.around}" if input.around else "",
-            before_cursor=before_cursor, through_cursor=through_cursor, after_cursor=after_cursor, limit=limit,
-        )
-        page._context = context
-        return page
-
-    @strawberry.field
-    @django_resolver
-    def record_message_feed_revalidate(
-        self, info: strawberry.Info, input: RecordThreadInput, ids: list[strawberry.ID],
-    ) -> RecordMessageFeedRevalidation:
-        """Partition retained IDs without granting private messages a generic feed."""
-        record = chatter_record(input.model_label, input.record_id)
-        if record is None:
-            raise ValueError("record not found")
-        context = _RecordThreadContext(record=record, info=info, role=input.role)
-        result = RecordMessageFeedRevalidation.from_scope(
-            Message.objects.record_scope(record, role=input.role, message_types=tuple(input.message_types)), ids,
-            search=input.search, all_copies=True,
-        )
-        result._context = context
-        return result
-
     @strawberry.field(name="record_thread")
     def record_thread(self, info: strawberry.Info, input: RecordThreadInput) -> RecordThreadPayload:
         """Return the existing chatter thread attached to a model record."""
 
         try:
-            resolved = chatter_record_with_attachment(input.model_label, input.record_id)
+            record = chatter_record(input.model_label, input.record_id)
         except ValueError as error:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
-        if resolved is None:
+        if record is None:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
-        record, attachment = resolved
-        if input.role != record.thread_attachment_role:
-            attachment = ThreadAttachment.objects.readable_for_record(record, role=input.role)
-        return RecordThreadPayload(_context=_RecordThreadContext(
-            record=record,
-            info=info,
-            _attachment=attachment,
+        return _record_thread_payload(
+            record,
+            info,
             role=input.role,
             search=input.search,
             message_limit=input.message_limit,
@@ -1738,7 +1339,7 @@ class MessagingQuery:
             after=input.after,
             around=input.around,
             message_types=tuple(input.message_types),
-        ))
+        )
 
     @strawberry.field(name="record_removed_messages")
     def record_removed_messages(self, info: strawberry.Info, input: RecordThreadInput) -> RecordRemovedMessagesPayload:
@@ -1753,13 +1354,11 @@ class MessagingQuery:
         if record is None:
             return RecordRemovedMessagesPayload(error="record not found", error_code="NOT_FOUND")
         try:
-            messages, count = cast(Any, record).message_removed_window(role=input.role, limit=input.message_limit)
+            messages, count = cast(Any, record).message_removed(role=input.role, limit=input.message_limit)
         except PermissionDenied as error:
             return RecordRemovedMessagesPayload.from_error(error, invalid_code="BAD_MESSAGE")
-        return RecordRemovedMessagesPayload(
-            _rows=messages, _context=_RecordThreadContext(record=record, info=info, role=input.role),
-            message_result_count=count,
-        )
+        _prime_record_messages(messages)
+        return RecordRemovedMessagesPayload(messages=messages, message_result_count=count)
 
     @strawberry.field(name="record_source_threads")
     def record_source_threads(self, input: RecordReferenceInput) -> list[ThreadAttachmentType]:
@@ -1769,7 +1368,7 @@ class MessagingQuery:
         if record is None:
             return []
         edges = ThreadAttachment.objects.source_threads_for_record(record).order_by("-created_at", "pk")
-        return cast(list[ThreadAttachmentType], edges)
+        return list(with_record_reference_access(edges))
 
 @strawberry.type
 class MessagingMutation:
@@ -1872,8 +1471,11 @@ class MessagingMutation:
                 )
         except (PermissionDenied, ValueError, ValidationError) as error:
             return RecordMessagePostPayload.from_error(error, invalid_code="BAD_MESSAGE")
-        return RecordMessagePostPayload(
-            _context=_RecordThreadContext(record=record, info=info, role=input.role), _message=message,
+        payload = _record_thread_payload(record, info, role=input.role)
+        return RecordMessagePostPayload.from_thread_state(
+            payload,
+            message=message,
+            thread=payload.thread,
         )
 
     @strawberry.mutation(name="update_record_message")
@@ -1897,8 +1499,11 @@ class MessagingMutation:
             message = cast(Any, record).message_update_content(message, body=input.body)
         except (PermissionDenied, ValueError) as error:
             return RecordMessageUpdatePayload.from_error(error, invalid_code="BAD_MESSAGE")
-        return RecordMessageUpdatePayload(
-            _context=_RecordThreadContext(record=record, info=info, role=input.role), _message=message,
+        payload = _record_thread_payload(record, info, role=input.role)
+        return RecordMessageUpdatePayload.from_thread_state(
+            payload,
+            message=message,
+            thread=payload.thread,
         )
 
     @strawberry.mutation(name="delete_record_message")
@@ -1920,12 +1525,16 @@ class MessagingMutation:
             return RecordMessageDeletePayload(error="record not found", error_code="NOT_FOUND")
         deleted_message_id = input.message_id
         try:
-            cast(Any, record).message_unlink(message)
+            thread = cast(Any, record).message_unlink(message)
         except (PermissionDenied, ValueError) as error:
             return RecordMessageDeletePayload.from_error(error, invalid_code="BAD_MESSAGE")
-        return RecordMessageDeletePayload(
-            _context=_RecordThreadContext(record=record, info=info, role=input.role),
+        payload = _record_thread_payload(record, info, role=input.role)
+        return RecordMessageDeletePayload.from_thread_state(
+            payload,
             deleted_message_id=deleted_message_id,
+            thread=thread,
+            messages=payload.messages,
+            message_result_count=payload.message_result_count,
         )
 
     @strawberry.mutation(name="trash_record_message")
@@ -1968,15 +1577,9 @@ class MessagingMutation:
             )
         except (PermissionDenied, ValueError) as error:
             return RecordMessageReactionPayload.from_error(error, invalid_code="BAD_REACTION")
-        prefetch_related_objects(
-            [message],
-            models.Prefetch(
-                "reactions",
-                queryset=apps.get_model("messaging", "Reaction")._base_manager.select_related("handle").order_by("pk"),
-            ),
-        )
         return RecordMessageReactionPayload(
-            _context=_RecordThreadContext(record=record, info=info, role=input.role), _message=message,
+            message=message,
+            reaction_groups=_record_message_reaction_groups(message, user),
         )
 
     @strawberry.mutation(name="set_record_message_starred")
@@ -2001,9 +1604,7 @@ class MessagingMutation:
             starred = cast(Any, record).message_set_starred(message, user=user, starred=input.starred)
         except (PermissionDenied, ValueError) as error:
             return RecordMessageStarPayload.from_error(error, invalid_code="BAD_MESSAGE")
-        return RecordMessageStarPayload(
-            _context=_RecordThreadContext(record=record, info=info, role=input.role), _message=message, starred=starred,
-        )
+        return RecordMessageStarPayload(message=message, starred=starred)
 
     @strawberry.mutation(name="mark_record_message_done")
     def mark_record_message_done(
@@ -2027,8 +1628,16 @@ class MessagingMutation:
             cast(Any, record).message_set_done(message, user=user)
         except (PermissionDenied, ValueError) as error:
             return RecordMessageDonePayload.from_error(error, invalid_code="BAD_MESSAGE")
+        payload = _record_thread_payload(record, info, role=input.role)
         return RecordMessageDonePayload(
-            _context=_RecordThreadContext(record=record, info=info, role=input.role), _message=message,
+            message=next(
+                (candidate for candidate in payload.messages if cast(Any, candidate).pk == message.pk),
+                message,
+            ),
+            thread=payload.thread,
+            notifications=payload.notifications,
+            unread_count=payload.unread_count,
+            needaction_count=payload.needaction_count,
         )
 
     @strawberry.mutation(name="set_record_following")
@@ -2056,8 +1665,13 @@ class MessagingMutation:
                 follower = None
         except (ValueError, PermissionDenied) as error:
             return RecordFollowPayload(error=str(error), error_code="BAD_FOLLOWER")
+        payload = _record_thread_payload(record, info, role=input.role)
         return RecordFollowPayload(
-            _context=_RecordThreadContext(record=record, info=info, role=input.role), follower=follower,
+            follower=follower,
+            thread=payload.thread,
+            followers=payload.followers,
+            follower_count=payload.follower_count,
+            is_following=payload.is_following,
         )
 
     @strawberry.mutation(name="mark_record_thread_read")
@@ -2073,8 +1687,11 @@ class MessagingMutation:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
-        ThreadFollower.objects.mark_read_for_record(record, user=user, role=input.role)
-        return RecordThreadPayload(_context=_RecordThreadContext(record=record, info=info, role=input.role))
+        try:
+            ThreadFollower.objects.mark_read_for_record(record, user=user, role=input.role)
+        except PermissionDenied as error:
+            return RecordThreadPayload.from_error(error, invalid_code="BAD_RECORD")
+        return _record_thread_payload(record, info, role=input.role)
 
 
 def _thread_inbox_queryset(info: strawberry.Info) -> Any:
@@ -2115,7 +1732,7 @@ def _part_inbox_queryset(info: strawberry.Info) -> Any:
     return Part.objects.inbox()
 
 
-class _InboxWriteBackend(ProtectedHasuraWriteBackend):
+class _InboxWriteBackend(AngeeHasuraWriteBackend):
     """Write backend that keeps record-attached chatter off the generic mutations.
 
     The read side scopes ``threads``/``messages`` to ``.inbox()`` through
@@ -2125,7 +1742,8 @@ class _InboxWriteBackend(ProtectedHasuraWriteBackend):
     Narrowing the write-target queryset to ``.inbox()`` makes the by-pk lookup miss
     a record-attached row, so the generic mutation reports it as not found while the
     inbox rows keep their update/delete surfaces. The ``.inbox()`` verb resolves
-    polymorphically on each model's queryset, so one backend serves both.
+    polymorphically on each model's queryset, so one backend serves both; it locates
+    the target under ``read_inbox``, and the row's own write or delete gate decides.
     """
 
     def write_target_queryset(self) -> Any:
@@ -2137,7 +1755,7 @@ class _InboxWriteBackend(ProtectedHasuraWriteBackend):
         return queryset.inbox()
 
 
-class _ChannelWriteBackend(ProtectedHasuraWriteBackend):
+class _ChannelWriteBackend(AngeeHasuraWriteBackend):
     """Make the generic ``delete_channels_by_pk`` a purge, not an orphan.
 
     ``delete=True`` on the channel resource is what lights the console's delete button
@@ -2367,9 +1985,7 @@ def _notification_inbox_queryset(info: strawberry.Info) -> Any:
 
     del info
     return (
-        ThreadNotification.objects.with_action("read_inbox")
-        .exclude(message__is_trashed=True)
-        .with_message_pointers()
+        ThreadNotification.objects.with_action("read_inbox").filter(TrashQuerySet.untrashed_q("message__"))
     )
 
 
@@ -2378,7 +1994,7 @@ _NOTIFICATION_INBOX_RESOURCE = hasura_model_resource(
     model=ThreadNotification,
     name="thread_notifications",
     get_queryset=_notification_inbox_queryset,
-    filterable=["id", "notification_type", "notification_status", "read_at", "created_at"],
+    filterable=["id", "notification_type", "read_at", "created_at"],
     sortable=["created_at", "read_at"],
     aggregatable=["id"],
     insert=False,
@@ -2459,6 +2075,12 @@ _MESSAGING_SCHEMA_BUCKET = {
 }
 
 
+def related_counts() -> tuple[RelatedCount, ...]:
+    """The source conversations a record came from, as the Conversations group lists them."""
+
+    return (RelatedCount("messaging.conversations", ThreadAttachment.objects.source_threads_for_record),)
+
+
 schemas = {
     "console": {
         **_MESSAGING_SCHEMA_BUCKET,
@@ -2512,9 +2134,6 @@ def _message_reaction_groups(message: Any, user: Any | None) -> list[MessageReac
 def _record_message_reaction_groups(message: Any, user: Any | None) -> list[RecordMessageReactionGroupType]:
     """Project model-owned reaction groups without generic handle backedges."""
 
-    context = getattr(message, "_record_thread_context", None)
-    if context is not None:
-        context.prime_reaction_groups()
     return [
         RecordMessageReactionGroupType(
             reaction=group.reaction,
@@ -2555,10 +2174,7 @@ def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any
 
     user = _request_user(info)
     post_access, moderate_access = False, False
-    context = getattr(message, "_record_thread_context", None)
-    if user is not None and context is not None:
-        post_access, moderate_access = context.access
-    elif user is not None and message.thread_id is not None:
+    if user is not None and message.thread_id is not None:
         cache = _record_message_access_cache(info)
         if message.thread_id not in cache:
             record = message.threaded_record()
@@ -2568,32 +2184,30 @@ def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any
 
 
 def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
-    """Batch display facts under the admitted follower rows and account gate."""
+    """Batch readable identities into Django's relation caches for the shared guards."""
 
     if not followers or actor is None:
         return
     party_model = apps.get_model("parties", "Party")
     person_model = apps.get_model("parties", "Person")
-    parties = {row.pk: row for row in party_model._base_manager.filter(pk__in={f.party_id for f in followers})}
-    prefetch_related_objects(
-        list(parties.values()),
-        *party_model.objects.display_avatar_prefetches(
-            actor, avatars=apps.get_model("storage", "File")._base_manager.select_related("mime_type"),
-        ),
-    )
-    people = {row.pk: row for row in person_model._base_manager.filter(pk__in=parties)}
+    parties = {
+        row.pk: row for row in party_model.objects.with_actor(actor).filter(pk__in={f.party_id for f in followers})
+    }
+    people = {row.pk: row for row in person_model.objects.with_actor(actor).filter(pk__in=parties)}
     users = {
         row.pk: row
         for row in get_user_model()
         .objects.with_actor(actor)
         .filter(pk__in={p.user_id for p in people.values() if p.user_id})
     }
-    for follower in followers:
-        follower._follower_party = parties.get(follower.party_id)
-        person = people.get(follower.party_id)
-        follower._follower_user = (
-            users.get(person.user_id) if person is not None and person.user_id is not None else None
+    for person in people.values():
+        person._meta.get_field("user").set_cached_value(
+            person, users.get(person.user_id) if person.user_id is not None else None
         )
+    for party in parties.values():
+        party._meta.get_field("person").set_cached_value(party, people.get(party.pk))
+    for follower in followers:
+        follower._meta.get_field("party").set_cached_value(follower, parties.get(follower.party_id))
 
 
 def _moderate_record_message(
@@ -2624,9 +2238,151 @@ def _moderate_record_message(
             message = cast(Any, record).message_restore(message)
     except (PermissionDenied, ValueError, ValidationError) as error:
         return RecordMessageTrashPayload.from_error(error, invalid_code="BAD_MESSAGE")
-    return RecordMessageTrashPayload(
-        _context=_RecordThreadContext(record=record, info=info, role=input.role), _message=message,
+    payload = _record_thread_payload(record, info, role=input.role)
+    return RecordMessageTrashPayload.from_thread_state(
+        payload,
+        message=message,
+        messages=payload.messages,
+        message_result_count=payload.message_result_count,
+        removed_message_count=payload.removed_message_count,
     )
+
+
+def _prime_record_messages(messages: list[Any]) -> None:
+    """Project every page message's actor-readable sender label in one query.
+
+    Keep the projection on each message so ``author_label`` never performs a
+    per-row fallback lookup.
+    """
+
+    if not messages:
+        return
+    owner = Message.objects.db_manager(messages[0]._state.db)
+    sender_names = dict(
+        owner.sudo(reason="messaging.record_thread.sender_labels")
+        .filter(pk__in=[message.pk for message in messages])
+        .annotate(_sender_name=owner.sender_name_expression())
+        .values_list("pk", "_sender_name")
+    )
+    for message in messages:
+        setattr(message, "_sender_name", sender_names.get(message.pk, ""))
+
+
+def _record_thread_payload(
+    record: Any,
+    info: strawberry.Info | None,
+    *,
+    role: str = "chatter",
+    search: str = "",
+    message_limit: int = 50,
+    before: strawberry.ID | None = None,
+    after: strawberry.ID | None = None,
+    around: strawberry.ID | None = None,
+    message_types: tuple[str, ...] = (),
+) -> RecordThreadPayload:
+    """Return a record thread payload with follower state for the request user."""
+
+    try:
+        attachment = ThreadAttachment.objects.readable_for_record(record, role=role)
+    except PermissionDenied as error:
+        return RecordThreadPayload.from_error(error, invalid_code="BAD_RECORD")
+    thread = attachment.thread if attachment is not None else None
+    messages, message_result_count = (
+        Message.objects.for_record(
+            record,
+            role=role,
+            search=search,
+            limit=message_limit,
+            before=before,
+            after=after,
+            around=around,
+            message_types=message_types,
+        )
+        if thread is not None
+        else ([], 0)
+    )
+    _prime_record_messages(messages)
+    followers = list(cast(Any, record).message_followers()) if thread is not None else []
+    _prime_follower_identities(followers, current_actor())
+    attachment_count = (
+        apps.get_model("messaging", "Part")
+        .objects.using(thread._state.db)
+        .filter(TrashQuerySet.untrashed_q("message__"), message__thread_id__in=thread.member_threads().values("pk"))
+        .attachments()
+        .count()
+        if thread is not None
+        else 0
+    )
+    user = _request_user(info) if info is not None else None
+    user_id = getattr(user, "pk", None)
+    suggested_recipients = [
+        SuggestedRecipientType(
+            user=suggestion["user"],
+            reason=str(suggestion["reason"]),
+            source=str(suggestion["source"]),
+        )
+        for suggestion in cast(Any, record).message_suggested_recipients(
+            role=role,
+            user=user,
+        )
+    ]
+    self_party_id = ThreadFollower.objects.get_party_id(user=user) if user_id is not None else None
+    self_follower = next((follower for follower in followers if follower.party_id == self_party_id), None)
+    is_following = self_follower is not None
+    notifications = (
+        list(
+            ThreadNotification.objects.for_record(record, user=user, role=role).select_related(
+                "thread", "attachment", "follower", "message", "message__subtype", "user"
+            )[:50]
+        )
+        if thread is not None and user is not None
+        else []
+    )
+    unread_count = (
+        ThreadFollower.objects.unread_count_for_record(record, user=user, role=role)
+        if thread is not None and user is not None
+        else 0
+    )
+    record_access = _record_message_access(record, user)
+    if messages:
+        # Posting and moderation are record-level facts shared by the whole page.
+        # Prime both through their owner instead of re-walking each message's record.
+        _record_message_access_cache(info)[messages[0].thread_id] = record_access
+    if messages and thread is not None and user is not None:
+        # One receipt-anchored scan answers the page's needaction flags — the same
+        # unread set the badge counts, restricted to the rows on this page.
+        ThreadFollower.objects.needaction_for_messages(thread, messages, user=user)
+    removed_message_count = None
+    if record_access[1]:
+        removed_message_count = (
+            Message.objects.sudo(reason="messaging.record_thread.removed_count").for_thread(thread).trashed().count()
+            if thread is not None
+            else 0
+        )
+    return RecordThreadPayload(
+        thread_post_access=record.thread_post_access,
+        permissions=[record.thread_post_access] if record_access[0] else [],
+        thread=thread,
+        messages=messages,
+        message_result_count=message_result_count,
+        _page_record=record,
+        _page_role=role,
+        _reply_search=search,
+        _reply_message_types=message_types,
+        post_kinds=[RecordPostKind.COMMENT, RecordPostKind.NOTE] if record_access[0] else [],
+        followers=followers,
+        self_follower=self_follower,
+        suggested_recipients=suggested_recipients,
+        subtypes=[MessageSubtypeOptionType(**option) for option in message_subtype_options(record._meta.label)],
+        follower_count=len(followers),
+        is_following=is_following,
+        notifications=notifications,
+        unread_count=unread_count,
+        needaction_count=unread_count,
+        attachment_count=attachment_count,
+        removed_message_count=removed_message_count,
+    )
+
 
 def _request_user(info: strawberry.Info | None) -> Any | None:
     """Return the authenticated request user, if there is one."""

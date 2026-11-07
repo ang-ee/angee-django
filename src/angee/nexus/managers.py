@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING, Any, Self
 
 from django.apps import apps
 from django.db import models, transaction
+from django.db.models.functions import Coalesce
 from django.utils import timezone
+from rebac import current_actor
 
-from angee.iam.managers import ProtectedManager
-from angee.iam.permissions import instance_actor
-from angee.iam.querysets import ProtectedQuerySet
-from angee.messaging.managers import MessageQuerySet
+from angee.base.managers import AngeeManager
+from angee.base.querysets import AngeeQuerySet
 
 if TYPE_CHECKING:
     from angee.nexus.models import Cadence, Tie
@@ -79,7 +79,7 @@ class NexusOverviewRows:
     due_count: int
 
 
-class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
+class TieQuerySet[TieT: Tie](AngeeQuerySet[TieT]):
     """Party-pair scopes over the derived edge collection."""
 
     def around_party(self, party: Any) -> Self:
@@ -94,7 +94,7 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
         return (
             apps.get_model("parties", "Party")
             .objects.all()
-            .with_actor(instance_actor(self))
+            .with_actor(self.actor() or current_actor())
             .filter(
                 models.Q(pk__in=models.Subquery(ties.values("party_a_id")))
                 | models.Q(pk__in=models.Subquery(ties.values("party_b_id")))
@@ -217,8 +217,7 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
                 truncated = True
             seed_party_ids = {membership.party_id for membership in seed_memberships}
             for party in (
-                party_model.objects.canonical().filter(pk__in=seed_party_ids)
-                .scoped().with_concrete_kind().order_by("display_name", "sqid")
+                party_model.objects.canonical().filter(pk__in=seed_party_ids).scoped().order_by("display_name", "sqid")
             ):
                 if not add_party(party):
                     break
@@ -261,7 +260,6 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
                 for party in party_model.objects.canonical()
                 .filter(pk__in=set(candidate_party_ids).difference(parties))
                 .scoped()
-                .with_concrete_kind()
             }
             next_frontier: set[Any] = set()
             for party_id in candidate_party_ids:
@@ -436,7 +434,7 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
             statement_model = party_model.statements.model
             statements = list(
                 party_model.objects.handle_statements()
-                .for_reader(instance_actor(self))
+                .for_reader(current_actor())
                 .members()
                 .filter(
                     subject_id__in=party_ids,
@@ -546,7 +544,7 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
         )
 
 
-_TieManagerBase = ProtectedManager.from_queryset(TieQuerySet)
+_TieManagerBase = AngeeManager.from_queryset(TieQuerySet)
 
 
 class TieManager[TieT: Tie](_TieManagerBase[TieT]):
@@ -631,7 +629,7 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
         message_model = apps.get_model("messaging", "Message")
         edge_model = apps.get_model("messaging", "MessageEdge")
         published = message_model.objects.sudo(reason="nexus.interaction.evidence").published().values("pk")
-        interaction_at = MessageQuerySet.chronological_time("message__")
+        interaction_at = Coalesce("message__sent_at", "message__created_at")
         addressed = (
             participant_model._base_manager.filter(
                 message_id__in=published,
@@ -663,7 +661,7 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
             "interaction_at",
         )
 
-        reply_at = MessageQuerySet.chronological_time()
+        reply_at = Coalesce("sent_at", "created_at")
         replies = (
             message_model._base_manager.filter(
                 pk__in=published,
@@ -692,7 +690,7 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
             "interaction_at",
         )
 
-        mention_at = MessageQuerySet.chronological_time("src__")
+        mention_at = Coalesce("src__sent_at", "src__created_at")
         mentions = (
             edge_model._base_manager.filter(
                 src_id__in=published,
@@ -724,7 +722,7 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
         return addressed_rows, reply_rows, mention_rows
 
 
-class CadenceManager[CadenceT: Cadence](ProtectedManager[CadenceT]):
+class CadenceManager[CadenceT: Cadence](AngeeManager[CadenceT]):
     """Own derived due-date refreshes for the human cadence collection."""
 
     def refresh_touch_due(self) -> None:

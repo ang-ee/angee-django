@@ -1,10 +1,10 @@
-"""The history read surface: a record's readable changesets touching its document.
+"""The history read surface: a record's changesets, read through the record's own gate.
 
 One timeline per record, keyed by changeset. Each entry carries the changeset's
 attribution, the field deltas simple-history computes between the record's
 versions, the statements the changeset asserted, withdrew or applied for the
-record, and the survivor/absorbed facts of a merge. Authorization follows the
-record's history selection and each field's gate; gated fields are left out of every
+record, and the survivor/absorbed facts of a merge. Authorization is the
+record's ``read``; gated fields the actor cannot read are left out of every
 delta and statement value, the same redaction the record's own projection
 carries. Statement tables mirror history tables, so they take the same gate.
 """
@@ -19,7 +19,7 @@ from typing import Any, cast
 
 import strawberry
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import BadRequest, ValidationError
 from django.db import models
 from rebac import SubjectRef, current_actor
 from rebac.field_visibility import redacted_fields
@@ -27,21 +27,20 @@ from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.utils import get_history_manager_for_model
 from strawberry.scalars import JSON
 
+from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
+from angee.base.pagination import valid_page_size
+from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
-from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
     attach_data_resource_contribution,
 )
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
-from angee.iam.graphql.actions import authorized_permission_target
-from angee.iam.identity import public_subject_ref
-from angee.iam.permissions import require_rebac_queryset
-from angee.provenance.changeset_querysets import ChangesetQuerySet
 from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory, record_history
 from angee.provenance.evidence import FactAuthority
@@ -54,12 +53,12 @@ from angee.provenance.statements import (
     StatementsMixin,
     StatementSourceMixin,
     prime_readable_statement_records,
+    readable_statement_read,
 )
 
 Changeset = changeset_model()
 
 HISTORY_LIMIT_DEFAULT = 25
-HISTORY_LIMIT_MAX = 100
 
 # The nested choices keep their owner's names on the wire; a bare ``Action`` would collide.
 strawberry.enum(cast(Any, ChangesetContract.Action), name="ChangesetAction")
@@ -154,7 +153,7 @@ class HistoryMergeType:
 
 @strawberry.interface
 class HistoryAttribution:
-    """Changeset attribution shared by compact and detailed record history."""
+    """Changeset attribution carried by every record history entry."""
 
     id: PublicID
     actor: str | None
@@ -170,25 +169,11 @@ class HistoryAttribution:
 
 
 @strawberry.type
-class HistorySummaryType(HistoryAttribution):
-    """One compact changeset line, without field or revert projection work."""
-
-    @classmethod
-    def from_changesets(cls, changesets: Iterable[Any]) -> list[HistorySummaryType]:
-        """Project a page while resolving each distinct actor once."""
-
-        page = list(changesets)
-        actors = _actor_projections(page)
-        return [cls(**_attribution(row, *actors.get(row.actor_ref, (None, None)))) for row in page]
-
-
-@strawberry.type
 class HistoryEntryType(HistoryAttribution):
     """One changeset with the record's authorized deltas and replay eligibility."""
 
-    # None distinguishes unavailable retained values from a truthful empty projection.
-    changes: list[HistoryFieldChangeType] | None
-    statements: list[HistoryStatementType] | None
+    changes: list[HistoryFieldChangeType]
+    statements: list[HistoryStatementType]
     merge: HistoryMergeType | None
     can_revert: bool
 
@@ -228,10 +213,10 @@ def provenance_model(label: str) -> type[models.Model]:
     return model
 
 
-def _statement_origin(statement: Statement) -> str:
+def _statement_origin(statement: Statement, actor: Any) -> str:
     """Name a readable asserting principal, otherwise disclose only its kind."""
 
-    source = statement.readable_asserting_source
+    source = statement.readable_asserting_source(actor)
     if source is not None:
         return str(public_subject_ref(source))
     return str(SourceKind(statement.source_kind).label)
@@ -250,7 +235,7 @@ def field_provenance(record: StatementsMixin, actor: Any) -> list[FieldProvenanc
                 FieldProvenanceType(
                     field=name,
                     authority=cast(Any, row.fact_authority),
-                    origin=_statement_origin(row),
+                    origin=_statement_origin(row, actor),
                     statement_model=statement_model._meta.label,
                     statement_id=PublicID(public_id_of(row)),
                     changeset_id=PublicID(public_id_for(Changeset, row.changeset_id))
@@ -293,11 +278,8 @@ def _attribution(changeset: Any, actor: SubjectRef | None, source_kind: str | No
 def _actor_projections(changesets: Iterable[Any]) -> dict[str, tuple[SubjectRef, str | None]]:
     """Resolve each page actor's stored source kind once."""
 
-    actors = {row.actor_ref: (SubjectRef.parse(row.actor_ref), row._state.db) for row in changesets if row.actor_ref}
-    return {
-        value: (actor, StatementSourceMixin.source_kind_for(actor, using=using))
-        for value, (actor, using) in actors.items()
-    }
+    actors = {row.actor_ref: SubjectRef.parse(row.actor_ref) for row in changesets if row.actor_ref}
+    return {value: (actor, StatementSourceMixin.source_kind_for(actor)) for value, actor in actors.items()}
 
 
 def _reference_value(model_field: models.Field[Any, Any], value: Any) -> Any:
@@ -322,13 +304,13 @@ def _history_reference(record: models.Model, *, pointer: str = "", label: str | 
     )
 
 
-def _statement_source_reference(version: Any) -> HistoryReferenceType | None:
+def _statement_source_reference(version: Any, actor: Any) -> HistoryReferenceType | None:
     """Prefer a readable retained link; otherwise name the readable principal."""
 
     link = getattr(version, "_readable_statement_link", None)
     if link is not None:
         return _history_reference(link, label=link.statement_source_label)
-    source = getattr(version, "_readable_asserting_source", None)
+    source = readable_statement_read(version, actor)[1]
     return _history_reference(source) if source is not None else None
 
 
@@ -348,45 +330,34 @@ class RecordHistory:
                 self.statement_scopes[model] = scope
 
     def changesets(self) -> models.QuerySet[Any]:
-        """The record's changesets, newest first; ordering is the changeset owner's."""
+        """The record's closed changesets, newest first; ordering is the changeset owner's."""
 
-        return ChangesetQuerySet.for_record(self.record, self.actor)
+        return Changeset.objects.sudo(reason="provenance.record_history").closed_for_record(self.record)
 
     def entries(self, changesets: Iterable[Any]) -> list[HistoryEntryType]:
         """Project an already bounded window, also used by the combined Comments feed."""
 
         page = list(changesets)
         ids = [changeset.pk for changeset in page]
-        versions, _retained = self._versions(ids, self.scopes)
-        statement_states, statements = self._versions(ids, self.statement_scopes)
+        versions = self._versions(ids)
+        statements = self._statement_versions(ids)
         self._prime_statement_references(statements)
         redacted = self._redactions(versions, statements)
         merges = self._merges(page)
         actors = _actor_projections(page)
         revertable = self.record.revertable_changesets(page, actor=self.actor)
-        entries: list[HistoryEntryType] = []
-        for changeset in page:
-            deltas = [self._changes(state, redacted) for state in versions.get(changeset.pk, ())]
-            statement_versions = statements.get(changeset.pk, ())
-            complete_statements = all(
-                (owner := model_history(table)) is not None and owner.source_state_complete(version)
-                for table, version in statement_versions
-            )
-            complete_statement_replay = all(
-                (owner := model_history(table)) is not None and owner.source_state_complete(first, last, previous)
-                for table, first, last, previous in statement_states.get(changeset.pk, ())
-            )
-            available = all(delta is not None for delta in deltas)
-            entries.append(HistoryEntryType(
+        return [
+            HistoryEntryType(
                 **_attribution(changeset, *actors.get(changeset.actor_ref, (None, None))),
-                changes=[change for delta in deltas if delta is not None for change in delta] if available else None,
-                statements=self._statements(statement_versions, redacted) if complete_statements else None,
+                changes=[
+                    change for state in versions.get(changeset.pk, ()) for change in self._changes(state, redacted)
+                ],
+                statements=self._statements(statements.get(changeset.pk, ()), redacted),
                 merge=merges.get(changeset.pk),
-                can_revert=(
-                    available and complete_statements and complete_statement_replay and changeset.pk in revertable
-                ),
-            ))
-        return entries
+                can_revert=changeset.pk in revertable,
+            )
+            for changeset in page
+        ]
 
     def page(self, limit: int, offset: int, selected: PublicID | None = None) -> RecordHistoryType:
         changesets = self.changesets()
@@ -402,14 +373,11 @@ class RecordHistory:
             entries=self.entries(changesets[offset : offset + limit]),
         )
 
-    def _versions[ModelT: models.Model](
-        self, changeset_ids: list[Any], scopes: dict[type[ModelT], models.Q],
-    ) -> tuple[dict[Any, list[_Version]], dict[Any, list[tuple[type[ModelT], Any]]]]:
-        """Fetch retained rows and boundary predecessors once per scoped table."""
+    def _versions(self, changeset_ids: list[Any]) -> dict[Any, list[_Version]]:
+        """Fetch selected boundaries and their predecessors once per table."""
 
         grouped: defaultdict[Any, list[_Version]] = defaultdict(list)
-        retained: defaultdict[Any, list[tuple[type[ModelT], Any]]] = defaultdict(list)
-        for table, predicate in scopes.items():
+        for table, predicate in self.scopes.items():
             key = table._meta.pk.attname
             historical = get_history_manager_for_model(table).model
             predecessor = (
@@ -418,25 +386,21 @@ class RecordHistory:
                 .order_by("-history_id")
                 .values("history_id")[:1]
             )
-            rows = list(
+            rows = (
                 get_history_manager_for_model(table)
                 .using(self.using)
                 .filter(
                     predicate,
-                    history_changeset_id__in=changeset_ids,
+                    changeset_id__in=changeset_ids,
                 )
                 .annotate(_angee_predecessor_id=models.Subquery(predecessor))
-                .order_by("history_changeset_id", key, "history_id")
+                .order_by("changeset_id", key, "history_id")
             )
-            # Statement presentation retains its original per-table history order,
-            # independently of the grouped boundaries used for native replay facts.
-            for version in sorted(rows, key=lambda row: row.history_id):
-                retained[version.history_changeset_id].append((table, version))
             boundaries = []
             predecessor_ids = set()
             for (changeset_id, _pk), versions in groupby(
-                rows,
-                key=lambda row: (row.history_changeset_id, getattr(row, key)),
+                rows.iterator(),
+                key=lambda row: (row.changeset_id, getattr(row, key)),
             ):
                 boundary = list(versions)
                 predecessor_id = boundary[0]._angee_predecessor_id
@@ -446,7 +410,27 @@ class RecordHistory:
             predecessors = get_history_manager_for_model(table).using(self.using).in_bulk(predecessor_ids)
             for changeset_id, first, last, predecessor_id in boundaries:
                 grouped[changeset_id].append((table, first, last, predecessors.get(predecessor_id)))
-        return dict(grouped), dict(retained)
+        return dict(grouped)
+
+    def _statement_versions(
+        self,
+        changeset_ids: list[Any],
+    ) -> dict[Any, list[tuple[type[Statement], Any]]]:
+        """Fetch every selected statement model once for the bounded page."""
+
+        grouped: defaultdict[Any, list[tuple[type[Statement], Any]]] = defaultdict(list)
+        for statement_model, predicate in self.statement_scopes.items():
+            versions = (
+                statement_model.history.using(self.using)
+                .filter(
+                    predicate,
+                    changeset_id__in=changeset_ids,
+                )
+                .order_by("history_id")
+            )
+            for version in versions:
+                grouped[version.changeset_id].append((statement_model, version))
+        return dict(grouped)
 
     def _prime_statement_references(
         self,
@@ -474,7 +458,7 @@ class RecordHistory:
         readable_links: dict[tuple[type[models.Model], Any], models.Model] = {}
         for link_model, ids in links_by_model.items():
             assert issubclass(link_model, StatementLinkMixin)
-            rows = require_rebac_queryset(link_model).with_actor(self.actor).with_action("read").filter(pk__in=ids)
+            rows = require_rebac_queryset(link_model, actor=self.actor).with_action("read").filter(pk__in=ids)
             if link_model.presentation_related:
                 rows = rows.select_related(*link_model.presentation_related)
             readable_links.update({(link_model, row.pk): row for row in rows})
@@ -490,7 +474,7 @@ class RecordHistory:
 
         snapshots: defaultdict[type[models.Model], dict[tuple[Any, Any | None], Any | None]] = defaultdict(dict)
         for table, _first, last, _previous in (state for states in versions.values() for state in states):
-            snapshots[table][getattr(last, table._meta.pk.attname), last.history_changeset_id] = last
+            snapshots[table][getattr(last, table._meta.pk.attname), last.changeset_id] = last
         for statement_model, version in (row for rows in statements.values() for row in rows):
             snapshots[statement_model.statement_subject_model].setdefault((version.subject_id, None), None)
 
@@ -498,8 +482,7 @@ class RecordHistory:
         for model, items in snapshots.items():
             keys = {pk for pk, _changeset_id in items}
             readable = (
-                require_rebac_queryset(model)
-                .with_actor(self.actor)
+                require_rebac_queryset(model, actor=self.actor)
                 .with_action("read")
                 .using(self.using)
                 .filter(pk__in=keys)
@@ -531,7 +514,7 @@ class RecordHistory:
         self,
         state: _Version,
         redactions: dict[tuple[type[models.Model], Any, Any | None], frozenset[str]],
-    ) -> list[HistoryFieldChangeType] | None:
+    ) -> list[HistoryFieldChangeType]:
         """Project the history owner's native diff through its redaction decision."""
 
         table, first, last, previous = state
@@ -539,10 +522,8 @@ class RecordHistory:
         history = model_history(table)
         if history is None:
             return []
-        if not history.source_state_complete(first, last, previous):
-            return None
         hidden = redactions.get(
-            (table, pk, last.history_changeset_id),
+            (table, pk, last.changeset_id),
             redactions[table, pk, None],
         )
         projected: list[HistoryFieldChangeType] = []
@@ -573,7 +554,7 @@ class RecordHistory:
         for statement_model, version in versions:
             subject_model = statement_model.statement_subject_model
             redacted = redactions.get(
-                (subject_model, version.subject_id, version.history_changeset_id),
+                (subject_model, version.subject_id, version.changeset_id),
                 redactions[subject_model, version.subject_id, None],
             )
             declaration = statement_model.statement_aspects[version.aspect]
@@ -597,10 +578,10 @@ class RecordHistory:
                     confidence=version.confidence,
                     history_type=cast(Any, HistoryType(version.history_type)),
                     values=cast(JSON, values),
-                    source=_statement_source_reference(version),
+                    source=_statement_source_reference(version, self.actor),
                     evidence=[
                         _history_reference(record, pointer=ref.pointer)
-                        for ref, record in getattr(version, "_readable_evidence_records", ())
+                        for ref, record in readable_statement_read(version, self.actor)[0]
                     ],
                 )
             )
@@ -627,12 +608,12 @@ class RecordHistory:
             for table in record.history_tables():
                 key = table._meta.pk.attname
                 redirected = "merged_into" in {field.name for field in table._meta.fields}
-                fields = ("history_changeset_id", key, "history_type", *(("merged_into_id",) if redirected else ()))
+                fields = ("changeset_id", key, "history_type", *(("merged_into_id",) if redirected else ()))
                 rows = (
                     get_history_manager_for_model(table)
                     .using(self.using)
                     .filter(
-                        history_changeset_id__in=changeset_ids,
+                        changeset_id__in=changeset_ids,
                     )
                     .values_list(*fields)
                 )
@@ -673,8 +654,9 @@ class RecordHistory:
 
 
 def _validate_page(limit: int, offset: int) -> None:
-    if not 1 <= limit <= HISTORY_LIMIT_MAX or offset < 0:
-        raise ValidationError(f"History requires a limit from 1 to {HISTORY_LIMIT_MAX} and a nonnegative offset.")
+    valid_page_size(limit)
+    if offset < 0:
+        raise BadRequest("History requires a nonnegative offset.")
 
 
 @strawberry.type
@@ -686,7 +668,7 @@ class HistoryQuery:
         subject_model = provenance_model(model)
         actor = current_actor()
         queryset = (
-            require_rebac_queryset(subject_model).with_actor(actor).with_action("read")
+            require_rebac_queryset(subject_model, actor=actor).with_action("read")
             if actor is not None
             else subject_model._base_manager.none()
         )
@@ -710,7 +692,7 @@ class HistoryQuery:
         tracked = history_model(model)
         actor = current_actor()
         queryset = (
-            require_rebac_queryset(tracked).with_actor(actor).with_action("read")
+            require_rebac_queryset(tracked, actor=actor).with_action("read")
             if actor is not None
             else tracked._base_manager.none()
         )
@@ -743,15 +725,13 @@ class HistoryMutation:
 
 
 for _model in sorted(apps.get_models(), key=lambda model: model._meta.label_lower):
-    has_history = issubclass(_model, HistoryMixin) and record_history(_model) is not None
-    has_field_statements = issubclass(_model, StatementsMixin) and _model.has_field_statements()
-    if has_history or has_field_statements:
+    if issubclass(_model, HistoryMixin) and record_history(_model) is not None:
         attach_data_resource_contribution(
             HistoryQuery,
             DataResourceContribution(
                 model=_model,
                 model_label=_model._meta.label,
-                policy=DataResourcePolicy(history=has_history, field_provenance=has_field_statements),
+                policy=DataResourcePolicy(history=True),
             ),
         )
 

@@ -3,16 +3,13 @@ import {
   extractActionOutcome,
   runActionResult,
   useActionMutation,
-  useReconcileMutationResponse,
   type AuthoredDocument,
-  type MutationExecutionOptions,
   type ActionArguments,
   type ActionMutate,
   type UseActionMutationState,
-  type UseActionMutationOptions,
 } from "@angee/refine";
 import {
-  useResourceMutationModels,
+  useCanonicalResourceModelLabels,
   useResourceInvalidates,
 } from "@angee/metadata";
 
@@ -38,7 +35,7 @@ export interface UseRecordActionOptions extends UseActionResultMutationOptions {
   defaultMessage?: string;
   /** Error thrown when the form action is invoked before a saved record exists. */
   missingRecordMessage?: string;
-  /** Default: coalesce the form read with mutation effects. True explicitly reloads; false skips it. */
+  /** Refresh the form record after a successful run. Defaults to true. */
   refresh?: boolean;
   /** Extra invalidation after the record refresh is requested. */
   afterSuccess?: (
@@ -58,29 +55,6 @@ export function recordActionId(context: ActionContext): string | undefined {
   return typeof id === "string" && id !== "" ? id : undefined;
 }
 
-/** One successful record-action completion policy, including settled actions. */
-async function completeRecordAction(
-  context: ActionContext,
-  result: ActionResult,
-  reconcile: ReturnType<typeof useReconcileMutationResponse>,
-  { refresh, afterSuccess }: Pick<UseRecordActionOptions, "refresh" | "afterSuccess">,
-): Promise<void> {
-  await refreshRecordAction(context, reconcile, refresh);
-  await afterSuccess?.(context, result);
-}
-
-/** Form-owned automatic completion; explicit/custom refresh retains its imperative contract. */
-export async function refreshRecordAction(
-  context: Pick<ActionContext, "refresh" | "refreshQueryKey" | "reconciliation">,
-  reconcile: ReturnType<typeof useReconcileMutationResponse>,
-  refresh?: boolean,
-): Promise<void> {
-  if (refresh === true || (refresh !== false && !context.refreshQueryKey)) await context.refresh();
-  else if (refresh !== false && context.refreshQueryKey) {
-    await reconcile(undefined, undefined, { queryKeys: [context.refreshQueryKey], reconciliation: context.reconciliation });
-  }
-}
-
 /** Build an `<Action run>` callback for actions that target the current record id.
  * @owner RecordActionBar
  */
@@ -88,26 +62,25 @@ export function useRecordAction(
   run: RecordActionRunner,
   options: UseRecordActionOptions = {},
 ): RecordAction {
-  const reconcile = useReconcileMutationResponse();
   const {
     afterSuccess,
     defaultMessage,
     missingRecordMessage,
-    refresh,
+    refresh = true,
   } = options;
   return React.useCallback<RecordAction>(
-    (context) => reconcile.batch(async (reconciliation) => {
-      const scopedContext = { ...context, reconciliation };
+    async (context) => {
       const id = recordActionId(context);
       if (!id) {
         if (missingRecordMessage) throw new Error(missingRecordMessage);
         return;
       }
-      const result = (await run(id, scopedContext)) ?? defaultMessage;
-      await completeRecordAction(scopedContext, result, reconcile, { refresh, afterSuccess });
+      const result = (await run(id, context)) ?? defaultMessage;
+      if (refresh) context.refresh();
+      await afterSuccess?.(context, result);
       return result;
-    }),
-    [afterSuccess, defaultMessage, missingRecordMessage, reconcile, refresh, run],
+    },
+    [afterSuccess, defaultMessage, missingRecordMessage, refresh, run],
   );
 }
 
@@ -122,7 +95,6 @@ export function useRecordActionMutation<TField extends string = string>(
   options?: UseRecordActionOptions,
 ): [RecordAction, { fetching: boolean; error: Error | null }] {
   const [mutate, state] = useActionOutcomeMutation<TField>(field, options);
-  const reconcile = useReconcileMutationResponse();
   const settleOptions = React.useMemo<ActionResultRunOptions | null>(() => {
     if (options?.settle === false) return null;
     if (options?.settle && typeof options.settle === "object") {
@@ -141,27 +113,24 @@ export function useRecordActionMutation<TField extends string = string>(
   const run = React.useCallback<RecordActionRunner>(
     async (id, context) => {
       const arguments_ = options?.actionArguments?.(id);
-      const execution = context.reconciliation ? { reconciliation: context.reconciliation } : undefined;
-      const mutateRecord = () => execution ? mutate(id, arguments_, execution)
-        : arguments_ === undefined ? mutate(id) : mutate(id, arguments_);
+      const mutateRecord = () => arguments_ === undefined
+        ? mutate(id)
+        : mutate(id, arguments_);
       if (settleOptions) {
         const outcome = await settleActionResult(mutateRecord);
         if (outcome?.ok) {
-          await completeRecordAction(context, outcome.message, reconcile, options ?? {});
+          if (options?.refresh !== false) context.refresh();
+          await options?.afterSuccess?.(context, outcome.message);
         }
         return undefined;
       }
       return runActionResult(await mutateRecord());
     },
-    [mutate, options?.actionArguments, options?.afterSuccess, options?.refresh, reconcile, settleActionResult, settleOptions],
+    [mutate, options?.actionArguments, options?.afterSuccess, options?.refresh, settleActionResult, settleOptions],
   );
-  // Settled success already queued the same exact fallback inside this batch;
-  // refusals must never run completion. Opaque/custom reloads remain imperative.
-  return [useRecordAction(run, {
-    ...options,
-    afterSuccess: settleOptions ? undefined : options?.afterSuccess,
-    refresh: settleOptions ? false : options?.refresh,
-  }), state];
+  return [useRecordAction(run, settleOptions
+    ? { ...options, afterSuccess: undefined, refresh: false }
+    : options), state];
 }
 
 export interface UseActionResultMutationOptions {
@@ -173,18 +142,11 @@ export interface UseActionResultMutationOptions {
   dataProviderName?: string;
   /** The verb records its outcome even when it fails, so caches refresh after a failure too. */
   invalidateOnFailure?: boolean;
-  /** Remove credential-bearing variables and results from the settled mutation cache. */
-  transient?: UseActionMutationOptions["transient"];
-  /** Explicit written records; related or unknown effects retain model fallback. */
-  records?: UseActionMutationOptions["records"];
-  /** Adopt an authoritative declared result before scheduling derived reads. */
-  acceptResponse?: UseActionMutationOptions["acceptResponse"];
 }
 
 export type ActionResultMutation = (
   id: string,
   arguments_?: ActionArguments,
-  execution?: MutationExecutionOptions,
 ) => Promise<void>;
 
 /**
@@ -209,9 +171,10 @@ export function useActionResultMutation<TField extends string = string>(
   const [mutate, state] = useActionOutcomeMutation<TField>(field, options);
   const settle = useActionResultRun();
   const run = React.useCallback<ActionResultMutation>(
-    async (id, arguments_, execution) => {
-      await settle(() => execution ? mutate(id, arguments_, execution)
-        : arguments_ === undefined ? mutate(id) : mutate(id, arguments_));
+    async (id, arguments_) => {
+      await settle(() =>
+        arguments_ === undefined ? mutate(id) : mutate(id, arguments_),
+      );
     },
     [mutate, settle],
   );
@@ -233,18 +196,17 @@ export function useActionOutcomeMutation<TField extends string = string>(
   options: UseActionResultMutationOptions = {},
 ): [ActionMutate, UseActionMutationState] {
   const { dataProviderName } = options;
-  const { models, resourceModels } = useResourceMutationModels(options.invalidateModels);
-  const invalidates = useResourceInvalidates(resourceModels, options.records);
+  const canonicalInvalidateModels = useCanonicalResourceModelLabels(
+    options.invalidateModels,
+  );
+  const invalidates = useResourceInvalidates(canonicalInvalidateModels);
   return useActionMutation<TField>(field, {
     ...(options.idArgument !== undefined ? { idArgument: options.idArgument } : {}),
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
     ...(options.invalidateModels !== undefined
-      ? { invalidateModels: models }
+      ? { invalidateModels: canonicalInvalidateModels }
       : {}),
     ...(options.invalidateOnFailure ? { invalidateOnFailure: true } : {}),
-    ...(options.transient ? { transient: true } : {}),
-    ...(options.records ? { records: options.records } : {}),
-    ...(options.acceptResponse ? { acceptResponse: options.acceptResponse } : {}),
     invalidates,
   });
 }
@@ -323,8 +285,8 @@ function useAuthoredChromeActionOutcome(
     ...options,
     shouldInvalidate: (data) => extractActionOutcome(data, action.resultField)?.ok === true,
   });
-  const run = React.useCallback<ActionMutate>(async (id, args = {}, execution) =>
-    extractActionOutcome(await mutate({ ...args, [action.idArgument]: id } as never, execution), action.resultField) ?? undefined,
+  const run = React.useCallback<ActionMutate>(async (id, args = {}) =>
+    extractActionOutcome(await mutate({ ...args, [action.idArgument]: id } as never), action.resultField) ?? undefined,
   [action.idArgument, action.resultField, mutate]);
   return [run, state];
 }
@@ -332,7 +294,7 @@ function useAuthoredChromeActionOutcome(
 /** Read the record-chrome context into the action options a chrome verb fires with. */
 function useRecordChromeActionOptions(
   options: UseRecordChromeActionMutationOptions,
-): Pick<UseActionResultMutationOptions, "dataProviderName" | "idArgument" | "invalidateModels"> {
+): UseActionResultMutationOptions {
   const { canonicalResource, dataProviderName, resource } =
     useRecordChromeContext();
   // Derived during render: `useResourceInvalidates` keys on the labels'

@@ -1,5 +1,4 @@
 import * as React from "react";
-import type { AuthoredQueryOptions } from "@angee/refine";
 import type { SearchFacet } from "../resource/search/types";
 import { useAngeeFacets } from "@angee/refine";
 import { Filter, ResourceQuery, useModelMetadata, type GroupAxis } from "@angee/metadata";
@@ -30,8 +29,6 @@ export function useRelationFacets(
   resource: string,
   options: readonly RelationFacetOptions[] | undefined = EMPTY_OPTIONS,
   activeFilter?: ResourceViewFilter,
-  interests: Pick<AuthoredQueryOptions, "records" | "relatedModels"> = {},
-  enabled = true,
 ): RelationFacets {
   const t = useUiT();
   const metadata = useModelMetadata(resource);
@@ -56,8 +53,7 @@ export function useRelationFacets(
     id: facet.field, ...query!.toFacet(facet.field, activeFilter), pageSize: facet.pageSize,
   })), [activeFilter, facets, query]);
   const result = useAngeeFacets(groupOperation.target, {
-    ...interests,
-    document: groupOperation.document, facets: facetSpecs, enabled: enabled && facetSpecs.length > 0,
+    document: groupOperation.document, facets: facetSpecs, enabled: facetSpecs.length > 0,
   });
   return React.useMemo(() => facets.map((facet): SearchFacet => ({
     field: facet.field, label: facet.label,

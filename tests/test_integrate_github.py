@@ -7,6 +7,8 @@ stub transport calls; a database regression pins the credential and OAuth-client
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -206,6 +208,24 @@ def test_search_repos_projects_candidates(monkeypatch: pytest.MonkeyPatch) -> No
     results = gh.GitHubBackend(_integration()).search_repos("widget", org="acme")
 
     assert [candidate.name for candidate in results] == ["acme/widgets"]
+
+
+def test_verify_webhook_checks_hmac(monkeypatch: pytest.MonkeyPatch) -> None:
+    """verify_webhook accepts a correct HMAC-SHA256 signature and rejects a wrong one."""
+
+    secret = "s3cr3t"
+    body = b'{"ref":"refs/heads/main"}'
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    backend = gh.GitHubBackend(_integration())
+    vcs_bridge = SimpleNamespace(webhook_secret=secret)
+
+    good = SimpleNamespace(headers={gh.WEBHOOK_SIGNATURE_HEADER: f"sha256={digest}"}, body=body)
+    bad = SimpleNamespace(headers={gh.WEBHOOK_SIGNATURE_HEADER: "sha256=deadbeef"}, body=body)
+
+    assert backend.verify_webhook(vcs_bridge, good) is True
+    assert backend.verify_webhook(vcs_bridge, bad) is False
+    # No secret configured → never authentic.
+    assert backend.verify_webhook(SimpleNamespace(webhook_secret=""), good) is False
 
 
 def test_repository_page_exhaustion_refuses_incomplete_inventory(monkeypatch):

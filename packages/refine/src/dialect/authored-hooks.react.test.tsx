@@ -24,13 +24,12 @@ const invalidationMock = vi.hoisted(() => ({
   resourceInvalidations: [] as unknown[],
 }));
 
-vi.mock("@refinedev/core", async (original) => ({
-  ...await original<typeof import("@refinedev/core")>(),
+vi.mock("@refinedev/core", () => ({
   useCustom: vi.fn(),
   useDataProvider: vi.fn(),
   useCustomMutation: ({ mutationOptions }: { mutationOptions: {
     gcTime?: number;
-    onMutate: (input: { meta?: object }) => unknown;
+    onMutate: () => unknown;
     onSuccess: (response: { data: { data: unknown } }, variables: { values: Record<string, unknown> }, context: unknown) => Promise<void>;
   } }) => {
     const policy = mutationOptions.gcTime === 0 ? "transient" : "ordinary";
@@ -42,9 +41,8 @@ vi.mock("@refinedev/core", async (original) => ({
           dataProviderName: string;
           values: Record<string, unknown>;
           errorNotification?: unknown;
-          meta?: object;
         }) => {
-          const context = mutationOptions.onMutate(payload);
+          const context = mutationOptions.onMutate();
           mutationMock.calls.push({
             dataProviderName: payload.dataProviderName,
             generation,
@@ -68,24 +66,22 @@ vi.mock("@refinedev/core", async (original) => ({
       invalidationMock.resourceInvalidations.push(target);
     }),
   useSubscription: vi.fn(),
-  usePublish: () => undefined,
-  useResourceParams: () => ({ resources: [] }),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
   hashKey: (value: unknown) => JSON.stringify(value),
   useInfiniteQuery: vi.fn(),
   useQueryClient: () => ({
-    getQueryCache: () => ({ findAll: () => [] }),
+    cancelQueries: vi.fn(async () => undefined),
     invalidateQueries: vi.fn(
       async (options: { predicate?: (query: { meta: unknown }) => boolean }) => {
         invalidationMock.queryInvalidations += 1;
-        if (invalidationMock.queryInvalidations === 1) {
-          invalidationMock.authoredPredicateMatches.push(
-            options.predicate?.({ meta: { angeeModels: ["messaging.ThreadFollower"] } }),
-            options.predicate?.({ meta: { angeeModels: ["other.Model"] } }),
-          );
-        }
+        invalidationMock.authoredPredicateMatches.push(
+          options.predicate?.({
+            meta: { angeeModels: ["messaging.ThreadFollower"] },
+          }),
+          options.predicate?.({ meta: { angeeModels: ["other.Model"] } }),
+        );
       },
     ),
   }),
@@ -159,11 +155,11 @@ describe("useAuthoredMutation", () => {
     });
 
     expect(invalidationMock.resourceInvalidations).toEqual([]);
-    expect(invalidationMock.queryInvalidations).toBe(2);
+    expect(invalidationMock.queryInvalidations).toBe(1);
     expect(invalidationMock.authoredPredicateMatches).toEqual([true, false]);
   });
 
-  test("routes caller-prepared resource invalidations through the non-cancelling query path", async () => {
+  test("runs caller-prepared resource invalidations without model labels", async () => {
     const document = "mutation Probe { probe }" as never;
     const target = {
       resource: "notes",
@@ -179,8 +175,8 @@ describe("useAuthoredMutation", () => {
       await result.current[0]({ value: "fresh" } as never);
     });
 
-    expect(invalidationMock.resourceInvalidations).toEqual([]);
-    expect(invalidationMock.queryInvalidations).toBe(2);
+    expect(invalidationMock.resourceInvalidations).toEqual([target]);
+    expect(invalidationMock.queryInvalidations).toBe(0);
   });
 
   test("throws result envelope errors before invalidating", async () => {

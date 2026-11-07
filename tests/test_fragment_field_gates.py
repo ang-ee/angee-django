@@ -14,7 +14,7 @@ from rebac.models import SchemaDefinition
 from rebac.schema import parse_zed
 from rebac.schema.parser import validate_schema
 
-from angee.iam.build import (
+from angee.base.build import (
     PermissionIntegration,
     SchemaExtensionError,
     extension_source_map,
@@ -23,7 +23,7 @@ from angee.iam.build import (
     merged_schemas,
     render_zed,
 )
-from angee.iam.testing.permissions import emit_permissions, installed_field_owners
+from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from tests.conftest import make_addon
 from tests.test_model_composition import modules as modules
 from tests.test_model_composition import source
@@ -131,6 +131,10 @@ def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(
         members=models.ManyToManyField("auth.User"),
     )
     source(donor_module, "PlainExtension", donor.label, extends=f"{base.label}.Plain", code=models.IntegerField())
+    settings.MIGRATION_MODULES = {
+        **settings.MIGRATION_MODULES,
+        **{config.label: f"{config.name}.migrations" for config in (base, donor)},
+    }
     target = f"{prefix}demo/thing"
     (Path(base.path) / "permissions.zed").write_text(f"definition {target} {{ permission read = authenticated }}")
     (Path(donor.path) / "permissions.extends.zed").write_text(

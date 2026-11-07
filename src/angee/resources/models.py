@@ -6,15 +6,14 @@ from django.db import models
 
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ModelLabelField
+from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
-from angee.iam.models.base import ProtectedModel
 from angee.resources.entries import resolve_model
-from angee.resources.exceptions import ResourceLoadError
 from angee.resources.managers import ResourceManager
 from angee.resources.tiers import ResourceTier
 
 
-class Resource(ProtectedModel, concrete=True):
+class Resource(AngeeModel, concrete=True):
     """Ledger row linking source resource xrefs to imported targets."""
 
 
@@ -47,17 +46,6 @@ class Resource(ProtectedModel, concrete=True):
 
     objects = ResourceManager()
     """Manager with validate, load, and diff operations."""
-
-    def require_target_model(self, model: type[models.Model]) -> None:
-        """Permit the declared target or a retained MTI parent, refusing other models."""
-
-        expected = model._meta.label
-        parents = {parent._meta.label for parent in model._meta.get_parent_list()}
-        if self.target_model != expected and self.target_model not in parents:
-            raise ResourceLoadError(
-                f"xref collision in {self.source_addon}: {self.xref!r} "
-                f"already targets {self.target_model}, not {expected}"
-            )
 
     def target_instance(self) -> models.Model | None:
         """Resolve this ledger's stored public identity through its model owner."""

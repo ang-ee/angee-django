@@ -10,11 +10,8 @@ from typing import TYPE_CHECKING, Any, Self
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
-from rebac import database_context
-from rebac.database import write_alias
 
-from angee.base.models.persistence import require_composed_type
-from angee.iam.querysets import ProtectedQuerySet
+from angee.base.querysets import AngeeQuerySet
 from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus
 
 if TYPE_CHECKING:
@@ -38,25 +35,16 @@ class SyncStateMixin(models.Model):
         rows = (SyncFailure.from_state(self, slot, data) for slot, data in enumerate(self.inbound))
         return tuple(row for row in rows if not open_only or row.is_open)
 
-    def failure_at(self, slot: int | None) -> SyncFailure:
-        """Read a retained slot from its owner or refuse a stale public selection."""
-
-        for failure in self.failures():
-            if failure.slot == slot:
-                return failure
-        raise ValidationError("The retained sync failure no longer exists.")
-
     def _lock_sync_state(self) -> Self:
-        using = write_alias(type(self), using=self._state.db, instance=self)
-
         stream = self.failure_stream
-        type(stream).objects.db_manager(using).lock_current(stream)
-        rows = require_composed_type(type(self)._default_manager.db_manager(using).get_queryset(), ProtectedQuerySet)
+        type(stream).objects.lock_current(stream)
+        rows = type(self)._default_manager.get_queryset()
+        assert isinstance(rows, AngeeQuerySet)
         return rows.lock_if_supported().get(pk=self.pk)
 
     def on_sync_state_saved(self, locked: Self) -> None:
         """Persist inbound state and refresh the caller; links extend the saved fields."""
-        locked.save(using=locked._state.db, update_fields=["inbound", "updated_at"])
+        locked.save(update_fields=["inbound", "updated_at"])
         self.inbound = locked.inbound
 
     def _failure_data(
@@ -97,9 +85,7 @@ class SyncStateMixin(models.Model):
         details: Mapping[str, Any] | None = None,
     ) -> SyncFailure:
         """Coalesce an open inbound identity; retain closed evidence and backoff."""
-        using = write_alias(type(self), using=self._state.db, instance=self)
-
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic():
             locked = self._lock_sync_state()
             identity = dict(kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version)
             slot = next(
@@ -150,9 +136,7 @@ class SyncStateMixin(models.Model):
         )
 
     def _transition_failure(self, slot: int | None, *, retry: bool, conflict: bool = False) -> SyncFailure:
-        using = write_alias(type(self), using=self._state.db, instance=self)
-
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic():
             locked = self._lock_sync_state()
             if slot is None or slot < 0 or slot >= len(locked.inbound):
                 raise ValidationError("The retained inbound failure no longer exists.")
@@ -169,9 +153,7 @@ class SyncStateMixin(models.Model):
 
     def defer_failure(self, row: SyncFailure, *, details: Mapping[str, Any]) -> None:
         """Retain the baseline fallback using the same retry delay as a refusal."""
-        using = write_alias(type(self), using=self._state.db, instance=self)
-
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic():
             locked = self._lock_sync_state()
             if row.slot is None:
                 raise ValidationError("An outbox failure cannot request an inbound baseline.")

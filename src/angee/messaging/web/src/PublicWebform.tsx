@@ -67,7 +67,7 @@ export function PublicWebform({
     return <ErrorBanner title={t("webform.errorTitle")} description={error} />;
   }
   if (!description) {
-    return <LoadingPanel density="inline" message={t("webform.loading")} />;
+    return <LoadingPanel density="inline" loadingLabel={t("webform.loading")} />;
   }
   return (
     <LoadedPublicWebform

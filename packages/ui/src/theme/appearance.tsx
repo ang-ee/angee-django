@@ -342,10 +342,6 @@ export function useOptionalAppearance(): AppearanceState | null {
   return useContext(AppearanceContext);
 }
 
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
 function readAppearancePreferences(preferences: RuntimeUserPreferences): AppearancePreferenceRead {
   const raw = preferences[APPEARANCE_PREFERENCE_KEY];
   if (raw === undefined) return { value: EMPTY_PREFERENCES, notice: null, writable: true, hasRawOptions: false };
@@ -364,10 +360,6 @@ function readAppearancePreferences(preferences: RuntimeUserPreferences): Appeara
   };
 }
 
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
 function writeAppearancePreferences(preferences: RuntimeUserPreferences, appearance: AppearancePreferences | (Omit<AppearancePreferences, "options"> & { options?: unknown }) | undefined): RuntimeUserPreferences {
   if (appearance === undefined) {
     const { [APPEARANCE_PREFERENCE_KEY]: _appearance, ...rest } = preferences;

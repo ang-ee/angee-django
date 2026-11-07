@@ -1,7 +1,7 @@
 // Authorization schema for proposal rounds.
 // @rebac_package: proposals
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 10
+// @rebac_schema_revision: 9
 
 definition proposals/role {
     relation member: auth/user | auth/group#member | angee/role:admin#member
@@ -10,10 +10,6 @@ definition proposals/role {
 }
 
 definition proposals/round {
-    // An admitted round may project its own action eligibility and, under
-    // see_roster, its attached proposals' responder labels. roster_status gates
-    // each attached track status.
-    // The roster prefetch is bounded by admitted round ids.
     relation task: projects/task // rebac:field=task
     relation project: projects/project // rebac:field=project
     relation task_project: projects/project // rebac:field={"path":"task__project","filters":{"task__visibility":"inherited"}}
@@ -59,8 +55,6 @@ definition proposals/topic {
 }
 
 definition proposals/proposal {
-    // An admitted proposal may re-read its own row to project a track status;
-    // read_track_status remains the scalar disclosure gate.
     relation responder: auth/user // rebac:field={"path":"responder","filters":{"retired_at__isnull":true}}
     relation drafter: auth/user // rebac:field={"path":"responder","filters":{"retired_at__isnull":true,"state":"draft","round__closed_at__isnull":true}}
     relation publisher: auth/user // rebac:field={"path":"responder","filters":{"retired_at__isnull":true,"round__status":"opened"}}

@@ -6,14 +6,14 @@ from threading import Event
 import pytest
 from django.db import connection, connections, transaction
 
+from angee.decisions.testing.models import Decision
 from tests.test_timeline import timeline_entries
 from tests.test_timeline_decisions import ask
-from tests.test_timeline_decisions import people as people
+from tests.test_timeline_decisions import people as people  # noqa: F401 -- shared fixture
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-@pytest.mark.postgresql
 def test_union_reads_committed_state_while_a_writer_holds_the_source(people, settings):
     if connection.vendor != "postgresql":
         pytest.skip("PostgreSQL MVCC acceptance test")
@@ -24,7 +24,7 @@ def test_union_reads_committed_state_while_a_writer_holds_the_source(people, set
     def answer():
         try:
             with transaction.atomic():
-                question.decide(actor=people[1], chosen=["complete"])
+                Decision.objects.decide(question, actor=people[1], chosen=["complete"])
                 held.set()
                 assert release.wait(10)
         finally:

@@ -18,8 +18,7 @@ from rebac import system_context
 
 import tests.test_platform_install  # noqa: F401 -- register fixture models before database setup
 from angee.base.testing.packages import write_addon_distribution
-from angee.platform import composed
-from angee.platform import managers as platform_managers
+from angee.platform import models as platform_models
 from angee.platform.discovery import available_addons
 from angee.resources.models import Resource as AbstractResource
 from tests.conftest import catalogue_package, make_addon
@@ -114,10 +113,10 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         def resource_counts():
             return {loaded.name: 7, "fakeaddon.base": 99}
 
-        patch.setattr(platform_managers, "available_addons", lambda **kwargs: available)
-        patch.setattr(composed, "addons", lambda: [loaded])
-        patch.setattr(composed, "root_app_aliases", lambda: {loaded.name: loaded.name})
-        patch.setattr(composed, "resource_counts", resource_counts)
+        patch.setattr(platform_models, "available_addons", lambda **kwargs: available)
+        patch.setattr(platform_models.composed, "addons", lambda: [loaded])
+        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {loaded.name: loaded.name})
+        patch.setattr(platform_models.composed, "resource_counts", resource_counts)
         with system_context(reason="test.platform.reconcile-native-facts"):
             addon.objects.create(
                 name="fakeaddon.base",
@@ -202,11 +201,9 @@ def test_enable_preview_refuses_an_unimportable_component(tmp_path, settings, mo
     """Catalogue availability cannot bypass native AppConfig validation."""
 
     manifest = catalogue_package(name="unavailable_package.addon", depends_on=("unavailable_package.dependency",))
-    monkeypatch.setattr(
-        platform_managers, "available_addons", lambda **kwargs: {manifest["name"]: (manifest, tmp_path)},
-    )
-    monkeypatch.setattr(composed, "addons", lambda: [])
-    monkeypatch.setattr(composed, "root_app_aliases", lambda: {})
+    monkeypatch.setattr(platform_models, "available_addons", lambda **kwargs: {manifest["name"]: (manifest, tmp_path)})
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
+    monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
     settings.BASE_DIR = tmp_path
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
     (tmp_path / "settings.yaml").write_text("INSTALLED_APPS: []\n")
@@ -231,7 +228,7 @@ def resource_model(monkeypatch):
                 app_label = "resources"
                 abstract = False
 
-        monkeypatch.setattr(composed, "apps", registry)
+        monkeypatch.setattr(platform_models.composed, "apps", registry)
         yield Resource
 
 
@@ -251,7 +248,7 @@ def test_resource_counts_tolerate_uncreated_ledger(monkeypatch, resource_model) 
         lambda: [],
     )
 
-    assert composed.resource_counts() == {}
+    assert platform_models.composed.resource_counts() == {}
     assert queried == []
 
 
@@ -271,7 +268,7 @@ def test_resource_counts_propagate_database_failures(monkeypatch, resource_model
     )
 
     with pytest.raises(DatabaseError, match="ledger unavailable"):
-        composed.resource_counts()
+        platform_models.composed.resource_counts()
 
 
 @pytest.mark.parametrize("addon_count", [1, 3])
@@ -281,10 +278,10 @@ def test_unknown_desired_reads_pending_flags_once(composed_tables, tmp_path, mon
         addon = apps.get_model("platform", "Addon")
         pending = {f"pending_fixture.addon_{index}": bool(index % 2) for index in range(addon_count)}
         available = {name: (catalogue_package(name=name), tmp_path / name) for name in pending}
-        patch.setattr(platform_managers, "available_addons", lambda **kwargs: available)
-        patch.setattr(composed, "addons", lambda: [])
-        patch.setattr(composed, "root_app_aliases", lambda: {})
-        patch.setattr(composed, "resource_counts", lambda **kwargs: {})
+        patch.setattr(platform_models, "available_addons", lambda **kwargs: available)
+        patch.setattr(platform_models.composed, "addons", lambda: [])
+        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
+        patch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
 
         with system_context(reason="test.platform.pending-query-count"):
             addon.objects.all().delete()
@@ -303,9 +300,9 @@ def test_pending_changes_is_unknown_when_project_yaml_is_not_effective(settings,
     """An override is not falsely treated as either pending or settled."""
 
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset()
-    monkeypatch.setattr(composed, "root_app_names", lambda: frozenset({"example.demo"}))
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset({"example.demo"}))
     monkeypatch.setattr(
-        platform_managers,
+        platform_models,
         "available_addons",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("catalogue read")),
     )
@@ -330,7 +327,7 @@ def test_pending_changes_compares_authored_roots_only(
     (tmp_path / "settings.yaml").write_text(f"INSTALLED_APPS:\n{roots}\n", encoding="utf-8")
     settings.BASE_DIR = tmp_path
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
-    monkeypatch.setattr(composed, "root_app_names", lambda: loaded)
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: loaded)
 
     assert apps.get_model("platform", "Addon").objects.pending_changes() is expected
 
@@ -354,15 +351,15 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
         for config in configs:
             config.apps = apps
             config.models = {}
-        patch.setattr(platform_managers, "available_addons", lambda **kwargs: {
+        patch.setattr(platform_models, "available_addons", lambda **kwargs: {
             config.name: (catalogue_package(config.name, depends_on=closure.dependencies[config.name]), None)
             for config in configs if config.name in closure.components.values()
         })
-        patch.setattr(composed, "addons", lambda: [
+        patch.setattr(platform_models.composed, "addons", lambda: [
             config for config in configs if config.name in closure.components.values()
         ])
-        patch.setattr(composed, "root_app_aliases", lambda: {root.name: root.name})
-        patch.setattr(composed, "resource_counts", lambda **kwargs: {})
+        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {root.name: root.name})
+        patch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
         settings.BASE_DIR = tmp_path
         settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
         (tmp_path / "settings.yaml").write_text(f"INSTALLED_APPS:\n  - {root.name}\n")
@@ -424,7 +421,7 @@ def test_passive_preview_retains_native_foreign_root_edges_and_canonical_pending
     settings.BASE_DIR = tmp_path
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({'INSTALLED_APPS'})
     (tmp_path / 'settings.yaml').write_text('INSTALLED_APPS:\n  - preview_host.apps.Config\n')
-    monkeypatch.setattr(composed, 'addons', lambda: [
+    monkeypatch.setattr(platform_models.composed, 'addons', lambda: [
         config for config in closure.app_configs if config.name in closure.components.values()
     ])
     monkeypatch.setattr(
@@ -448,7 +445,7 @@ def test_preview_refuses_missing_native_requirement(tmp_path, settings, monkeypa
     settings.BASE_DIR = tmp_path
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
     (tmp_path / "settings.yaml").write_text("INSTALLED_APPS: []\n")
-    monkeypatch.setattr(composed, "addons", lambda: [])
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
     preview = apps.get_model("platform", "Addon").objects.change_preview(component.name, "enable")
     assert not preview.can_apply
     assert "absent-component-dependency-184572" in preview.refusal
@@ -460,7 +457,7 @@ def test_preview_revision_tracks_config_owned_edges(tmp_path, settings, monkeypa
     settings.BASE_DIR = tmp_path
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
     (tmp_path / "settings.yaml").write_text("INSTALLED_APPS: []\n")
-    monkeypatch.setattr(composed, "addons", lambda: [])
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
     manager = apps.get_model("platform", "Addon").objects
     before = manager.change_preview(component.name, "enable")
     assert before.can_apply
@@ -489,7 +486,7 @@ def test_pending_custom_config_root_keeps_native_identity(tmp_path, settings, mo
     path = tmp_path / "settings.yaml"
     original = f"INSTALLED_APPS:\n  - {declaration}\n"
     path.write_text(original)
-    monkeypatch.setattr(composed, "addons", lambda: [])
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
     monkeypatch.setattr(AppConfig, "create", classmethod(lambda *args: pytest.fail("parent app activation")))
 
     preview = apps.get_model("platform", "Addon").objects.change_preview(component.name, action)
@@ -507,8 +504,8 @@ def test_preview_revision_changes_with_running_graph(tmp_path, settings, monkeyp
         config.apps = apps
         config.models = {}
     loaded = [first]
-    monkeypatch.setattr(composed, "addons", lambda: loaded)
-    monkeypatch.setattr(composed, "root_app_names", lambda: frozenset(config.name for config in loaded))
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: loaded)
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset(config.name for config in loaded))
     settings.BASE_DIR = tmp_path
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
     path = tmp_path / "settings.yaml"
@@ -541,7 +538,7 @@ def test_disable_can_remove_a_broken_queued_root(tmp_path, settings, monkeypatch
     path = tmp_path / "settings.yaml"
     original = f"INSTALLED_APPS:\n  - {component.name}\n"
     path.write_text(original)
-    monkeypatch.setattr(composed, "addons", lambda: [])
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
 
     preview = apps.get_model("platform", "Addon").objects.change_preview(component.name, "disable")
 

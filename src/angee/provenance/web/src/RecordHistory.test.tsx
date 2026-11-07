@@ -8,7 +8,7 @@ import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, expect, test, vi } from "vitest";
 
 const reads = vi.hoisted(() => vi.fn());
-const attribution = vi.hoisted(() => ({ source: false, unavailable: "none" }));
+const attribution = vi.hoisted(() => ({ source: false }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/refine")>(),
   useAuthoredQuery: (_document: unknown, variables: { selected: string | null; offset: number }) => {
@@ -21,12 +21,12 @@ vi.mock("@angee/refine", async (importOriginal) => ({
         id: old ? "chg_old" : "chg_latest", actor: null, actor_model: null, actor_id: null,
         source_kind: attribution.source ? "PERSON" : null, action: "UPDATE", activity: "MANUAL", outcome: "SUCCESS",
         change_reason: old ? "Original source" : "Latest edit", occurred_at: "2026-01-01T00:00:00Z",
-        recorded_at: "2026-01-01T00:00:00Z", can_revert: false, statements: ["statements", "both"].includes(attribution.unavailable) ? null : attribution.source ? [{
+        recorded_at: "2026-01-01T00:00:00Z", can_revert: false, statements: attribution.source ? [{
           id: "stmt_7", aspect: "reference", asserted_by: "Synthetic source", source_kind: "SYSTEM_OF_RECORD",
           snak: "VALUE", rank: "NORMAL", status: "ACTIVE", applied: true, confidence: 1,
           history_type: "CREATED", values: { reference: "Statement value" }, source: null, evidence: [],
         }] : [], merge: null,
-        changes: ["changes", "both"].includes(attribution.unavailable) ? null : [{ model: "example.Document", id: "doc_7", field: "reference", old: "Before", new: "Applied source" }],
+        changes: [{ model: "example.Document", id: "doc_7", field: "reference", old: "Before", new: "Applied source" }],
       }],
     } }, isLoading: false, isFetching: false };
   },
@@ -42,7 +42,7 @@ import { RecordHistoryTimeline } from "./RecordHistory";
 const { Provider, clearClients } = createUiTestProviders({
   resources: [testDataResource("example.Document", { history: true })],
 });
-afterEach(() => { cleanup(); clearClients(); reads.mockClear(); attribution.source = false; attribution.unavailable = "none"; vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); clearClients(); reads.mockClear(); attribution.source = false; vi.restoreAllMocks(); });
 
 test("history and statement source kinds render without Changeset resource metadata", async () => {
   attribution.source = true;
@@ -96,19 +96,4 @@ test("paging clears a consumed Chatter target so the same source can reveal it a
   expect(await screen.findByText("Applied source")).toBeTruthy();
   expect(screen.getByText(/Original source/)).toBeTruthy();
   expect(router.state.location.search).toMatchObject({ chatterTarget: "chg_old", chatterFocus: "changeset" });
-});
-
-test.each(["changes", "statements", "both"])("unavailable %s retain attribution and independently available details", async (unavailable) => {
-  attribution.source = true;
-  attribution.unavailable = unavailable;
-  render(<Provider><RecordHistoryTimeline model="example.Document" id="doc_7" selected="chg_old" /></Provider>);
-  expect(await screen.findByText(/Original source/)).toBeTruthy();
-  expect(screen.getAllByText("Some historical details are unavailable")).toHaveLength(1);
-  expect(screen.getByText(/The original source values were not retained/)).toBeTruthy();
-  if (unavailable === "statements") expect(screen.getByText("Applied source")).toBeTruthy();
-  else expect(screen.queryByText("Applied source")).toBeNull();
-  const statementValue = screen.queryByText('{"reference":"Statement value"}', { selector: "code" });
-  if (unavailable === "changes") expect(statementValue).toBeTruthy();
-  else expect(statementValue).toBeNull();
-  expect(screen.queryByRole("button", { name: "Revert" })).toBeNull();
 });

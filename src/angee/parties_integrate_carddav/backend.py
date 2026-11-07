@@ -130,7 +130,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
             self.discover()
         except CardDavError:
             raise
-        except Exception as error:  # surface any transport/SSRF failure as a connect error.
+        except Exception as error:  # noqa: BLE001 — surface any transport/SSRF failure as a connect error.
             raise CardDavError("Could not connect to the CardDAV server.") from error
 
     def discover(self) -> list[ParsedAddressbook]:
@@ -324,7 +324,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         except ResponseTooLargeError as error:
             # Storage's image cap refuses it, as it refuses an inline photo that size.
             raise UploadTooLarge("The vCard photo is larger than the image size cap.") from error
-        except Exception as error:  # do not promote a partial comparison base.
+        except Exception as error:  # noqa: BLE001 — do not promote a partial comparison base.
             raise CardDavError("The vCard photo could not be retrieved.") from error
         if not response.is_success or not response.content:
             raise CardDavError("The vCard photo could not be retrieved.")
@@ -561,7 +561,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 if card.name != "VCARD":
                     raise ValueError("The address object is not a vCard.")
                 contact = _parse_vcard(card, etag=etag, href=href, raw=data)
-            except Exception:  # the driver quarantines semantic input per record.
+            except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
                 contacts[href] = _quarantined(
                     href,
                     {"href": href, "source_digest": canonical_json_sha256(data), "error": "invalid_vcard"},

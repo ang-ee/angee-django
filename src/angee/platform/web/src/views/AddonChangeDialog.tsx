@@ -61,7 +61,7 @@ export function AddonChangeDialog({
         </Button>
       </>}
     >
-      {loading && !preview ? <LoadingPanel density="inline" message={t("apps.preview.loading")} /> : null}
+      {loading && !preview ? <LoadingPanel density="inline" loadingLabel={t("apps.preview.loading")} /> : null}
       <ErrorBanner description={error} actions={<Button size="sm" variant="secondary" onClick={onRetry}>{t("apps.preview.retry")}</Button>} />
       {preview?.refusal ? <Alert tone="danger">{preview.refusal}</Alert> : null}
       {preview?.migration_warning ? <Alert tone="warning">{preview.migration_warning}</Alert> : null}

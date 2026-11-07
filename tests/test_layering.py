@@ -209,10 +209,9 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
 def test_addon_serving_modules_never_import_build_owners() -> None:
     """Serving modules cannot load composition; declared build and typing owners may."""
     root = PROJECT_ROOT / "src/angee"
-    # c7732c91a moved permission typing and fixtures into IAM.
-    typing_paths = {root / "base/typing.py", root / "iam/typing.py", root / "provenance/typing.py"}
+    typing_paths = {root / "base/typing.py", root / "provenance/typing.py"}
     build_paths = set(root.glob("*/build.py")) | typing_paths
-    fixture_paths = {root / "iam/testing/permissions.py"}
+    fixture_paths = {root / "base/testing/permissions.py", root / "base/testing/fixtures.py"}
     build_modules = {"django_compose.build", "django_compose.model_composition", "django_compose.rendering"} | {
         "angee." + ".".join(path.relative_to(root).with_suffix("").parts)
         for path in build_paths

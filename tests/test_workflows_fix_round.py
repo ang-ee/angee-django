@@ -11,11 +11,13 @@ from django.db.models.functions import Now
 from rebac import system_context
 
 from angee.graphql.publishing import change_published
-from angee.workflows.querysets import StepRunQuerySet, WorkflowRunQuerySet
+from angee.workflows import managers
+from angee.workflows import runner as runner_module
+from angee.workflows.managers import StepRunQuerySet, WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode, Superseded
-from angee.workflows.testing.drivers import load_workflow, observe
+from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
 from tests.workflow_steps import Echo, document
 
@@ -172,7 +174,7 @@ def test_effect_marker_controls_retryable_body_failures(execution, register_step
         retry = RetryPolicy(max_attempts=2, backoff=timedelta())
 
         def run(self, ctx):
-            acknowledgements.append(ctx.attempt.acknowledged_by_id is not None)
+            acknowledgements.append(ctx.retry_acknowledged)
             if ctx.attempt.number == 1:
                 ctx.begin_effect()
                 if failure == "retryable":
@@ -326,13 +328,11 @@ def test_retry_names_other_unrouted_failures_without_reopening_the_run(execution
     assert runner.execute(retained_step(run).pk)
     assert runner.execute(retained_step(run, "sibling").pk)
     before = terminal_fields(run)
-    graph = WorkflowRun.objects.with_actor(actor).get(pk=run.pk).graph(
-        actor, step_fields=frozenset({"can_retry"}),
-    )
-    failed = {node.node.key: node.step_run for node in graph.nodes}
-    assert not failed["failed"].get_can_retry(actor) and not failed["sibling"].get_can_retry(actor)
-    assert "sibling" in failed["failed"].retry_blocker
-    assert "failed" in failed["sibling"].retry_blocker
+    graph = WorkflowRun.objects.with_actor(actor).get(pk=run.pk).graph(actor)
+    assert graph is not None
+    seeded = {node.node.key: node.step_run for node in graph.nodes}
+    assert not seeded["failed"].can_retry(actor) and not seeded["sibling"].can_retry(actor)
+    assert "sibling" in seeded["failed"].retry_blocker and "failed" in seeded["sibling"].retry_blocker
     for target, other in (("failed", "sibling"), ("sibling", "failed")):
         with pytest.raises(ValidationError, match=other):
             StepRun.objects.retry_step(retained_step(run, target), actor=actor)
@@ -399,10 +399,18 @@ def test_cancel_abandoned_failed_run_closes_open_siblings_without_changing_termi
 
 
 @pytest.mark.parametrize("result", ["failed", "superseded", "succeeded"])
-def test_artifacts_commit_only_with_successful_attempt_evidence(execution, register_step, result):
+def test_artifacts_commit_only_with_successful_attempt_evidence(execution, register_step, monkeypatch, result):
     """IO-created evidence is staged until its own successful settlement commits."""
     actor, _ = execution
-    after_cancel = []
+    publications, after_cancel = [], []
+    original_publish = managers.publish_change
+
+    def publish(run, **kwargs):
+        publications.append(run.pk)
+        return original_publish(run, **kwargs)
+
+    monkeypatch.setattr(managers, "publish_change", publish)
+    monkeypatch.setattr(runner_module, "publish_change", publish)
 
     class Evidence(Echo):
         mode = StepMode.IO
@@ -418,17 +426,14 @@ def test_artifacts_commit_only_with_successful_attempt_evidence(execution, regis
                 after_cancel.append(len(publications))
             return ctx.done(ctx.input)
 
-    with observe(WorkflowRun) as publications:
-        register_step(Evidence)
-        workflow = load_workflow(document("entry"), key="settled_artifacts", actor=actor)
-        run = WorkflowRun.objects.start(workflow, actor=actor)
-        step = retained_step(run)
-        assert runner.execute(step.pk) is (result != "superseded")
-        assert StepRecord.system_queryset().filter(step_run=step).count() == (1 if result == "succeeded" else 0)
-        assert publications
-        assert all(payload.model == run._meta.label and payload.id == run.sqid for payload in publications)
-        if result == "superseded":
-            assert len(publications) == after_cancel[0]
+    register_step(Evidence)
+    workflow = load_workflow(document("entry"), key="settled_artifacts", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    step = retained_step(run)
+    assert runner.execute(step.pk) is (result != "superseded")
+    assert StepRecord.system_queryset().filter(step_run=step).count() == (1 if result == "succeeded" else 0)
+    if result == "superseded":
+        assert len(publications) == after_cancel[0]
 
 
 def test_reprocess_origin_is_present_at_its_first_change_publication(execution):

@@ -1,44 +1,28 @@
-"""REBAC declarations and authorization boundaries shared by framework layers."""
+"""GraphQL access control for Angee IAM.
+
+iam owns "who is a platform admin", so the platform-admin GraphQL gate lives here
+— not buried in ``iam.schema`` — and downstream addons (e.g. ``integrate``) import
+it without pulling in iam's whole schema module. GraphQL owns the shared
+session-user gate; Strawberry owns request context.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
-from os import PathLike
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, ClassVar
 
-from django.apps import AppConfig, apps
-from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import models
-from rebac import (
-    ObjectRef,
-    SubjectRef,
-    check_new,
-    current_actor,
-    is_sudo,
-    proposed_forward_relationships,
-    to_object_ref,
-    to_subject_ref,
-)
-from rebac import user_subject_type as _user_subject_type
-from rebac.backends import backend
-from rebac.errors import PermissionDenied
-from rebac.managers import RebacQuerySet
-from rebac.resources import model_resource_type
-from rebac.schema import Definition, Schema, resolve_schema_path
-from rebac.schema.introspection import relation_dependencies
-from rebac.schema.parser import parse_zed
+import strawberry
+from django.contrib.auth.models import AnonymousUser
+from rebac import ObjectRef, current_actor
+from strawberry.permission import BasePermission
+from strawberry_django.auth.utils import get_current_user
 
-if TYPE_CHECKING:
-    from rebac import RebacMixin
+from angee.iam.roles import platform_admin_role, subject_has_role
 
 
 def is_authenticated(user: Any) -> bool:
     """Return whether ``user`` is a real authenticated session user."""
 
-    return bool(getattr(user, "is_authenticated", False))
+    return not isinstance(user, AnonymousUser) and bool(getattr(user, "is_authenticated", False))
 
 
 def is_platform_admin(user: Any) -> bool:
@@ -46,9 +30,6 @@ def is_platform_admin(user: Any) -> bool:
 
     if not is_authenticated(user):
         return False
-    # Schema declarations load before app population; angee.iam.roles imports rebac.models.
-    from angee.iam.roles import platform_admin_role
-
     role = platform_admin_role()
     return role is not None and current_actor_has_role(role)
 
@@ -56,330 +37,44 @@ def is_platform_admin(user: Any) -> bool:
 def current_actor_has_role(role: ObjectRef) -> bool:
     """Return whether the ambient REBAC actor is an effective member of ``role``."""
 
-    # Schema declarations load before app population; angee.iam.roles imports rebac.models.
-    from angee.iam.roles import subject_has_role
-
     return subject_has_role(current_actor(), role)
 
 
-def declared_grants(model: type[models.Model]) -> dict[str, str]:
-    """Validate the record-share relations declared on this model itself."""
+class RolePermission(BasePermission):
+    """Allow actors that reach ``role_ref`` through ``effective_member``."""
 
-    raw = model.__dict__.get("rebac_grantable", {})
-    if not isinstance(raw, Mapping):
-        raise ImproperlyConfigured(f"{model._meta.label}.rebac_grantable must be a mapping.")
-    declaration: dict[str, str] = {}
-    for relation, permission in raw.items():
-        if not isinstance(relation, str) or not relation:
-            raise ImproperlyConfigured(f"{model._meta.label}.rebac_grantable relation names must be non-empty strings.")
-        if not isinstance(permission, str) or not permission:
-            raise ImproperlyConfigured(f"{model._meta.label}.rebac_grantable[{relation!r}] must name a permission.")
-        declaration[relation] = permission
-    return declaration
+    role_ref: ClassVar[ObjectRef | None] = None
 
+    message = "Role permission required."
+    error_extensions = {"code": "PERMISSION_DENIED"}
 
-def require_rebac_queryset[M: models.Model](model: type[M]) -> RebacQuerySet[M]:
-    """Preserve the default manager's filters and require its native REBAC query contract."""
+    def has_permission(
+        self,
+        source: Any,
+        info: strawberry.Info,
+        **kwargs: Any,
+    ) -> bool:
+        """Return whether the current actor reaches the configured role."""
 
-    queryset = model._default_manager.get_queryset()
-    if not isinstance(queryset, RebacQuerySet):
-        raise ImproperlyConfigured(f"{model._meta.label} requires a RebacQuerySet default manager.")
-    return queryset
+        del source, kwargs
+        return self.role_ref is not None and current_actor_has_role(self.role_ref)
 
 
-@dataclass(frozen=True, slots=True)
-class _RebacSchemaBinding:
-    source: Path | None
-    declaration: str | PathLike[str] | None
-    effective: str | PathLike[str] | None
-    signature: tuple[Path, int, int, int, int, int] | None = None
-    schema: Schema | None = None
+class PlatformAdminPermission(RolePermission):
+    """Allow only actors that reach IAM's const-backed platform admin role."""
 
+    message = "Platform admin permission required."
 
-_SCHEMA_BINDING = "_angee_rebac_schema_binding"
+    def has_permission(
+        self,
+        source: Any,
+        info: strawberry.Info,
+        **kwargs: Any,
+    ) -> bool:
+        """Return whether the request user has platform-admin reach."""
 
+        del source, kwargs
+        return is_platform_admin(get_current_user(info))
 
-def declared_schema_path(app_config: AppConfig) -> Path | None:
-    """Retain the native authored declaration before binding generated output."""
 
-    binding = app_config.__dict__.get(_SCHEMA_BINDING)
-    declaration = getattr(app_config, "rebac_schema", None)
-    if not isinstance(binding, _RebacSchemaBinding) or declaration != binding.effective:
-        binding = _RebacSchemaBinding(resolve_schema_path(app_config), declaration, declaration)
-        app_config.__dict__[_SCHEMA_BINDING] = binding
-    return binding.source
-
-
-def bind_rebac_schema(app_config: AppConfig, path: Path | None) -> None:
-    """Bind generated input; ``None`` restores the original native declaration."""
-
-    source = declared_schema_path(app_config)
-    binding = app_config.__dict__[_SCHEMA_BINDING]
-    assert isinstance(binding, _RebacSchemaBinding)
-    effective = path if path is not None else binding.declaration
-    setattr(app_config, "rebac_schema", effective)
-    app_config.__dict__[_SCHEMA_BINDING] = _RebacSchemaBinding(source, binding.declaration, effective)
-
-
-def merged_schema_relpath(package: str) -> Path:
-    """Return the permission artifact address relative to compiler output."""
-
-    return Path("permissions") / f"{package}.zed"
-
-
-def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
-    """Read request policy through the native synced, scope-pinned backend."""
-
-    resource_type = model_resource_type(model)
-    return backend().schema().get_definition(resource_type) if resource_type else None
-
-
-def effective_rebac_schema(app_config: AppConfig) -> Schema | None:
-    """Reuse one parsed bound declaration while its source identity is unchanged.
-
-    State lives only on this AppConfig's binding. Native path discovery still
-    observes missing files and declaration changes; nanosecond modification/change
-    times and inode identity invalidate same-path rewrites and atomic replacement.
-    Request policy never reads this startup snapshot.
-    """
-
-    declared_schema_path(app_config)
-    binding = app_config.__dict__[_SCHEMA_BINDING]
-    assert isinstance(binding, _RebacSchemaBinding)
-    schema_path = resolve_schema_path(app_config)
-    if schema_path is None:
-        if binding.signature is not None:
-            app_config.__dict__[_SCHEMA_BINDING] = replace(binding, signature=None, schema=None)
-        return None
-    status = schema_path.stat()
-    signature = (
-        schema_path,
-        status.st_dev,
-        status.st_ino,
-        status.st_size,
-        status.st_mtime_ns,
-        status.st_ctime_ns,
-    )
-    if signature != binding.signature:
-        binding = replace(
-            binding,
-            signature=signature,
-            schema=parse_zed(schema_path.read_text(encoding="utf-8")),
-        )
-        app_config.__dict__[_SCHEMA_BINDING] = binding
-    return binding.schema
-
-
-def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
-    """Read one model declaration without consulting database-backed policy."""
-
-    resource_type = model_resource_type(model)
-    if not resource_type:
-        return None
-    try:
-        config = apps.get_app_config(model._meta.app_label)
-    except LookupError:
-        return None
-    schema = effective_rebac_schema(config)
-    return schema.get_definition(resource_type) if schema is not None else None
-
-
-def instance_actor(instance: models.Model | RebacQuerySet[Any]) -> SubjectRef | None:
-    """Return a row or queryset's pinned actor, then the ambient actor.
-
-    Instance verbs, queryset projections, and audit defaults share this
-    resolution, including during elevation. Plain Django models have only the
-    ambient actor.
-    """
-
-    # Schema declarations also load before Django setup; the native mixin is model-defined.
-    from rebac import RebacMixin
-
-    if isinstance(instance, RebacQuerySet):
-        actor = instance.effective_actor()[0]
-    elif isinstance(instance, RebacMixin):
-        actor = instance.actor()
-    else:
-        actor = None
-    return actor if actor is not None else current_actor()
-
-
-def require_record_access(instance: RebacMixin, permission: str, actor: Any = None) -> Any:
-    """Authorize and return the explicit, pinned, or ambient actor, in that order.
-
-    Retain the requester as the instance binding. Missing actors are refused even
-    outside strict mode unless an explicit sudo scope applies. A concrete
-    requester always clears instance sudo and scopes the permission check.
-    """
-    actor = actor or instance_actor(instance)
-    if actor is None:
-        if instance.is_sudo() or is_sudo():
-            return None
-        raise PermissionDenied(f"Denied: {permission!r} requires an actor.")
-    instance.with_actor(actor)
-    if not instance.has_access(permission):
-        target = instance._meta.label if instance._state.adding else to_object_ref(instance)
-        raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {target}.")
-    return actor
-
-
-_PERMISSION_PROOF_ISSUER = object()
-
-
-@dataclass(frozen=True, slots=True, init=False)
-class PermissionProof:
-    """Evidence issued only after an actor-scoped target lookup admitted one action."""
-
-    target: models.Model
-    actor: SubjectRef
-    permission: str
-    _seal: object = field(init=False, repr=False, compare=False)
-    _target_pk: Any = field(init=False, repr=False)
-    _target_db: str | None = field(init=False, repr=False)
-
-    def __init__(self, target: models.Model, actor: SubjectRef, permission: str) -> None:
-        raise PermissionDenied("A permission proof must come from an authorized target lookup.")
-
-    def matches(self, target: models.Model, actor: Any, permission: str) -> bool:
-        """Only the exact resolved row, actor and action may consume this proof."""
-
-        return (
-            getattr(self, "_seal", None) is _PERMISSION_PROOF_ISSUER
-            and self.target is target
-            and target.pk == self._target_pk
-            and target._state.db == self._target_db
-            and self.actor == to_subject_ref(actor)
-            and self.permission == permission
-        )
-
-
-def prove_target[M: models.Model](
-    model: type[M],
-    id: Any,
-    actor: Any,
-    permission: str,
-    *,
-    narrow: Callable[[models.QuerySet[M]], models.QuerySet[M]] | None = None,
-) -> tuple[M | None, PermissionProof | None]:
-    """Resolve one actor-scoped target and issue proof only for a row it admits."""
-
-    # Schema declarations load before app population; the identity module declares a model.
-    from angee.base.models.identity import instance_from_public_id
-
-    queryset: models.QuerySet[M] = require_rebac_queryset(model)
-    if narrow is not None:
-        queryset = narrow(queryset)
-    if not isinstance(queryset, RebacQuerySet):
-        raise ImproperlyConfigured(f"{model._meta.label} requires a RebacQuerySet target scope.")
-    target = instance_from_public_id(model, str(id or ""), queryset=queryset.with_actor(actor).with_action(permission))
-    if target is None:
-        return None, None
-    proof = object.__new__(PermissionProof)
-    object.__setattr__(proof, "target", target)
-    object.__setattr__(proof, "actor", to_subject_ref(actor))
-    object.__setattr__(proof, "permission", permission)
-    object.__setattr__(proof, "_seal", _PERMISSION_PROOF_ISSUER)
-    object.__setattr__(proof, "_target_pk", target.pk)
-    object.__setattr__(proof, "_target_db", target._state.db)
-    return target, proof
-
-
-def actor_user_id(actor: Any) -> Any | None:
-    """Return ``actor``'s user primary key, or ``None`` when no user backs it.
-
-    Model-backed REBAC subjects use the database primary key, so the canonical
-    actor id is already the value required by user foreign-key columns.
-    Non-user subjects return ``None``.
-    """
-
-    if actor is None or not actor.subject_id:
-        return None
-    if actor.subject_type != _user_subject_type():
-        return None
-    pk = get_user_model()._meta.pk
-    if pk is None:
-        return None
-    try:
-        return pk.to_python(actor.subject_id)
-    except TypeError, ValueError, ValidationError:
-        return None
-
-
-def subject_reaches_user(subject: models.Model | SubjectRef, user_id: Any) -> bool:
-    """Return whether ``subject`` resolves to, or contains, the user with ``user_id``.
-
-    A subject reaches a user when it is that user's own reference, a wildcard,
-    or a userset such as ``auth/group:7#member`` whose relation the user holds on
-    the referenced object. A record invariant that keeps one user out of its
-    holders composes this before a grant, an assignment, or an admission and
-    raises :class:`angee.base.exceptions.RecordAccessSubjectRefused` on ``True``.
-    ``user_id`` of ``None`` names nobody and is never reached.
-    """
-
-    if user_id is None:
-        return False
-    reference = to_subject_ref(subject)
-    if reference.subject_id == "*":
-        return True
-    user = SubjectRef.of(_user_subject_type(), str(user_id))
-    if reference == user:
-        return True
-    if not reference.optional_relation:
-        return False
-
-    return backend().check_access(subject=user, action=reference.optional_relation, resource=reference.object).allowed
-
-
-@dataclass(frozen=True, slots=True)
-class DirectRecordAccess:
-    """One direct declared-relation tuple on a shareable record."""
-
-    relation: str
-    subject: SubjectRef
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateRelationships:
-    """The relations a row would carry for one action, as rebac's candidate preflight reads them.
-
-    This adapter composes rebac's public field-backed candidate projection.
-    A caller asks about a row that is not, or not yet, the stored one (an
-    unsaved task's assignee, a retained history snapshot) and checks a subject
-    against the relations its fields and ledger would give it.
-    """
-
-    resource_type: str
-    definition: Definition
-    required: frozenset[str]
-    relationships: dict[str, tuple[SubjectRef, ...] | None]
-
-    def allows(self, subject: Any, action: str) -> bool:
-        """Whether ``subject`` may perform ``action`` on the candidate these relations describe."""
-
-        return check_new(
-            subject=to_subject_ref(subject),
-            action=action,
-            resource_type=self.resource_type,
-            relationships=self.relationships,
-        ).allowed
-
-
-def candidate_relationships(instance: models.Model, action: str) -> CandidateRelationships | None:
-    """Read the relations ``instance`` would carry for ``action``; ``None`` when its type has no definition."""
-
-    resource_type = model_resource_type(type(instance))
-    if resource_type is None:
-        return None
-
-    schema = backend().schema()
-    definition = schema.get_definition(resource_type)
-    if definition is None:
-        return None
-    required = frozenset(relation_dependencies(schema, resource_type, action))
-    relationships = proposed_forward_relationships(
-        instance,
-        definition,
-        required_relations=required,
-        using=instance._state.db,
-    )
-    return CandidateRelationships(resource_type, definition, required, relationships)
+ADMIN_PERMISSION_CLASSES: list[type[BasePermission]] = [PlatformAdminPermission]

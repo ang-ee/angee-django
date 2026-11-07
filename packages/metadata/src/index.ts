@@ -12,7 +12,6 @@ export {
   resourceInvalidationTargets,
   useCanonicalResourceModelLabels,
   useResourceInvalidates,
-  useResourceMutationModels,
   type ResourceInvalidationTarget,
 } from "./invalidation";
 export {

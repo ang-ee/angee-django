@@ -45,12 +45,11 @@ from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.actions import ActionResult, action_guard, session_user
 from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.graphql.actions import session_user
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.mcp import graphql as mcp_graphql
 from angee.mcp.graphql import ACTION_RESULT, GraphQLTool, _compile, execute_under_actor, register_graphql_tools
 from tests.conftest import SchemaAddon, create_user
@@ -435,12 +434,12 @@ def test_module_exposes_project_row_helper() -> None:
 
 
 @strawberry_django.type(Scope)
-class McpScopeType(ProtectedNode):
+class McpScopeType(AngeeNode):
     name: strawberry.auto
 
 
 @strawberry_django.type(ScopedDoc)
-class McpDocType(ProtectedNode):
+class McpDocType(AngeeNode):
     title: str | None
     scope: McpScopeType | None = actor_scoped_to_one("scope")
 
@@ -476,7 +475,7 @@ def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
     try:
         resource = hasura_model_resource(
             McpDocType, model=ScopedDoc, name="mcp_docs",
-            filterable=["id"], sortable=["id"], aggregatable=["id"], groupable=["scope"],
+            filterable=["id", "scope"], sortable=["id"], aggregatable=["id"], groupable=["scope"],
             insert=False, update=False, delete=False,
         )
         schemas = GraphQLSchemas([

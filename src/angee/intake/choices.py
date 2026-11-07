@@ -8,10 +8,3 @@ class NeedAccessAction(models.TextChoices):
 
     INTAKE_APPROVE = "intake.approve", "Approve"
     INTAKE_DENY = "intake.deny", "Deny"
-
-
-class NeedImportance(models.TextChoices):
-    """Binary requester signal, deliberately distinct from planning priority."""
-
-    NORMAL = "normal", "Normal"
-    IMPORTANT = "important", "Important"

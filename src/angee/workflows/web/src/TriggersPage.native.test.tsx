@@ -33,13 +33,8 @@ test("the ledger tab uses native trigger filtering and retains record and run re
   render(<TriggerStory onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("tab", { name: "Events" }));
   await screen.findByText("Review notes");
-  const eventRead = requests.find(({ query }) => query.includes("triggerevent("));
-  expect(eventRead?.variables.where).toEqual({ _and: [{ trigger: { _eq: "wft_review" } }] });
-  expect(eventRead?.query).toContain("record_id");
-  expect(eventRead?.query).toContain("record_label");
-  expect(eventRead?.query).toMatch(/started_run\s*\{[^}]*\bid\b/);
-  expect(eventRead?.query).toMatch(/started_run\s*\{[^}]*\bdisplay_name\b/);
-  expect((await screen.findByRole("link", { name: "Record review run" })).getAttribute("href")).toBe("/workflows/runs/wfr_review");
+  expect(requests.find(({ query }) => query.includes("triggerevent("))?.variables.where).toEqual({ _and: [{ trigger: { _eq: "wft_review" } }] });
+  expect((await screen.findByRole("link", { name: "wfr_review" })).getAttribute("href")).toBe("/workflows/runs/wfr_review");
 });
 
 test("the principal grants tab lists direct tuples and revokes through the trigger action", async () => {

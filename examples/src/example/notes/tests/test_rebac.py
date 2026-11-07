@@ -10,12 +10,11 @@ from __future__ import annotations
 from django.apps import apps
 from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
-from django.test import RequestFactory, TransactionTestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from rebac import system_context, to_object_ref
 from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
-from rebac.schema import ConstBinding
 
 Note = apps.get_model("notes", "Note")
 User = get_user_model()
@@ -68,11 +67,11 @@ class NotesAuthorizationTests(TransactionTestCase):
         # an explicit sudo, and empty (never the full table) with no actor.
         with system_context(reason="test"):
             total = Note.objects.count()
-        alice_total = len(list(Note.objects.with_actor(self.alice)))
+        alice_total = len(list(Note.objects.as_user(self.alice)))
         self.assertLess(alice_total, total)
 
         # An actor's aggregate sees only that actor's rows.
-        self.assertEqual(Note.objects.with_actor(self.alice).scoped_for_aggregate().count(), alice_total)
+        self.assertEqual(Note.objects.as_user(self.alice).scoped_for_aggregate().count(), alice_total)
 
         # Ambient system_context and per-queryset .sudo() both aggregate across all rows.
         with system_context(reason="test"):
@@ -86,8 +85,8 @@ class NotesAuthorizationTests(TransactionTestCase):
 
     def test_demo_load_uses_owner_field_backed_ownership(self) -> None:
         # Ownership is independent of attribution: a user reaches their owned notes.
-        alice_notes = list(Note.objects.with_actor(self.alice))
-        bob_notes = list(Note.objects.with_actor(self.bob))
+        alice_notes = list(Note.objects.as_user(self.alice))
+        bob_notes = list(Note.objects.as_user(self.bob))
 
         self.assertTrue(alice_notes)
         self.assertTrue(bob_notes)
@@ -113,10 +112,10 @@ class NotesAuthorizationTests(TransactionTestCase):
     def test_platform_admin_reaches_all_notes(self) -> None:
         with system_context(reason="test"):
             total = Note.objects.count()
-        # with_actor(admin) is not bracketed in sudo, so reach is purely
+        # as_user(admin) is NOT bracketed in sudo, so reach is purely
         # schema-based: the const-backed admin relation points every note at
-        # angee/role:admin, whose demo member grant names the admin user.
-        admin_notes = Note.objects.with_actor(self.admin)
+        # angee/role:admin, whose live member relation reads is_superuser.
+        admin_notes = Note.objects.as_user(self.admin)
 
         self.assertEqual(admin_notes.count(), total)
         self.assertGreaterEqual(
@@ -124,7 +123,7 @@ class NotesAuthorizationTests(TransactionTestCase):
             {self.admin.pk, self.alice.pk, self.bob.pk},
         )
         relationship_model = active_relationship_model()
-        self.assertTrue(
+        self.assertFalse(
             relationship_model.objects.filter(
                 resource_type="angee/role", resource_id="admin", relation="member"
             ).exists()
@@ -137,7 +136,8 @@ class NotesAuthorizationTests(TransactionTestCase):
             for relation in backend().schema().get_definition("notes/note").relations
             if relation.name == "admin"
         )
-        self.assertEqual(admin_rel.backing, ConstBinding(target_id="admin"))
+        self.assertEqual(admin_rel.backing.kind, "const")
+        self.assertEqual(admin_rel.backing.target_id, "admin")
 
     def test_demo_load_is_idempotent(self) -> None:
         with system_context(reason="test"):
@@ -149,12 +149,8 @@ class NotesAuthorizationTests(TransactionTestCase):
             self.assertEqual(User.objects.count(), users_before)
 
     def test_demo_users_authenticate(self) -> None:
-        request = RequestFactory().get("/")
-        # Credential verification can upgrade stale hashes and save the user,
-        # as IAM's login mutation does under system_context.
-        with system_context(reason="test.demo.authentication"):
-            alice = authenticate(request=request, username="alice", password="alice")
-            bob = authenticate(request=request, username="bob", password="bob")
+        alice = authenticate(username="alice", password="alice")
+        bob = authenticate(username="bob", password="bob")
 
         self.assertIsNotNone(alice)
         self.assertIsNotNone(bob)
@@ -164,8 +160,8 @@ class NotesAuthorizationTests(TransactionTestCase):
     def test_reader_grant_redacts_owner_only_fields(self) -> None:
         self.welcome.with_actor(self.alice).grant_record_access("reader", self.bob)
         sqid = self.welcome.sqid
-        bob_view = Note.objects.with_actor(self.bob).get(sqid=sqid)
-        owner_view = Note.objects.with_actor(self.alice).get(sqid=sqid)
+        bob_view = Note.objects.as_user(self.bob).get(sqid=sqid)
+        owner_view = Note.objects.as_user(self.alice).get(sqid=sqid)
 
         self.assertEqual(bob_view.title, "Welcome to Angee")
         self.assertIsNone(bob_view.is_starred)  # read__is_starred = owner
@@ -179,7 +175,7 @@ class NotesAuthorizationTests(TransactionTestCase):
             Note.objects.get(sqid=sqid).delete()
         # Owner reach is field-backed and admin reach const-backed, so a note
         # carries no tuples; deleting the row removes it and leaves no orphans.
-        self.assertEqual(list(Note.objects.with_actor(self.alice).filter(sqid=sqid)), [])
+        self.assertEqual(list(Note.objects.as_user(self.alice).filter(sqid=sqid)), [])
         self.assertFalse(
             relationship_model.objects.filter(
                 resource_type=resource.resource_type, resource_id=resource.resource_id

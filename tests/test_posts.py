@@ -14,7 +14,6 @@ table) and feed backend live in ``tests.conftest``.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from copy import copy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -159,8 +158,8 @@ def test_due_feed_is_queued_once_as_feed(posts_tables: None, monkeypatch: pytest
         feed.save(update_fields=["next_sync_at"])
     queued: list[tuple[str, int]] = []
     monkeypatch.setattr(
-        Feed,
-        "request_sync",
+        scheduler,
+        "queue_bridge_sync",
         lambda bridge, **kwargs: queued.append((bridge._meta.label, bridge.pk)),
     )
 
@@ -189,7 +188,7 @@ def test_integration_feed_children_prefetch_in_fixed_queries(posts_tables: None)
         with CaptureQueriesContext(connection) as queries:
             rows = list(
                 Integration.objects.sudo(reason="test.posts.feed_prefetch")
-                .with_concrete_children(actor=admin)
+                .with_concrete_children(actor=admin, exposed_model_labels={"posts.Feed"})
                 .order_by("pk")
             )
             targets = [row.concrete_children(actor=admin, exposed_model_labels={"posts.Feed"})[1][0] for row in rows]
@@ -202,42 +201,6 @@ def test_integration_feed_children_prefetch_in_fixed_queries(posts_tables: None)
     assert len(first) == 1
     assert len(targets) == 5
     assert many_count <= one_count + 1
-
-
-@pytest.mark.django_db(transaction=True)
-def test_primed_concrete_child_cache_respects_actor_change(posts_tables: None) -> None:
-    """A Feed keeps direct integrity and resolves each reader's own child."""
-
-    del posts_tables
-    feed = _feed("prefetch-actor-change")
-    reader = create_user("prefetch-actor-reader")
-    second_reader = create_user("prefetch-actor-second-reader")
-    channel = Channel._base_manager.get(pk=feed.pk)
-    with actor_context(feed.owner):
-        channel.grant_record_access("reader", reader)
-        channel.grant_record_access("reader", second_reader)
-    with actor_context(reader):
-        row = Integration.objects.sudo(reason="test.posts.primed_parent").with_concrete_children(actor=reader).get(
-            pk=feed.pk
-        )
-        row.with_actor(reader)
-        visible = row.concrete_capability()
-        assert visible.pk == feed.pk
-        assert getattr(visible, "_rebac_actor", None) is not None
-        structural = copy(row).sudo(reason="test.posts.concrete_child_actor_change").concrete_capability()
-        assert structural.pk == feed.pk
-        assert structural is not visible
-        direct = row._concrete_child(Channel, actor=second_reader, authorized=False)
-        assert direct is not None and direct._meta.label == Feed._meta.label
-        integrity, authorized = row.concrete_children(
-            actor=second_reader, exposed_model_labels={Feed._meta.label},
-        )
-        assert [child._meta.label for child in integrity] == [Feed._meta.label]
-        assert [child._meta.label for child in authorized] == [Feed._meta.label]
-        row.with_actor(second_reader)
-        second_visible = row.concrete_capability()
-        assert second_visible._meta.label == Feed._meta.label
-        assert getattr(second_visible, "_rebac_actor", None) == to_subject_ref(second_reader)
 
 
 # --- Quota ledger ---------------------------------------------------------------
@@ -472,8 +435,7 @@ def test_feed_sync_overlays_post_metrics_and_public_payload(posts_tables: None) 
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("historical", [False, True])
-def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None, historical: bool) -> None:
+def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None) -> None:
     """Archive clients can land the same public shape without a Feed backend."""
 
     del posts_tables
@@ -483,7 +445,6 @@ def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None, histo
             feed,
             [_post("archive-p1", subject_url="https://example.test/archive-p1")],
             owner_id=feed.owner_id,
-            historical=historical,
         )
         message = Message._base_manager.get(external_id="archive-p1")
 

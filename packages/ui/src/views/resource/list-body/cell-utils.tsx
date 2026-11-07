@@ -44,7 +44,7 @@ export function cellContent<TRow extends Row>(
         throw new Error(`Relation list column "${column.field}" expected a related record identity.`);
       }
       const color = colorPath ? rowValueAtPath(item as Row, colorPath) : undefined;
-      return { id, label: label == null || label === "" ? id : String(label), color: typeof color === "string" ? color : undefined };
+      return { id, label: label == null ? undefined : String(label), color: typeof color === "string" ? color : undefined };
     })} />;
   }
   const labelPath = queryField?.relation?.labelPath;

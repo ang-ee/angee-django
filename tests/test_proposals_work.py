@@ -203,7 +203,7 @@ class ProposalsWorkTests(ClarificationCase):
                 held = self.as_user(task, self.member)
                 self.assertEqual(held.has_access("read"), allowed)
                 self.assertFalse(held.has_access("comment"))
-                self.assertEqual(self.Task.objects.with_actor(self.member).filter(pk=task.pk).exists(), allowed)
+                self.assertEqual(self.Task.objects.as_user(self.member).filter(pk=task.pk).exists(), allowed)
                 with self.assertRaises(PermissionDenied):
                     held.message_post(body="Must not be posted")
         self.assertFalse(self.as_user(inherited, self.outsider).has_access("read"))

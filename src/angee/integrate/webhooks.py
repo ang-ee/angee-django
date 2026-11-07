@@ -1,7 +1,8 @@
-"""Outbound webhook test delivery: a signed POST over the shared HTTP client.
+"""Outbound webhook delivery: a signed POST over the shared HTTP client.
 
-A subscription sends its own test delivery through ``WebhookSubscription.deliver``.
-This module owns the webhook *signature*
+The delivery *orchestration* (which subscriptions receive an event) lives on
+``WebhookSubscription``'s manager, and a subscription delivers itself via
+``WebhookSubscription.deliver``. This module owns only the webhook *signature*
 and maps the shared client's result to a delivery error — the SSRF-pinned
 transport is :class:`angee.integrate.http.HttpClient`, so the resolve-once-and-pin
 mechanics live in exactly one place.
@@ -13,7 +14,7 @@ import hashlib
 import hmac
 
 from angee.integrate.http import HttpClient
-from angee.integrate.validators import parse_http_url
+from angee.integrate.net import parse_http_url
 
 SIGNATURE_HEADER = "X-Angee-Signature"
 """Header carrying the HMAC-SHA256 signature for outbound webhook bodies."""

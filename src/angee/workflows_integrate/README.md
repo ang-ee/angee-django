@@ -2,7 +2,7 @@
 
 ## Bridge sync cycles
 
-[`SyncCycleBridge`](models.py) composes workflow admission and settlement with
+[`SyncCycleBridge`](sync.py) composes workflow admission and settlement with
 integrate's existing scheduling and dispatch lifecycle. A consumer composes this
 mixin before `Bridge` and its Integration parent, declares `sync_workflow_key`,
 and implements the database-only `lock_sync_scope()` and `sync_workflow_input()`

@@ -13,15 +13,16 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 from strawberry import auto
 
+from angee.base.models.base import AngeeDataModel
 from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.models.base import ProtectedDataModel
-from tests.conftest import SchemaAddon, execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import SchemaAddon
 from tests.tables import model_tables
 
 
-class ScopedAggregateRecord(ProtectedDataModel):
+class ScopedAggregateRecord(AngeeDataModel):
     """A custom-public-identity record with two independent read grant paths."""
 
     sqid_prefix = "sar_"
@@ -29,7 +30,7 @@ class ScopedAggregateRecord(ProtectedDataModel):
     amount = models.IntegerField()
     bucket = models.CharField(max_length=16)
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         abstract = False
         app_label = "tests"
         rebac_resource_type = "tests/scoped_aggregate_record"
@@ -40,7 +41,7 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
     """Multiple permissions on one row cannot inflate groups, counts, or sums."""
 
     @strawberry_django.type(ScopedAggregateRecord)
-    class ScopedAggregateRecordType(ProtectedNode):
+    class ScopedAggregateRecordType(AngeeNode):
         name: auto
 
     reset_backend()
@@ -65,7 +66,7 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
                 ScopedAggregateRecordType,
                 model=ScopedAggregateRecord,
                 name="scoped_records",
-                filterable=["id", "amount"],
+                filterable=["id", "amount", "bucket"],
                 sortable=["name"],
                 aggregatable=["amount"],
                 groupable=["bucket"],

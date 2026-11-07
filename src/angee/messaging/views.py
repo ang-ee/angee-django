@@ -8,6 +8,7 @@ from typing import Any
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import transaction
 from django.http import Http404, HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -23,7 +24,7 @@ from angee.messaging.ingress import (
     AnonymousIngressUnavailable,
     guard_anonymous_ingress,
 )
-from angee.messaging.webforms import WebformChanged, WebformUnavailable, validate_submission_id
+from angee.messaging.webforms import validate_submission_id
 
 WEBFORM_ENVELOPE_FIELDS = frozenset({"submission_id", "answers"})
 
@@ -94,13 +95,35 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
     except ValidationError as error:
         return _validation_error(error)
 
-    try:
-        channel.submit_webform(parsed)
-    except WebformUnavailable as error:
-        raise Http404 from error
-    except WebformChanged:
-        return JsonResponse(
-            {"error": "form_changed", "message": "The form changed; reload and submit again."}, status=409,
+    channel_model = apps.get_model("messaging", "Channel")
+    message_model = apps.get_model("messaging", "Message")
+    with system_context(reason=f"public form {slug}"), transaction.atomic():
+        locked = (
+            channel_model.objects.select_for_update()
+            .filter(
+                pk=channel.pk,
+                slug=slug,
+                is_published=True,
+                backend_class="webform",
+            )
+            .first()
+        )
+        if locked is None:
+            raise Http404
+        if (
+            locked.form_schema_version != channel.form_schema_version
+            or locked.form_schema != channel.form_schema
+            or locked.max_body_bytes != channel.max_body_bytes
+            or locked.max_field_bytes != channel.max_field_bytes
+        ):
+            return JsonResponse(
+                {"error": "form_changed", "message": "The form changed; reload and submit again."},
+                status=409,
+            )
+        message_model.objects.ingest(
+            [parsed],
+            channel=locked,
+            quote_edges=False,
         )
     return JsonResponse({"submission_id": submission_id}, status=202)
 
@@ -109,7 +132,11 @@ def _published_webform(slug: str) -> Any:
     channel_model = apps.get_model("messaging", "Channel")
     with system_context(reason=f"public form {slug}.resolve"):
         channel = (
-            channel_model.objects.published_webforms(slug)
+            channel_model.objects.filter(
+                slug=slug,
+                is_published=True,
+                backend_class="webform",
+            )
             .order_by("pk")
             .first()
         )

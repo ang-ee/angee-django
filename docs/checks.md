@@ -3,30 +3,8 @@
 This guide owns verification commands and their execution context. The
 [backend](backend/guidelines.md) and [frontend](frontend/guidelines.md) guides own
 what behavior needs coverage; manifests and CI own the executable scripts.
+Run focused checks while editing, then the relevant broad checks before handoff.
 Do not weaken a failing check or claim a check ran when its environment was absent.
-
-## Verification Phases
-
-Local lane handoff, integration into `src`, and final delivery have different
-gates. Select checks for the affected behavior and their required environment:
-
-| Phase | Checks and prerequisites |
-|---|---|
-| Lane development and local handoff | Read the owners and review the diff; run focused tests and applicable static checks supported by the lane's documented test environment. Record host-dependent checks as pending integration. |
-| Local integration into `src` | Prepare the integrated host through its native composition and operator lifecycle, then run pending host-dependent Python checks, affected frontend checks and browser journeys. Native test runners own isolated test databases. |
-| Before merging to `main` or releasing | Run the relevant consolidated full suites against the completed integrated candidate, including the full Python coverage required for shared foundation/composition changes. |
-
-A pending host-dependent check does not by itself block a reviewed local lane
-handoff. Use an existing documented disposable host when it supports the test's
-fixture contract; otherwise run the check after integration. Do not construct an
-ad hoc environment solely to satisfy lane handoff. Final required checks must
-pass before the change is described as fully verified.
-
-Each additional run must resolve a named uncertainty or check a relevant change.
-Reuse passing evidence when its relevant source and environment inputs are
-unchanged. After a consolidated run fails, diagnose and fix related causes, run
-the affected checks, then repeat the required consolidated gate on the completed
-candidate; do not restart a full suite after each individual fix.
 
 ## Choose The Working Directory
 
@@ -64,7 +42,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
-| Final integrated Python/addon/template verification: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
+| Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |
@@ -91,18 +69,50 @@ boundaries and optional state-field declarations. See the
 [Database routing rule](backend/guidelines.md#rules) for persistence checks.
 
 The PostgreSQL lane in [reusable checks](../.github/workflows/reusable-checks.yml)
-selects `@pytest.mark.postgresql` contracts from the `tests` tree. Tests that
-require row locks, independent connections, or PostgreSQL-specific SQL carry
-this marker at the test or module owner. The six groups use the
-[PostgreSQL timing map](../.test_durations_postgres) with pytest-split's
-`least_duration` algorithm, four xdist workers grouped by file,
-`--nomigrations --create-db`, a JUnit report, and a gate that requires marked
-tests and zero skips. Pytest-django creates a separate PostgreSQL test database
-for each worker. Composed-host subprocess tests use Django's test runner to
-create separate worker-named secondary databases; callers bound the subprocess
-with the shared limit in [`composed_host.py`](../tests/composed_host.py).
-The full suite runs on SQLite with migrations enabled and `DATABASE_URL` unset.
-PostgreSQL-only modules skip explicitly on SQLite.
+covers workflow definition, publication, execution,
+[settlement recovery](../tests/test_workflows_fix_round.py), authorization, concurrency,
+test-harness and composed-consumer contracts, plus decision
+[lifecycle](../tests/test_decisions_lifecycle.py) and
+[concurrency](../tests/test_decisions_concurrency.py). This named file selection
+also covers [review waiters](../tests/test_workflows_review.py), their
+[locking races](../tests/test_workflows_review_concurrency.py),
+[execution links](../tests/test_workflows_review_graphql.py), and
+[inbox predicates](../tests/test_decisions_inbox.py),
+[committed timeline waits and inherited record feeds](../tests/test_timeline_workflows.py), plus the
+[agent session loop](../tests/test_agent_sessions.py) and its
+[locking races](../tests/test_agent_sessions_concurrency.py), plus
+[connection discovery races](../tests/test_integrate_discovery_concurrency.py),
+[cross-addon reply and inbound joins](../tests/test_framework_integration.py),
+[delivery contracts](../tests/test_messaging_delivery.py) with PostgreSQL
+[sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
+[comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
+also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
+knowledge, messaging, proposals, sequences, spaces, storage, the system
+queryset, work and task ordering locks, integrate streams and workflow
+integrate steps, the [grouped rows](../tests/test_group_rows.py) partitions, the
+messaging inbox's [explorer](../tests/test_inbox_explorer.py),
+[thread and message reads](../tests/test_messaging_inbox_read.py) and
+[part reads](../tests/test_inbox_part_reads.py), and the composed
+[intake access decision](../tests/test_intake_access_decision.py). It also runs
+[task ordering](../tests/test_task_rank_allocation.py),
+[record tasks](../tests/test_projects_record_tasks.py), and the
+[projects access campaign](../tests/test_projects_wave3_campaign.py).
+`test_connections.py` and `test_system_queryset.py` contribute only their
+PostgreSQL test nodes because each also has SQLite-only tests; the PostgreSQL
+branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`
+also run by node. Every other listed file runs whole, which keeps the SQLite
+floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
+by pytest-split's `least_duration` algorithm over the
+[PostgreSQL timing map](../.test_durations_postgres); each runs with four xdist
+workers grouped by file, `--nomigrations`, a JUnit report, and a zero-skip
+gate. Pytest-django creates a separate PostgreSQL test database
+for each worker. The composed-host subprocess tests use Django's test runner to
+create separate worker-named secondary test databases; every caller bounds the
+subprocess with the one hang limit in [`composed_host.py`](../tests/composed_host.py). The full
+suite runs on SQLite with migrations enabled and `DATABASE_URL` unset; do not
+apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
+skip explicitly on SQLite. Report those skips separately from the PostgreSQL
+lane's executed coverage.
 
 Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
@@ -111,44 +121,6 @@ or `-p no:xdist` for serial debugging. `--dist loadfile` keeps each test module 
 one worker. Pytest-django isolates worker databases; custom database and composed
 host fixtures must use process-local connections or pytest's worker-local
 `tmp_path`/`tmp_path_factory`, and restore registry changes after each test.
-
-### GraphQL document budgets
-
-The shipped IAM [GraphQL test guard](../src/angee/iam/testing/graphql.py) measures
-one authored document against an addon schema built with `addon_schema` or a
-composed host. The `capture_graphql_document` fixture comes from
-`angee.iam.testing.fixtures`; pass the schema, document, variables, and actor.
-It returns GraphQL data, statement count across configured database aliases,
-total UTF-8 SQL bytes, largest statement bytes, and INSERTs into REBAC's
-permission-audit table. Bytes use Django's captured SQL text, including bind
-values when the backend renders them. For a list, seed one and at least five
-visible rows and pin the same document at both sizes:
-
-```python
-one = capture_graphql_document(schema, document, {"limit": 1}, actor=viewer)
-many = capture_graphql_document(schema, document, {"limit": 5}, actor=viewer)
-assert len(one.data["items"]) == 1
-assert len(many.data["items"]) == 5
-many.assert_flat_from(one)
-for read in (one, many):
-    read.assert_no_audit_writes()
-    read.assert_statements(20)
-    read.assert_bytes(total=120_000, largest=80_000)
-```
-
-Every ceiling is a maximum. Set it from measured values with headroom, and
-lower it when a change reduces the cost. Compare one and at least five visible
-rows, then use `assert_flat_from` across larger sizes where policy or row-count
-growth matters. Pin the document's behavior and cost rather than a dependency's
-SQL spelling, statement order, or exact internal count. Pass `cause=` to
-`assert_bytes` to name the mechanism behind a changed byte ceiling. Read paths
-should assert zero permission-audit writes. When that contract is still failing,
-keep a separate strict expected failure naming the owning behavior.
-
-Consumer suites can register `angee.iam.testing.fixtures` in `pytest_plugins`
-and use `capture_graphql_document` with their authored documents. ARP does not
-yet use this guard for its bill list or form; its invoice test has a separate
-SQL measurement.
 
 ### Source-addon Test Models
 
@@ -159,42 +131,17 @@ Share source-addon compositions through their owning test apps:
 package docstrings own the adoption contract. Other reusable concrete
 compositions, including [`decisions`](../src/angee/decisions/testing/models.py)
 and [`messaging`](../src/angee/messaging/testing/models.py), register once
-through imports in the root conftest before database setup. The IAM-owned
-[`composed_tables`](../src/angee/iam/testing/fixtures.py) fixture uses
-pytest-django's savepoint isolation by default. Session database setup emits
-the merged addon permission schema and synchronizes REBAC once; it resynchronizes
-after each transactional test flush. `composed_permissions` is a compatibility
-alias for `composed_tables`. Tests needing autocommit, independent connections,
-or commit visibility declare `django_db(transaction=True)`. The GraphQL statement
-budget module uses that mark because its read costs are measured under autocommit.
+through imports in the root conftest before database setup. The framework-generic
+[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture uses native transactional
+isolation and synchronizes REBAC after each flush; use the native `db` fixture
+when a test needs neither transaction behavior nor permission synchronization.
 Composed hosts also install their schema during native database setup. Register
-`angee.iam.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
-that loads it explicitly must pass `-p django -p angee.iam.testing.fixtures` in that
+`angee.base.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
+that loads it explicitly must pass `-p django -p angee.base.testing.fixtures` in that
 order so pytest-django cannot shadow the shared `django_db_setup` override.
 Hosts installing provenance also register
 [`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py)
-for test attribution; the IAM permission plugin does not install that boundary.
-A separate plain-Django host runs the relocated engine's original assertions
-without the framework source-model conftest. It uses the same checkout and lock,
-but its own app registry and fixture migration history:
-
-```sh
-env -u DATABASE_URL uv run --locked python -m pytest -q -p no:cacheprovider --confcutdir=tests/provenance_engine --ds=tests.provenance_engine.settings tests/provenance_engine
-env -u DATABASE_URL uv run --locked python -m django check --settings=tests.provenance_engine.settings
-env -u DATABASE_URL uv run --locked python -m django makemigrations --check --dry-run --settings=tests.provenance_engine.settings
-PYTHONPATH=src:. uv run --locked python -m mypy --config-file tests/provenance_engine/mypy.toml -p angee.provenance.engine
-```
-
-The default suite excludes this subtree because Django settings are fixed per
-pytest process. The isolated host routes `provenance` migrations to its own
-`storage/migrations` fixture; the addon ships no migration history. CI runs the
-full isolated suite on SQLite and its three PostgreSQL-only cases in the
-PostgreSQL shard, with a zero-skip gate there. The host check, migration-drift
-check and strict engine type check also run in CI. The PostgreSQL shard runs
-all 120 isolated-host cases with an exact-count, zero-skip JUnit gate; the
-quality job runs framework mypy before the isolated engine steps and evaluates
-those steps after a mypy failure.
-
+for test attribution; the generic framework plugin does not install that boundary.
 A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
 [`angee.parties.testing.fixtures`](../src/angee/parties/testing/fixtures.py) in
@@ -211,21 +158,27 @@ through their native app lifecycle. Decisions-only suites use
 test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
 
-### Optional IAM source fixtures
+### GraphQL Document Budgets
 
-These native pytest-django source rosters intentionally bypass the framework's
-full-capability conftest. They use the selected environment's existing dependencies
-and native test-database lifecycle; they do not create or install a host:
+[`angee.graphql.testing.documents`](../src/angee/graphql/testing/documents.py) executes
+one document as one actor, as served requests do, and records the SQL Django captured
+on every configured database. The same helpers run an addon schema in the bare source
+host under pytest and the composed console schema under Django's test runner:
 
-```sh
-uv run --locked python -m pytest --noconftest --ds=tests.permissionless_settings -q tests/test_permissionless_base.py
-uv run --locked python -m pytest --noconftest --ds=tests.iam_only_settings -q tests/test_permissionless_iam_composition.py
+```python
+read = measure_graphql_document(schema, document, variables, actor=member)
+assert read.data["projects_aggregate"]["aggregate"]["count"] == 3
+read.assert_ceiling(statements=89, sql_kb=538)
 ```
 
-The first proves ordinary CRUD and generic-reference deletion without auth, IAM or
-REBAC imports. The second proves IAM-only capability activation and native
-abstract-target/QuerySet composition. Emitted protected-host runtime and final
-SQL authorization checks remain integration gates.
+A ceiling is the measured cost: statements exact, SQL text rounded up to the next KB
+of 1,024 bytes. A change that lowers a cost lowers its ceiling in the same change; a
+rise is a regression to fix, never a reason to raise the ceiling. Assert the rows a
+read returns beside its ceiling, so a read that loses rows cannot pass. The
+[console document ceilings](../tests/native_graphql_document_budgets.py) pin the
+console app's inbox, transcript, person, projects and current-user reads for a
+platform admin and a member, each after one warm execution, in the
+[composed query-budget host](../tests/test_composed_query_budgets.py) on SQLite.
 
 ### Owner Search
 
@@ -272,10 +225,13 @@ git diff --check
 
 These tests exercise documentation links/commands, template input agreement,
 adapter parity, and mocked helper behavior without starting the application.
-`tests/test_owner_index.py` validates the owner index citations: every cited
-`path:line` in `.agents/skills/angee-design/references/owners.md` declares the
-named symbol, and every public class a foundation models or fields module
-declares, and every source distribution (including libraries), has a row.
+`tests/test_owner_index.py` validates the owner index citations: every
+`` `Symbol` path `` in `.agents/skills/angee-design/references/owners.md` names a
+file that declares the symbol, and every public class a foundation models or fields
+module declares, and every source distribution (including libraries), has a row. It
+also refuses any `path:line` or `path:line-line` in the skills, capability guides
+and their references, a guide line in shorthand (`guidelines:120`) and a line
+cited in prose (`line 120`); only `docs/` references keep a line.
 Disabling pytest-django, application configuration, and conftest intentionally
 isolates these tests; use normal pytest for application or template behavior.
 If template source changes too, run its contract tests and the Python suite above. A prose-only
@@ -320,16 +276,6 @@ The optional Redis channel-layer cross-process test uses
 `ANGEE_TEST_CHANNEL_REDIS_URL` to select a disposable Redis database. It skips
 when the variable is unset or Redis is unreachable. Use a database separate
 from the running stack's channel layer and Celery broker.
-
-For cross-process signed-cursor diagnostics, match the running operator's signing
-configuration and the original effective actor/query scope before interpreting a
-signature failure. A plain management shell can read the `settings.yaml`
-development default while the service receives `YAMLCONF_SECRET_KEY`; use native
-`angee secret reveal` to supply the service value directly to the child environment
-without printing or retaining it. Verify the expected service configuration and
-context, then reuse the original cursor through the
-[native signer](../src/angee/base/pagination.py); do not regenerate it or bypass
-validation.
 
 After a model change, run native compose and author
 required native history before provision. Compose emits GraphQL SDL through its
@@ -437,13 +383,8 @@ database, and these commands do not create one.
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. The current tiers are:
 
-- **Python quality:** Ruff, mypy, the four isolated-settings modules, the
-  generated-adapter check, and the provenance engine checks use the locked
-  framework environment.
-- **Notes example:** the composed host runs the complete `example.notes.tests`
-  package in its own 60-minute job using the locked framework environment.
-- **Redis publication:** a Redis service runs the cross-process workflow wake
-  contract in a separate job.
+- **Python quality:** Ruff over the source tree and mypy over addons,
+  using the locked framework environment.
 - **SQLite:** the full framework Python suite once, as six shards that
   pytest-split cuts into contiguous chunks of equal stored time from the
   committed [durations](../.test_durations), so each test file stays in one or two
@@ -453,20 +394,21 @@ pushes to `main`. The current tiers are:
   remain part of this suite. Per-file scheduling keeps a file on one worker, so the
   heaviest files (the proposals access, owner-gate adopters and agents GraphQL
   campaigns, about 700 stored seconds each) set a floor near 25 minutes on CI.
-  The default source fixture now uses savepoint isolation and a session-level
-  REBAC sync; tests that request transactional isolation still pay for a flush.
-- **PostgreSQL:** in six shards of its own beside the SQLite ones, assigned by
-  pytest-split's `least_duration` algorithm over
-  [PostgreSQL timings](../.test_durations_postgres), the `postgresql` marker
-  selection runs with `-n 4 --dist loadfile --nomigrations --create-db` and a
-  60-minute limit. It prints its 25
-  slowest test durations; each shard writes JUnit output and checks that it did
+  Their cost is per-test fixture setup, a `rebac sync` before every test; making
+  that setup cheaper is how the limit comes down.
+- **PostgreSQL:** in six groups of its own beside the SQLite shards, assigned
+  by pytest-split's `least_duration` algorithm over the
+  [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
+  limit (CI runs 1.9–2.6 times the local timings the map records; six groups
+  keep that margin), the named PostgreSQL contract selection runs with
+  `-n 4 --dist loadfile --nomigrations` and prints its 25
+  slowest test durations; each group writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. The `uv` job passes only
-  when Python quality and every shard of both test suites pass, so callers keep
-  one check name.
-- **Packages:** framework package typecheck/test/build, FormSpec generation
-  check, and export/distribution checks.
+  when Python quality, every SQLite shard and every PostgreSQL group pass, so
+  callers keep one check name.
+- **Packages:** framework package typecheck/test/build and export/distribution
+  checks.
 - **Composed stack:** compose the host, check generated documents
   and addon fragments, and run the bridges repository's pytest suite with its
   native source-test settings and collection policy. Bridge tests use the
@@ -476,13 +418,8 @@ pushes to `main`. The current tiers are:
   `pyproject.toml`; native lockfiles own resolved versions. The suite's package
   metadata guard checks that the collection requirements match its workspace
   member distributions.
-  Framework composed-host tests, including `test_full_model_graph.py`, create
-  temporary hosts in the SQLite suite. The full-profile stack job installs the
-  blank-choice test addon and runs `test_full_model_graph.py` on its first shard
-  against every installed addon; it does not repeat the rest of the framework suite.
-  The first framework stack shard also runs the native project template input
-  tests with the installed `angee` CLI. The SQLite shard has Copier from the
-  locked dev group for addon template rendering.
+  Framework composed-host tests create their own temporary hosts in the SQLite
+  suite; the stack job does not repeat that framework suite.
 
 A test missing from the durations still runs: pytest-split gives it the average
 duration and places it in exactly one shard. Refresh the file when a shard nears
@@ -492,12 +429,34 @@ framework checkout and commit `.test_durations`. Ties in the assignment fall bac
 to collection order, so an opt-in `-p randomly` run must give every shard one
 shared `--randomly-seed`.
 
-Refresh `.test_durations_postgres` after changing marked coverage or when its
-shard balance drifts. Run `pytest -m postgresql --nomigrations --create-db
---store-durations --durations-path .test_durations_postgres tests` against an
-isolated PostgreSQL test service. The current timing map was measured on
-PostgreSQL 16.14, while CI uses PostgreSQL 17; use it for relative placement
-until a PostgreSQL 17 refresh is available.
+Refresh `.test_durations_postgres` after changing the PostgreSQL selection or
+when its group balance drifts. Run the selected tests serially on PostgreSQL so
+the map records per-test costs without xdist scheduling effects;
+`--clean-durations` drops the entries of tests the selection no longer
+collects, which pytest-split would otherwise keep when it merges into the
+existing map:
+
+```bash
+export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/angee
+pg_tests=$(uv run --locked python - <<'PY'
+import shlex
+from pathlib import Path
+
+import yaml
+
+steps = yaml.safe_load(Path('.github/workflows/reusable-checks.yml').read_text())['jobs']['uv-postgres']['steps']
+run = next(step['run'] for step in steps if step.get('name') == 'Verify PostgreSQL contracts execute without skips')
+print(' '.join(arg for arg in shlex.split(run.split('uv run --locked python -c', 1)[0]) if arg.startswith('tests/')))
+PY
+)
+test -n "$pg_tests"
+uv run --locked python -m pytest -q -n 0 --nomigrations --store-durations --clean-durations --durations-path .test_durations_postgres $pg_tests
+```
+
+The current map came from a local serial macOS arm64 run against PostgreSQL
+16.14; host load was not fixed. CI per-test durations have been 1.9–2.6 times
+the local measurements, so use the map for relative group balance and check
+actual CI wall times against the 60-minute limit.
 
 Separate structural and downstream tiers are not implemented. Separate workflows
 enforce private-path exclusion and other repository policies. Executable jobs in
@@ -507,8 +466,7 @@ not accept `timeout-minutes`.
 Consumer repositories call the same reusable checks with `uv-enabled: false`,
 `pnpm-enabled: false`, and `stack-enabled: true`. Their caller owns the explicit
 `consumer-sources` (repository, sibling slot path, ref), `consumer-roots`,
-`consumer-path`, and `consumer-tests` inputs. The consumer's root conftest
-registers its fixture plugins.
+`consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs.
 The caller revision replaces its source ref; dependency revisions remain explicit.
 The full declared Python collection runs once across six `stack-shard` jobs,
 using native pytest-split `least_duration` assignment. Without stored consumer
@@ -577,16 +535,3 @@ Compiler co-development may use an explicit editable sibling checkout in a
 separate disposable check environment. Keep that local override out of committed
 requirements/locks and never apply it to a live stack environment. Normal native
 installation continues to consume the committed public release pin.
-
-
-The isolated generic API contracts run from the framework root with the existing
-Python environment and native pytest fixtures (no composed host required):
-
-```sh
-env -u DATABASE_URL python -m pytest --noconftest --ds=tests.permissionless_graphql_settings -q tests/test_permissionless_graphql.py
-env -u DATABASE_URL python -m pytest --noconftest --ds=tests.permissioned_graphql_settings -q tests/test_permissioned_graphql.py
-```
-
-These prove the no-IAM API import/CRUD/HTTP/stream contract and optional native IAM
-query/write/redaction/revocation adapters. They complement protected composed-host
-checks; they do not replace the integrated host and browser gates.

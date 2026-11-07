@@ -119,22 +119,18 @@ def test_daemonic_worker_rejects_process_hosting_before_spawning(monkeypatch):
         BridgeSessionProcess("unused", 1, stop_event=threading.Event()).run()
 
 
-@pytest.mark.parametrize("using", [None, "producer"])
-def test_production_child_receives_stop_and_returns_job_outcome(monkeypatch, tmp_path, using):
+def test_production_child_receives_stop_and_returns_job_outcome(monkeypatch, tmp_path):
     monkeypatch.setattr(session_process, "run_session_child", isolated_session_child)
     ready = tmp_path / "ready"
     stop = threading.Event()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        child = executor.submit(
-            BridgeSessionProcess("cooperative", {"ready": str(ready)}, stop_event=stop, using=using).run
-        )
+        child = executor.submit(BridgeSessionProcess("cooperative", {"ready": str(ready)}, stop_event=stop).run)
         try:
             wait_for_file(ready)
         finally:
             stop.set()
         result = child.result(timeout=5.0)
 
-    assert result["using"] == using
     assert result["in_child"] is True
     assert result["has_shutdown"] is True
     assert result["has_stalled_shutdown"] is True

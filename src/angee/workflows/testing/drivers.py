@@ -13,7 +13,7 @@ from django.apps import apps
 from django.conf import settings
 from rebac import system_context
 
-from angee.base.signals import change_published
+from angee.graphql.publishing import change_published
 from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks
 from angee.workflows.runner import runner
@@ -99,13 +99,22 @@ def load_workflow(
         ledger = apps.get_model("resources", "Resource")
         return ledger.objects.load_xref(document_or_xref, model=model, actor=actor, allow_non_dev=allow_non_dev)
     return model.objects.install_definition(
-        key=key,
-        name=name or key,
-        draft=document_or_xref,
-        publish=publish,
-        subject_model=subject_model,
-        actor=actor,
+        key=key, name=name or key, draft=document_or_xref,
+        publish=publish, subject_model=subject_model, actor=actor,
     )
+
+
+def publish_draft(workflow: Any, *, draft: Any, actor: Any) -> Any:
+    """Save a changed draft at the current revision, then publish exactly that revision."""
+
+    manager = type(workflow).objects
+    with system_context(reason="workflows testing draft revision"):
+        revision = type(workflow)._base_manager.filter(pk=workflow.pk).values_list("draft_revision", flat=True).get()
+    saved = manager.save_draft(workflow, draft=draft, expected_revision=revision, actor=actor)
+    result = manager.publish(workflow, expected_revision=saved.revision, actor=actor)
+    with system_context(reason="workflows testing published state"):
+        workflow.refresh_from_db()
+    return result
 
 
 def start_run(workflow: Any, *, actor: Any, **kwargs: Any) -> Any:
@@ -117,10 +126,8 @@ def start_run(workflow: Any, *, actor: Any, **kwargs: Any) -> Any:
 
 def decide(decision: Any, *, actor: Any, chosen: Sequence[str]) -> Any:
     """Submit the caller's observed revision through the real decisions owner."""
-    return decision.decide(
-        actor=actor,
-        revision=decision.revision,
-        chosen=chosen,
+    return type(decision).objects.decide(
+        decision.pk, actor=actor, revision=decision.revision, chosen=chosen,
     )
 
 
@@ -138,12 +145,7 @@ def run_until(run: Any, *, node: str | None = None, max_steps: int = 100) -> Any
         if run.is_terminal:
             return run
         with system_context(reason="workflows.testing inspect ready rows"):
-            ready = list(
-                apps.get_model("workflows", "StepRun")
-                ._default_manager.db_manager(run._state.db)
-                .filter(run_id=run.pk, status=StepRunStatus.READY)
-                .order_by("pk")
-            )
+            ready = list(run.step_runs.filter(status=StepRunStatus.READY).order_by("pk"))
         if not ready or any(step_run.node_key == node for step_run in ready):
             return run
         for step_run in ready:
@@ -170,11 +172,7 @@ class RunFactory:
         run = start_run(self.workflow, actor=self.actor, **kwargs)
         run_until(run, node=node)
         with system_context(reason="workflows.testing inspect target"):
-            step_run = (
-                apps.get_model("workflows", "StepRun")
-                ._default_manager.db_manager(run._state.db)
-                .get(run_id=run.pk, node_key=node)
-            )
+            step_run = run.step_runs.get(node_key=node)
         if step_run.status != status and step_run.status == StepRunStatus.READY:
             runner.execute(step_run.pk)
             with system_context(reason="workflows.testing inspect settlement"):

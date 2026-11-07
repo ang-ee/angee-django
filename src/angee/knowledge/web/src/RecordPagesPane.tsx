@@ -1,7 +1,7 @@
 import { ResourceQuery, useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Button, ErrorBanner, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, RecordReferenceRow, RelationPicker, Skeleton, SkeletonStatus, SkeletonText,
+  Button, ErrorBanner, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, PaneRowsSkeleton, RecordReferenceRow, RelationPicker,
   errorMessage, useAuthoredResourceMutation, useRelatedGroups, useRouteHref, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent,
   type RelatedGroupLabel,
 } from "@angee/ui";
@@ -36,8 +36,7 @@ function useRecordPagesRead(context: ChatterViewContext, role?: string) {
     content.edge?.model === RECORD_BINDING_MODEL && content.bindingRole !== undefined ? [content.bindingRole] : []));
   const variables = useMemo(() => ({ modelLabel, recordId, role: null }), [modelLabel, recordId]);
   const query = useAuthoredQuery(KnowledgeRecordPages, variables, {
-    enabled: Boolean(modelLabel && recordId), models: [...BINDING_MODELS, ...PAGE_READ_MODELS, modelLabel],
-    records: [{ model: modelLabel, id: recordId }], relatedModels: [RECORD_BINDING_MODEL],
+    enabled: Boolean(modelLabel && recordId), models: BINDING_MODELS,
   });
   const bindings = query.data?.record_knowledge_bindings.filter((binding) => binding.page !== null
     && (role === undefined ? !claimedRoles.has(binding.role) : binding.role === role));
@@ -62,6 +61,9 @@ export function recordPagesGroup(options: RecordPagesGroupOptions = {}): Contain
       edge: { model: RECORD_BINDING_MODEL },
       bindingRole: role,
       when,
+      // The generic group's related count counts every page binding. Role groups declare none, so
+      // where one is eligible the badge waits for Links, whose rows partition roles.
+      ...(role === undefined ? { relatedCount: { models: BINDING_MODELS } } : {}),
       usePaneCount: (context) => useRecordPagesRead(context, role).bindings?.length,
       useVerb: (context) => useRecordPagesRead(context, role).canBind,
       render: (context, label) => <RecordPagesGroup key={context.view.sqid} context={context} role={role} label={label} />,
@@ -86,24 +88,8 @@ function RecordPagesGroup({ context, role, label }: { context: ChatterViewContex
   const pagesQuery = useAuthoredQuery(KnowledgePages, { limit: 20, offset: 0, where, order: [{ title: "asc" }] }, {
     enabled: canBind && open && Boolean(metadata), models: [PAGE_MODEL],
   });
-  const [bind, bindState] = useAuthoredResourceMutation(KnowledgeBindRecord, {
-    invalidateModels: BINDING_MODELS,
-    records: (data, { input }) => data?.bind_knowledge_record ? [{ model: RECORD_BINDING_MODEL,
-      id: data.bind_knowledge_record.id, action: "create", relatedRecords: [
-        { model: input.model_label, id: input.record_id },
-        ...(input.page ? [{ model: PAGE_MODEL, id: input.page }] : []),
-      ] }] : [],
-  });
-  const [unbind, unbindState] = useAuthoredResourceMutation(KnowledgeUnbindRecord, {
-    invalidateModels: BINDING_MODELS,
-    records: (_data, { input }) => {
-      const binding = bindings?.find((row) => row.page === input.page && row.role === input.role);
-      return binding ? [{ model: RECORD_BINDING_MODEL, id: binding.id, action: "delete", relatedRecords: [
-        { model: input.model_label, id: input.record_id },
-        ...(input.page ? [{ model: PAGE_MODEL, id: input.page }] : []),
-      ] }] : [];
-    },
-  });
+  const [bind, bindState] = useAuthoredResourceMutation(KnowledgeBindRecord, { invalidateModels: BINDING_MODELS });
+  const [unbind, unbindState] = useAuthoredResourceMutation(KnowledgeUnbindRecord, { invalidateModels: BINDING_MODELS });
   const busy = bindState.fetching || unbindState.fetching;
 
   async function changeBinding(page: string, remove: boolean, bindingRole = role ?? "related"): Promise<void> {
@@ -128,9 +114,7 @@ function RecordPagesGroup({ context, role, label }: { context: ChatterViewContex
         onClick={() => void changeBinding(pageToBind, false)}>{t("record.bind")}</Button>
     </PaneLabelPopover>)}
     <li>
-      {query.isPending && !query.data ? <SkeletonStatus label={t("record.loading")} className="p-2">
-        <SkeletonText lines={2} size="lg" />
-      </SkeletonStatus> : query.error && !query.data ? <ErrorBanner description={errorMessage(query.error, t("record.loadError"))} /> :
+      {query.isPending && !query.data ? <PaneRowsSkeleton loadingLabel={t("record.loading")} rowCount={2} /> : query.error && !query.data ? <ErrorBanner description={errorMessage(query.error, t("record.loadError"))} /> :
         <div className="flex min-h-0 flex-col">
           {unbindState.error ? <ErrorBanner description={errorMessage(unbindState.error, t("record.writeError"))} /> : null}
           {bindings?.length ? <PaneRows>
@@ -153,7 +137,7 @@ export const pageBacklinksGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: "Backlinks",
-    usePaneCount: (context) => usePageDetail(context).data?.pages_by_pk?.backlinks.length,
+    relatedCount: { models: PAGE_READ_MODELS },
     render: (context, label) => <>{label()}<li><PageBacklinks context={context} /></li></>,
   },
 };
@@ -163,7 +147,7 @@ export const pageBoundToGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: "Bound to",
-    usePaneCount: (context) => usePageRecordBindings(context).data?.page_record_bindings.length,
+    relatedCount: { models: BINDING_MODELS },
     render: (context, label) => <>{label()}<li><PageBoundTo context={context} /></li></>,
   },
 };
@@ -179,8 +163,7 @@ function usePageDetail(context: ChatterViewContext) {
 
 function usePageRecordBindings(context: ChatterViewContext) {
   const page = pageId(context);
-  return useAuthoredQuery(KnowledgePageRecordBindings, { page }, { enabled: Boolean(page), models: BINDING_MODELS,
-    records: [{ model: PAGE_MODEL, id: page }], relatedModels: [RECORD_BINDING_MODEL] });
+  return useAuthoredQuery(KnowledgePageRecordBindings, { page }, { enabled: Boolean(page), models: BINDING_MODELS });
 }
 
 function PageBacklinks({ context }: { context: ChatterViewContext }): ReactElement {
@@ -188,7 +171,7 @@ function PageBacklinks({ context }: { context: ChatterViewContext }): ReactEleme
   const routeHref = useRouteHref();
   const query = usePageDetail(context);
   const backlinks = query.data?.pages_by_pk?.backlinks ?? [];
-  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton size="lg" /></SkeletonStatus>;
+  if (query.isPending && !query.data) return <PaneRowsSkeleton loadingLabel={t("page.loading")} rowCount={1} />;
   if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
   return <PaneRows>
     {backlinks.map((backlink) => {
@@ -206,7 +189,7 @@ function PageBoundTo({ context }: { context: ChatterViewContext }): ReactElement
   const bindings = query.data?.page_record_bindings.map((binding) => ({
     key: binding.id, model: binding.model_label, id: binding.record_id, role: binding.role,
   })) ?? [];
-  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton size="lg" /></SkeletonStatus>;
+  if (query.isPending && !query.data) return <PaneRowsSkeleton loadingLabel={t("page.loading")} rowCount={1} />;
   if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
   return <PaneRows>
     {bindings.map((binding) => <li key={binding.key}>

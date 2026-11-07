@@ -11,7 +11,7 @@ in RecordLink history and survive conditional writes.
 [PartyManager.ingest_contact](managers.py) asserts directory facts; Address and
 Relationship keep their own identities and statements. Missing members withdraw
 only that source. Canonical scopes retain unasserted rows and exclude trash and
-wholly withdrawn rows. [Handle transitions](models/handles.py) compose `Party.statements`
+wholly withdrawn rows. [Handle sources](managers.py) compose `Party.statements`
 through the shared Handle, Party lock order; resolution owns the cross-party
 winner and derived counters outside Party history.
 

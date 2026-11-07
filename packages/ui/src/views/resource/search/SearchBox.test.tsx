@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { FacetReadActivationContext, SearchBox } from "./SearchBox";
+import { SearchBox } from "./SearchBox";
 import { searchFixture } from "./search-fixture.test-support";
 import { ResourceViewProvider, useResourceView } from "../resource-view-context";
 import { useResourceSearch } from "./use-resource-search";
@@ -31,18 +31,6 @@ test("typing offers per-field searches before a facet match and Enter applies th
   fireEvent.keyDown(input, { key: "Enter" });
   expect(search.setText).toHaveBeenCalledWith("ab", "title");
   expect((input as HTMLInputElement).value).toBe("");
-});
-
-test("typing activates server facet reads and clearing the box with the panel closed releases them", async () => {
-  const search = searchFixture({ catalog: { text: [{ field: "title", label: "Title" }] } });
-  const activate = vi.fn();
-  render(<FacetReadActivationContext.Provider value={activate}><SearchBox search={search} /></FacetReadActivationContext.Provider>);
-  await waitFor(() => expect(activate).toHaveBeenLastCalledWith(false));
-  const input = screen.getByRole("combobox", { name: "Filter records" });
-  fireEvent.input(input, { target: { value: "ab" }, inputType: "insertText" });
-  await waitFor(() => expect(activate).toHaveBeenLastCalledWith(true));
-  fireEvent.input(input, { target: { value: "" }, inputType: "deleteContentBackward" });
-  await waitFor(() => expect(activate).toHaveBeenLastCalledWith(false));
 });
 
 test("each active kind has one chip and its remove calls the model's clear", () => {

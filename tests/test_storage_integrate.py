@@ -17,11 +17,13 @@ from django.db import DataError
 from django.utils import timezone
 from rebac import system_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.storage_integrate.connect import create_local_folder_mount
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import (
     LocalFolderMountBackend,
+    browse_mount_source,
 )
 from tests.conftest import (
     Backend,
@@ -33,9 +35,7 @@ from tests.conftest import (
     Vendor,
     addon_schema,
     create_platform_admin,
-    execute_schema,
     make_mount,
-    result_data,
 )
 
 storage_integrate_connect = importlib.import_module("angee.storage_integrate.connect")
@@ -96,8 +96,8 @@ def queued_mounts(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 
     queued: list[Any] = []
     monkeypatch.setattr(
-        Mount,
-        "request_sync",
+        storage_integrate_connect,
+        "queue_bridge_sync",
         lambda mount, **kwargs: queued.append((mount, kwargs)),
     )
     return queued
@@ -282,10 +282,9 @@ def test_browse_mount_source_dispatches_local_neutral_locations(
     assert len(queued_mounts) == 1
 
     direct = LocalFolderMountBackend.browse()
-    listing = Mount.objects.browse_source("local_folder")
+    listing = browse_mount_source("local_folder")
 
-    assert direct.location == listing.location
-    assert all(entry.blocked_reason != "Already mounted" for entry in direct.entries)
+    assert direct == listing
     assert listing.location.token == str(home.resolve())
     assert listing.location.label == "home"
     assert listing.parent_token == str(home.parent.resolve())
@@ -304,7 +303,7 @@ def test_browse_mount_source_dispatches_local_neutral_locations(
     assert not entries[".Library"].is_mountable
 
     with pytest.raises(ValidationError) as unknown_backend:
-        Mount.objects.browse_source("missing")
+        browse_mount_source("missing")
     assert "backend_class" in unknown_backend.value.message_dict
 
 
@@ -819,8 +818,8 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
 
     sync_calls: list[tuple[Any, dict[str, Any]]] = []
     monkeypatch.setattr(
-        Mount,
-        "request_sync",
+        storage_integrate_schema,
+        "queue_bridge_sync",
         lambda row, **kwargs: sync_calls.append((row, kwargs)),
     )
     synced = result_data(

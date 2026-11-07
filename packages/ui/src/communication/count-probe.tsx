@@ -27,8 +27,12 @@ export interface CountProbeProps {
 /** Each contributed hook gets its own React lifetime, even as eligibility changes. */
 export function ChatterCountProbe({ id, useCount, context, onCount }: CountProbeProps & {
   useCount: (context: ChatterViewContext) => number | undefined;
-}): null {
-  const count = useCount(context);
+}): React.ReactElement {
+  return <PublishedCount id={id} count={useCount(context)} onCount={onCount} />;
+}
+
+/** Publish one count under its id while mounted; only a changed number republishes. */
+export function PublishedCount({ id, count, onCount }: Omit<CountProbeProps, "context"> & { count: number | undefined }): null {
   React.useEffect(() => {
     onCount(id, count);
     return () => onCount(id, undefined);

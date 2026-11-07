@@ -1,6 +1,7 @@
 import { ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import type { PaginationState, Row as TableRowModel } from "@tanstack/react-table";
 import {
+  clampPageSize,
   stableSerialize,
   type AggregateBucket,
   type AngeeListBatchEntry,
@@ -27,16 +28,13 @@ import type { UiTranslate } from "../../i18n";
 import { errorFromUnknown } from "../../data/errors";
 import type { CollectionGroupRequest } from "./collection-source";
 
-/** Leaf record page size inside a server-grouped bucket. */
+/** Default size of a server-grouped bucket's first page; a source may declare its own. */
 const GROUPED_LEAF_PAGE_SIZE = 20;
 const EMPTY_ARRAY = [] as const;
 
 export interface GroupedRenderParams {
   query?: ResourceQuery;
   leafPageSize?: number;
-  /** Root groups that default open can request their full page immediately. */
-  autoExpandRoot?: boolean;
-  collapsedKeys?: ReadonlySet<string>;
   groupStack: readonly ResourceViewGroup[];
   baseFilter: ResourceViewFilter | undefined;
   expandedKeys: ReadonlySet<string>;
@@ -56,10 +54,6 @@ export interface GroupedRenderParams {
 /** Semantic leaf scope; the surface projects it once before transport. */
 export interface GroupedLeafScope {
   key: string;
-  value: unknown;
-  groupBy: { field: string; granularity?: string };
-  parentFilter: ResourceViewFilter | undefined;
-  total: number;
   filter: ResourceViewFilter;
   order: ResourceListOrder | undefined;
   page: number;
@@ -68,7 +62,12 @@ export interface GroupedLeafScope {
 
 export interface GroupedRenderModel<TRow extends Row> {
   groupScopes: GroupedGroupScope[];
+  /** Leaf pages to request: a later or resized page of one group. */
   leafScopes: GroupedLeafScope[];
+  /** Every expanded leaf bucket, in display order. */
+  leafKeys: string[];
+  /** First pages the groups read carried, keyed like `leafScopes`. */
+  carriedLeaves: ReadonlyMap<string, AngeeListBatchEntry>;
   items: GroupedListItem<TRow>[];
   rootResult: GroupedQueryResult | undefined;
 }
@@ -114,37 +113,49 @@ export function buildGroupedRenderModel<TRow extends Row>(
   } = params;
   const groupScopes: GroupedGroupScope[] = [];
   const leafScopes: GroupedLeafScope[] = [];
+  const leafKeys: string[] = [];
+  const carriedLeaves = new Map<string, AngeeListBatchEntry>();
   const items: GroupedListItem<TRow>[] = [];
   let rootResult: GroupedQueryResult | undefined;
   const resourceQuery =
     params.query ?? (modelMetadata ? ResourceQuery.from(modelMetadata) : null);
+  // The one owner of a group's first-page size: the groups read carries that page.
+  const declaredLeafPageSize = clampPageSize(params.leafPageSize ?? GROUPED_LEAF_PAGE_SIZE);
 
   const emitLeaf = (
     bucketKey: string,
     cumulativeFilter: ResourceViewFilter,
     bucket: AggregateBucket,
     depth: number,
-    groupBy: { field: string; granularity?: string },
-    value: unknown,
-    parentFilter: ResourceViewFilter | undefined,
+    groups: GroupedQueryResult,
   ): GroupedListPager => {
     const pagination = paginationByScope[bucketKey];
-    const leafPageSize =
-      pagination?.pageSize ?? params.leafPageSize ?? GROUPED_LEAF_PAGE_SIZE;
+    const leafPageSize = pagination?.pageSize ?? declaredLeafPageSize;
     const pageCount = Math.max(1, Math.ceil(bucket.count / leafPageSize));
     const currentPage = Math.min((pagination?.pageIndex ?? 0) + 1, pageCount);
-    leafScopes.push({
-      key: bucketKey,
-      value,
-      groupBy,
-      parentFilter,
-      total: bucket.count,
-      filter: cumulativeFilter,
-      order: leafOrder,
-      page: currentPage,
-      pageSize: leafPageSize,
-    });
-    const leaf = leafResults.get(bucketKey);
+    leafKeys.push(bucketKey);
+    if (currentPage === 1 && leafPageSize === declaredLeafPageSize) {
+      // Page 1 at the declared size comes with the groups read; a group without
+      // it is a broken groups contract, never a silent per-group request.
+      carriedLeaves.set(bucketKey, {
+        rows: bucket.rows ?? EMPTY_ARRAY,
+        total: bucket.count,
+        fetching: groups.fetching,
+        error: bucket.rows === undefined
+          ? new Error("The groups read carried no first page for this group.")
+          : null,
+        refetch: groups.refetch,
+      });
+    } else {
+      leafScopes.push({
+        key: bucketKey,
+        filter: cumulativeFilter,
+        order: leafOrder,
+        page: currentPage,
+        pageSize: leafPageSize,
+      });
+    }
+    const leaf = carriedLeaves.get(bucketKey) ?? leafResults.get(bucketKey);
     const rows = rowModelsByScopeKey.get(bucketKey) ?? EMPTY_ARRAY;
     const nav: GroupedRecordNav = {
       filter: cumulativeFilter,
@@ -218,6 +229,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
       depth === 0 ? pageSize : pagination?.pageSize ?? pageSize;
     const storedPage =
       depth === 0 ? rootPage : (pagination?.pageIndex ?? 0) + 1;
+    const isLeafLevel = depth === groupStack.length - 1;
     const query: GroupByRequestOptions = {
       dimensions: projection.dimensions,
       ...(projection.orderBy ? { orderBy: projection.orderBy } : {}),
@@ -225,6 +237,9 @@ export function buildGroupedRenderModel<TRow extends Row>(
       measures: queryMeasures,
       page: storedPage,
       pageSize: levelPageSize,
+      ...(isLeafLevel
+        ? { rows: { limit: declaredLeafPageSize, orderBy: resourceQuery.toOrderBy(leafOrder) } }
+        : {}),
     };
     groupScopes.push({
       key: levelScopeKey,
@@ -234,6 +249,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
       order: leafOrder,
       page: storedPage,
       pageSize: levelPageSize,
+      ...(isLeafLevel ? { leafPageSize: declaredLeafPageSize } : {}),
     });
     const result = groupByResults.get(levelScopeKey);
     if (depth === 0) rootResult = result;
@@ -283,7 +299,6 @@ export function buildGroupedRenderModel<TRow extends Row>(
       return pager;
     }
 
-    const isLeafLevel = depth === groupStack.length - 1;
     for (const bucket of result.buckets) {
       const bucketFilter = axis.drill(bucket);
       const expandable = bucketFilter !== undefined;
@@ -291,9 +306,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
         scope: levelScopeKey,
         bucket: bucket.key ?? null,
       });
-      const expanded = expandable && (expandedKeys.has(bucketKey)
-        || (depth === 0 && params.autoExpandRoot === true && !params.collapsedKeys?.has(bucketKey)));
-      const label = bucket.label ?? bucketLabel(
+      const expanded = expandable && expandedKeys.has(bucketKey);
+      const label = bucketLabel(
         bucket,
         axisGroup,
         modelMetadata,
@@ -315,21 +329,17 @@ export function buildGroupedRenderModel<TRow extends Row>(
         bucket,
       };
       items.push(header);
-      if (bucketFilter === undefined) continue;
+      if (!expanded || bucketFilter === undefined) continue;
       const cumulativeFilter = Filter.combine(parentFilter ?? {}, bucketFilter);
-      if (!expanded) continue;
       header.pager = isLeafLevel
-        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth,
-            { field: projection.dimensions[0]!.input,
-              ...(projection.dimensions[0]!.granularity ? { granularity: projection.dimensions[0]!.granularity } : {}) },
-            bucket.key?.[projection.valueKey] ?? null, parentFilter)
+        ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth, result)
         : walkLevel(depth + 1, cumulativeFilter);
     }
     return pager;
   };
 
   walkLevel(0, baseFilter);
-  return { groupScopes, leafScopes, items, rootResult };
+  return { groupScopes, leafScopes, leafKeys, carriedLeaves, items, rootResult };
 }
 
 function bucketLabel(

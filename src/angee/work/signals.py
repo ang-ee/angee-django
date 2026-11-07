@@ -6,16 +6,16 @@ from typing import Any
 
 from django.apps import apps
 
-from angee.messaging.events import message_landed
+from angee.messaging.events import message_ingested
 from angee.projects.events import project_phase_changed, project_status_changed, task_promoted
 
 
 def connect() -> None:
     """Listen through the declared messaging and composed-project event seams."""
 
-    message_landed.connect(
+    message_ingested.connect(
         wake_snoozed_task,
-        dispatch_uid="work.wake_snoozed_task.message_landed",
+        dispatch_uid="work.wake_snoozed_task.message_ingested",
     )
     for event in (task_promoted, project_phase_changed, project_status_changed):
         event.connect(
@@ -34,14 +34,13 @@ def follow_project(sender: Any, project: Any, **kwargs: Any) -> None:
 def wake_snoozed_task(sender: Any, instance: Any, **kwargs: Any) -> None:
     """Clear snooze state when a new message lands on a task chatter thread."""
 
-    del sender
-    task_model = apps.get_model("projects", "Task")
-    threads = {
-        row.thread_id: row.thread for row in kwargs.get("created_batch") or (instance,) if row.thread_id is not None
-    }
-    for thread_id, thread in threads.items():
-        if not thread.is_record_chatter:
-            continue
-        task_model.objects.db_manager(instance._state.db).sudo(reason="work.chatter.wake").wake_from_chatter_thread(
-            thread_id,
-        )
+    del sender, kwargs
+    try:
+        task_model = apps.get_model("projects", "Task")
+    except LookupError:
+        # Source-model test/profile graphs can install the addon declarations
+        # without composing the concrete Task runtime model. The chatter seam
+        # is global, so those graphs must stay a no-op rather than failing every
+        # unrelated message ingest.
+        return
+    task_model.wake_from_chatter_thread(instance.thread_id)

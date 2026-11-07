@@ -4,18 +4,17 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
-from angee.iam.models.merge import ProtectedMergeableUnscopedManager
+from angee.base.managers import AngeeManager, AngeeUnscopedManager, MergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import (
     AngeeHistoryMergeableUnscopedQuerySet,
     AngeeHistoryQuerySet,
     AngeeHistoryUnscopedQuerySet,
 )
 
-_AngeeHistoryManagerBase = ProtectedManager.from_queryset(AngeeHistoryQuerySet)
+_AngeeHistoryManagerBase = AngeeManager.from_queryset(AngeeHistoryQuerySet)
 
 
-_AngeeHistoryUnscopedManagerBase = ProtectedUnscopedManager.from_queryset(AngeeHistoryUnscopedQuerySet)
+_AngeeHistoryUnscopedManagerBase = AngeeUnscopedManager.from_queryset(AngeeHistoryUnscopedQuerySet)
 
 
 class AngeeHistoryManager[T: models.Model](_AngeeHistoryManagerBase[T]):
@@ -26,7 +25,7 @@ class AngeeHistoryUnscopedManager[T: models.Model](_AngeeHistoryUnscopedManagerB
     """Explicit captured base manager for Angee record models."""
 
 
-_AngeeHistoryMergeableUnscopedManagerBase = ProtectedMergeableUnscopedManager.from_queryset(
+_AngeeHistoryMergeableUnscopedManagerBase = MergeableUnscopedManager.from_queryset(
     AngeeHistoryMergeableUnscopedQuerySet,
 )
 

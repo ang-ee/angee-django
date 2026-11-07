@@ -8,17 +8,10 @@ from django.apps import AppConfig
 from django.core import checks
 from sentry_sdk.integrations.logging import ignore_logger
 
-from angee.base.hooks import check_hook, check_hooks
+from angee.base.hooks import check_hooks
+from angee.server.checks import SERVING_TAG
 
-check_settings = partial(
-    check_hooks,
-    (
-        "ANGEE_GRAPHQL_RESOURCE_FILTERS",
-        "ANGEE_GRAPHQL_RESOURCE_CONTRIBUTORS",
-        "ANGEE_GRAPHQL_RESOURCE_METADATA",
-        "ANGEE_GRAPHQL_CHANGE_PROJECTORS",
-    ),
-)
+check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS", "ANGEE_GRAPHQL_RELATED_COUNTS"))
 
 
 class GraphQLConfig(AppConfig):
@@ -26,16 +19,7 @@ class GraphQLConfig(AppConfig):
 
     default = True
     name = "angee.graphql"
-    compose_urls = "angee.graphql.urls"
-    requires_apps = ("channels",)
-
-    def compose_asgi(self):
-        """Contribute the single Channels protocol owner after app population."""
-
-        from angee.graphql.asgi import websocket_application
-        from angee.server.asgi import AsgiContribution
-
-        return AsgiContribution(protocols={"websocket": websocket_application()})
+    requires_apps = ('channels', 'django.contrib.auth', 'django.contrib.sessions')
 
     def ready(self) -> None:
         """Register schema checks and connect model-change hooks."""
@@ -54,20 +38,13 @@ class GraphQLConfig(AppConfig):
 
         from angee.graphql import field_types  # noqa: F401
         from angee.graphql.checks import check_graphql_channel_layer, check_graphql_schemas
-        from angee.graphql.publishing import connect_change_adapter, connect_change_publishers
+        from angee.graphql.publishing import connect_change_publishers
+        from angee.graphql.related_counts import check_related_counts
 
-        connect_change_adapter()
         checks.register(check_settings, checks.Tags.models)
-        for name in (
-            "ANGEE_GRAPHQL_SCHEMA_CLASS",
-            "ANGEE_GRAPHQL_HTTP_VIEW_CLASS",
-            "ANGEE_GRAPHQL_WS_CONSUMER_CLASS",
-            "ANGEE_GRAPHQL_CHANGE_FILTER",
-        ):
-            checks.register(partial(check_hook, name), checks.Tags.models)
-
+        checks.register(check_related_counts, checks.Tags.models)
         checks.register(check_graphql_schemas)
-        checks.register(check_graphql_channel_layer)
+        checks.register(check_graphql_channel_layer, SERVING_TAG, deploy=True)
         if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None and mode() is None:
             connect_change_publishers()
         # Compose connects in SchemaIntegration after all ready callbacks. Bare

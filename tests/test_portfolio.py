@@ -9,13 +9,13 @@ from django.db import models, transaction
 from rebac import SubjectRef, actor_context, system_context
 from rebac.models import active_relationship_model
 
-from angee.iam.models.base import ProtectedDataModel
+from angee.base.models.base import AngeeDataModel
 from angee.portfolio.models import InitiativeProject
 from angee.portfolio.testing.models import Product
 from tests.hierdemo.models import HierNode
 
 
-class InitiativePlacementRow(ProtectedDataModel):
+class InitiativePlacementRow(AngeeDataModel):
     """Minimal persisted placement exercising the portfolio ancestry invariant."""
 
     initiative = models.ForeignKey(HierNode, on_delete=models.CASCADE, related_name="+")

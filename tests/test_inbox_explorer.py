@@ -6,10 +6,10 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_groups import InboxGroupScope
 from angee.messaging.inbox_navigator import InboxNavigator, InboxNavigatorOptions
@@ -18,7 +18,7 @@ from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.inbox_transcript import InboxTranscript
 from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Participant, Party, Thread
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
-from tests.conftest import execute_schema, make_integration, result_data
+from tests.conftest import make_integration
 from tests.test_messaging import _storage_drive
 from tests.test_nexus import _schema
 
@@ -77,20 +77,78 @@ def test_file_backlinks_allow_empty_files_and_deduplicate_authorized_messages(tm
                 )
     with actor_context(owner):
         related = InboxRelated(Message.objects.all().explorer(), target, str(messages[0].sqid))
-        uses = Message.objects.all().explorer().message_uses(str(messages[0].sqid))
-        assert [(use.target, use.count) for use in uses] == [(target, 2), (target, 2)]
         assert related.summary().count == 2
         first, second = related.page(size=1), related.page(page=2, size=1)
         assert (first.count, first.message_count) == (2, 2)
-        assert [row.message.pk for row in [*first.rows, *second.rows]] == [messages[1].pk, messages[0].pk]
+        assert [row.message_id for row in [*first.rows, *second.rows]] == [str(messages[1].sqid), str(messages[0].sqid)]
+        assert [message.pk for message in first.messages] == [messages[1].pk]
         assert all(row.part.file_id == file.pk for row in [*first.rows, *second.rows])
     with actor_context(other):
-        # The file is now readable through this actor's message part, while
-        # the explorer still excludes messages from the owner's account.
-        related = InboxRelated(Message.objects.all().explorer(), target)
-        page = related.page()
-        assert (page.count, page.message_count) == (1, 1)
-        assert [row.message.pk for row in page.rows] == [messages[2].pk]
+        with pytest.raises(ValueError, match="Related content unavailable"):
+            InboxRelated(Message.objects.all().explorer(), target).page()
+
+
+def test_attachment_page_cost_does_not_grow_with_its_rows(tmp_path):
+    reader = User.objects.create_user(username="explorer-attachment-cost")
+    stranger = User.objects.create_user(username="explorer-attachment-cost-hidden")
+    account = make_integration(reader.username, model=Channel, owner=reader)
+    hidden_account = make_integration(stranger.username, model=Channel, owner=stranger)
+    File = apps.get_model("storage", "File")
+    with system_context(reason="seed readable and hidden files used in two inboxes"):
+        drive = _storage_drive(tmp_path, owner=reader)
+        hidden_drive = apps.get_model("storage", "Drive")._base_manager.create(
+            backend=drive.backend, slug="hidden", name="Hidden", prefix="hidden", created_by=stranger,
+        )
+        own = range(0, 30, 2)  # files in the reader's drive; a stranger owns the rest
+        files = [
+            File.objects.create(
+                drive=drive if index in own else hidden_drive, created_by=reader if index in own else stranger,
+                filename=f"f{index}.pdf", content_hash=f"{index:064x}",
+            )
+            for index in range(40)
+        ]
+        messages = []
+        for index, file in enumerate(files):
+            hidden = index >= 30
+            messages.append(Message._base_manager.create(
+                created_by=stranger if hidden else reader, channel=hidden_account if hidden else account,
+                status="synced", sent_at=T0 + timedelta(minutes=index),
+            ))
+            Part._base_manager.create(
+                created_by=messages[-1].created_by, message=messages[-1], file=file,
+                name=f"a{index}.pdf", disposition="attachment", position=1,
+            )
+        reused = [
+            Part._base_manager.create(
+                created_by=reader, message=messages[29], file=files[0], name="again.pdf",
+                disposition="attachment", position=position,
+            )
+            for position in (2, 3)
+        ]
+    with actor_context(reader):
+        inbox = Message.objects.all().explorer()
+        readable = set(inbox.collection("storage", "File").values_list("pk", flat=True))
+        results = InboxResults(inbox, inbox.messages, InboxResultOptions(lens="attachments"))
+
+        def cost(size: int) -> tuple[int, int]:
+            with CaptureQueriesContext(connection) as captured:
+                results.page(size=size)
+            return len(captured), max(len(query["sql"]) for query in captured.captured_queries)
+
+        cost(10)  # warm per-process schema and policy caches
+        (narrow_statements, narrow_largest), (wide_statements, wide_largest) = cost(10), cost(25)
+        page = results.page(size=25)
+    # The reader reads only part of the files; an unreadable file's use stays a part row.
+    assert files[0].pk in readable and not readable >= {file.pk for file in files}
+    assert (len(page.rows), page.count) == (25, 30)
+    assert all((row.file is not None) == (row.part.file_id in readable) for row in page.rows)
+    # A file's source is its newest use; the higher part breaks a tie in one message.
+    source = next(row for row in page.rows if row.id == f"file:{files[0].sqid}")
+    assert (source.count, source.part_count, source.part.pk) == (2, 3, reused[-1].pk)
+    # The 15 extra rows add only their keys and times to the source read; a file
+    # permission compiled once per selected row added tens of kilobytes each.
+    assert wide_statements == narrow_statements
+    assert wide_largest - narrow_largest < 15 * 100
 
 
 def test_circle_groups_deduplicate_confirmed_subtrees_and_keep_empty_circles():
@@ -216,7 +274,7 @@ def test_search_candidates_preserve_terms_roles_and_distinct_message_uses():
         assert (groups.count, groups.record_count, groups.message_count) == (3, 3, 3)
 
 
-def test_sections_page_threads_before_bounded_previews():
+def test_conversation_groups_page_before_bounded_leaf_pages():
     owner = User.objects.create_user(username="explorer-sections")
     channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed explorer"):
@@ -232,13 +290,29 @@ def test_sections_page_threads_before_bounded_previews():
         Message._base_manager.create(channel=channel, created_by=owner, status="draft")
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
-        first = inbox.conversations(inbox.results(InboxCoverage(), InboxSearch()), size=2)
-        second = inbox.conversations(inbox.messages, size=2, page=2)
+        results = InboxResults(inbox, inbox.results(InboxCoverage(), InboxSearch()), InboxResultOptions())
+        first = results.groups("conversation").page(size=2)
+        second = results.groups("conversation").page(page=2, size=2)
         assert (first.count, first.message_count) == (5, 33)
-        assert first.rows[0].id == f"message:{standalone.sqid}"
-        assert first.rows[1].matching_count == first.rows[1].total_count == 8
-        assert len(first.rows[1].messages) == 3
-        assert {row.id for row in first.rows}.isdisjoint(row.id for row in second.rows)
+        assert first.rows[0].value == f"message:{standalone.sqid}"
+        assert first.rows[1].count == 8
+        leaf = results.page(scope=InboxGroupScope(axis="conversation", value=first.rows[1].value), size=3)
+        assert (len(leaf.rows), leaf.count) == (3, 8)
+        assert {row.value for row in first.rows}.isdisjoint(row.value for row in second.rows)
+        # Each header carries exactly its own leaf page, read in one window over every header.
+        carried = results.group_page("conversation", size=2, leaf_size=3)
+        assert [row.value for row in carried.rows] == [row.value for row in first.rows]
+        for row in carried.rows:
+            expected = results.page(scope=InboxGroupScope(axis="conversation", value=row.value), size=3)
+            assert [result.id for result in row.rows] == [result.id for result in expected.rows]
+        assert sorted(str(message.sqid) for message in carried.messages) == sorted(
+            result.message_id for row in carried.rows for result in row.rows
+        )
+        with CaptureQueriesContext(connection) as two_groups:
+            results.group_page("conversation", size=2, leaf_size=3)
+        with CaptureQueriesContext(connection) as five_groups:
+            results.group_page("conversation", size=5, leaf_size=3)
+        assert len(five_groups) == len(two_groups)
 
 
 def test_confirmed_senders_consolidate_but_suggestions_do_not():
@@ -505,8 +579,6 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
                 created_by=row.created_by, message=row, role="body", fragment=fragment, position=0
             )
         Part._base_manager.create(created_by=owner, message=rows[0], role="quoted", fragment=fragment, position=1)
-        title = Fragment.objects.upsert(text="Selected shared title", created_by_id=owner.pk)
-        Part._base_manager.create(created_by=owner, message=rows[0], role="title", fragment=title, position=2)
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
         related = inbox.related(f"fragment:{fragment.sqid}")
@@ -523,7 +595,6 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
         assert page.count == page.message_count == 1
         assert page.rows[0].count == 1 and page.rows[0].part_count == 2
         assert page.rows[0].id == f"fragment:{fragment.sqid}"
-        assert page.rows[0].message.title() == "Selected shared title"
         assert content.groups("platform").page().record_count == 1
         assert content.page(scope=InboxGroupScope(axis="platform", value="email")).rows[0].count == 1
         related_target = InboxRelated(inbox, f"fragment:{fragment.sqid}", str(rows[1].sqid))
@@ -555,11 +626,13 @@ def test_related_relations_authorize_both_endpoints_and_keep_reply_provenance():
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
         related = InboxRelated(inbox, f"relations:{source.sqid}")
-        rows = related.page().rows
+        page = related.page()
+        rows = page.rows
         assert related.summary().count == 2
         assert {row.id for row in rows} == {f"edge:{edge.sqid}", f"reply:{reply.sqid}"}
         assert {row.label for row in rows} == {"quote", "reply"}
-        assert all(row.src.pk == source.pk and row.dst.pk == reply.pk for row in rows)
+        assert all(row.src_id == str(source.sqid) and row.dst_id == str(reply.sqid) for row in rows)
+        assert [message.pk for message in page.messages] == sorted([source.pk, reply.pk])
         assert inbox.relation_kinds() == ["quote", "reply"]
 
 
@@ -574,24 +647,48 @@ def test_unreadable_thread_is_not_exposed_as_a_group():
         )
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
-        assert not Thread.objects.with_actor(owner).filter(pk=thread.pk).exists()
-        result = inbox.conversations(inbox.messages)
-        assert result.rows[0].thread is None
-        assert result.rows[0].id == f"message:{message.sqid}"
-        groups = InboxResults(inbox, inbox.messages, InboxResultOptions()).groups("conversation").page()
+        results = InboxResults(inbox, inbox.messages, InboxResultOptions())
+        groups = results.groups("conversation").page()
         assert groups.rows[0].value == f"message:{message.sqid}"
-        unreadable_scope = InboxGroupScope(axis="conversation", value=f"thread:{thread.sqid}")
-        for lens in ("conversations", "attachments", "text"):
+        assert results.page(scope=InboxGroupScope(axis="conversation", value=groups.rows[0].value)).count == 1
+        with pytest.raises(ValueError, match="Conversation unavailable"):
+            results.page(scope=InboxGroupScope(axis="conversation", value=f"thread:{thread.sqid}"))
+
+
+def test_merged_threads_group_under_their_readable_survivor():
+    owner = User.objects.create_user(username="explorer-merged-threads")
+    other = User.objects.create_user(username="explorer-merged-hidden")
+    channel = make_integration(owner.username, model=Channel, owner=owner)
+    with system_context(reason="seed merged conversations"):
+        survivor = Thread._base_manager.create(created_by=owner, channel=channel, platform="email")
+        # Redirects keep their messages; readable or not, they belong to a readable survivor.
+        hidden = Thread._base_manager.create(created_by=other, merged_into=survivor)
+        visible = Thread._base_manager.create(created_by=owner, channel=channel, merged_into=survivor)
+        # A readable redirect whose survivor is unreadable stays its own conversation.
+        unreadable_survivor = Thread._base_manager.create(created_by=other)
+        stranded = Thread._base_manager.create(created_by=owner, channel=channel, merged_into=unreadable_survivor)
+        for index, thread in enumerate((survivor, hidden, visible, stranded)):
+            Message._base_manager.create(
+                channel=channel, created_by=owner, thread=thread, status="synced", sent_at=T0 + timedelta(days=index)
+            )
+    with actor_context(owner):
+        inbox = Message.objects.all().explorer()
+        results = InboxResults(inbox, inbox.messages, InboxResultOptions())
+        groups = results.groups("conversation").page()
+        assert [(row.value, row.count) for row in groups.rows] == [
+            (f"thread:{stranded.sqid}", 1), (f"thread:{survivor.sqid}", 3),
+        ]
+        assert groups.message_count == 4
+        survivor_scope = InboxGroupScope(axis="conversation", value=f"thread:{survivor.sqid}")
+        assert results.page(scope=survivor_scope).count == 3
+        carried = results.group_page("conversation", leaf_size=5)
+        assert [len(row.rows) for row in carried.rows] == [1, 3]
+        stranded_scope = InboxGroupScope(axis="conversation", value=f"thread:{stranded.sqid}")
+        assert results.page(scope=stranded_scope).count == 1
+        # A redirect under a readable survivor is not a conversation key of its own.
+        for redirect in (hidden, visible):
             with pytest.raises(ValueError, match="Conversation unavailable"):
-                InboxResults(inbox, inbox.messages, InboxResultOptions(lens=lens)).page(scope=unreadable_scope)
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
-    projected = result_data(execute_schema(
-        _schema(),
-        "query($id: ID!) { inbox_message(id: $id) { message { thread { id } } } }",
-        {"id": str(message.sqid)}, request=request,
-    ))
-    assert projected["inbox_message"]["message"]["thread"] is None
+                results.page(scope=InboxGroupScope(axis="conversation", value=f"thread:{redirect.sqid}"))
 
 
 def test_live_schema_projects_sections_and_independent_message():
@@ -603,34 +700,36 @@ def test_live_schema_projects_sections_and_independent_message():
             channel=channel,
             created_by=owner, sender=handle, status="synced", direction="inbound", sent_at=T0
         )
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
+    request = graphql_request(owner)
     result = execute_schema(
         _schema(),
         """query($id: ID!) {
       inbox_senders { count rows { id count handle { id value } } }
       inbox_navigator { count rows { id label count handle { id } thread { id } } }
       inbox_navigator_groups(axis: "platform") { count record_count rows { value label count } }
-      inbox_results { count message_count rows { id latest message { id } } }
+      inbox_results { count message_count rows { id latest message_id } messages { id } }
       inbox_result_groups(axis: "day") { count record_count rows { value label count } }
-      inbox_conversations { count message_count rows { id matching_count messages { id preview parts { id } } } }
+      carried_results: inbox_result_groups(axis: "conversation", leaf_size: 3) {
+        rows { value rows { message_id } } messages { id }
+      }
+      carried_navigator: inbox_navigator_groups(axis: "platform", leaf_size: 2) { rows { value rows { id } } }
       inbox_message(id: $id, coverage: {platforms: ["slack"]}) {
-        matches message { id starred }
+        matches message { id starred } uses { part_id target count }
       }
     }""",
         {"id": str(message.sqid)},
         request=request,
     )
     data = result_data(result)
-    assert data["inbox_conversations"]["message_count"] == 1
+    assert data["inbox_results"]["rows"][0]["message_id"] == str(message.sqid)
+    assert data["inbox_results"]["messages"] == [{"id": str(message.sqid)}]
+    assert data["carried_results"]["rows"][0]["rows"] == [{"message_id": str(message.sqid)}]
+    assert data["carried_results"]["messages"] == [{"id": str(message.sqid)}]
+    assert data["carried_navigator"]["rows"][0]["rows"] == [{"id": f"handle:{handle.sqid}"}]
     assert data["inbox_senders"]["count"] == 1
     assert data["inbox_navigator"]["rows"][0]["label"] == "sender@example.com"
     assert data["inbox_navigator_groups"]["record_count"] == 1
     assert data["inbox_message"]["matches"] is False
-    assert result_data(execute_schema(
-        _schema(), "query($id: ID!) { inbox_message_uses(id: $id) { target count } }",
-        {"id": str(message.sqid)}, request=request,
-    ))["inbox_message_uses"] == []
     starred = result_data(
         execute_schema(
             _schema(),
@@ -644,223 +743,82 @@ def test_live_schema_projects_sections_and_independent_message():
     assert starred["set_inbox_message_starred"]["starred"] is True
 
 
-@pytest.mark.django_db(transaction=True)
-def test_selected_message_open_stays_flat_and_uses_remain_actor_scoped_as_corpus_grows():
-    owner = User.objects.create_user(username="explorer-message-budget")
+def test_day_content_and_navigator_group_pages_carry_their_first_pages():
+    owner = User.objects.create_user(username="explorer-carried-pages")
     channel = make_integration(owner.username, model=Channel, owner=owner)
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
-    document = """query NexusInboxMessage($id: ID!) {
-      inbox_message(id: $id) { matches message { id } }
-    }"""
-    uses_document = """query($id: ID!) { inbox_message_uses(id: $id) { part_id target count } }"""
-    with system_context(reason="seed selected use target"):
-        fragment = Fragment.objects.upsert(text="Shared selected target", created_by_id=owner.pk)
-        selected = Message._base_manager.create(channel=channel, created_by=owner, status="synced", sent_at=T0)
-        Part._base_manager.create(message=selected, created_by=owner, fragment=fragment)
-    for corpus_size in (1, 5, 10):
-        with system_context(reason="grow message corpus"):
-            for index in range(corpus_size - Message._base_manager.count()):
-                message = Message._base_manager.create(
-                    channel=channel, created_by=owner, status="synced", sent_at=T0 + timedelta(minutes=index + 1)
-                )
-                Part._base_manager.create(message=message, created_by=owner, fragment=fragment)
-        with actor_context(owner):
-            inbox = Message.objects.all().explorer()
-            with CaptureQueriesContext(connection) as statements:
-                message, matches = inbox.selected_message(str(selected.sqid), InboxCoverage(), InboxSearch())
-            assert matches is True
-            assert message.pk == selected.pk
-            assert len(statements) == 3
-            assert all(f'FROM "{Part._meta.db_table}"' not in statement["sql"] for statement in statements)
-            # The matches statement tests the admitted message's own fields; it must not compile Message.read.
-            assert "rebac_relationshipregistry" not in statements[-1]["sql"]
-            with CaptureQueriesContext(connection) as uses_statements:
-                uses = inbox.message_uses(str(selected.sqid))
-            assert uses[0].count == corpus_size
-            assert "rebac_relationshipregistry" in uses_statements[-1]["sql"]
-            assert inbox.selected_message(
-                str(selected.sqid), InboxCoverage(), InboxSearch(text="Shared selected target"),
-            )[1]
-            assert not inbox.selected_message(str(selected.sqid), InboxCoverage(), InboxSearch(attachment="any"))[1]
-        with CaptureQueriesContext(connection) as document_statements:
-            payload = result_data(execute_schema(
-                _schema(), document, {"id": str(selected.sqid)}, request=request,
-            ))["inbox_message"]
-        assert payload["matches"] is True
-        assert len(document_statements) == 6
-        assert all(f'FROM "{Part._meta.db_table}"' not in statement["sql"] for statement in document_statements)
-        uses_payload = result_data(execute_schema(
-            _schema(), uses_document, {"id": str(selected.sqid)}, request=request,
-        ))
-        assert uses_payload["inbox_message_uses"][0]["count"] == corpus_size
-    other = User.objects.create_user(username="explorer-message-budget-hidden")
-    hidden_channel = make_integration(other.username, model=Channel, owner=other)
-    with system_context(reason="seed unreadable use"):
-        hidden = Message._base_manager.create(channel=hidden_channel, created_by=other, status="synced", sent_at=T0)
-        Part._base_manager.create(message=hidden, created_by=other, fragment=fragment)
-    with actor_context(owner):
-        assert Message.objects.all().explorer().message_uses(str(selected.sqid))[0].count == 10
-
-
-def test_selected_message_admits_before_exposing_matches_or_part_uses():
-    owner = User.objects.create_user(username="explorer-selected-owner")
-    outsider = User.objects.create_user(username="explorer-selected-outsider")
-    channel = make_integration(owner.username, model=Channel, owner=owner)
-    with system_context(reason="seed unreadable selected message"):
-        message = Message._base_manager.create(channel=channel, created_by=owner, status="synced", sent_at=T0)
-        fragment = Fragment.objects.upsert(text="Hidden selected content", created_by_id=owner.pk)
-        Part._base_manager.create(message=message, created_by=owner, fragment=fragment)
-    with actor_context(outsider):
-        with pytest.raises(ValueError, match="Message unavailable"):
-            Message.objects.all().explorer().message_uses(str(message.sqid))
-
-
-def test_selected_merged_copy_is_outside_results_when_its_survivor_is_present():
-    owner = User.objects.create_user(username="explorer-merged-copy")
-    channel = make_integration(owner.username, model=Channel, owner=owner)
-    with system_context(reason="seed selected copy and survivor"):
-        survivor = Message._base_manager.create(channel=channel, created_by=owner, status="synced", sent_at=T0)
-        copy = Message._base_manager.create(
-            channel=channel, created_by=owner, status="synced", sent_at=T0 + timedelta(minutes=1),
-            merged_into=survivor,
-        )
+    with system_context(reason="seed carried group pages"):
+        handle = Handle._base_manager.create(created_by=owner, value="sender@example.com", platform="email")
+        fragment = Fragment.objects.upsert(text="shared carried text", created_by_id=owner.pk)
+        for index, (platform, sent_at) in enumerate(
+            (("email", T0), ("email", T0 + timedelta(hours=1)), ("slack", T0 + timedelta(days=1)))
+        ):
+            message = Message._base_manager.create(
+                channel=channel, created_by=owner, sender=handle, status="synced", direction="inbound",
+                platform=platform, sent_at=sent_at,
+            )
+            Part._base_manager.create(created_by=owner, message=message, role="body", fragment=fragment, position=index)
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
-        assert inbox.selected_message(str(copy.sqid), InboxCoverage(), InboxSearch())[1] is False
-        assert inbox.selected_message(
-            str(copy.sqid), InboxCoverage(platforms=["slack"]), InboxSearch(),
-        )[1] is False
-        assert inbox.selected_message(
-            str(copy.sqid), InboxCoverage(after=T0 + timedelta(seconds=30)), InboxSearch(),
-        )[1] is True
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
-    selected = result_data(execute_schema(
-        _schema(),
-        """query($id: ID!) { inbox_message(id: $id) { message { merged_into { id } } } }""",
-        {"id": str(copy.sqid)}, request=request,
-    ))["inbox_message"]["message"]
-    assert selected["merged_into"]["id"] == str(survivor.sqid)
+        for options, axis in (
+            (InboxResultOptions(lens="timeline"), "day"),
+            (InboxResultOptions(lens="timeline"), "platform"),
+            (InboxResultOptions(lens="text"), "platform"),
+        ):
+            results = InboxResults(inbox, inbox.messages, options)
+            carried = results.group_page(axis, leaf_size=1)
+            assert carried.rows
+            for row in carried.rows:
+                expected = results.page(scope=InboxGroupScope(axis=axis, value=row.value), size=1)
+                assert [result.id for result in row.rows] == [result.id for result in expected.rows]
+            named = {result.message_id for row in carried.rows for result in row.rows}
+            assert {str(message.sqid) for message in carried.messages} == named
+        assert InboxResults(inbox, inbox.messages, InboxResultOptions()).group_page("platform").messages.count() == 0
+        navigator = InboxNavigator(Message.objects.all(), InboxCoverage(), InboxNavigatorOptions())
+        groups = navigator.group_page("platform", leaf_size=2)
+        assert [row.value for row in groups.rows] == ["email", "slack"]
+        for row in groups.rows:
+            expected = navigator.page(scope=InboxGroupScope(axis="platform", value=row.value), size=2)
+            assert [identity.id for identity in row.rows] == [identity.id for identity in expected.rows]
 
 
-def test_new_reply_names_its_parent_for_reader_invalidation():
-    owner = User.objects.create_user(username="explorer-reply-invalidation")
-    with system_context(reason="seed reply relation"):
-        parent = Message._base_manager.create(created_by=owner, status="synced", sent_at=T0)
-        reply = Message._base_manager.create(created_by=owner, parent=parent, status="synced", sent_at=T0)
-    assert [(ref.model_label, ref.public_id) for ref in reply.change_related_records()] == [
-        ("messaging.Message", str(parent.sqid)),
-    ]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_result_batch_preserves_each_group_page_and_statement_budget():
-    owner = User.objects.create_user(username="explorer-batch-budget")
+def test_result_page_loads_each_message_relation_once():
+    owner = User.objects.create_user(username="explorer-page-relations")
     channel = make_integration(owner.username, model=Channel, owner=owner)
-    with system_context(reason="seed result groups"):
-        threads = [Thread._base_manager.create(created_by=owner) for _ in range(25)]
-        for index, thread in enumerate(threads):
-            message = Message._base_manager.create(
-                channel=channel, created_by=owner, thread=thread, status="synced", sent_at=T0 + timedelta(minutes=index)
-            )
-            title = Fragment.objects.upsert(text=f"Inbox title {index}", created_by_id=owner.pk)
-            Part._base_manager.create(message=message, role="title", fragment=title, created_by=owner)
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
-    query = """query($pages: [InboxResultPageInput!]!) {
-      inbox_results_batch(pages: $pages) {
-        key error result { count message_count rows { id message { id title } } }
+    with system_context(reason="seed explorer"):
+        handle = Handle._base_manager.create(created_by=owner, value="sender@example.com", platform="email")
+        title = Fragment.objects.upsert(text="A conversation", created_by_id=owner.pk)
+
+    def seed(count: int, start: int) -> None:
+        with system_context(reason="seed result rows"):
+            for index in range(start, start + count):
+                thread = Thread._base_manager.create(created_by=owner, channel=channel, title=title, platform="email")
+                message = Message._base_manager.create(
+                    channel=channel, created_by=owner, sender=handle, thread=thread, status="synced",
+                    direction="inbound", sent_at=T0 + timedelta(days=index),
+                )
+                Part._base_manager.create(created_by=owner, message=message, role="title", fragment=title, position=0)
+
+    query = """{
+      inbox_results(options: {lens: "timeline"}) {
+        count rows { id message_id }
+        messages { id title sender { id display_name } thread { id title { text } } channel { id display_name } }
       }
     }"""
-    total_limit, largest_limit = (
-        (625_000, 230_000) if connection.vendor == "sqlite" else (750_000, 275_000)
-    )
-    for group_count in (1, 5, 25):
-        pages = [
-            {"key": f"group-{index}", "scope": {"axis": "conversation", "value": f"thread:{thread.sqid}"},
-             "page": 1, "size": 3}
-            for index, thread in enumerate(threads[:group_count])
-        ]
-        with CaptureQueriesContext(connection) as statements:
-            result = result_data(execute_schema(_schema(), query, {"pages": pages}, request=request))
-        assert [page["key"] for page in result["inbox_results_batch"]] == [page["key"] for page in pages]
-        assert all(page["result"]["count"] == page["result"]["message_count"] == 1
-                   and len(page["result"]["rows"]) == 1 for page in result["inbox_results_batch"])
-        assert [page["result"]["rows"][0]["message"]["title"] for page in result["inbox_results_batch"]] == [
-            f"Inbox title {index}" for index in range(group_count)
-        ]
-        sizes = [len(statement["sql"].encode("utf-8")) for statement in statements]
-        # Readable conversation keys share one thread proof, count, and page read.
-        # The complete Channel donor schema is included in each actor-scoped SQL read.
-        assert len(statements) == 7
-        assert sum(sizes) <= total_limit
-        assert max(sizes) <= largest_limit
-    single = result_data(execute_schema(
-        _schema(),
-        """query($scope: InboxGroupScopeInput!) {
-          inbox_results(scope: $scope, page: 1, size: 3) {
-            count message_count rows { id message { id title } }
-          }
-        }""",
-        {"scope": pages[0]["scope"]}, request=request,
-    ))
-    assert result["inbox_results_batch"][0]["result"] == single["inbox_results"]
-    page_query = """query($size: Int!) {
-      inbox_results(size: $size) { count rows { message { title } } }
-    }"""
-    page_totals = []
-    for size in (1, 5, 25):
-        with CaptureQueriesContext(connection) as page_statements:
-            whole = result_data(execute_schema(_schema(), page_query, {"size": size}, request=request))
-        assert whole["inbox_results"]["count"] == 25
-        assert [row["message"]["title"] for row in whole["inbox_results"]["rows"]] == [
-            f"Inbox title {index}" for index in range(24, 24 - size, -1)
-        ]
-        page_sizes = [len(statement["sql"].encode("utf-8")) for statement in page_statements]
-        # The page proves its parent threads once through the thread read policy.
-        assert len(page_statements) == 7
-        page_totals.append(sum(page_sizes))
-        assert sum(page_sizes) <= total_limit
-        assert max(page_sizes) <= largest_limit
-    assert max(page_totals) - min(page_totals) <= 2_000
-    mixed = [dict(page, page=2 if index == 0 else 1) for index, page in enumerate(pages[:2])]
-    paged = result_data(execute_schema(_schema(), query, {"pages": mixed}, request=request))["inbox_results_batch"]
-    assert [(page["result"]["count"], len(page["result"]["rows"])) for page in paged] == [(1, 0), (1, 1)]
-    repeated = [
-        {**pages[0], "key": "first", "page": 1},
-        {**pages[0], "key": "second", "page": 2},
-    ]
-    repeated_result = result_data(execute_schema(_schema(), query, {"pages": repeated}, request=request))[
-        "inbox_results_batch"
-    ]
-    assert [(page["result"]["count"], len(page["result"]["rows"])) for page in repeated_result] == [(1, 1), (1, 0)]
+    request = graphql_request(owner)
 
+    def statements() -> int:
+        with CaptureQueriesContext(connection) as captured:
+            data = result_data(execute_schema(_schema(), query, request=request))
+        assert len(data["inbox_results"]["messages"]) == data["inbox_results"]["count"]
+        assert all(message["title"] == "A conversation" for message in data["inbox_results"]["messages"])
+        return len(captured)
 
-def test_result_batch_keeps_readable_pages_when_one_group_is_unavailable():
-    owner = User.objects.create_user(username="explorer-batch-readable")
-    other = User.objects.create_user(username="explorer-batch-private")
-    channel = make_integration(owner.username, model=Channel, owner=owner)
-    with system_context(reason="seed readable and private result groups"):
-        readable = Thread._base_manager.create(created_by=owner)
-        private = Thread._base_manager.create(created_by=other)
-        Message._base_manager.create(channel=channel, created_by=owner, thread=readable, status="synced", sent_at=T0)
-    request = RequestFactory().post("/graphql/console/")
-    request.user = owner
-    pages = [
-        {"key": key, "scope": {"axis": "conversation", "value": f"thread:{thread.sqid}"}, "page": 1, "size": 3}
-        for key, thread in (("readable", readable), ("private", private))
-    ]
-    batch = result_data(execute_schema(
-        _schema(),
-        """query($pages: [InboxResultPageInput!]!) {
-          inbox_results_batch(pages: $pages) { key error result { count rows { id } } }
-        }""",
-        {"pages": pages}, request=request,
-    ))["inbox_results_batch"]
-    assert batch[0]["key"] == "readable" and batch[0]["error"] is None
-    assert batch[0]["result"]["count"] == 1
-    assert batch[1] == {"key": "private", "error": "An unexpected error occurred.", "result": None}
+    seed(1, 0)
+    statements()  # warm per-process schema and policy caches
+    one = statements()
+    seed(3, 1)
+    # Rows name their messages; the page loads each selected relation once.
+    assert statements() == one
 
 
 def test_transcript_anchor_is_bounded_and_can_continue_both_directions():

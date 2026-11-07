@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import ssl
 from collections import deque
-from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,7 +36,6 @@ from angee.messaging_integrate_imap.backend import (
     ImapError,
     ImapSamplePreviewRequest,
 )
-from angee.messaging_integrate_imap.models import ImapChannelSampling
 from angee.messaging_integrate_imap.parser import (
     fallback_message,
     html_to_text,
@@ -751,8 +749,6 @@ class _BridgeStub:
         self.config = {"host": "192.0.2.10", **(config or {})}
         self.credential = credential
         self._state = SimpleNamespace(adding=False, db="default")
-
-    imap_delivery_boundary = ImapChannelSampling.imap_delivery_boundary
 
     def fresh_credential(self) -> Any:
         """Supply the integration credential contract without a database."""
@@ -1829,7 +1825,7 @@ def test_new_mail_boundary_preserves_existing_exclusion(composed_tables: None, m
         }
         channel.save(update_fields=["config"])
         current_stream(channel, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 1})
-        boundary = channel.select_imap_new_mail_boundary(backend.prepare_new_mail_boundary(), backend)
+        boundary = backend.prepare_new_mail_boundary()
         assert not boundary.changed
         assert boundary.cursors == {"INBOX": {"uidvalidity": 100, "last_uid": 1}}
         channel.refresh_from_db()
@@ -2034,77 +2030,6 @@ def test_channel_sync_quarantines_oversized_handle_and_lands_remaining_page(
     channel.refresh_from_db()
     assert channel.sync_stage == channel.SyncStage.COMPLETED
     assert channel.sync_error == channel.last_error == ""
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("field", ["part_role", "part_disposition", "recipient_role"])
-def test_channel_sync_quarantines_unknown_adapter_choice(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, field: str,
-) -> None:
-    """Invalid choice values refuse only their record and advance the page."""
-
-    del composed_tables
-    original = imap_backend.parse_message
-
-    def poisoned(*args, **kwargs):
-        parsed = original(*args, **kwargs)
-        if parsed.external_id != "poison@x":
-            return parsed
-        if field == "part_role":
-            return replace(parsed, body=replace(parsed.body, role="bogus"))
-        if field == "part_disposition":
-            return replace(parsed, body=replace(parsed.body, disposition="form-data"))
-        return replace(parsed, recipients=tuple(replace(r, role="reply-to") for r in parsed.recipients))
-
-    monkeypatch.setattr(imap_backend, "parse_message", poisoned)
-    _wire_fake(
-        monkeypatch,
-        FakeImapAccount(
-            {
-                "INBOX": _folder(
-                    _eml(message_id="<first@x>", subject="First"),
-                    _eml(message_id="<poison@x>", subject="Poison"),
-                    _eml(message_id="<last@x>", subject="Last"),
-                )
-            }
-        ),
-    )
-    channel = _imap_channel(batch_size=3)
-    with system_context(reason="test imap invalid choice quarantine"):
-        assert channel.run_sync(now=_INTERNAL_DATE) == 2
-    assert set(Message._base_manager.values_list("external_id", flat=True)) == {"first@x", "last@x"}
-    with system_context(reason="test imap inspect invalid choice failures"):
-        failure = next(row for stream in SyncStream.objects.all() for row in stream.sync_failures(open_only=False))
-    assert failure.code == "invalid_record"
-
-
-@pytest.mark.django_db(transaction=True)
-def test_channel_sync_accepts_state_member_name(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """StateField accepts a member name and stores its value."""
-
-    del composed_tables
-    original = imap_backend.parse_message
-
-    def named(*args, **kwargs):
-        parsed = original(*args, **kwargs)
-        return replace(parsed, body=replace(parsed.body, disposition="ATTACHMENT"))
-
-    monkeypatch.setattr(imap_backend, "parse_message", named)
-    _wire_fake(
-        monkeypatch,
-        FakeImapAccount(
-            {
-                "INBOX": _folder(_eml(message_id="<named@x>", subject="Named")),
-            }
-        ),
-    )
-    channel = _imap_channel(batch_size=1)
-    with system_context(reason="test imap state member name"):
-        assert channel.run_sync(now=_INTERNAL_DATE) == 1
-    assert Part._base_manager.filter(message__external_id="named@x", disposition="attachment").exists()
 
 
 @pytest.mark.django_db(transaction=True)

@@ -18,7 +18,6 @@ from tests.test_workflows_review import answer, questions, start_review
 from tests.test_workflows_review import review as review
 
 pytestmark = [
-    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]

@@ -117,13 +117,6 @@ def test_addon_template_renders_one_complete_source_addon() -> None:
     assert "``tests/settings.py`` ``INSTALLED_APPS``" in adoption
     assert "``tests/conftest.py``" in adoption
     assert "repository's ``tests/test_{{ addon_id }}.py``" in adoption
-    for source in (
-        ADDON_TEMPLATE / "template" / f"{BARE_TEST}.jinja",
-        ADDON_TEMPLATE / "template" / TESTS_DIR / "test_{{ addon_id }}.py.jinja",
-    ):
-        test_source = source.read_text(encoding="utf-8")
-        assert ".objects.with_actor(" in test_source
-        assert ".objects.as_user(" not in test_source
 
 
 def test_repository_template_renders_a_consumer_addon_root() -> None:
@@ -249,8 +242,6 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
         assert 'call_command("rebac", "sync", verbosity=0)' in test_module
         assert "TransactionTestCase" in test_module
         assert "testing" not in test_module
-    assert ".objects.with_actor(" in test_module
-    assert ".objects.as_user(" not in test_module
 
     manifest = tomllib.loads((target / "pyproject.toml").read_text(encoding="utf-8"))
     assert manifest["project"]["name"] == "acme-contacts"

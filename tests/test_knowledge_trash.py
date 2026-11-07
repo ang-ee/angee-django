@@ -9,8 +9,9 @@ import pytest
 from rebac import actor_context, system_context
 from rebac.roles import grant, revoke
 
-from angee.iam.graphql import records
-from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, result_data, vault_for
+from angee.graphql import records
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import Page, Vault, addon_schema, create_user, vault_for
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
 
@@ -99,7 +100,7 @@ def test_manager_trashes_a_folder_and_readers_lose_its_whole_subtree(vault: Any)
 
     assert _run(RESTORE, {"id": vault.folder.sqid}, vault.owner_user)["ok"] is True
     assert _visible(vault.reader) == ["Notes", "Plan", "Projects"]
-    restored = Page.objects.with_actor(vault.owner_user).get(pk=vault.folder.pk)
+    restored = Page.objects.as_user(vault.owner_user).get(pk=vault.folder.pk)
     assert (restored.is_trashed, restored.trashed_by_id, restored.trash_reason) == (False, None, "")
 
 
@@ -143,18 +144,18 @@ def test_trashed_title_is_free_until_restore(vault: Any) -> None:
         Page.objects.create_in(vault, title="Projects", kind=Page.PageKind.FOLDER)
     refused = _run(RESTORE, {"id": vault.folder.sqid}, vault.owner_user)
     assert refused["ok"] is False
-    assert Page.objects.with_actor(vault.owner_user).get(pk=vault.folder.pk).is_trashed
+    assert Page.objects.as_user(vault.owner_user).get(pk=vault.folder.pk).is_trashed
 
 
 def test_folder_restore_brings_back_only_pages_trashed_with_it(vault: Any) -> None:
     """A page trashed on its own stays trashed; a child waits for its folder."""
 
-    plan = Page.objects.with_actor(vault.owner_user).get(title="Plan")
+    plan = Page.objects.as_user(vault.owner_user).get(title="Plan")
     with actor_context(vault.owner_user):
         Page.objects.create_in(vault, title="Archive", parent=plan, kind=Page.PageKind.FOLDER)
     assert _run(TRASH, {"id": plan.sqid, "reason": "first", "confirm": True}, vault.owner_user)["ok"] is True
     assert _run(TRASH, {"id": vault.folder.sqid, "reason": "later", "confirm": True}, vault.owner_user)["ok"] is True
-    archive = Page.objects.with_actor(vault.owner_user).get(title="Archive")
+    archive = Page.objects.as_user(vault.owner_user).get(title="Archive")
     assert (archive.is_trashed, archive.trash_reason) == (True, "first")
     assert _run(RESTORE, {"id": archive.sqid}, vault.owner_user)["ok"] is False
 
@@ -171,7 +172,7 @@ def test_readers_keep_deep_pages_while_a_sibling_is_trashed(vault: Any) -> None:
     with actor_context(vault.owner_user):
         for depth in range(12):
             parent = Page.objects.create_in(vault, title=f"Level {depth}", parent=parent, kind=Page.PageKind.FOLDER)
-    notes = Page.objects.with_actor(vault.owner_user).get(title="Notes")
+    notes = Page.objects.as_user(vault.owner_user).get(title="Notes")
     assert _run(TRASH, {"id": notes.sqid, "reason": "", "confirm": True}, vault.owner_user)["ok"] is True
     visible = _visible(vault.reader)
     assert "Level 11" in visible and "Notes" not in visible

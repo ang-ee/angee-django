@@ -8,165 +8,121 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
-## Unreleased — workflow and agent owner cleanup
+## Unreleased — scalar foreign-key public ids
 
-- `workflows.StepRecord.operation` uses the enum-backed `StateField` with its
-  existing values. Projects must alter the field declaration in their own native
-  migration history after the materialized initial migration; stored operation
-  values are preserved.
-- Workflow trigger capture, retry failure selection, and agent MCP catalogue
-  lookup use their owning managers and querysets directly. Test-only forwarding
-  APIs and unused imports were removed.
-- The unfinished per-call tool approval path is removed. The
-  `requires_approval` catalogue flag remains: flagged tools stay unavailable
-  until an approval decision path exists, even when a service user has `use`.
-  Projects with a migration that dropped this column must restore it and mark
-  formerly approval-gated tools before enabling them. Parked sessions and turns
-  still need to map to error/failed; the active-turn constraint covers running
-  turns.
+- `public_id_field("relation", nullable=False)` (`angee.graphql.ids`) projects a
+  primary-key foreign key as a `PublicID` from the row's stored key, without
+  loading or authorizing the target. `nullable` decides the GraphQL type; schema
+  build refuses any other field and an annotation that disagrees with it.
+  `actor_scoped_public_id` stays the owner when target readability must redact
+  the reference. The `knowledge`, `storage_integrate` and `dashboards` schemas
+  declare it in place of their hand-written resolvers.
 
-## Unreleased — test contract coverage
+## Unreleased — one page bound, reader batches and loading labels
 
-- The PostgreSQL CI lane selects marked contracts; isolated settings, the notes
-  example, Redis publication, template rendering, and generated adapters have
-  executable CI checks. Neutral GraphQL delete operations load REBAC only when
-  the REBAC app is installed.
+Consumer-facing renames and removals, each with its replacement.
 
-## Unreleased — integration dead paths
+- GraphQL: `WorkflowRunType.graph_steps` is `graph_step_runs`; clients select
+  the new field.
+- `require_rebac_queryset(model, actor=None)` reads nothing, whatever the
+  ambient actor or system context. Omit `actor` for REBAC's ambient scope; pass
+  an actor to pin it.
+- `ThreadedModelMixin.thread_attachment_role` is deleted; read
+  `ThreadAttachment.AttachmentRole.CHATTER`.
+- A related container declares `relatedCount: { models }` (was `count: { id,
+  models }`); its container id is the server related count id.
+- Loading owners take `loadingLabel`: `RecordHeader`, `Combobox.Status`,
+  `PaneRowsSkeleton` and `SkeletonStatus` (was `label`), `DetailSurface` and
+  `MetricStrip` (was `loadingMessage`), and `LoadingPanel` (was `message`).
+- `useStorageActionRun` is deleted; storage verbs settle through
+  `useBusyRun().settle(action, fallback, failureTitle?)`.
+- `GROUP_ROWS_MAX_LIMIT` is deleted; `angee.base.pagination.MAX_PAGE_SIZE` is the
+  one page bound. An explicit page size outside it (group rows' `limit`, inbox
+  pages, provenance history) is refused as `BAD_USER_INPUT` through
+  `valid_page_size`; first-N reads (timeline, removed tasks, people search,
+  answered decisions, record runs) clamp to it.
+- `angee.graphql.E003` (the in-memory channel layer beside a Celery broker) runs
+  only for the serving commands (`serve`, `runserver`, plain `check`) through
+  `SERVING_TAG`; build and data commands no longer meet it.
 
-- Removed the outbound integration event fan-out and inbound VCS webhook dispatch,
-  which had no production producer or receiver route. Subscription CRUD and signed
-  test delivery remain available. Subscription `event_kinds` is removed from the
-  model, GraphQL writes and console form because no event kind can be delivered;
-  projects must remove that column in their own native migration history.
-- Removed `VcsBridge.webhook_secret`, `Bridge.next_subscription_refresh_at`, and
-  `Integration.use_count_24h` / `error_count_24h`. Projects must, in their own
-  native migration history, remove the secret from VcsBridge, the refresh
-  timestamp from VcsBridge, Channel, Directory, Mount, and NotionConnection, and
-  the counters from Integration.
-- OAuth discovery now uses `ANGEE_INTEGRATE_OAUTH_DISCOVERY_TTL`; the old
-  `ANGEE_OIDC_DISCOVERY_TTL` setting no longer applies.
+## Unreleased — the inbox reads conversations without record chatter
 
-## Unreleased — intake trigger cleanup
+- `messaging/thread` has two read extension points. `read_granted` takes grants
+  that hold for any conversation (channel, owner, shares, identity rule, admins,
+  bound projects, selected groups); `chatter_read` takes a record's read of its
+  own chatter thread (projects' `record_project` and `record_task`, knowledge's
+  `record_page`). `read` unions both; the new `read_inbox` is `read_granted` alone.
+  `messaging/message#read_inbox` withholds and keeps exactly as `read` does over
+  the thread's `read_inbox`; message `read_granted` now holds only the message's
+  own channel and share grants.
+- `ThreadQuerySet.inbox()` and `MessageQuerySet.inbox()` select `read_inbox`, so
+  every inbox read (results, groups, counts, search, navigator, transcript, feed
+  and revalidation, the generic `threads` and `messages` lists) stops compiling the
+  chatter arms. The inbox excludes record chatter, so its answers are unchanged.
+  A verb that needs another action selects it after `inbox()`.
+- A fragment that unions an arm straight into a thread or message `read` or
+  `read_inbox` is refused by the security check `messaging.E003`. Consumers move a
+  chatter-filtered thread arm from `read_granted` to `chatter_read`; grants for any
+  conversation stay on `read_granted`.
+- Operators re-sync the permission schema (`rebac sync`, which provision runs):
+  messaging revision 23 (it also adds `messaging/part#read_inbox`, through which
+  the inbox lists a part of a readable message), the projects fragment 9 and the
+  knowledge fragment 3; a source host also syncs the `tests.extcontrib` fragment 9.
+  Move every stored REBAC override on a thread or message `read` or `read_inbox`
+  to that definition's `read_granted`, which both reads take. While one remains,
+  or the store is not yet synced, the inbox reads threads, messages and their
+  parts under `read` (`purpose_read_holds`): correct, without the narrower
+  statement.
 
-- Channel intake now offers only `all_messages`. The selectable `reaction`,
-  `mention`, and `command` triggers never captured messages and have been removed
-  from the declared choices. Projects must, in their own native migration history
-  after messaging 0011, map stored retired values to `all_messages` while clearing
-  `intake_queue`. This preserves their prior no-capture behavior and keeps
-  filter, sort, and group values consistent with the enum.
+## Unreleased — dead subsystems removed with their schema
 
-## Unreleased — extraction correction cleanup
+Each removal below changes composed models. A project removes the storage in its
+own native migration history. No framework addon or consumer reads these facts.
 
-- Remove the unused decision-backed extraction correction writer and its
-  `Extraction.correction_decision` foreign key. Projects must drop that column
-  and its foreign-key constraint in their own native migration history.
-  Previously retained correction provenance remains in the extraction outcome
-  JSON for read and inference preservation.
-
-## Unreleased — notification delivery cleanup
-
-- Remove unused notification delivery transitions and their pending/error
-  indexes. Projects must, in their own native migration history, reset obsolete
-  statuses to `ready`, restrict the field's choices to `ready`, and drop
-  `ix_thread_notification_pending` and `ix_thread_notification_failed`. The
-  `notification_status` and failure fields remain until the messaging schema
-  and querysets can be changed together.
-
-## Unreleased — core owner cleanup
-
-- Removed unused party association, stage category, IAM lookup, and provenance
-  helpers. Native provenance capture now uses `CaptureHistoryMixin` directly;
-  creation conflicts are imported from `angee.provenance.engine.exceptions`.
-- Actor resolution on rows and querysets now uses the IAM and REBAC owners.
-  Already-admitted ownership parents and attachment files use structural base
-  manager reads, avoiding one bypass audit row on each path. This cleanup
-  changes no model fields and requires no schema migration.
-
-## Unreleased — REBAC decided statements per request
-
-- Pin django-zed-rebac at `89a982e3d1e6`: bounded, witnessed read scopes
-  compile decided statements per request while retaining reusable
-  value-independent statements, and reuse decided statements across requests
-  keyed on the decision outcome; compiled identity projections are shared by
-  use count with native statement probes; Django's collected delete order is
-  preserved; default ordering is cleared in recursive permission paths; the
-  compiled-statement cache is bounded by bytes (`REBAC_STATEMENT_CACHE_BYTES`).
-  The pinned head removes the queryset and instance `as_user()` / `as_agent()`
-  aliases (pin actors with `with_actor()`), `decision_scope()` and five inert
-  settings; `scope_cte(actions=...)` remains the owned API for sharing one
-  proven read across several permission names of one resource.
-
-## Unreleased — grouped lists, list labels and projections
-
-- Every grouped list reads the first rows of its visible groups through one
-  `<resource>_grouped_rows(group_by, pages, where, order_by)` root (a window per
-  group under one proof) and the group headers and counts through the
-  `<resource>_groups` root, which returns an actor-admitted relation target's
-  display name as `label`; the per-group row and aggregate aliases are gone.
-  Date-bucket, JSON-path, and computed-resource axes use the same root. The
-  grouped-rows root returns one `{ key, rows }` result per requested
-  `<resource>_grouped_rows_page` input in request order, including empty pages;
-  `key` is the exact requested JSON value, and `rows` contains only that page's
-  bounded records. Clients must select
-  `key` and `rows` and use this page membership directly, including for
-  local-time date buckets. Fifty groups cost 2 statements instead of 200. The
-  client owns date-bucket labels from the key's local calendar fields and
-  localized JSON scalar, boolean, and
-  blank labels; the server emits no label for those axes.
-- List columns that show a record reference select `record_label` and
-  `record_id` through the list document; no list cell resolves a label with a
-  per-row read, and a hidden target renders no label.
-- `Message.title` requires the title projection the message queryset provides
-  (`with_title_text()`); both inbox result paths apply it. Reading the title
-  on an unprojected instance raises `ImproperlyConfigured` instead of issuing a
-  per-row read.
-- Live subscriptions replay the changes published in the registration window:
-  publication appends each change to a per-model log before fanout, a
-  registration replays the retained changes through its read gate, and
-  `ready` carries an opaque cursor. The window and length are
-  `CHANGE_REPLAY_SECONDS` and `CHANGE_REPLAY_MAXLEN`; a log truncated inside
-  the window sends one model-wide change.
-- `Thread.is_record_chatter` marks the threads attached as record chatter;
-  projects add a migration that adds the column and backfills it from the
-  chatter attachments (this stack's runtime carries it as messaging 0008).
-
-## Unreleased — messaging historical import compatibility
-
-- `Message.objects.ingest(historical=True)` and `posts.land_posts(historical=True)`
-  remain deprecated compatibility aliases for `messaging.events.historical_import()`. Callers
-  should enter that named context directly for a multi-call import. It also mutes
-  live GraphQL changes and timeline invalidations.
-- Live provider ingest sends `message_ingested` for every changed envelope inside
-  the batch transaction. Receivers can use each `instance` or the final event's
-  complete `created_batch`; workflow capture is durable with the message write.
-
-## Unreleased — admin-only account preview
-
-- `auth/user#view_as` now belongs only to platform admins. Intake task writers
-  and proposal round managers no longer inherit account preview through requester
-  or responder relationships; their requester and roster displays retain their
-  record-specific permissions. Integrations that used `X-Angee-View-As` with
-  those roles must use the owning record's display fields instead.
-- IAM composition rejects any extension fragment that adds an arm to
-  `auth/user#view_as` with `<addon>: permissions.extends.zed cannot extend
-  auth/user#view_as; account preview is granted to platform admins only`.
-  Consumers must grant each specific display need at its owning record instead.
-
-## Unreleased — agent transcript storage
-
-- `AgentTurn` stores ACP updates in ordered `AgentTurnUpdate` batches with turn
-  counters. Projects with existing turn data must author the upgrade in their
-  own native migration history: rename `updates` to `_legacy_updates` in
-  migration state while retaining the `updates` column. Add the three turn
-  counters and the `AgentTurnUpdate` table, copy retained JSON in primary-key
-  order into batches, then drop the old column. The reverse must restore JSON
-  before dropping the batch table. The composition drop guard refuses an
-  automatic column drop while legacy updates remain.
-- `AgentTurn.updates` is now a read-only transcript property. Call
-  `append_updates()` to write batches; constructing turns with `updates=`,
-  filtering by `updates`, and `values("updates")` are no longer supported Python
-  model APIs. GraphQL continues to expose the same `updates` JSON field.
+- **Extraction correction.** The decision-backed correction writer and
+  everything only it fed are removed: `ExtractionManager.prepare_correction_binding`,
+  `revise_from_decision` and `reviewed_correction_authority`, `CorrectionBinding`,
+  `CorrectionRef`, the outcome's `corrections` list with its readers
+  (`Extraction.corrections`, `fact_correction`, `retained_corrections`,
+  `reviewed_facts`), the helpers only the correction path read
+  (`Extraction.reference` with its `ExtractionRef` value, `failed_at_inference`
+  and `pointers.fact_pointers`), and the `Extraction.correction_decision`
+  foreign key.
+  Nothing called the writer, so no revision holds a correction; retained
+  outcomes may still carry an empty `corrections` list that nothing reads.
+  `Extraction.fact_authority` reports `source` or `unverified`. A project
+  composing `angee.extraction` removes the column with
+  `RemoveField(model_name="extraction", name="correction_decision")` in its
+  `extraction` history; the drop guard admits the autodetected removal while
+  the column is null on every row.
+- **Notification delivery states.** No worker ever advanced or failed a
+  notification, so its delivery lifecycle and diagnostics are removed:
+  `ThreadNotification.NotificationStatus`, `notification_status`,
+  `failure_type`, `failure_reason`, the `ix_thread_notification_pending` and
+  `ix_thread_notification_failed` partial indexes,
+  `ThreadNotificationManager.mark_failed`, `mark_failed_for_message` and
+  `error_count_for_record`, and the queryset's `delivery_errors` with its
+  `DELIVERY_ERROR_STATUSES`. GraphQL drops the three fields from both
+  notification types and the `notification_status` filter field on
+  `thread_notifications`, and the record chatter state drops `message_has_error`
+  and `message_has_error_counter`; clients stop selecting them. A project composing
+  `angee.messaging` removes the two indexes and three columns (`RemoveIndex` and
+  `RemoveField` on `messaging.threadnotification`); the drop guard admits the
+  autodetected removal while every row holds `ready` and empty failure text.
+- **Intake channel triggers.** Channel intake offered `reaction`, `mention`
+  and `command` beside `all_messages`; none of the three ever captured a
+  message. They go with `ChannelIntake.IntakeTrigger` and the `intake_trigger`
+  field, since its one remaining value carries no fact: a channel with an
+  `intake_queue` captures every ingested message. GraphQL drops
+  `ChannelType.intake_trigger` with its update input and its filter, sort and
+  group axes, and the demo channel row drops the key. A project composing
+  `angee.intake` first clears `intake_queue` on channels whose stored trigger
+  is `reaction`, `mention` or `command`, so they keep capturing nothing, and
+  flushes deferred foreign-key checks (`connection.check_constraints()`); then,
+  in the same `messaging` migration (the field folds into the channel table), it
+  removes the column with `RemoveField(model_name="channel", name="intake_trigger")`.
+  The drop guard refuses the autodetected removal while any row holds a retired
+  value.
 
 ## Unreleased — jj workspace slots in the templates
 
@@ -309,10 +265,6 @@ stack that keeps its database follows the [upgrade cutoff](docs/composer.md#foun
   `source` field on circle members, relationships and space memberships,
   `resolve_sync_discrepancy`, `retry_sync_discrepancy`,
   `SyncStream.open_discrepancy_count` and the record link hash bases.
-- `AngeeQuerySet.with_page_hook` centralizes per-page preparation for extraction,
-  workflows, integrate and messaging. This removes the public
-  `angee.messaging.querysets.NotificationPointerIterable` class and its messaging
-  manager re-exports; consumers importing that name must use the queryset hook.
 
 ## Unreleased — native permission integration
 

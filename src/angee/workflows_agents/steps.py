@@ -12,6 +12,7 @@ from rebac import actor_context, generic_target, to_object_ref
 from angee.agents.context import record_view_context
 from angee.agents.models import ACTIVE_TURN_STATUSES, SessionStatus, TurnStatus
 from angee.base.models.identity import public_id_of
+from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.steps import Fail, Settlement, Step
 from angee.workflows.triggers import TriggerGrantTarget
@@ -157,7 +158,10 @@ class StartConversation(Step[ConversationInput, ConversationOutput, StartConvers
             if turn.status == TurnStatus.PENDING and retained.redispatches < MAX_PENDING_REDISPATCHES:
                 retained.redispatches += 1
                 retained.deadline = ctx.now + ctx.config.timeout
-                session.enqueue_execution(expires=retained.deadline, robust=True)
+                enqueue_task(
+                    "agents.run_session", kwargs={"session_id": session.pk},
+                    expires=retained.deadline, robust=True,
+                )
             else:
                 return _CancelTurnAndFail(
                     error="The agent turn exceeded its deadline; it was stopped. Retry to start another turn.",

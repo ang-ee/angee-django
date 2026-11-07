@@ -27,7 +27,7 @@ AT = datetime(2026, 10, 19, 12, tzinfo=UTC)
 
 
 @pytest.fixture
-def correspondence(composed_tables):
+def correspondence(composed_tables):  # noqa: ANN001, ANN201 - fixture namespace
     with (
         override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"]),
         system_context(reason="test nexus timeline"),
@@ -61,7 +61,7 @@ def correspondence(composed_tables):
         )
 
 
-def test_nexus_message_appears_once_per_party_and_circle(correspondence) -> None:
+def test_nexus_message_appears_once_per_party_and_circle(correspondence) -> None:  # noqa: ANN001
     data = correspondence
     kind, = timeline_kinds()
     assert kind.id == CORRESPONDENCE_KIND and kind.sequence == 60
@@ -91,7 +91,7 @@ def test_nexus_message_appears_once_per_party_and_circle(correspondence) -> None
     assert all(timeline_entries(record, data.actor) == [] for record in (data.party, data.circle, data.parent))
 
 
-def test_nexus_uses_the_timeline_identity_contract(correspondence) -> None:
+def test_nexus_uses_the_timeline_identity_contract(correspondence) -> None:  # noqa: ANN001
     data = correspondence
     event, = timeline_entries(data.party, data.actor)
     content_type, _ = generic_pointer_target(data.party)
@@ -103,7 +103,7 @@ def test_nexus_uses_the_timeline_identity_contract(correspondence) -> None:
 
 
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
-def test_nexus_correspondence_keeps_the_message_read_gate(composed_tables) -> None:
+def test_nexus_correspondence_keeps_the_message_read_gate(composed_tables) -> None:  # noqa: ANN001
     with system_context(reason="test nexus target visibility"):
         owner = get_user_model().objects.create_user(username="message-owner")
         reader = get_user_model().objects.create_user(username="party-reader")
@@ -124,7 +124,7 @@ def test_nexus_correspondence_keeps_the_message_read_gate(composed_tables) -> No
         assert timeline_entries(party, reader)[0].detail.endswith("Private")
 
 
-def test_nexus_dependency_removals_are_immediately_visible(correspondence) -> None:
+def test_nexus_dependency_removals_are_immediately_visible(correspondence) -> None:  # noqa: ANN001
     data = correspondence
     data.member.delete()
     assert timeline_entries(data.circle, data.actor) == []
@@ -142,7 +142,7 @@ def test_nexus_dependency_removals_are_immediately_visible(correspondence) -> No
                for record in (data.party, data.other, data.circle, data.parent))
 
 
-def test_nexus_correspondence_excludes_record_chatter(correspondence) -> None:
+def test_nexus_correspondence_excludes_record_chatter(correspondence) -> None:  # noqa: ANN001
     data = correspondence
     content_type, object_id = generic_pointer_target(data.party)
     attachment = apps.get_model("messaging", "ThreadAttachment")._base_manager.create(
@@ -154,7 +154,7 @@ def test_nexus_correspondence_excludes_record_chatter(correspondence) -> None:
     assert all(len(timeline_entries(record, data.actor)) == 1 for record in (data.party, data.circle, data.parent))
 
 
-def test_nexus_only_confirmed_memberships_appear_and_reparent_moves_ancestors(correspondence) -> None:
+def test_nexus_only_confirmed_memberships_appear_and_reparent_moves_ancestors(correspondence) -> None:  # noqa: ANN001
     data = correspondence
     for confirmed, dismissed in ((False, False), (True, True), (True, False)):
         data.member.is_confirmed, data.member.is_dismissed = confirmed, dismissed
@@ -167,7 +167,7 @@ def test_nexus_only_confirmed_memberships_appear_and_reparent_moves_ancestors(co
     assert timeline_entries(data.circle, data.actor)
 
 
-def test_nexus_ignores_unread_fields_before_target_discovery(correspondence) -> None:
+def test_nexus_ignores_unread_fields_before_target_discovery(correspondence) -> None:  # noqa: ANN001
     data = correspondence
     with patch.object(CorrespondenceKind, "targets", side_effect=AssertionError("Unrelated change")) as targets:
         data.circle.name = "Renamed"
@@ -179,7 +179,7 @@ def test_nexus_ignores_unread_fields_before_target_discovery(correspondence) -> 
 
 
 @pytest.mark.parametrize("subtype", ["Person", "Organization"])
-def test_nexus_observes_party_descendants_and_merge_redirects(correspondence, subtype, monkeypatch) -> None:
+def test_nexus_observes_party_descendants_and_merge_redirects(correspondence, subtype, monkeypatch) -> None:  # noqa: ANN001
     data = correspondence
     model = apps.get_model("parties", subtype)
     source = model._base_manager.create(display_name="Source", owner=data.parent.owner, created_by=data.parent.owner)

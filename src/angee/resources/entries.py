@@ -27,7 +27,6 @@ from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.kinds import ResourceEntryKind
 from angee.resources.tiers import ResourceTier
-from angee.resources.validators import normalize_xref
 
 
 class _ResourceAddon(Protocol):
@@ -396,7 +395,9 @@ class ResourceEntry:
     def _normalized_xref(self, value: Any, index: int) -> str:
         """Return the one technical identity column with source diagnostics."""
 
-        return normalize_xref(value, location=f"{self.display} row {index}")
+        if not isinstance(value, str) or not value.strip():
+            raise ResourceLoadError(f"{self.display} row {index}: missing _xref")
+        return value.strip()
 
     @staticmethod
     def _record_mappings(records: list[dict[str, Any]] | tablib.Dataset) -> Iterable[Mapping[str, Any]]:

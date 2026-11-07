@@ -19,7 +19,7 @@ const CREATE_PERSONAL_DASHBOARD = `
 // The shared trash verb removes the dashboard; the suite leaves nothing behind.
 const TRASH_PERSONAL_DASHBOARD = `
   mutation TrashRecordSharingDashboard($id: ID!) {
-    trash_record(target_type: "dashboards/dashboard", target_id: $id, reason: "e2e cleanup", confirm: true) {
+    trash_record(target_type: "dashboards.Dashboard", target_id: $id, reason: "e2e cleanup", confirm: true) {
       ok message
     }
   }

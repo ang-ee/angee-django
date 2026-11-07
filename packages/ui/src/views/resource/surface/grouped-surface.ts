@@ -5,16 +5,18 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   MAX_PAGE_SIZE,
   clampPageSize,
+  groupRowsDocument,
   stableSerialize,
   useAngeeAggregate,
   useAngeeGroupByBatch,
+  useAngeeListBatch,
   type AngeeListBatchEntry,
 } from "@angee/refine";
 import type { ResourceViewGroupExpansion } from "../resource-view-context";
 import { useUiT } from "../../../i18n";
 import { type ResourceListOrder } from "../resource-view-model";
 import { estimateGroupedItemSize, groupFieldLabel, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures } from "../resource-view-list-body";
-import { groupedListTarget, requireDataResource, useAggregateOperation, useGroupOperation } from "../resource-operations";
+import { listBatchTarget, requireDataResource, useAggregateOperation, useGroupOperation } from "../resource-operations";
 import { idsFromRowSelectionState, modelRowId } from "../resource-view-codecs";
 import {
   buildGroupedRenderModel,
@@ -25,7 +27,7 @@ import {
   type GroupedGroupScope,
   type GroupedQueryResult,
 } from "../resource-view-grouped-model";
-import { useCollectionQueryBatch, useGroupedNativePages } from "../collection-source";
+import { useCollectionQueryBatch } from "../collection-source";
 import { useResourceViewTableChrome } from "./presentation";
 import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState, useSettledPageClamp } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS } from "./types";
@@ -34,16 +36,15 @@ import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSur
  * The server-grouped collection surface: the owner of a folded group view's render
  * model. It emits a single measured `listItems` stream (per-level `_groups`
  * headers, the leaf record rows of expanded buckets, and the per-group pagers)
- * driving the same `useVirtualizer` the flat list uses, batches every `_groups`
- * level into one `useAngeeGroupByBatch` and every expanded leaf into one
- * authored GraphQL document, and exposes per-group pagination via `setScopePage`. The
- * thin list and board bodies compose this surface; neither fetches.
+ * driving the same `useVirtualizer` the flat list uses. The leaf `_groups` read
+ * carries every group's first page (`rows`), so a grouped page is one request;
+ * only a later or resized group page is requested on its own, batched into one
+ * `useAngeeListBatch`. Per-group pagination is `setScopePage`. The thin list and
+ * board bodies compose this surface; neither fetches.
  */
 export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   resource,
   source,
-  records,
-  relatedModels,
   columns,
   fields,
   filter,
@@ -64,11 +65,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     : ResourceQuery.from(requireDataResource(resource, modelMetadata));
   const aggregateOperation = useAggregateOperation(dataResource);
   const groupOperation = useGroupOperation(dataResource);
-  const listTarget = groupedListTarget(dataResource);
-  if (!source && !listTarget) {
-    throw new Error(`Resource "${resource}" is missing grouped row metadata.`);
-  }
-  const rowGroupStack = groupStack ?? resourceView.state.groupStack;
+  const listTarget = listBatchTarget(dataResource);
 
   const { requestedFields, mergedFilter, sortOrder } =
     useResourceViewQueryFacts({
@@ -79,12 +76,13 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       resourceView,
       modelMetadata,
       laneSource,
-      groupStack: rowGroupStack,
+      groupStack: EMPTY_ARRAY,
     });
   const leafOrder = React.useMemo<ResourceListOrder | undefined>(
     () => sortOrder ?? order,
     [sortOrder, order],
   );
+  const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   // Shared table state plus per-group/footer measures.
   const tableState = useResourceViewTableState({
     query,
@@ -120,8 +118,6 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   );
   const grandTotal = useAngeeAggregate(aggregateOperation.target, {
     document: aggregateOperation.document,
-    records,
-    relatedModels,
     where,
     measures: queryMeasures,
     enabled: !source && rowGroupStack.length > 0 && measures.length > 0,
@@ -175,8 +171,6 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     () => ({
       query,
       leafPageSize: source?.leafPageSize,
-      autoExpandRoot: !source && defaultExpandedGroups === "all",
-      collapsedKeys: activeExpansion.collapsedKeys,
       groupStack: rowGroupStack,
       baseFilter: mergedFilter,
       expandedKeys,
@@ -198,9 +192,6 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     [
       query,
       source?.leafPageSize,
-      source,
-      defaultExpandedGroups,
-      activeExpansion.collapsedKeys,
       rowGroupStack,
       mergedFilter,
       expandedKeys,
@@ -219,16 +210,24 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   // parent resolves. `useAngeeGroupByBatch` is a single hook, so a dynamic-length
   // array is rules-of-hooks safe.
   const [groupScopes, setGroupScopes] =
-    React.useState<readonly GroupedGroupScope[]>(() => buildGroupedRenderModel<TRow>(
-      new Map(), EMPTY_LEAF_RESULTS, new Map(), renderParams,
-    ).groupScopes);
+    React.useState<readonly GroupedGroupScope[]>(EMPTY_ARRAY);
+  // The generated groups document plus each group's first page of the list's fields.
+  const groupDocument = React.useMemo(
+    () =>
+      groupOperation.document && groupOperation.target && dataResource?.typeNames.order
+        ? groupRowsDocument(
+            groupOperation.document as Parameters<typeof groupRowsDocument>[0],
+            { root: groupOperation.target.root, orderType: dataResource.typeNames.order },
+            requestedFields,
+          )
+        : groupOperation.document,
+    [groupOperation.document, groupOperation.target, dataResource?.typeNames.order, requestedFields],
+  );
   const nativeGroupResults = useAngeeGroupByBatch(
     groupOperation.target,
     source ? EMPTY_ARRAY : groupScopes,
     {
-      document: groupOperation.document,
-      records,
-      relatedModels,
+      document: groupDocument,
       enabled: !source && rowGroupStack.length > 0,
     },
   );
@@ -295,6 +294,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   ]);
   const desiredGroupScopes = scopeModel.groupScopes;
   const leafScopes = scopeModel.leafScopes;
+  const leafKeys = scopeModel.leafKeys;
   React.useEffect(() => {
     setGroupScopes((current) =>
       groupScopesEqual(current, desiredGroupScopes)
@@ -303,20 +303,21 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     );
   }, [desiredGroupScopes]);
 
-  // Every expanded leaf bucket contributes its own page to one grouped row read.
+  // Later or resized group pages, batched into one request round.
   const leafRequests = React.useMemo(() => {
     if (source) return EMPTY_ARRAY;
-    return leafScopes.map(({ parentFilter, order, filter: _filter, ...scope }) => ({
+    return leafScopes.map(({ filter, order, ...scope }) => ({
       ...scope,
-      parentWhere: query.toWhere(parentFilter),
+      where: query.toWhere(filter),
       orderBy: query.toOrderBy(order),
     }));
   }, [source, query, leafScopes]);
-  const nativeLeafResults = useGroupedNativePages(
-    source ? null : listTarget, leafRequests, requestedFields, dataResource?.modelLabel,
-  );
+  const nativeLeafResults = useAngeeListBatch(listTarget, leafRequests, {
+    fields: requestedFields,
+    enabled: !source && leafScopes.length > 0,
+  });
   const authoredLeaves = useCollectionQueryBatch(source?.rows, leafScopes);
-  const leafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
+  const requestedLeafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
     () =>
       source
         ? new Map(
@@ -333,6 +334,10 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
           )
         : nativeLeafResults,
     [source, authoredLeaves, nativeLeafResults],
+  );
+  const leafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
+    () => new Map([...scopeModel.carriedLeaves, ...requestedLeafResults]),
+    [scopeModel.carriedLeaves, requestedLeafResults],
   );
 
   // Persist corrections from settled native counts for both subgroup and leaf
@@ -355,22 +360,21 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       for (const [key, result] of groupByResults) {
         clamp(key, result.totalCount, !result.fetching && !result.error);
       }
-      for (const [key, result] of leafResults) {
+      for (const [key, result] of requestedLeafResults) {
         clamp(key, result.total, !result.fetching && !result.error);
       }
       return next;
     });
-  }, [groupByResults, leafResults, setPaginationByScope]);
+  }, [groupByResults, requestedLeafResults, setPaginationByScope]);
 
   // One table over the in-display-order concatenation of loaded leaf rows: row
   // ids stay the bare public id so selection identity matches the flat surface.
   const leafRows = React.useMemo(
     () =>
-      leafScopes.flatMap((scope) => [
-        ...((leafResults.get(scope.key)?.rows ??
-          EMPTY_ARRAY) as readonly TRow[]),
+      leafKeys.flatMap((key) => [
+        ...((leafResults.get(key)?.rows ?? EMPTY_ARRAY) as readonly TRow[]),
       ]),
-    [leafScopes, leafResults],
+    [leafKeys, leafResults],
   );
   const table = useReactTable<TRow>({
     data: leafRows as TRow[],
@@ -389,13 +393,13 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   const rowModelsByScopeKey = React.useMemo(() => {
     const byScope = new Map<string, readonly TableRowModel<TRow>[]>();
     let offset = 0;
-    for (const scope of leafScopes) {
-      const count = leafResults.get(scope.key)?.rows.length ?? 0;
-      byScope.set(scope.key, rowModels.slice(offset, offset + count));
+    for (const key of leafKeys) {
+      const count = leafResults.get(key)?.rows.length ?? 0;
+      byScope.set(key, rowModels.slice(offset, offset + count));
       offset += count;
     }
     return byScope;
-  }, [leafScopes, leafResults, rowModels]);
+  }, [leafKeys, leafResults, rowModels]);
 
   const groupedItems = React.useMemo(
     () =>
@@ -466,10 +470,9 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   );
   const refetch = React.useCallback(() => {
     for (const result of groupByResults.values()) result.refetch();
-    const leafRefetches = new Set([...leafResults.values()].map((result) => result.refetch));
-    for (const refetchLeaf of leafRefetches) refetchLeaf();
+    for (const result of requestedLeafResults.values()) result.refetch();
     if (measures.length > 0) grandTotal.refetch();
-  }, [groupByResults, leafResults, measures.length, grandTotal.refetch]);
+  }, [groupByResults, requestedLeafResults, measures.length, grandTotal.refetch]);
   const list = React.useMemo<ResourceListResult>(
     () => ({
       ...listResultFromPageState({
@@ -483,6 +486,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
         pageSize: statePageSize,
         pageCount: rootPageCount,
         hasNext: rootWindow?.hasNext ?? false,
+        pageUnit: "groups",
       }),
       summary: rootResult?.summary,
     }),

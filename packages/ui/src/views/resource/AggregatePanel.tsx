@@ -162,14 +162,14 @@ function AggregateSkeleton({
 }): React.ReactElement {
   if (!grouped) {
     return (
-      <SkeletonStatus label={loadingLabel} className="my-1">
+      <SkeletonStatus loadingLabel={loadingLabel} className="my-1">
         <Skeleton shape="text" size="sm" className="w-2/3" />
       </SkeletonStatus>
     );
   }
 
   return (
-    <SkeletonStatus label={loadingLabel}>
+    <SkeletonStatus loadingLabel={loadingLabel}>
       <ul className="flex flex-col gap-2" aria-hidden="true">
         {Array.from({ length: 4 }, (_, index) => (
           <li key={index} className="flex flex-col gap-1">

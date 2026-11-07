@@ -16,9 +16,10 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 from rebac.roles import grant as grant_role
 
 from angee.base.models.locks import StaleRevisionError
+from angee.workflows import managers as managers_module
+from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid
-from angee.workflows.models import runs as runs_module
-from angee.workflows.querysets import StepAttemptQuerySet, StepRunQuerySet
+from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunManager
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Done, Fail, RetryPolicy, Step, StepMode, Superseded, Wait
@@ -186,7 +187,7 @@ def test_claim_retains_run_identity_and_parses_definition_once(execution, regist
     assert len(parsed) == 1
 
 
-@pytest.mark.parametrize("helper", ["context", "direct"])
+@pytest.mark.parametrize("helper", ["context", "class", "direct"])
 def test_success_output_is_validated_once_before_serialization(execution, register_step, helper):
     """Native validation aliases and serializers survive every completion constructor."""
     actor, _ = execution
@@ -208,13 +209,15 @@ def test_success_output_is_validated_once_before_serialization(execution, regist
             return value + 1
 
     class AliasedStep(Step[None, AliasedOutput, None]):
-        """Return the same raw output through either supported constructor."""
+        """Return the same raw output through each supported constructor."""
 
         key = "aliased_output"
 
         def run(self, ctx):
             if helper == "context":
                 return ctx.done({"raw": 21})
+            if helper == "class":
+                return self.done({"raw": 21})
             return Done(outcome="done", output={"raw": 21})
 
     register_step(AliasedStep)
@@ -1260,7 +1263,7 @@ def test_failure_recording_database_errors_preserve_successful_body(
     register_step(RetainedBody)
     monkeypatch.setattr(Definition, "result_for", result_error)
     if failure_write == "state":
-        monkeypatch.setattr(WorkflowRun, "_write_state", invalid_write)
+        monkeypatch.setattr(WorkflowRunManager, "_write_state", invalid_write)
     else:
         _fail_run_publication(monkeypatch, workflow)
     assert runner.execute(step_run.pk)
@@ -1321,14 +1324,14 @@ def test_soft_time_limit_during_settlement_belongs_to_open_attempt(execution, re
 
 def _fail_run_publication(monkeypatch, workflow):
     """Break the run owner's notification without breaking step settlement."""
-    original = runs_module.publish_change
+    original = managers_module.publish_change
 
     def publish(instance, **kwargs):
         if isinstance(instance, WorkflowRun):
             Workflow.objects.filter(pk=workflow.pk).update(key=None)
         return original(instance, **kwargs)
 
-    monkeypatch.setattr(runs_module, "publish_change", publish)
+    monkeypatch.setattr(managers_module, "publish_change", publish)
 
 
 def test_publication_database_error_keeps_successful_outcome(execution, register_step, monkeypatch, caplog):
@@ -1392,7 +1395,7 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
     workflow = load_workflow(document("entry"), key="expired_failure_recovery", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = StepRun.system_queryset().get(run=run)
-    original_settle, original_record_failure = StepRunQuerySet.settle, runs_module.record_failure
+    original_settle, original_record_failure = StepRunQuerySet.settle, runner_module._record_failure
     settlements = []
 
     def reject_result(self, row, settlement):
@@ -1402,14 +1405,14 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
         return original_settle(self, row, settlement)
 
     @contextmanager
-    def expire_before_failure_recovery(operation, *, using=None):
+    def expire_before_failure_recovery(operation):
         if operation == "settlement failure":
             StepRun.objects.filter(pk=step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
-        with original_record_failure(operation, using=using):
+        with original_record_failure(operation):
             yield
 
     monkeypatch.setattr(StepRunQuerySet, "settle", reject_result)
-    monkeypatch.setattr(runs_module, "record_failure", expire_before_failure_recovery)
+    monkeypatch.setattr(runner_module, "_record_failure", expire_before_failure_recovery)
 
     assert runner.execute(step_run.pk) is False
     assert settlements == ["done", "fail"]

@@ -8,7 +8,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import Prefetch, QuerySet
+from django.db.models import Prefetch
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
@@ -16,14 +16,8 @@ from strawberry_django.auth.utils import get_current_user
 from angee.base.models.identity import public_id_for
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
-from angee.graphql.introspection import selected_field
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import (
-    RecordReferenceNode,
-    actor_scoped_to_many,
-    actor_scoped_to_one,
-    record_reference_field,
-)
+from angee.graphql.node import AngeeNode
+from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
 from angee.storage.schema import FileType
 
 Extraction = apps.get_model("extraction.Extraction")
@@ -44,7 +38,7 @@ def _readable_target(field: str) -> Callable[[strawberry.Info], Prefetch]:
 
 
 @strawberry_django.type(Extraction)
-class ExtractionType(ProtectedNode):
+class ExtractionType(AngeeNode):
     """One exact retained revision and its separately authorized source records."""
 
     @strawberry_django.field(
@@ -97,14 +91,14 @@ class ExtractionSourceType(RecordReferenceNode):
     content_hash: auto
     mime_type: auto
 
-    @record_reference_field(ExtractionSource, only=["message_part_id"])
-    def message_part_id(self, info: strawberry.Info) -> PublicID | None:
+    @strawberry_django.field(only=["message_part_id"])
+    def message_part_id(self) -> PublicID | None:
         """Project the retained part only while its current record remains readable."""
-        return RecordReferenceNode.reference_id(self, info) if cast(Any, self).message_part_id else None
+        return RecordReferenceNode.reference_id(self) if cast(Any, self).message_part_id else None
 
 
 @strawberry_django.type(ExtractionPage)
-class ExtractionPageType(ProtectedNode):
+class ExtractionPageType(AngeeNode):
     """Page dimensions and its independently authorized raster."""
 
     extraction: ExtractionType | None = actor_scoped_to_one("extraction")
@@ -120,12 +114,8 @@ class ExtractionPageType(ProtectedNode):
 
 
 @strawberry_django.type(ExtractionPart)
-class ExtractionPartType(ProtectedNode):
+class ExtractionPartType(AngeeNode):
     """A retained carrier, readable through its evidence revision's policy."""
-
-    @classmethod
-    def get_queryset(cls, queryset: QuerySet[Any], info: strawberry.Info) -> QuerySet[Any]:
-        return cast(Any, queryset).with_part_values() if selected_field(info.selected_fields, "value") else queryset
 
     extraction: ExtractionType | None = actor_scoped_to_one("extraction")
     source: ExtractionSourceType | None = actor_scoped_to_one("source")
@@ -141,12 +131,10 @@ class ExtractionPartType(ProtectedNode):
     dpi: auto
     duration_ms: auto
 
-    @strawberry_django.field(
-        only=["carrier_file_id", "source_id", "source_page", "kind", "carrier_digest", "content_hash", "metadata"],
-    )
+    @strawberry_django.field(only=["carrier_file_id"])
     def value(self) -> JSON:
         """Read part content from its retained storage carrier."""
-        return cast(Any, self).value
+        return cast(Any, self).document_part().value
 
 
 _EXTRACTIONS = hasura_model_resource(
@@ -189,7 +177,6 @@ _PARTS = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=lambda info: ExtractionPartType.get_queryset(ExtractionPart.objects.all(), info),
 )
 _RESOURCES = (_EXTRACTIONS, _SOURCES, _PAGES, _PARTS)
 schemas = {

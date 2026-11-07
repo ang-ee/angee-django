@@ -109,7 +109,7 @@ def test_outer_transaction_rollback_removes_account_and_person(iam_admin):
 
 def test_system_creation_has_no_actor_logs_named_reason_and_emits_once(iam_admin, person_events, caplog):
     assert current_actor() is None
-    with caplog.at_level(logging.INFO, logger="angee.iam.managers"):
+    with caplog.at_level(logging.INFO, logger="angee.iam.models"):
         user = User.objects.create_person_as_system("ingress", " INGRESS@example.com ", reason="test.channel.capture")
     assert user.actor() is None
     assert not user.is_sudo()

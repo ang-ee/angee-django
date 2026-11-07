@@ -7,21 +7,25 @@ from collections.abc import Callable
 from functools import partial
 
 import django_yamlconf
+from django.db import models
 from django_compose.conf import setting_name
-from django_compose.typing import CompositionPlugin
+from django_compose.typing import CompositionContext, CompositionPlugin
 from mypy.join import join_types
 from mypy.nodes import (
     ARG_NAMED_OPT,
+    GDEF,
     Argument,
     Import,
     ImportFrom,
     MemberExpr,
     MypyFile,
     NameExpr,
+    PlaceholderNode,
+    SymbolTableNode,
     TypeInfo,
     Var,
 )
-from mypy.plugin import AttributeContext, ClassDefContext
+from mypy.plugin import AttributeContext, ClassDefContext, DynamicClassDefContext
 from mypy.plugins.common import add_method_to_class
 from mypy.typeops import make_simplified_union
 from mypy.types import AnyType, CallableType, Instance, NoneType, TypedDictType, TypeType, get_proper_type
@@ -31,9 +35,21 @@ from mypy_django_plugin.lib import fullnames, helpers
 from angee.base.fields.implementation import ImplClassField
 
 
+class BaseCompositionContext(CompositionContext):
+    """Project checked parent contracts through native REBAC manager injection."""
+
+    def is_fallback_manager(self, manager: models.Manager[models.Model]) -> bool:
+        # Native model imports require Django's completed setup, supplied by the
+        # context before manager projection begins.
+        from rebac.mixins import INJECTED_BASE_MANAGER
+
+        return super().is_fallback_manager(manager) or manager.name == INJECTED_BASE_MANAGER
+
+
 class BasePlugin(CompositionPlugin):
     """Project model-toolkit contracts for Angee hosts."""
 
+    context_class = BaseCompositionContext
     default_settings_module: str | None = "angee.base.autoconfig"
 
     def get_additional_deps(self, file: MypyFile) -> list[tuple[int, str, int]]:
@@ -195,6 +211,31 @@ class BasePlugin(CompositionPlugin):
                 return signature.copy_modified(ret_type=method.ret_type)
         return ctx.default_attr_type
 
+    def get_dynamic_class_hook(self, fullname: str) -> Callable[[DynamicClassDefContext], None] | None:
+        if fullname == "angee.base.models.roles.role_anchor":
+            return self._role_anchor
+        return super().get_dynamic_class_hook(fullname)
+
+    def _role_anchor(self, ctx: DynamicClassDefContext) -> None:
+        api = helpers.get_semanal_api(ctx)
+        existing = api.lookup_current_scope(ctx.name)
+        if existing is not None and isinstance(existing.node, TypeInfo):
+            return
+        symbol = self.lookup_fully_qualified("angee.base.models.base.AngeeModel")
+        if symbol is None or not isinstance(symbol.node, TypeInfo) or not symbol.node.mro:
+            if not ctx.api.final_iteration:
+                if existing is None or not isinstance(existing.node, PlaceholderNode):
+                    placeholder = PlaceholderNode(
+                        api.qualified_name(ctx.name), ctx.call, ctx.call.line, becomes_typeinfo=True,
+                    )
+                    ctx.api.add_symbol_table_node(ctx.name, SymbolTableNode(GDEF, placeholder))
+                ctx.api.defer()
+            else:
+                ctx.api.fail("role_anchor requires the AngeeModel typing contract", ctx.call)
+            return
+        info = ctx.api.basic_new_typeinfo(ctx.name, Instance(symbol.node, []), ctx.call.line)
+        info.metaclass_type = symbol.node.metaclass_type
+        ctx.api.add_symbol_table_node(ctx.name, SymbolTableNode(GDEF, info))
 
 
 

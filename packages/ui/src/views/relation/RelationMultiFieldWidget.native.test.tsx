@@ -30,8 +30,6 @@ test("one chips field offers create for an unmatched query, from the related mod
   render(<Provider dataProvider={{ getList }}>
     <RelationMultiFieldWidget value={[]} relation={relation} aria-label="Tags" />
   </Provider>);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(getList).not.toHaveBeenCalled();
   // No create button beside the field: create is the search's last option.
   expect(screen.queryByRole("button", { name: "New tag" })).toBeNull();
   await typeQuery("urg");

@@ -10,9 +10,10 @@ from uuid import uuid4
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
+from rebac import ObjectRef
+from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
-from angee.base.hooks import resolve_hooks
 from angee.base.models.identity import public_id_of
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.serialization import json_safe
@@ -72,10 +73,7 @@ class ChangePayload:
     """Whether the change happened inside a sync ingestion context; not part of the wire message."""
 
     instance: models.Model | None = field(default=None, compare=False, repr=False)
-    """Source row available during transport projection, including deletes; never serialized."""
-
-    using: str | None = None
-    """Database alias captured before local observation; never serialized."""
+    """Source row available during synchronous local delivery, including deletes; never serialized."""
 
     broadcasts: bool = True
     """Whether this occurrence reaches the channel layer; local observers still receive it."""
@@ -90,7 +88,6 @@ class ChangePayload:
         readable_fields: ReadableFields = (),
         during_ingestion: bool = False,
         broadcasts: bool = True,
-        field_values: Mapping[str, Any] | None = None,
     ) -> ChangePayload:
         """Return the channel payload for a saved or deleted model instance."""
 
@@ -98,26 +95,27 @@ class ChangePayload:
         changed_values = None
         if changed_fields is not None:
             readable = readable_fields() if callable(readable_fields) else readable_fields
-            changed_values = _changed_values(instance, changed_fields, frozenset(readable), field_values)
-
+            changed_values = _changed_values(instance, changed_fields, frozenset(readable))
+        resource_id = None
+        if model_resource_type(type(instance)):
+            resource_id = model_resource_id(instance)
+        read_resource = _change_read_resource(instance) if broadcasts else None
         related_records = _change_related_records(instance) if broadcasts else ()
-        change = cls(
+        return cls(
             model=instance._meta.label,
             id=public_id_of(instance),
             action=action,
             occurrence_id=uuid4().hex,
             changed_fields=changed_fields,
             changed_values=changed_values,
+            resource_id=resource_id,
+            read_resource_type=None if read_resource is None else read_resource.resource_type,
+            read_resource_id=None if read_resource is None else read_resource.resource_id,
             related_records=related_records,
             during_ingestion=during_ingestion,
             instance=instance,
             broadcasts=broadcasts,
-            using=instance._state.db,
         )
-
-        for provider in resolve_hooks("ANGEE_GRAPHQL_CHANGE_PROJECTORS"):
-            change = provider(instance, change)
-        return change
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ChangePayload:
@@ -165,7 +163,9 @@ class ChangePayload:
             payload["read_resource_type"] = self.read_resource_type
             payload["read_resource_id"] = self.read_resource_id
         if self.related_records:
-            payload["related_records"] = [{"model": item.model, "id": item.id} for item in self.related_records]
+            payload["related_records"] = [
+                {"model": item.model, "id": item.id} for item in self.related_records
+            ]
         return payload
 
     @property
@@ -173,6 +173,14 @@ class ChangePayload:
         """Return the REBAC resource id, falling back to the public id."""
 
         return self.resource_id or self.id
+
+    @property
+    def read_resource(self) -> ObjectRef | None:
+        """Return the model-selected event read anchor, if one was captured."""
+
+        if self.read_resource_type is None or self.read_resource_id is None:
+            return None
+        return ObjectRef(self.read_resource_type, self.read_resource_id)
 
     def redacted(self, denied_fields: set[str]) -> ChangePayload:
         """Return a payload with denied field-level values removed."""
@@ -192,7 +200,6 @@ def _changed_values(
     instance: models.Model,
     changed_fields: tuple[str, ...],
     readable_fields: frozenset[str],
-    field_values: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return projected concrete-field values, including inherited columns, without relation fetches."""
 
@@ -201,29 +208,38 @@ def _changed_values(
         field = _concrete_field(instance, name)
         if field is None or not ({name, field.name, field.attname} & readable_fields):
             continue
-        value = field_values.get(name) if field_values is not None else getattr(instance, field.attname, None)
-        values[name] = json_safe(value)
+        values[name] = json_safe(getattr(instance, field.attname, None))
     return values
 
 
-def _change_related_records(instance: models.Model) -> tuple[ChangeRelatedRecord, ...]:
-    """Project model-owned native references without widening their declared views.
+def _change_read_resource(instance: models.Model) -> ObjectRef | None:
+    """Return an instance-owned change-feed read anchor, if declared.
 
-    Live historical hooks in ARP and framework callers still return the wire
-    value; accept those during their companion migration. New hooks return
-    ``RecordRef`` and own any explicit ``record_view_refs`` expansion themselves.
+    Most rows are gated by their own REBAC identity. A child or polymorphic edge
+    whose visibility derives from another row may expose ``change_read_resource``;
+    capturing that :class:`~rebac.ObjectRef` while the instance is still live keeps
+    create, update, and delete events on the same authorization boundary.
     """
+
+    resolver = getattr(instance, "change_read_resource", None)
+    if not callable(resolver):
+        return None
+    resource = resolver()
+    if resource is not None and not isinstance(resource, ObjectRef):
+        raise TypeError("change_read_resource() must return rebac.ObjectRef or None")
+    return resource
+
+
+def _change_related_records(instance: models.Model) -> tuple[ChangeRelatedRecord, ...]:
+    """Return model-owned canonical parents for exact authored-query invalidation."""
 
     resolver = getattr(instance, "change_related_records", None)
     if not callable(resolver):
         return ()
     records = tuple(resolver())
-    if any(not isinstance(record, RecordRef | ChangeRelatedRecord) for record in records):
-        raise TypeError("change_related_records() must return RecordRef values")
-    return tuple(
-        ChangeRelatedRecord(record.model_label, record.public_id) if isinstance(record, RecordRef) else record
-        for record in records
-    )
+    if any(not isinstance(record, ChangeRelatedRecord) for record in records):
+        raise TypeError("change_related_records() must return ChangeRelatedRecord values")
+    return records
 
 
 def _concrete_field(
@@ -254,16 +270,11 @@ class ChangeRelatedRecordType:
 
 @strawberry.type
 class ChangeEvent:
-    """Read-gated model change, or an empty-id ``ready`` registration control.
-
-    Readiness contains no record data or occurrence identity and follows replayed
-    data. Its opaque cursor marks the completed registration replay.
-    """
+    """Read-gated notification that one model instance changed."""
 
     model: str
     id: strawberry.ID
     action: str
-    replay_cursor: str | None = None
     occurrence_id: str | None = None
     changed_fields: list[str] | None = None
     changed_values: JSON | None = None
@@ -282,6 +293,7 @@ class ChangeEvent:
             changed_fields=list(payload.changed_fields) if payload.changed_fields is not None else None,
             changed_values=cast(JSON | None, payload.changed_values),
             related_records=[
-                ChangeRelatedRecordType(model=item.model, id=strawberry.ID(item.id)) for item in payload.related_records
+                ChangeRelatedRecordType(model=item.model, id=strawberry.ID(item.id))
+                for item in payload.related_records
             ],
         )

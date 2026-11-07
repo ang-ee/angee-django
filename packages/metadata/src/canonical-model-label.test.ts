@@ -37,15 +37,6 @@ describe("canonicalModelLabel", () => {
     );
   });
 
-  test("optional lookup distinguishes absent resources from ambiguous aliases", () => {
-    const resources = [testDataResource("notes.Note"), testDataResource("other.Note")];
-    expect(canonicalModelLabel(resources, "notes.Note", { optional: true })).toBe("notes.Note");
-    expect(canonicalModelLabel(resources, "notes.NoteBody", { optional: true })).toBeNull();
-    expect(canonicalModelLabel([], "notes.NoteBody", { optional: true })).toBeNull();
-    expect(() => canonicalModelLabel(resources, "Note", { optional: true })).toThrow(/ambiguous/);
-    expect(() => canonicalModelLabel(resources, "notes.NoteBody")).toThrow(/Unknown model spelling/);
-  });
-
   test("rejects an unknown spelling", () => {
     expect(() =>
       canonicalModelLabel([testDataResource("notes.Note")], "Missing"),

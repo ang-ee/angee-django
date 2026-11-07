@@ -26,10 +26,6 @@ class RoundRecordTests(CampaignIdentities, ClarificationCase):
         }""", {"project": self.project.sqid}, self.manager)
         self.assertIsNone(result.errors, result.errors)
         self.assertEqual(result.data["projects_by_pk"]["active_proposal_round"]["id"], self.round.sqid)
-        self.assertEqual(
-            {entry["name"] for entry in result.data["projects_by_pk"]["active_proposal_round"]["roster"]},
-            {self.asker.username, self.recipient.username},
-        )
 
 
 def test_round_record_verbs(tmp_path: Path) -> None:

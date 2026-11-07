@@ -22,8 +22,23 @@ type MergeHandle = MergePartyRecord["handles"][number];
 type MergeCircleMember = MergePartyRecord["circle_members"][number];
 type Provenance = MergeSide | "both";
 
+const COMMON_FIELDS = ["display_name", "notes", "first_met_note"] as const;
+const PERSON_FIELDS = [
+  "name_prefix",
+  "given_name",
+  "additional_name",
+  "family_name",
+  "name_suffix",
+  "nickname",
+  "birthday",
+] as const;
+
+type CommonField = (typeof COMMON_FIELDS)[number];
+type PersonField = (typeof PERSON_FIELDS)[number];
+type MergeField = CommonField | PersonField;
+
 interface FieldComparison {
-  name: string;
+  name: MergeField;
   left: string | null;
   right: string | null;
 }
@@ -40,19 +55,20 @@ function fieldComparisons(
   leftPerson: MergePersonRecord | null | undefined,
   rightPerson: MergePersonRecord | null | undefined,
 ): readonly FieldComparison[] {
-  const scalar = (row: object, name: string): string | null => {
-    const value: unknown = Reflect.get(row, name);
-    return typeof value === "string" ? value : null;
-  };
-  const comparisons = (names: readonly string[], leftRow: object, rightRow: object): FieldComparison[] =>
-    names.map((name) => ({ name, left: scalar(leftRow, name), right: scalar(rightRow, name) }));
-  const commonNames = left.merge_scalar_fields.filter((name) => right.merge_scalar_fields.includes(name));
-  const common = comparisons(commonNames, left, right);
+  const common = COMMON_FIELDS.map((name) => ({
+    name,
+    left: left[name],
+    right: right[name],
+  }));
   if (!leftPerson || !rightPerson) return common;
-  const personNames = leftPerson.merge_scalar_fields.filter(
-    (name) => !commonNames.includes(name) && rightPerson.merge_scalar_fields.includes(name),
-  );
-  return [...common, ...comparisons(personNames, leftPerson, rightPerson)];
+  return [
+    ...common,
+    ...PERSON_FIELDS.map((name) => ({
+      name,
+      left: leftPerson[name],
+      right: rightPerson[name],
+    })),
+  ];
 }
 
 function sameScalar(left: string | null, right: string | null): boolean {
@@ -165,7 +181,7 @@ export function MergePage(): React.ReactElement {
     invalidateModels: PARTY_MERGE_INVALIDATES,
   });
   const [survivor, setSurvivor] = React.useState<MergeSide>("left");
-  const [fieldChoices, setFieldChoices] = React.useState<Partial<Record<string, MergeSide>>>({});
+  const [fieldChoices, setFieldChoices] = React.useState<Partial<Record<MergeField, MergeSide>>>({});
   const platforms = useEnumOptions("parties.Handle", "platform", { casing: "upper" });
   const confirm = useConfirm();
 
@@ -259,7 +275,7 @@ export function MergePage(): React.ReactElement {
       <Page>
         <PageHeader title={t("merge.title")} description={t("merge.description")} />
         <PageBody>
-          <LoadingPanel message={t("merge.loading")} />
+          <LoadingPanel loadingLabel={t("merge.loading")} />
         </PageBody>
       </Page>
     );

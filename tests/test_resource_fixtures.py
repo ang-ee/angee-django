@@ -1,4 +1,4 @@
-"""Validate model resource values and owner-defined declaration resources."""
+"""Validate every declared resource value against its actual emitted Django field."""
 
 from __future__ import annotations
 
@@ -12,13 +12,12 @@ from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
 def test_declared_resource_values_are_accepted_by_their_model_field(tmp_path: Path) -> None:
-    """All installed addon fixtures resolve through a fresh composed Django registry.
+    """All local addon fixtures resolve through a fresh composed Django registry.
 
     The subprocess runs the real settings composer and generated model imports.
     This keeps the broad fixture sweep independent of pytest's hand-built models,
     while Django alone resolves donor and multi-table parent fields. Relation
     cells contain xref handles, so the loader owns their separate validation.
-    Non-model resource kinds are parsed by their registered declaration readers.
     """
 
     root = Path(__file__).resolve().parents[1]

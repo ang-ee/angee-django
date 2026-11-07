@@ -2,31 +2,29 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
 from django.conf import settings
+from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import ObjectRef
 
-from angee.base.fields.relations import GenericRelation
 from angee.base.fields.state import StateField
-from angee.iam.models.base import ProtectedDataModel
-from angee.iam.models.ownership import OwnerMixin
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.ownership import OwnerMixin
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class Note(
-    RecordChangedOptIn, OwnerMixin, ThreadedModelMixin, HistoryMixin, ProtectedDataModel, concrete=True
-):
+class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A short note used to exercise backend composition.
 
     Metadata and body changes are recorded through native ``history``.
     """
 
-    record_display_paths: ClassVar[tuple[str, ...]] = ("title",)
 
     @classmethod
     def record_changed_grant_targets(cls, trigger: Any) -> tuple[TriggerGrantTarget, ...]:

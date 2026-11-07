@@ -12,11 +12,17 @@ import pytest
 
 @pytest.mark.parametrize("order", ["iam-first", "provenance-first", "no-iam", "iam-only"])
 def test_iam_principal_donor_is_optional_and_order_independent(order: str) -> None:
-    script = """
+    script = '''
 import os
 import sys
 os.environ.pop("DJANGO_SETTINGS_MODULE", None)
+from django.apps import AppConfig
 from django.conf import settings
+class BareAngee(AppConfig):
+    name = "angee"
+class BareGraphQL(AppConfig):
+    name = "angee.graphql"
+    label = "graphql"
 selected = {
     "iam-first": ["angee.iam", "angee.provenance"],
     "provenance-first": ["angee.provenance", "angee.iam"],
@@ -25,7 +31,7 @@ selected = {
 }[sys.argv[1]]
 settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "rebac", "simple_history",
-                    "angee.base", "angee.graphql", *selected],
+                    "__main__.BareAngee", "angee.base", "__main__.BareGraphQL", *selected],
     DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
     SECRET_KEY="optional-iam-donor", ANGEE_CHANGESET_MODEL="provenance.Changeset",
 )
@@ -41,14 +47,13 @@ if sys.argv[1] == "iam-only":
 from angee.provenance import models as provenance
 if sys.argv[1] == "no-iam":
     assert not hasattr(provenance, "UserSource")
+    assert "angee.iam.models" not in sys.modules
 else:
     from django_compose.model_composition import ModelComposition
     from angee.iam.models import User
     donor = provenance.UserSource
-    composition = ModelComposition.discover((
-        apps.get_app_config("base"), apps.get_app_config("iam"), apps.get_app_config("provenance"),
-    ))
-    assert tuple(source for source in composition.donors(User) if source._meta.app_label == "provenance") == (donor,)
+    composition = ModelComposition.discover((apps.get_app_config("iam"), apps.get_app_config("provenance")))
+    assert composition.donors(User) == (donor,)
     from django.test.utils import isolate_apps
     with isolate_apps():
         class BaselineUser(User):
@@ -67,16 +72,11 @@ else:
             for active in (False, True):
                 user = ComposedUser(kind=kind, is_active=active)
                 assert user.source_kind == ("person" if kind == "person" and active else None)
-"""
+'''
     root = Path(__file__).resolve().parents[1]
     environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src")))}
     result = subprocess.run(
-        [sys.executable, "-c", script, order],
-        cwd=root,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=60,
-        check=False,
+        [sys.executable, "-c", script, order], cwd=root, env=environment,
+        text=True, capture_output=True, timeout=60, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr

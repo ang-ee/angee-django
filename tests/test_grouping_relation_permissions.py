@@ -5,7 +5,6 @@ These tests exercise only the public ``hasura_model_resource`` contract.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
@@ -15,7 +14,6 @@ import strawberry_django
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models
 from django.db.models.functions import Coalesce, NullIf
-from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
@@ -31,23 +29,19 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 from strawberry import auto
 
+from angee.base.models.base import AngeeDataModel
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import (
     _declared_aliases,
     aggregate_queryset,
     declared_hasura_resource_fields,
     hasura_model_resource,
 )
+from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.graphql.capabilities import permissions_field
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
-from angee.iam.models.base import ProtectedDataModel
-from angee.iam.testing.graphql import measure_graphql_document
-from tests.conftest import (
-    SchemaAddon,
-    execute_schema,
-    result_data,
-)
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import SchemaAddon
 from tests.tables import model_tables
 
 
@@ -60,7 +54,7 @@ def clear_declared_aliases():
     _declared_aliases.cache_clear()
 
 
-class GroupLabel(ProtectedDataModel):
+class GroupLabel(AngeeDataModel):
     """Protected target whose scalar fields must follow its own read scope."""
 
     sqid_prefix = "grl_"
@@ -68,16 +62,13 @@ class GroupLabel(ProtectedDataModel):
     display_name = models.CharField(max_length=64)
     rank = models.IntegerField()
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "tests/group_label"
 
-    def __str__(self) -> str:
-        return self.display_name
 
-
-class GroupMiddle(ProtectedDataModel):
+class GroupMiddle(AngeeDataModel):
     """Readable first hop whose protected target can still be unreadable."""
 
     sqid_prefix = "grm_"
@@ -87,7 +78,7 @@ class GroupMiddle(ProtectedDataModel):
         on_delete=models.CASCADE,
     )
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "tests/group_middle"
@@ -119,21 +110,17 @@ def test_plain_django_aggregate_source_retains_native_grouping(transactional_db)
         ]
 
 
-class GroupParent(ProtectedDataModel):
+class GroupParent(AngeeDataModel):
     """Readable parent spanning direct, scalar, nested, and plain axes."""
 
     sqid_prefix = "grp_"
     hasura_sortable_fields = ("metric_target__rank",)
-    hasura_groupable_fields = ("target__display_name",)
     hasura_aliases = {
         "label_name": NullIf(models.F("target__display_name"), models.Value(""), output_field=models.TextField()),
         "nested_name": Coalesce(models.F("middle__target__display_name"), models.Value("fallback")),
     }
     kind = models.CharField(max_length=16)
     amount = models.IntegerField(default=1)
-    occurred_at = models.DateTimeField(null=True)
-    occurred_on = models.DateField(null=True)
-    metadata = models.JSONField(default=dict)
     target = models.ForeignKey(
         GroupLabel,
         null=True,
@@ -159,30 +146,29 @@ class GroupParent(ProtectedDataModel):
         related_name="+",
     )
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "tests/group_parent"
 
 
 @strawberry_django.type(GroupLabel)
-class GroupLabelType(ProtectedNode):
+class GroupLabelType(AngeeNode):
     display_name: auto
     permissions = permissions_field(("read",))
 
 
 @strawberry_django.type(GroupMiddle)
-class GroupMiddleType(ProtectedNode):
+class GroupMiddleType(AngeeNode):
     target: GroupLabelType | None = actor_scoped_to_one("target")
     parents: list["GroupParentType"] = actor_scoped_to_many("parents")
     permissions = permissions_field(("read",))
 
 
 @strawberry_django.type(GroupParent)
-class GroupParentType(ProtectedNode):
+class GroupParentType(AngeeNode):
     kind: auto
     amount: auto
-    occurred_at: auto
     label_name: str | None = strawberry_django.field(annotate=models.F("label_name"))
     nested_name: str | None = strawberry_django.field(annotate=models.F("nested_name"))
     target: GroupLabelType | None = actor_scoped_to_one("target")
@@ -219,7 +205,7 @@ def relation_grouping_case(transactional_db: None):
     with (
         model_tables(models_in_order),
         patch(
-            "angee.iam.graphql.capabilities.declared_rebac_definition",
+            "angee.graphql.capabilities.declared_rebac_definition",
             side_effect=lambda model: definition.get_definition(cast(str, model_resource_type(model))),
         ),
     ):
@@ -232,8 +218,8 @@ def relation_grouping_case(transactional_db: None):
                 model=GroupParent,
                 name="group_parents",
                 filterable=[
-                    "kind", "target", "metric_target__rank", "target__display_name", "middle__target__display_name",
-                    "occurred_at",
+                    "kind", "target", "metric_target", "metric_target__rank", "middle", "plain",
+                    "target__display_name", "middle__target__display_name",
                 ],
                 sortable=[
                     "kind", "id", "target", "middle__target", "plain",
@@ -241,19 +227,13 @@ def relation_grouping_case(transactional_db: None):
                 ],
                 aggregatable=["amount"],
                 groupable=[
-                    "target", *declared_hasura_resource_fields(GroupParent, "hasura_groupable_fields"),
+                    "target",
                     "metric_target",
                     "metric_target__rank",
                     "middle",
                     "middle__target__display_name",
-                    "plain", "plain__display_name",
-                    "occurred_at", "occurred_on", "metadata.mailbox", "metadata.rank", "metadata.held_at",
-                    "metadata.enabled",
+                    "plain",
                 ],
-                json_paths={
-                    "metadata.mailbox": "str", "metadata.rank": "int", "metadata.held_at": "datetime",
-                    "metadata.enabled": "bool",
-                },
                 insert=False,
                 update=False,
                 delete=False,
@@ -281,7 +261,7 @@ def relation_grouping_case(transactional_db: None):
                     *declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields"),
                 ],
                 aggregatable=["amount"],
-                groupable=["target", *declared_hasura_resource_fields(GroupParent, "hasura_groupable_fields")],
+                groupable=["target"],
                 get_queryset=lambda info: GroupParent.objects.with_actor(alice),
                 insert=False,
                 update=False,
@@ -326,7 +306,7 @@ def relation_grouping_case(transactional_db: None):
                 alpha_middle = GroupMiddle.objects.create(target=alpha)
                 beta_middle = GroupMiddle.objects.create(target=beta)
                 hidden_middle = GroupMiddle.objects.create(target=duplicate_one)
-                plain = PlainGroupLabel._default_manager.create(display_name="Plain")
+                plain = PlainGroupLabel.objects.create(display_name="Plain")
                 parents = [
                     GroupParent.objects.create(
                         kind="target",
@@ -403,313 +383,6 @@ def relation_grouping_case(transactional_db: None):
 
 def _query(case: Any, actor: SubjectRef, document: str) -> dict[str, Any]:
     return result_data(execute_schema(case.schema, document, user=actor))
-
-
-def test_grouped_page_window_sql_budget(relation_grouping_case: Any) -> None:
-    """Fifty four-row groups retain one windowed leaf read and one label read."""
-
-    case = relation_grouping_case
-    with system_context(reason="test.grouped_page.window.seed"):
-        labels = [
-            GroupLabel.objects.create(external_key=f"window-{index}", display_name=f"Company {index}", rank=index)
-            for index in range(50)
-        ]
-        parents = [
-            GroupParent.objects.create(kind="window", target=label)
-            for label in labels for _ in range(4)
-        ]
-    write_relationships([
-        *(RelationshipTuple(to_object_ref(label), "reader", case.alice) for label in labels),
-        *(RelationshipTuple(to_object_ref(parent), "reader", case.alice) for parent in parents),
-    ])
-    metadata = next(resource for resource in case.owner.resources("public") if resource.model is GroupParent)
-    assert metadata.roots.grouped_rows_name == "group_parents_grouped_rows"
-    assert metadata.type_names.grouped_row_page == "group_parents_grouped_rows_page"
-    # Measured SQLite leaf SQL bytes at 1/10/50 groups: 19,714/17,393/21,425;
-    # PostgreSQL: 20,485/18,004/21,964. Largest: 16,535/14,108/17,708
-    # and 17,169/14,615/18,215. The 30/25 KB ceilings leave CI headroom.
-    # Both backends issue two statements: the windowed rows and the selected
-    # relation projection. The rows statement itself is exactly one SELECT.
-    # Groups + labels measured 9,653/9,742/10,094 bytes on SQLite and
-    # 10,043/10,099/10,379 on PostgreSQL, also two flat statements.
-    for count in (1, 10, 50):
-        pages = ", ".join(f'{{key: "{label.sqid}", limit: 4}}' for label in labels[:count])
-        document = f'''query GroupedResourceList {{
-          group_parents_grouped_rows(group_by: {{field: TARGET}}, pages: [{pages}],
-            where: {{kind: {{_eq: "window"}}}}, order_by: [{{id: asc}}]) {{
-              key rows {{ id kind target {{ id display_name }} }}
-            }}
-        }}'''
-        read = measure_graphql_document(case.schema, document, {}, actor=case.alice)
-        read.assert_no_audit_writes()
-        assert read.statement_count == 2
-        read.assert_bytes(total=30_000, largest=25_000)
-        assert sum("ROW_NUMBER" in sql.upper() for sql in read.statements) == 1
-        result = read.data["group_parents_grouped_rows"]
-        assert [page["key"] for page in result] == [label.sqid for label in labels[:count]]
-        assert [len(page["rows"]) for page in result] == [4] * count
-        groups = measure_graphql_document(
-            case.schema,
-            """query GroupedResourceGroups($limit: Int) {
-              group_parents_groups(group_by: [{field: TARGET}],
-                where: {kind: {_eq: "window"}}, limit: $limit) {
-                key { target_id } label aggregate { count }
-              }
-            }""",
-            {"limit": count},
-            actor=case.alice,
-        )
-        groups.assert_no_audit_writes()
-        assert groups.statement_count == 2
-        groups.assert_bytes(total=16_000, largest=10_000)
-        assert all(group["aggregate"]["count"] == 4 for group in groups.data["group_parents_groups"])
-        assert {group["label"] for group in groups.data["group_parents_groups"]} == {
-            label.display_name for label in labels[:count]
-        }
-
-
-@pytest.mark.parametrize(
-    ("axis", "key_field", "granularity"),
-    [
-        ("OCCURRED_AT", "occurred_at_month", "MONTH"),
-        ("OCCURRED_ON", "occurred_on_month", "MONTH"),
-        ("METADATA__MAILBOX", "metadata__mailbox", None),
-        ("METADATA__RANK", "metadata__rank", None),
-        ("METADATA__HELD_AT", "metadata__held_at_month", "MONTH"),
-    ],
-)
-def test_extracted_group_pages_match_native_keys_at_flat_cost(
-    relation_grouping_case: Any, axis: str, key_field: str, granularity: str | None,
-) -> None:
-    """Native bucket keys page the same 50 actor-scoped groups in one windowed read."""
-
-    case = relation_grouping_case
-    seeded: dict[str | int, list[str]] = {}
-    with system_context(reason="test.grouped_page.extracted.seed"):
-        parents = []
-        for index in range(50):
-            month = datetime(2020 + index // 12, index % 12 + 1, 12, 14, tzinfo=UTC)
-            mailbox = f"mail-{index:02d}"
-            group_rows = [
-                GroupParent.objects.create(
-                    kind="axis", occurred_at=month, occurred_on=month.date(),
-                    metadata={"mailbox": mailbox, "rank": index, "held_at": month.isoformat()},
-                )
-                for _ in range(4)
-            ]
-            seeded[mailbox] = [row.sqid for row in group_rows]
-            seeded[index] = [row.sqid for row in group_rows]
-            seeded[month.strftime("%Y-%m")] = [row.sqid for row in group_rows]
-            parents.extend(group_rows)
-    write_relationships([
-        RelationshipTuple(to_object_ref(parent), "reader", case.alice) for parent in parents
-    ])
-    spec = f"field: {axis}" + (f", granularity: {granularity}" if granularity else "")
-    prior_rows = None
-    prior_groups = None
-    for count in (1, 10, 50):
-        groups = measure_graphql_document(
-            case.schema,
-            f'''query AxisGroups($limit: Int) {{
-              group_parents_groups(group_by: [{{{spec}}}], where: {{kind: {{_eq: "axis"}}}},
-                limit: $limit) {{ key {{ {key_field} }} label aggregate {{ count }} }}
-            }}''',
-            {"limit": count}, actor=case.alice,
-        )
-        groups.assert_no_audit_writes()
-        assert groups.statement_count == 1
-        assert len(groups.data["group_parents_groups"]) == count
-        assert all(group["aggregate"]["count"] == 4 for group in groups.data["group_parents_groups"])
-        keys = [group["key"][key_field] for group in groups.data["group_parents_groups"]]
-        assert all(key is not None for key in keys)
-        assert all(group["label"] is None for group in groups.data["group_parents_groups"])
-        if axis == "METADATA__RANK":
-            assert all(isinstance(key, int) for key in keys)
-        pages = [{"key": key, "limit": 2, "offset": 1} for key in keys]
-        rows = measure_graphql_document(
-            case.schema,
-            f'''query AxisRows($pages: [group_parents_grouped_rows_page!]!) {{
-              group_parents_grouped_rows(group_by: {{{spec}}}, pages: $pages,
-                where: {{kind: {{_eq: "axis"}}}}, order_by: [{{id: asc}}]) {{
-                  key rows {{ id kind }}
-                }}
-            }}''',
-            {"pages": pages}, actor=case.alice,
-        )
-        rows.assert_no_audit_writes()
-        assert rows.statement_count == 1
-        assert sum("ROW_NUMBER" in sql.upper() for sql in rows.statements) == 1
-        result = rows.data["group_parents_grouped_rows"]
-        assert [page["key"] for page in result] == keys
-        assert [len(page["rows"]) for page in result] == [2] * count
-        expected = {
-            row_id
-            for key in keys
-            for row_id in seeded[key if granularity is None else key[:7]][1:3]
-        }
-        assert {row["id"] for page in result for row in page["rows"]} == expected
-        if prior_rows is not None and prior_groups is not None:
-            rows.assert_flat_from(prior_rows)
-            groups.assert_flat_from(prior_groups)
-        prior_rows, prior_groups = rows, groups
-        # Measured SQLite rows at 1/10/50: DateTime 3966/5029/10149,
-        # Date 3844/4771/9171, JSON text 4514/5218/9378, JSON DateTime
-        # 4894/5725/10845 bytes. PostgreSQL: 4056/5128/10248,
-        # 3914/4966/9846, 3864/4762/8922, 4220/5251/10371.
-        # Each groups read stays below 3504 bytes on SQLite and 3433 on PG.
-        budget = {1: 6_500, 10: 7_500, 50: 14_500}[count]
-        rows.assert_bytes(
-            total=budget,
-            largest=budget,
-            cause="one actor-scoped row window partitioned by the selected group expression",
-        )
-        groups.assert_bytes(total=5_000, largest=5_000, cause="native grouped aggregate")
-
-
-@pytest.mark.parametrize("granularity", ["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"])
-@pytest.mark.parametrize("axis", ["OCCURRED_AT", "OCCURRED_ON"])
-def test_date_buckets_round_trip_group_keys(
-    relation_grouping_case: Any, axis: str, granularity: str,
-) -> None:
-    """Each date bucket's native key addresses exactly its grouped row page."""
-
-    case = relation_grouping_case
-    dates = [
-        datetime(2020, 12, 31, 14, tzinfo=UTC),
-        datetime(2021, 1, 1, 14, tzinfo=UTC),
-        datetime(2021, 1, 4, 14, tzinfo=UTC),
-        datetime(2021, 2, 1, 14, tzinfo=UTC),
-    ]
-    with system_context(reason="test.grouped_page.date_grain.seed"):
-        parents = [
-            GroupParent.objects.create(kind="date-grain", occurred_at=value, occurred_on=value.date())
-            for value in dates
-        ]
-    write_relationships([
-        RelationshipTuple(to_object_ref(parent), "reader", case.alice) for parent in parents
-    ])
-    key_field = f"{'occurred_at' if axis == 'OCCURRED_AT' else 'occurred_on'}_{granularity.lower()}"
-    groups = _query(case, case.alice, f'''query {{
-      group_parents_groups(group_by: [{{field: {axis}, granularity: {granularity}}}],
-        where: {{kind: {{_eq: "date-grain"}}}}) {{ key {{ {key_field} }} label aggregate {{ count }} }}
-    }}''')["group_parents_groups"]
-    assert all(group["label"] is None for group in groups)
-    pages = [{"key": group["key"][key_field], "limit": group["aggregate"]["count"]} for group in groups]
-    rows = measure_graphql_document(
-        case.schema,
-        f'''query DateRows($pages: [group_parents_grouped_rows_page!]!) {{
-          group_parents_grouped_rows(group_by: {{field: {axis}, granularity: {granularity}}},
-            pages: $pages, where: {{kind: {{_eq: "date-grain"}}}}, order_by: [{{id: asc}}]) {{
-              key rows {{ id }}
-            }}
-        }}''',
-        {"pages": pages}, actor=case.alice,
-    )
-    assert rows.statement_count == 1
-    result = rows.data["group_parents_grouped_rows"]
-    assert [page["key"] for page in result] == [page["key"] for page in pages]
-    assert {row["id"] for page in result for row in page["rows"]} == {parent.sqid for parent in parents}
-
-
-@override_settings(TIME_ZONE="America/Chicago")
-def test_grouped_page_keys_preserve_local_month_membership_and_empty_pages(
-    relation_grouping_case: Any,
-) -> None:
-    """UTC November can belong to October, and every requested page keeps its wire key."""
-
-    case = relation_grouping_case
-    with system_context(reason="test.grouped_page.local_month.seed"):
-        october = GroupParent.objects.create(
-            kind="local-month", occurred_at=datetime(2026, 11, 1, 3, tzinfo=UTC),
-        )
-        november = GroupParent.objects.create(
-            kind="local-month", occurred_at=datetime(2026, 11, 1, 8, tzinfo=UTC),
-        )
-    write_relationships([
-        RelationshipTuple(to_object_ref(row), "reader", case.alice)
-        for row in (october, november)
-    ])
-    groups = _query(case, case.alice, '''query {
-      group_parents_groups(group_by: [{field: OCCURRED_AT, granularity: MONTH}],
-        where: {kind: {_eq: "local-month"}}) { key { occurred_at_month } }
-    }''')["group_parents_groups"]
-    keys = {
-        datetime.fromisoformat(group["key"]["occurred_at_month"]).month:
-        group["key"]["occurred_at_month"]
-        for group in groups
-    }
-    requested = [keys[11], "2026-12-01T00:00:00-06:00", keys[10]]
-    read = measure_graphql_document(
-        case.schema,
-        '''query LocalMonthRows($pages: [group_parents_grouped_rows_page!]!) {
-          group_parents_grouped_rows(
-            group_by: {field: OCCURRED_AT, granularity: MONTH}, pages: $pages,
-            where: {kind: {_eq: "local-month"}}, order_by: [{id: asc}]
-          ) { key rows { id } }
-        }''',
-        {"pages": [{"key": key, "limit": 1} for key in requested]},
-        actor=case.alice,
-    )
-    assert read.statement_count == 1
-    assert read.data["group_parents_grouped_rows"] == [
-        {"key": keys[11], "rows": [{"id": november.sqid}]},
-        {"key": requested[1], "rows": []},
-        {"key": keys[10], "rows": [{"id": october.sqid}]},
-    ]
-
-
-def test_json_boolean_group_headers_leave_label_to_client(relation_grouping_case: Any) -> None:
-    """JSON boolean keys retain their type without a server display label."""
-
-    case = relation_grouping_case
-    with system_context(reason="test.grouped_page.json_bool.seed"):
-        row = GroupParent.objects.create(kind="json-bool", metadata={"enabled": False, "mailbox": ""})
-    write_relationships([
-        RelationshipTuple(to_object_ref(row), "reader", case.alice)
-    ])
-    groups = _query(case, case.alice, '''query {
-      group_parents_groups(group_by: [{field: METADATA__ENABLED}],
-        where: {kind: {_eq: "json-bool"}}) { key { metadata__enabled } label }
-    }''')["group_parents_groups"]
-    assert groups == [{"key": {"metadata__enabled": False}, "label": None}]
-    blanks = _query(case, case.alice, '''query {
-      group_parents_groups(group_by: [{field: METADATA__MAILBOX}],
-        where: {kind: {_eq: "json-bool"}}) { key { metadata__mailbox } label }
-    }''')["group_parents_groups"]
-    assert blanks == [{"key": {"metadata__mailbox": ""}, "label": None}]
-
-
-def test_grouped_row_pages_keep_offsets_and_redacted_null_bucket(relation_grouping_case: Any) -> None:
-    """Independent page offsets use the same guarded key as the groups read."""
-
-    case = relation_grouping_case
-    result = _query(
-        case,
-        case.alice,
-        f'''query {{
-          rows: group_parents_grouped_rows(
-            group_by: {{field: TARGET}},
-            pages: [{{key: "{case.alpha.sqid}", limit: 1, offset: 1}}, {{key: null, limit: 2}}],
-            where: {{kind: {{_eq: "target"}}}}, order_by: [{{id: asc}}]
-          ) {{ key rows {{ id target {{ id }} }} }}
-          groups: group_parents_groups(
-            group_by: [{{field: TARGET}}], where: {{kind: {{_eq: "target"}}}}
-          ) {{ key {{ target_id }} label aggregate {{ count }} }}
-        }}''',
-    )
-    assert result["rows"] == [
-        {"key": case.alpha.sqid, "rows": [
-            {"id": case.parents[1].sqid, "target": {"id": case.alpha.sqid}},
-        ]},
-        {"key": None, "rows": [
-            {"id": case.parents[2].sqid, "target": None},
-            {"id": case.parents[5].sqid, "target": None},
-        ]},
-    ]
-    groups = {group["key"]["target_id"]: group for group in result["groups"]}
-    assert groups[case.alpha.sqid]["label"] == "Alpha"
-    assert groups[None]["label"] is None
-    assert groups[None]["aggregate"]["count"] == 2
 
 
 def test_related_axes_merge_unreadable_identities_into_null(
@@ -1032,14 +705,11 @@ def test_declared_sort_alias_guards_every_hop_and_its_fallback(relation_grouping
     assert _query(case, case.alice, document) == before
 
 
-@pytest.mark.parametrize("attribute", ["hasura_sortable_fields", "hasura_groupable_fields"])
 @pytest.mark.parametrize("path", ["middle__parents__kind", "target__absent", "kind__value"])
-def test_declared_scalar_paths_reject_to_many_and_unknown_fields(
-    monkeypatch: pytest.MonkeyPatch, path: str, attribute: str,
-) -> None:
-    monkeypatch.setattr(GroupParent, attribute, (path,))
+def test_declared_sort_paths_reject_to_many_and_unknown_fields(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    monkeypatch.setattr(GroupParent, "hasura_sortable_fields", (path,))
     with pytest.raises(ImproperlyConfigured, match="invalid field"):
-        declared_hasura_resource_fields(GroupParent, attribute)
+        declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields")
 
 
 @pytest.mark.parametrize(
@@ -1070,7 +740,7 @@ def test_declared_sort_alias_rejects_field_gated_paths(monkeypatch: pytest.Monke
         }
     """)
     monkeypatch.setattr(
-        "angee.iam.graphql.resources.declared_rebac_definition",
+        "angee.graphql.data.hasura.declared_rebac_definition",
         lambda model: definition.get_definition(cast(str, model_resource_type(model))),
     )
     with pytest.raises(ImproperlyConfigured, match="field-gated reads"):
@@ -1116,7 +786,7 @@ def test_permissions_remain_batched_through_guarded_relations(relation_grouping_
     for limit in (1, 10, 50):
         with (
             patch(
-                "angee.iam.graphql.capabilities.permission_annotations",
+                "angee.graphql.capabilities.permission_annotations",
                 side_effect=AssertionError("Unbatched permission check"),
             ),
             CaptureQueriesContext(connection) as queries,

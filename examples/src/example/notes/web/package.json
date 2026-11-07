@@ -12,7 +12,6 @@
   "dependencies": {
     "@angee/app": "workspace:*",
     "@angee/metadata": "workspace:*",
-    "@angee/refine": "workspace:*",
     "@refinedev/core": "^5.0.12",
     "@angee/provenance": "workspace:*",
     "@angee/ui": "workspace:*"

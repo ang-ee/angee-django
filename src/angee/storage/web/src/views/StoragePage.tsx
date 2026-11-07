@@ -93,7 +93,10 @@ export function StoragePage(): ReactElement {
     },
     [navigate, routeHref, fileResource],
   );
-  const fileActions = useFileActions();
+  const refreshOpenFile = useCallback(() => {
+    if (openFileId) openFileQuery.refetch();
+  }, [openFileId, openFileQuery.refetch]);
+  const fileActions = useFileActions({ onChanged: refreshOpenFile });
   const uploads = useStorageUpload();
 
   return <StorageExplorer openFile={openFile} openFileId={openFileId} folderScope={folderScope}

@@ -153,21 +153,6 @@ describe("ThreadTranscript", () => {
     expect(mocks.scrollToIndex).toHaveBeenLastCalledWith(0, { align: "center" });
   });
 
-  test("Back to the feed's date anchor scrolls back to that calendar day", () => {
-    mocks.transcriptRows = [
-      message({ id: "late", feed_order_key: "v1:0003", sent_at: "2026-07-03T10:00:00Z" }),
-      message({ id: "dated", feed_order_key: "v1:0002", sent_at: "2026-07-01T10:00:00Z" }),
-      message({ id: "early", feed_order_key: "v1:0001", sent_at: "2026-06-30T10:00:00Z" }),
-    ];
-    const dateAnchor = "date:2026-07-01@UTC";
-    const { rerender } = render(<ThreadTranscript threadId="thr_1" anchor={dateAnchor} timezone="UTC" />);
-    expect(mocks.scrollToIndex).toHaveBeenLastCalledWith(1, { align: "center" });
-    rerender(<ThreadTranscript threadId="thr_1" anchor="message:late" timezone="UTC" />);
-    expect(mocks.scrollToIndex).toHaveBeenLastCalledWith(2, { align: "center" });
-    rerender(<ThreadTranscript threadId="thr_1" anchor={dateAnchor} timezone="UTC" />);
-    expect(mocks.scrollToIndex).toHaveBeenLastCalledWith(1, { align: "center" });
-  });
-
   test("renders inbound, outbound, and internal turns with their distinct treatments", () => {
     mocks.transcriptRows = [
       message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),

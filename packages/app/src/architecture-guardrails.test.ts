@@ -133,6 +133,8 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("CollectionTreeView", "@angee/ui", "src/views/tree/CollectionTreeView.tsx"),
   frameworkCriticalExport("RelationFieldWidget", "@angee/ui", "src/views/relation/RelationFieldWidget.tsx"),
   frameworkCriticalExport("RecordReference", "@angee/ui", "src/views/relation/RecordReference.tsx"),
+  // Pending pane rows: panes compose it instead of drawing their own row blocks.
+  frameworkCriticalExport("PaneRowsSkeleton", "@angee/ui", "src/communication/pane-list.tsx"),
   frameworkCriticalExport("createAngeeI18nInstance", "@angee/ui", "src/runtime/i18n.ts"),
   frameworkCriticalExport("resourcePageRoutes", "@angee/app", "src/define-base-addon.ts"),
   frameworkCriticalExport("expectValidBaseAddon", "@angee/app", "src/testing.tsx"),

@@ -31,16 +31,11 @@ through that query path. Deleting the source preserves these retained links.
 ```
 
 At least one alternative and unique keys are required. Action identities must be
-among the concerns. The workflow chooses which editable fields to propose on the
-action model; Decisions has no field allowlist and does not derive admission from
-GraphQL exposure. Model fields own value decoding and validation. To-one sets use
-readable public identities or null, and many-to-many `set`/`choose` values are lists
-of readable public ids (empty clears); one-to-many stays refused. Values and field
-editability are validated when asking. State and server-owned fields stay with
-their record's methods. Record and field write permissions, related-record read
-access and model validation are checked again when applying. Multiple alternatives
-cannot write the same field of the same record. A record action may call only a
-method named by the model's class-level `decision_methods` tuple; the proposal's keyword
+among the concerns. Field names must be editable scalar fields on their canonical
+models or updatable many-to-many fields; to-one sets use readable public identities or null, and many-to-many `set`/`choose` values are lists of readable public ids (empty clears); one-to-many stays refused. Values and field
+editability are validated when asking. Multiple alternatives cannot write the
+same field of the same record. A record action may call only a method named by
+the model's class-level `decision_methods` tuple; the proposal's keyword
 `arguments` are bound to the method's signature when the request is validated, so
 a method with required parameters (a strict `cancel(reason)`) is a valid call
 when the proposal names them and refused when it does not. `delete` is

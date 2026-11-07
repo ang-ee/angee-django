@@ -1,9 +1,7 @@
-import { createContext, useContext, useEffect, useRef, useState, type MutableRefObject, type ReactElement } from "react";
-import { useDataProvider } from "@refinedev/core";
-import { useQueryClient } from "@tanstack/react-query";
-import { authoredQueryOptions, useActiveDataProviderName, useAuthoredQuery } from "@angee/refine";
+import { createContext, useContext, useEffect, useState, type ReactElement } from "react";
+import { useAuthoredQuery } from "@angee/refine";
 import { ThreadTranscript } from "@angee/messaging";
-import { Button, Chip, ErrorBanner, Glyph, PaneToolbarHost, RecordHeader } from "@angee/ui";
+import { Button, Chip, ErrorBanner, Glyph, PaneToolbarHost, RecordHeader, SkeletonStatus, SkeletonText } from "@angee/ui";
 import { InboxTranscriptMatches } from "./documents";
 import type { DocumentType } from "@angee/gql/console";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
@@ -25,7 +23,6 @@ export function InboxConversation({
   // The visible window reports membership; the header names the complete conversation.
   const [matches, setMatches] = useState<TranscriptMatches | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const navigateMatch = useRef<((direction: "previous" | "next") => Promise<void>) | null>(null);
   const statusFeed = matches?.thread.modality === "STATUS";
   useInboxBreadcrumbs(navigation, { conversation: { id: navigation.thread,
     label: matches?.thread.conversation_label || t("inbox.conversation") } });
@@ -40,7 +37,8 @@ export function InboxConversation({
         crumbs={t(statusFeed ? "inbox.updates" : "inbox.conversation")}
         title={matches?.thread.conversation_label || t("inbox.conversation")}
         meta={matches ? t(statusFeed ? "inbox.statusFeedCount" : matches.count === matches.total ? "inbox.conversationCount" : "inbox.transcriptCount",
-          { count: matches.count, total: matches.total }) : t("inbox.loading")}
+          { count: matches.count, total: matches.total })
+          : error ? undefined : <SkeletonStatus loadingLabel={t("inbox.loading")} className="w-full py-1"><SkeletonText lines={1} lineClassName="w-64 max-w-full" /></SkeletonStatus>}
       />
       <ErrorBanner description={error} />
       {/* The transcript's own controls publish into this pane's toolbar row. */}
@@ -52,20 +50,16 @@ export function InboxConversation({
           onAnchorChange={(at) => navigation.patch({ at: at || undefined })}
           onOpenReply={navigation.openInContext}
           toolbarActions={matches && matches.count < matches.total ? [
-            { icon: "chevron-left", label: t("inbox.previousMatch"), text: true, disabled: matches.count === 0,
-              onClick: () => { void navigateMatch.current?.("previous"); } },
-            { icon: "chevron-right", label: t("inbox.nextMatch"), text: true, disabled: matches.count === 0,
-              onClick: () => { void navigateMatch.current?.("next"); } },
+            { icon: "chevron-left", label: t("inbox.previousMatch"), text: true, disabled: !matches.previous,
+              onClick: () => navigation.patch({ at: `message:${matches.previous}` }) },
+            { icon: "chevron-right", label: t("inbox.nextMatch"), text: true, disabled: !matches.next,
+              onClick: () => navigation.patch({ at: `message:${matches.next}` }) },
           ] : undefined}
-          renderWindow={(messages, positioned, feedAnchor, viewportMessageId, children) => (
+          renderWindow={(messages, children) => (
             <MatchWindow
               scope={scope}
               navigation={navigation}
               ids={messages.map((message) => message.id)}
-              positioned={positioned}
-              feedAnchor={feedAnchor}
-              viewportMessageId={viewportMessageId}
-              navigateMatch={navigateMatch}
               onMatches={setMatches}
               onError={setError}
             >
@@ -90,10 +84,6 @@ function MatchWindow({
   scope,
   navigation,
   ids,
-  positioned,
-  feedAnchor,
-  viewportMessageId,
-  navigateMatch,
   children,
   onMatches,
   onError,
@@ -101,54 +91,29 @@ function MatchWindow({
   scope: InboxScope;
   navigation: InboxNavigation;
   ids: string[];
-  positioned: boolean;
-  feedAnchor: string;
-  viewportMessageId: () => string;
-  navigateMatch: MutableRefObject<((direction: "previous" | "next") => Promise<void>) | null>;
   children: ReactElement;
   onMatches: (matches: TranscriptMatches | null) => void;
   onError: (message: string | null) => void;
 }) {
-  const queryClient = useQueryClient();
-  const dataProvider = useDataProvider();
-  const providerName = useActiveDataProviderName() ?? "default";
-  // Membership follows the feed's copy-inclusion anchor, not the navigation
-  // anchor, which can move within an already loaded window.
-  const membershipAnchor = feedAnchor.startsWith("message:") ? feedAnchor.slice(8) : "";
-  const variables = {
-    ...scope,
-    thread: navigation.thread,
-    visible: ids,
-    at: membershipAnchor,
-  };
   const query = useAuthoredQuery(
     InboxTranscriptMatches,
-    variables,
-    { models: INBOX_MODELS, enabled: positioned, keepPreviousData: true },
+    {
+      ...scope,
+      thread: navigation.thread,
+      visible: ids,
+      at: navigation.at.startsWith("message:")
+        ? navigation.at.slice(8)
+        : (ids[0] ?? ""),
+    },
+    // The header counts the whole conversation, so a new window's read keeps the last window's facts;
+    // a retained read from another conversation is never shown.
+    { models: INBOX_MODELS, keepPreviousData: true },
   );
-  const matches = query.data?.inbox_transcript_matches ?? null;
+  const read = query.data?.inbox_transcript_matches ?? null;
+  const matches = read?.thread.id === navigation.thread ? read : null;
   const errorMessage = query.error?.message ?? null;
   useEffect(() => { onMatches(matches); }, [matches, onMatches]);
   useEffect(() => { onError(errorMessage); }, [errorMessage, onError]);
-  async function navigateToMatch(direction: "previous" | "next"): Promise<void> {
-    const at = viewportMessageId();
-    if (!at) return;
-    try {
-      const result = await queryClient.fetchQuery({
-        ...authoredQueryOptions(queryClient, dataProvider, providerName, InboxTranscriptMatches,
-          { ...variables, at }, INBOX_MODELS),
-        staleTime: 0,
-      });
-      const target = result.inbox_transcript_matches?.[direction];
-      if (target) navigation.patch({ at: `message:${target}` });
-    } catch (error) {
-      onError(error instanceof Error ? error.message : String(error));
-    }
-  }
-  useEffect(() => {
-    navigateMatch.current = navigateToMatch;
-    return () => { if (navigateMatch.current === navigateToMatch) navigateMatch.current = null; };
-  });
   return (
     <Matches.Provider value={matches?.visible ?? []}>
       {children}

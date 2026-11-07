@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlsplit
 
@@ -114,11 +113,10 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
         raw_limit = self._config_value("generation_limit")
         if raw_limit is not None:
             try:
-                limit = Decimal(str(raw_limit))
-                generation_limit = int(limit)
-            except (TypeError, ValueError, OverflowError, InvalidOperation) as error:
+                generation_limit = int(raw_limit)
+            except (TypeError, ValueError) as error:
                 raise ValueError("Ollama generation_limit must be a positive integer.") from error
-            if isinstance(raw_limit, bool) or generation_limit <= 0 or limit != generation_limit:
+            if isinstance(raw_limit, bool) or generation_limit <= 0:
                 raise ValueError("Ollama generation_limit must be a positive integer.")
             if "max_tokens" not in result:
                 result["max_tokens"] = generation_limit
@@ -205,13 +203,14 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
         # The SDK adapter loads with the model it binds, not with the catalogue.
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.profiles.openai import OpenAIModelProfile
-        from pydantic_ai.providers.ollama import OllamaProvider
+        from pydantic_ai.providers.openai import OpenAIProvider
 
         return OpenAIChatModel(
             handle,
-            provider=OllamaProvider(openai_client=client),
+            provider=OpenAIProvider(openai_client=client),
             profile=OpenAIModelProfile(
                 supports_thinking=True,
+                supports_json_schema_output=True,
                 native_output_requires_schema_in_instructions=True,
                 default_structured_output_mode="native",
                 openai_chat_supports_max_completion_tokens=(self._max_tokens_param() == "max_completion_tokens"),

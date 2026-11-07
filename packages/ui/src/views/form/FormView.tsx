@@ -227,7 +227,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     if (loadError) return <ErrorBanner title={t("form.loadFailed")}
       description={errorMessage(loadError, t("form.loadFailed"))}
       actions={<Button type="button" size="sm" onClick={() => void reload()}>{t("collection.retry")}</Button>} />;
-    return <EmptyState icon="lock" title={t("form.recordUnavailable")} className="min-h-64 p-8" />;
+    return <EmptyState icon="lock" title={t("record.unavailable")} className="min-h-64 p-8" />;
   }
   const toolbarStartNode =
     typeof toolbarStart === "function"
@@ -250,7 +250,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     lineFooter: lineFooter && !awaitingRecord ? () => lineFooter(recordToolbarContext) : undefined,
   };
   const sheetBody = awaitingRecord ? (
-    <SkeletonStatus label={t("form.loading")} className="grid gap-4 py-5">
+    <SkeletonStatus loadingLabel={t("form.loading")} className="grid gap-4 py-5">
       <Skeleton shape="text" className="h-6 w-2/3" />
       <Skeleton className="h-32 w-full" />
     </SkeletonStatus>
@@ -310,7 +310,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       ? <Tabs.Panel key={pane.id} value={pane.id} keepMounted={keepMounted} className={paneClass}>{content}</Tabs.Panel>
       : <div key={pane.id} className={paneClass}>{content}</div>;
   });
-  const formTitle = awaitingRecord ? t("form.loading") : typeof title === "function" ? title(recordToolbarContext) : title;
+  const formTitle = awaitingRecord ? undefined : typeof title === "function" ? title(recordToolbarContext) : title;
   const formEyebrow = awaitingRecord ? undefined : typeof eyebrow === "function" ? eyebrow(recordToolbarContext) : eyebrow;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
   // A declared context line replaces the generic subtitle even when it says nothing for this record.
@@ -364,7 +364,6 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             actions={availableDeclaredActions}
             applyPatch={applyPatch}
             reload={reload}
-            refreshQueryKey={surface.refreshQueryKey}
             deleteAction={visibleDeleteAction}
             contributedActions={
               !readOnly && recordChromeContext && menuRecordActions.length > 0 ? (

@@ -10,14 +10,13 @@ from django.apps import apps
 from django.db.models import QuerySet
 from strawberry import auto
 
-from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.graphql.capabilities import permissions_field
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
-from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
-from angee.iam.graphql.capabilities import permissions_field
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.schema import UserType
 from angee.messaging.models import NotificationPolicy
 from angee.messaging.models import Thread as ThreadModel
@@ -36,7 +35,7 @@ strawberry.enum(cast(Any, MembershipRole))
 
 
 @strawberry_django.type(Group)
-class SpaceGroupType(ProtectedNode):
+class SpaceGroupType(AngeeNode):
     """GraphQL projection of a shared group."""
 
     name: auto
@@ -58,7 +57,7 @@ class SpaceGroupType(ProtectedNode):
 
 
 @strawberry_django.type(Membership)
-class SpaceMembershipType(ProtectedNode):
+class SpaceMembershipType(AngeeNode):
     """GraphQL projection of one role-bearing group roster row."""
 
     permissions = permissions_field(("write", "write__role", "delete", "set_notifications"))
@@ -90,9 +89,15 @@ class VaultSpaceExtension:
 
 
 @strawberry_django.type(Thread)
-class SpaceThreadType(ProtectedNode):
+class SpaceThreadType(AngeeNode):
     """Read-only projection of a messaging group thread bound to a space."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=Thread.display_title_fields(),
+        select_related=["title"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
     title: FragmentType | None
     modality: auto
     message_count: auto
@@ -174,7 +179,10 @@ def _space_threads(info: strawberry.Info) -> QuerySet[ThreadModel]:
     """Return actor-scoped threads that are explicitly bound to at least one group."""
 
     del info
-    return Thread.objects.bound_to_groups()
+    return Thread.objects.filter(
+        modality=Thread.Modality.GROUP,
+        groups__isnull=False,
+    ).distinct()
 
 
 _GROUP_RESOURCE = hasura_model_resource(
@@ -187,7 +195,7 @@ _GROUP_RESOURCE = hasura_model_resource(
     groupable=["visibility", "parent"],
     writable=["name", "slug", "description", "visibility", "parent"],
     field_id_decode={"parent": public_pk_decoder(Group)},
-    write_backend=ProtectedHasuraWriteBackend(Group, public_id_fields=("parent",)),
+    write_backend=AngeeHasuraWriteBackend(Group, public_id_fields=("parent",)),
 )
 _MEMBERSHIP_RESOURCE = hasura_model_resource(
     SpaceMembershipType,
@@ -212,7 +220,7 @@ _MEMBERSHIP_RESOURCE = hasura_model_resource(
         "group": public_pk_decoder(Group),
         "party": public_pk_decoder(Party),
     },
-    write_backend=ProtectedHasuraWriteBackend(
+    write_backend=AngeeHasuraWriteBackend(
         Membership,
         public_id_fields=("group", "party"),
     ),

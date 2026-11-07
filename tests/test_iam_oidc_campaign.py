@@ -19,7 +19,6 @@ User = get_user_model()
 
 @pytest.mark.parametrize("link_on_email_match", [False, True])
 @pytest.mark.parametrize("create_on_login", [False, True])
-@pytest.mark.django_db(transaction=True)
 def test_oidc_ambiguous_email_never_links_or_provisions(legacy_person_emails, link_on_email_match, create_on_login):
     for username in ("ambiguous-first", "ambiguous-second"):
         User.objects.create_user(username, "ambiguous@example.com")
@@ -30,7 +29,8 @@ def test_oidc_ambiguous_email_never_links_or_provisions(legacy_person_emails, li
     )
     before = User._base_manager.count(), ExternalAccount._base_manager.count(), Person._base_manager.count()
     with pytest.raises(IdentityFlowError) as caught:
-        identity.OidcIdentityResolver(oauth_client).resolve(
+        identity.resolve(
+            oauth_client,
             sub="unlinked-subject",
             email=" AMBIGUOUS@EXAMPLE.COM ",
             claims={"sub": "unlinked-subject", "email": "ambiguous@example.com", "email_verified": True},
@@ -62,8 +62,8 @@ def test_oidc_login_establishes_person_only_for_explicitly_verified_email(compos
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, token, **kwargs: claims)
     monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, token, params=None: {})
-    completion = identity.OidcLoginCompletion(oauth_client).complete_login(
-        code="test-code", state_token=state_token, redirect_uri=redirect_uri
+    completion = identity.complete_login(
+        oauth_client, code="test-code", state_token=state_token, redirect_uri=redirect_uri
     )
     user = User._base_manager.get(pk=completion.user.pk)
     assert user.email == "first.login@example.com"
@@ -85,18 +85,3 @@ def test_user_factory_preserves_explicit_manager_database(factory: str) -> None:
     with pytest.raises(ConnectionDoesNotExist):
         getattr(users, factory)("explicit-database", "explicit-db@example.com", **options)
     assert not User.system_queryset().filter(username="explicit-database").exists()
-
-
-@pytest.mark.django_db
-def test_seed_factory_owns_passwordless_name_collisions() -> None:
-    """Protocols provide a seed; IAM owns sanitation, suffixes and non-login flags."""
-
-    first = User.objects.create_user_from_seed("a/b", fallback="fallback", first_name="First")
-    second = User.objects.create_user_from_seed("a/b", fallback="fallback", first_name="Second")
-    assert (first.username, second.username) == ("a-b", "a-b-1")
-    assert first.email == second.email == ""
-    assert not first.has_usable_password() and not second.has_usable_password()
-    assert not first.is_staff and not first.is_superuser
-    with pytest.raises(ConnectionDoesNotExist):
-        User.objects.db_manager("missing-seed-database").create_user_from_seed("do-not-create", fallback="fallback")
-    assert not User._base_manager.filter(username="do-not-create").exists()

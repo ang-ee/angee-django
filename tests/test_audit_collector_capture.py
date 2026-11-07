@@ -11,12 +11,12 @@ from rebac import system_context
 
 from angee.base.models.audit import AuditMixin
 from angee.base.querysets import ClosedUpdateQuerySet
-from angee.provenance.history import CaptureHistoryMixin
+from angee.provenance.history import HistoryMixin
 from angee.provenance.querysets import HistoryQuerySet
 from tests.conftest import create_user
 
 
-class CapturedAuditReference(CaptureHistoryMixin, AuditMixin):
+class CapturedAuditReference(HistoryMixin, AuditMixin):
     """Plain Django capture does not require an Angee record or REBAC resource."""
 
     name = models.CharField(max_length=40)
@@ -50,7 +50,7 @@ class ClosedCapturedQuerySet(ClosedUpdateQuerySet, HistoryQuerySet):
     """Close generic updates before the native capture owner."""
 
 
-class ClosedCapturedAuditReference(CaptureHistoryMixin, AuditMixin):
+class ClosedCapturedAuditReference(HistoryMixin, AuditMixin):
     name = models.CharField(max_length=40)
     objects = ClosedCapturedQuerySet.as_manager()
 

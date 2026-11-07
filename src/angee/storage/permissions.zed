@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 12
+// @rebac_schema_revision: 11
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -93,8 +93,7 @@ definition storage/file {
     relation viewer: auth/user | auth/group#member | auth/user:*
     relation admin:  angee/role // rebac:const=admin
 
-    permission read_granted = nil
-    permission read   = inherited_drive->read + inherited_folder->read + owner + viewer + admin->member + read_granted
+    permission read   = inherited_drive->read + inherited_folder->read + owner + viewer + admin->member
     permission write  = inherited_drive->write + inherited_folder->write + owner + admin->member
     permission share  = inherited_drive->share + owner + admin->member
     permission transfer = owner + admin->member
@@ -114,9 +113,6 @@ definition storage/file {
 // relation names has no arm and is refused under an actor. Existing-edge access
 // rides on the file parent; FileAttachmentManager.attach also requires file read.
 definition storage/file_attachment {
-    // A proved record may project its attachment rows after file-read admission:
-    // record-visible files use the declared record arm, all others their own
-    // file read. The reverse file_attachments query keeps target proofs.
     relation file:  storage/file // rebac:field=file
     relation admin: angee/role // rebac:const=admin
 

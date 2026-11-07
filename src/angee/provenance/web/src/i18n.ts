@@ -10,8 +10,6 @@ export const enProvenanceMessages: Record<string, string> = {
   "fieldProvenance.unverified": "Unverified",
   "history.loading": "Loading history",
   "history.unavailable": "History is unavailable",
-  "history.detailsUnavailable": "Some historical details are unavailable",
-  "history.sourceNotRetained": "The original source values were not retained. Attribution and available details remain visible.",
   "history.noRecordTitle": "No record selected",
   "history.noRecordDescription": "Open a saved record to see its history.",
   "history.emptyTitle": "No history yet",

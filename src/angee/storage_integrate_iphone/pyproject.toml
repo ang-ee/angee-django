@@ -5,7 +5,7 @@ name = "angee-storage-integrate-iphone"
 version = "3.0.0"
 description = "iPhone backups exposed as external storage Mounts"
 keywords = ["iphone", "backup", "storage", "mounts"]
-dependencies = ["angee-iam>=3,<4", "angee-storage-integrate>=3,<4", "angee-storage>=3,<4", "angee-integrate>=3,<4", "angee-integrate-iphone>=3,<4", "angee-web>=3,<4"]
+dependencies = ["angee-storage-integrate>=3,<4", "angee-storage>=3,<4", "angee-integrate>=3,<4", "angee-integrate-iphone>=3,<4", "angee-web>=3,<4"]
 dynamic = ["entry-points"]
 
 [tool.angee]

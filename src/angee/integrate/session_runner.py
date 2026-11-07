@@ -10,16 +10,15 @@ from typing import Any, NoReturn
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
-from rebac import database_context, system_context
-from rebac.database import write_alias
+from rebac import system_context
 
-from angee.base.locks import task_lock, task_locks_are_cross_process
-from angee.integrate.backends.base import LiveBridgeImpl
+from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import PairingState, SessionLoggedOut
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session_process import BridgeSessionProcess, SessionProcessError
 from angee.integrate.sync import bridge_progress_context
+from angee.jobs.locks import task_lock, task_locks_are_cross_process
 from angee.provenance.context import changeset
 
 logger = logging.getLogger(__name__)
@@ -30,33 +29,29 @@ def run_bridge_session_job(
     pk: Any,
     *,
     stop_event: threading.Event,
-    using: str | None = None,
     in_child: bool = False,
     on_shutdown: Callable[[], None] | None = None,
     on_stalled_shutdown: Callable[[], NoReturn] | None = None,
 ) -> dict[str, Any]:
     """Run one bridge's live session for the life of its vendor connection.
 
-    ``using`` pins the producer; omitted legacy deliveries use model write routing.
     The run is one logical pull: its boundary attributes every landed item of a
     session, whether the session runs inside the task or in a spawned child
     process, which has no other entrypoint boundary.
     """
 
-    try:
-        app_label, model_name = str(model_label).split(".", 1)
-    except ValueError:
-        return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
-    model = apps.get_model(app_label, model_name)
-    if not issubclass(model, Bridge):
-        return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
-    using = write_alias(model, using=using)
     with (
-        database_context(using),
         system_context(reason="integrate.run_bridge_session"),
-        changeset(fresh=True, using=using, activity="pull", change_reason="integrate.run_bridge_session"),
+        changeset(fresh=True, activity="pull", change_reason="integrate.run_bridge_session"),
     ):
-        bridge = model._default_manager.db_manager(using).filter(pk=pk).first()
+        try:
+            app_label, model_name = str(model_label).split(".", 1)
+        except ValueError:
+            return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
+        model = apps.get_model(app_label, model_name)
+        if not issubclass(model, Bridge):
+            return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
+        bridge = model._default_manager.filter(pk=pk).first()
         if bridge is None:
             return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
         if type(bridge).live_implementation_field() is None:
@@ -73,13 +68,13 @@ def run_bridge_session_job(
         if impl.session_isolation not in ("thread", "process"):
             raise ImproperlyConfigured(f"Unknown live session isolation: {impl.session_isolation!r}")
         if impl.session_isolation == "process" and not in_child:
-            if not task_locks_are_cross_process(using=using):
+            if not task_locks_are_cross_process():
                 raise ImproperlyConfigured("Process-isolated live sessions require cross-process task locks.")
-            with task_lock(bridge.live_session_host_lock_key(), using=using) as acquired:
+            with task_lock(bridge.live_session_host_lock_key()) as acquired:
                 if not acquired:
                     return {"ok": True, "skipped": True, "reason": "session-already-hosted"}
                 try:
-                    return BridgeSessionProcess(model_label, pk, stop_event=stop_event, using=using).run()
+                    return BridgeSessionProcess(model_label, pk, stop_event=stop_event).run()
                 except SessionProcessError as error:
                     logger.error("Live session process for %s %s exited with code %s.", model_label, pk, error.exitcode)
                     with bridge_advisory_lock(bridge) as session_acquired:
@@ -91,7 +86,7 @@ def run_bridge_session_job(
                 return {"ok": True, "skipped": True, "reason": "session-already-running"}
             # A queued start may outlive an operator stop or a terminal outcome.
             # Revalidate under the same lock that guards opening the session store.
-            bridge.refresh_from_db(using=using)
+            bridge.refresh_from_db()
             if stop_event.is_set():
                 return {"ok": True, "skipped": True, "reason": "host-stopping"}
             if bridge.subscription_state.get("desired") != bridge.LiveState.LIVE:

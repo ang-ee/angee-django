@@ -4,35 +4,33 @@ from types import SimpleNamespace
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.test import RequestFactory, TransactionTestCase
+from django.test import TransactionTestCase
 from rebac import actor_context, system_context
 from strawberry_django_aggregates import AggregateBuilder, ChoicesValueNotInEnumError
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import graphql_request
 
 Party = apps.get_model("parties", "Party")
 Address = apps.get_model("parties", "Address")
 
 
 class BlankCountryGroupsTests(TransactionTestCase):
-    """Blank party and postal countries remain enum keys with string drills."""
+    """Blank tax and postal countries remain enum keys with string drills."""
 
-    def test_party_and_address_blank_buckets(self):
+    def test_party_billing_and_address_blank_buckets(self):
         reader = get_user_model().objects.create_user(username="country-reader")
         with system_context(reason="test.blank_country_groups.seed"):
             party = Party.objects.create(display_name="Blank country", created_by=reader)
-            known_party = Party.objects.create(
-                display_name="Known country", blank_choice_country="DE", created_by=reader
-            )
+            known_party = Party.objects.create(display_name="Known country", tax_country="DE", created_by=reader)
             Address.objects.create(party=party, country="", created_by=reader)
             Address.objects.create(party=known_party, country="DE", created_by=reader)
 
         schema = GraphQLSchemas.from_discovery().build("blank_choices")
         resources = {item.model_label: item for item in schema.angee_resources}
-        request = RequestFactory().post("/graphql/blank_choices/")
-        request.user = reader
+        request = graphql_request(reader)
         for model, name, field in (
-            (Party, "blank_choice_parties", "blank_choice_country"),
+            (Party, "billing_parties", "tax_country"),
             (Address, "country_addresses", "country"),
         ):
             with self.subTest(model=model._meta.label):

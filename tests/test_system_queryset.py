@@ -11,11 +11,13 @@ from django.db import connection, models, transaction
 from django.db.models import OuterRef
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from rebac import SubjectRef, system_context
 from rebac.managers import TrackedQuerySet
 
-from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
-from angee.iam.models.base import ProtectedModel
-from angee.iam.querysets import ProtectedQuerySet, ProtectedUnscopedQuerySet
+from angee.base.managers import AngeeManager, AngeeUnscopedManager
+from angee.base.models.base import AngeeModel
+from angee.base.permissions import require_rebac_queryset
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
 from tests.conftest import Drive, File, Integration
 from tests.tables import model_tables
 
@@ -29,7 +31,7 @@ SQLITE_ONLY = pytest.mark.skipif(
 )
 
 
-class SystemQueryThing(ProtectedModel):
+class SystemQueryThing(AngeeModel):
     """Concrete Angee model used to exercise the system queryset owner."""
 
     name = models.CharField(max_length=32)
@@ -40,7 +42,7 @@ class SystemQueryThing(ProtectedModel):
         app_label = "tests"
 
 
-class GuardedSystemQuerySet(ProtectedQuerySet["GuardedSystemQueryThing"]):
+class GuardedSystemQuerySet(AngeeQuerySet["GuardedSystemQueryThing"]):
     """Test-local queryset whose write rule must survive system elevation."""
 
     def update(self, **kwargs: object) -> int:
@@ -51,7 +53,7 @@ class GuardedSystemQuerySet(ProtectedQuerySet["GuardedSystemQueryThing"]):
         return super().update(**kwargs)
 
 
-class GuardedSystemManager(ProtectedManager.from_queryset(GuardedSystemQuerySet)):  # type: ignore[misc]
+class GuardedSystemManager(AngeeManager.from_queryset(GuardedSystemQuerySet)):  # type: ignore[misc]
     """Keep a manager-owned base predicate on elevated querysets."""
 
     def get_queryset(self) -> GuardedSystemQuerySet:
@@ -60,7 +62,7 @@ class GuardedSystemManager(ProtectedManager.from_queryset(GuardedSystemQuerySet)
         return super().get_queryset().filter(selected=True)
 
 
-class GuardedSystemQueryThing(ProtectedModel):
+class GuardedSystemQueryThing(AngeeModel):
     """Concrete model proving system paths preserve domain queryset ownership."""
 
     name = models.CharField(max_length=32)
@@ -86,11 +88,11 @@ def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model:
     assert queryset._db == "default"
     assert queryset.query.select_for_update is True
     assert queryset.query.select_for_update_of == ("self",)
-    assert isinstance(manager, ProtectedUnscopedManager)
-    assert isinstance(queryset, ProtectedUnscopedQuerySet)
+    assert isinstance(manager, AngeeUnscopedManager)
+    assert isinstance(queryset, AngeeUnscopedQuerySet)
 
 
-@pytest.mark.parametrize("queryset_class", [ProtectedQuerySet, ProtectedUnscopedQuerySet])
+@pytest.mark.parametrize("queryset_class", [AngeeQuerySet, AngeeUnscopedQuerySet])
 def test_lock_preserves_queryset_policy_and_declares_native_write_intent(queryset_class: Any) -> None:
     """Lock intent preserves the queryset and hints without mutating the original."""
 
@@ -109,7 +111,7 @@ def test_lock_preserves_queryset_policy_and_declares_native_write_intent(queryse
     assert locked.query.select_for_update_of == ("self",)
 
 
-@pytest.mark.parametrize("queryset_class", [ProtectedQuerySet, ProtectedUnscopedQuerySet])
+@pytest.mark.parametrize("queryset_class", [AngeeQuerySet, AngeeUnscopedQuerySet])
 def test_lock_forwards_skip_locked_and_no_key(queryset_class: Any) -> None:
     """Both Angee queryset policies preserve the requested Django lock mode."""
 
@@ -129,7 +131,6 @@ def system_query_tables() -> Iterator[None]:
         yield
 
 
-@pytest.mark.postgresql
 @POSTGRESQL_ONLY
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("model", [SystemQueryThing])
@@ -146,7 +147,6 @@ def test_system_queryset_emits_for_update_on_postgresql(system_query_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.postgresql
 def test_queryset_lock_facade_executes_skip_locked_no_key(system_query_tables: None) -> None:
     """The public facade executes PostgreSQL lock options and SQLite's unlocked floor."""
 
@@ -194,7 +194,7 @@ def test_unscoped_locks_keep_native_base_manager_visibility(system_query_tables:
 
     selected = GuardedSystemQueryThing._base_manager.create(name="selected", selected=True)
     excluded = GuardedSystemQueryThing._base_manager.create(name="excluded", selected=False)
-    manager = ProtectedUnscopedManager()
+    manager = AngeeUnscopedManager()
     manager.model = GuardedSystemQueryThing
 
     with transaction.atomic():
@@ -256,3 +256,17 @@ def test_readable_count_subquery_without_actor_is_zero(system_query_tables: None
         visible_count=SystemQueryThing.objects.filter(pk=OuterRef("pk")).readable_count_subquery(),
     ).get(pk=row.pk)
     assert projected.visible_count == 0
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+def test_an_explicit_none_reader_fails_closed_where_an_omitted_one_reads_ambient() -> None:
+    """``require_rebac_queryset``: no actor argument defers to REBAC's ambient scope, ``actor=None`` reads nothing."""
+
+    actor = SubjectRef.of("auth/user", "1")
+    SystemQueryThing.system_queryset().create(name="row")
+    with system_context(reason="test.require_rebac_queryset"):
+        assert require_rebac_queryset(SystemQueryThing).count() == 1
+        assert require_rebac_queryset(SystemQueryThing, actor=None).count() == 0
+    assert require_rebac_queryset(SystemQueryThing).actor() is None
+    assert require_rebac_queryset(SystemQueryThing, actor=actor).actor() == actor

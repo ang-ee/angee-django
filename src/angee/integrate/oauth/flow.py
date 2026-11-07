@@ -10,16 +10,16 @@ differ between them (OAuth vs OIDC protocol).
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from authlib.oauth2.rfc7636 import create_s256_code_challenge
 from django.apps import apps
 from django.http import HttpRequest
 from django.utils.http import url_has_allowed_host_and_scheme
 
-from angee.base.models.identity import public_id_of
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
@@ -129,7 +129,7 @@ def consume_validated_state(
     """Consume one state record and fail closed when it does not match this flow."""
 
     record = state.consume(state_token)
-    oauth_client_id = str(public_id_of(oauth_client))
+    oauth_client_id = str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", "")))
     if record.flow != expected_flow or record.oauth_client_id != oauth_client_id or record.redirect_uri != redirect_uri:
         raise OAuthFlowError(INVALID_STATE, 400)
     return record
@@ -165,7 +165,8 @@ def pkce_challenge(code_verifier: str | None) -> str | None:
 
     if not code_verifier:
         return None
-    return create_s256_code_challenge(code_verifier)
+    digest = hashlib.sha256(code_verifier.encode()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
 
 
 def _default_authorize_url(

@@ -9,14 +9,14 @@ from zoneinfo import ZoneInfo
 from django.db import models, transaction
 from django.utils import timezone
 
-from angee.iam.managers import ProtectedManager
-from angee.iam.querysets import ProtectedQuerySet
+from angee.base.managers import AngeeManager
+from angee.base.querysets import AngeeQuerySet
 
 if TYPE_CHECKING:
     from angee.posts.models import FeedFollow, PostMetrics, Quota
 
 
-class FeedFollowQuerySet[FollowT: FeedFollow](ProtectedQuerySet[FollowT]):
+class FeedFollowQuerySet[FollowT: FeedFollow](AngeeQuerySet[FollowT]):
     """REBAC-scoped read scopes for the following/timeline edge."""
 
     def active(self) -> Self:
@@ -30,7 +30,7 @@ class FeedFollowQuerySet[FollowT: FeedFollow](ProtectedQuerySet[FollowT]):
         return self.filter(feed=feed)
 
 
-_FeedFollowManagerBase = ProtectedManager.from_queryset(FeedFollowQuerySet)
+_FeedFollowManagerBase = AngeeManager.from_queryset(FeedFollowQuerySet)
 
 
 class FeedFollowManager[FollowT: FeedFollow](_FeedFollowManagerBase[FollowT]):
@@ -58,18 +58,8 @@ class FeedFollowManager[FollowT: FeedFollow](_FeedFollowManagerBase[FollowT]):
         )
 
 
-class PostMetricsManager[MetricsT: PostMetrics](ProtectedManager[MetricsT]):
+class PostMetricsManager[MetricsT: PostMetrics](AngeeManager[MetricsT]):
     """Owns the one-to-one engagement-counter upsert for a message."""
-
-    def reply_counts(self, *, channel: Any, platform: str, external_ids: list[str]) -> dict[str, int]:
-        """Snapshot known reply counts once for selected source-message identities.
-
-        Missing metrics stay absent so providers can distinguish an unseen post
-        from a measured zero without decoding the metrics owner's relation path.
-        """
-        return dict(self.filter(
-            message__channel_id=channel.pk, message__platform=platform, message__external_id__in=external_ids,
-        ).values_list("message__external_id", "reply_count"))
 
     def upsert(self, *, message: Any, metrics: Any, created_by_id: Any = None) -> MetricsT:
         """Write the rolled-up engagement counters for ``message`` (idempotent).
@@ -96,7 +86,7 @@ class PostMetricsManager[MetricsT: PostMetrics](ProtectedManager[MetricsT]):
         return row
 
 
-class QuotaManager[QuotaT: Quota](ProtectedManager[QuotaT]):
+class QuotaManager[QuotaT: Quota](AngeeManager[QuotaT]):
     """Owns the API-unit ledger: opening a period and atomic consumption.
 
     A backend calls :meth:`consume` before spending platform API units; enforcement is

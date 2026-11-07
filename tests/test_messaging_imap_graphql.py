@@ -10,15 +10,15 @@ from imapclient.exceptions import LoginError
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import CursorInvalid, advance_stream
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
-from tests.conftest import SchemaAddon, Vendor, create_user, current_stream, execute_schema
-from tests.conftest import result_data as _data
+from tests.conftest import SchemaAddon, Vendor, create_user, current_stream
 from tests.test_messaging_graphql import (
     Channel,
     _platform_admin,
-    _request,
     iam_schema,
     integrate_schema,
     messaging_schema,
@@ -56,7 +56,6 @@ def test_connect_imap_channel_creates_basic_auth_channel(composed_tables: None) 
         "lifecycle": "CONNECTED",
         "credential_status": "active",
         "runtime_status": "OK",
-        "open_failure_count": 0,
         "config": {
             "host": "imap.example.com",
             "security": "starttls",
@@ -145,7 +144,7 @@ def test_connect_imap_channel_requires_seeded_vendor(composed_tables: None) -> N
             "mailboxes": None,
             "ownAddresses": None,
         },
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors
@@ -163,8 +162,7 @@ def _schema() -> Any:
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
         for module in (iam_schema, integrate_schema, parties_schema, messaging_schema, imap_schema)
     ]
-    # An addon-only build: donor addons are left out, so it declares itself partial.
-    return GraphQLSchemas(addons, partial_schema=True).build("console")
+    return GraphQLSchemas(addons).build("console")
 
 
 def test_update_imap_channel_credential_replaces_the_login_in_place(
@@ -184,7 +182,7 @@ def test_update_imap_channel_credential_replaces_the_login_in_place(
             _schema(),
             _UPDATE_CREDENTIAL_MUTATION,
             {"id": channel["id"], "username": "ada.lovelace@example.com", "password": "rotated"},
-            request=_request(admin),
+            user=admin,
         )
     )["update_imap_channel_credential"]
 
@@ -206,7 +204,7 @@ def test_update_imap_channel_credential_refuses_blank_material(composed_tables: 
         _schema(),
         _UPDATE_CREDENTIAL_MUTATION,
         {"id": channel["id"], "username": "ada@example.com", "password": ""},
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors
@@ -225,13 +223,13 @@ def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
 ) -> None:
     admin, channel, account = _paused_sample_channel(monkeypatch)
     schema = _schema()
-    first = _data(execute_schema(schema, _PREVIEW_QUERY, {"id": channel["id"]}, request=_request(admin)))[
+    first = _data(execute_schema(schema, _PREVIEW_QUERY, {"id": channel["id"]}, user=admin))[
         "preview_imap_sample"
     ]
     second = _data(execute_schema(schema, _PREVIEW_QUERY, {
         "id": channel["id"], "uidvalidity": first["uidvalidity"], "upperUid": first["upper_uid"],
         "beforeUid": first["next_before_uid"], "totalCount": first["total_count"],
-    }, request=_request(admin)))["preview_imap_sample"]
+    }, user=admin))["preview_imap_sample"]
 
     assert first["messages"] == [{"uid": 3, "subject": "3"}, {"uid": 2, "subject": "2"}]
     assert second["messages"] == [{"uid": 1, "subject": "1"}]
@@ -252,7 +250,7 @@ def test_sample_preview_denies_non_admin_before_mailbox_probe(
     _, channel, account = _paused_sample_channel(monkeypatch)
     reader = create_user("imap-sample-reader")
 
-    result = execute_schema(_schema(), _PREVIEW_QUERY, {"id": channel["id"]}, request=_request(reader))
+    result = execute_schema(_schema(), _PREVIEW_QUERY, {"id": channel["id"]}, user=reader)
 
     assert result.errors
     assert account.logins == []
@@ -276,7 +274,7 @@ def test_imap_resolvers_preserve_safe_transport_errors(
         "prepare": """mutation($id: ID!) { prepare_imap_new_mail(id: $id) { ok message } }""",
     }[operation]
 
-    result = execute_schema(_schema(), document, {"id": channel["id"]}, request=_request(admin))
+    result = execute_schema(_schema(), document, {"id": channel["id"]}, user=admin)
 
     assert result.errors
     assert result.errors[0].message == (
@@ -301,7 +299,6 @@ def _paused_sample_channel(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[s
     return admin, channel, account
 
 
-@pytest.mark.django_db(transaction=True)
 def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -391,7 +388,7 @@ def test_test_connection_logs_in_through_the_imap_backend(
     monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
 
     result = _data(
-        execute_schema(_schema(), _TEST_CONNECTION_MUTATION, {"id": channel["id"]}, request=_request(admin))
+        execute_schema(_schema(), _TEST_CONNECTION_MUTATION, {"id": channel["id"]}, user=admin)
     )["test_connection"]
 
     assert result == {"ok": True, "message": "Signed in to 10.0.0.4 as ada@example.com."}
@@ -419,7 +416,7 @@ def test_test_connection_reports_the_imap_refusal(
     monkeypatch.setattr(FakeIMAPClient, "login", refuse)
 
     result = _data(
-        execute_schema(_schema(), _TEST_CONNECTION_MUTATION, {"id": channel["id"]}, request=_request(admin))
+        execute_schema(_schema(), _TEST_CONNECTION_MUTATION, {"id": channel["id"]}, user=admin)
     )["test_connection"]
 
     assert result == {
@@ -438,7 +435,7 @@ def _seed_imap_vendor() -> None:
 def _connect(admin: Any, variables: dict[str, Any]) -> dict[str, Any]:
     """Execute the addon-owned connect mutation and return its channel payload."""
 
-    result = execute_schema(_schema(), _CONNECT_MUTATION, variables, request=_request(admin))
+    result = execute_schema(_schema(), _CONNECT_MUTATION, variables, user=admin)
     return _data(result)["connect_imap_channel"]
 
 
@@ -469,7 +466,6 @@ mutation ConnectImap(
     lifecycle
     credential_status
     runtime_status
-    open_failure_count
     config
   }
 }

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, fireEvent, screen } from "@testing-library/react";
 import type { RootOptions } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { assertShellSettings, bootApp, selectApp, type SelectableRoot } from "./boot-app";
 import type { AngeeApp } from "./create-app";
@@ -15,12 +15,6 @@ vi.mock("./error-reporting", () => ({
 }));
 
 let host: HTMLElement;
-
-beforeEach(() => {
-  // reportError is a browser global; happy-dom does not provide it. Retry
-  // evaluates the callback even when the subsequent boot succeeds.
-  vi.stubGlobal("reportError", vi.fn());
-});
 
 afterEach(() => {
   host?.remove();

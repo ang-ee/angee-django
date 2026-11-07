@@ -18,12 +18,10 @@ def enqueue_task(
     queue: str | None = None,
     expires: float | datetime | None = None,
     robust: bool = False,
-    using: str | None = None,
 ) -> None:
     """Send one named Celery task after the current transaction commits.
 
-    ``using`` selects the producer connection for Django's commit hook.
-    Without an active transaction on that connection the send is immediate. Broker errors propagate
+    Without an active transaction the send is immediate. Broker errors propagate
     from the send, including from the committing transaction's exit, unless
     ``robust=True`` asks Django to log them and continue later commit callbacks.
 
@@ -38,4 +36,4 @@ def enqueue_task(
         """A named callback also supplies Django's robust error logger's qualname."""
         celery_app.send_task(name, kwargs=payload, queue=queue, expires=expires)
 
-    transaction.on_commit(send, using=using, robust=robust)
+    transaction.on_commit(send, robust=robust)

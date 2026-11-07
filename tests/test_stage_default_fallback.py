@@ -66,11 +66,3 @@ def test_fallback_override_may_deliberately_return_no_stage(pipeline, monkeypatc
     container, _stages, _foreign = pipeline
     monkeypatch.setattr(FallbackStage, "resolve_default_fallback", classmethod(lambda cls, stages: None))
     assert FallbackStage.resolve_default(container) is None
-
-
-def test_chained_container_selection_preserves_filters(pipeline):
-    container, (first, middle, late), foreign = pipeline
-    selected = FallbackStage.objects.exclude(pk=middle.pk).for_container(container)
-    assert list(selected) == [first, late]
-    assert not selected.filter(pk=foreign.pk).exists()
-    assert list(selected.for_container(container)) == [first, late]

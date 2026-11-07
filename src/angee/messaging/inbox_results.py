@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+import operator
+from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
+from functools import reduce
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from django.db import models
-from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, Value, When, Window
-from django.db.models.functions import Cast, RowNumber, TruncDate
-from django.db.models.query import prefetch_related_objects
+from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, Value, When
+from django.db.models.functions import Cast, TruncDate
 from pydantic import BaseModel, ConfigDict, Field
 
+from angee.base.pagination import valid_page_size
+from angee.base.querysets import MergeableQuerySet
 from angee.messaging.inbox import InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroupPage, InboxGroups, InboxGroupScope
+from angee.messaging.managers import MESSAGE_ORDER
 
 
 class InboxResultOptions(BaseModel):
@@ -29,13 +35,16 @@ class InboxResultOptions(BaseModel):
 
 @dataclass(frozen=True)
 class InboxResultRow:
-    """One message, exact file/fragment, or unavailable attachment use."""
+    """One message, exact file/fragment, or unavailable attachment use.
+
+    ``message_id`` names the row's message by public ID; the page carries it.
+    """
 
     id: str
     latest: datetime
     count: int
     part_count: int
-    message: Any
+    message_id: str
     part: Any | None = None
     file: Any | None = None
     fragment: Any | None = None
@@ -76,12 +85,11 @@ class InboxResults:
             raise ValueError("Unknown shared-text part role.")
         # Eligibility needs a second distinct readable message, not the full use
         # count. EXISTS can stop at the first other use of a ubiquitous fragment.
-        # Check each candidate use's message through an indexed existence read.
-        # A broad message-ID subquery can be aggregated again for every fragment.
-        readable_message = self.inbox.messages.filter(pk=OuterRef("message_id"))
-        other_message = self.inbox.collection("messaging", "Part").filter(
-            Exists(readable_message), fragment_id=OuterRef("fragment_id"),
-        ).exclude(
+        # The inbox's parts check each candidate use's message through the part's
+        # own read and joined eligibility, not a broad message-ID subquery that is
+        # aggregated again for every fragment (MessageInbox.parts_for names the
+        # scoped fallback while the part's contextual read is unproved).
+        other_message = self.inbox.parts.filter(fragment_id=OuterRef("fragment_id")).exclude(
             message_id=OuterRef("message_id")
         )
         parts = parts.filter(fragment_id__isnull=False)
@@ -136,11 +144,17 @@ class InboxResults:
                 label_field="_sender_name", empty_label="Unknown sender",
             )
         elif axis == "conversation":
-            threads = self.inbox.threads
-            readable_thread = {f"{prefix}thread_id__in": Subquery(threads.values("pk"))}
-            rows = rows.annotate(
+            # A conversation groups under the readable survivor of its thread's
+            # redirect: readers resolve a merged record to its canonical one. An
+            # unreadable thread is not an exposed grouping identity: a readable
+            # message in it groups under its readable survivor, else stands alone.
+            # Redirects are flattened to one hop, so the survivor is a column of
+            # the row's own thread.
+            readable = Subquery(self.inbox.threads.values("pk"))
+            rows = rows.alias(_survivor=MergeableQuerySet.survivor_id(f"{prefix}thread__")).annotate(
                 _bucket=Case(
-                    When(**readable_thread, then=F(f"{prefix}thread_id")),
+                    When(_survivor__in=readable, then=F("_survivor")),
+                    When(**{f"{prefix}thread_id__in": readable}, then=F(f"{prefix}thread_id")),
                     default=-F("_message"),
                     output_field=models.BigIntegerField(),
                 ),
@@ -167,28 +181,61 @@ class InboxResults:
             )
         return self.groups(scope.axis, require_shared=require_shared).scope(scope.value)
 
+    def group_page(self, axis: str, *, page: int = 1, size: int = 25, leaf_size: int = 0) -> InboxGroupPage:
+        """Page headers; with ``leaf_size`` each carries its first page, and the page their messages.
+
+        Message rows of every header come from one ranked window over the headers'
+        buckets. A content row is a distinct identity, not a message, so each
+        content header still pages through :meth:`page`.
+        """
+
+        groups = self.groups(axis)
+        header = groups.page(page=page, size=size)
+        if leaf_size < 1 or not header.rows:
+            return replace(header, messages=self.inbox.messages.none())
+        if self.is_content:
+            carried, pages = header.carry(axis, leaf_size, lambda scope, size: self.page(scope=scope, size=size))
+            return replace(
+                carried,
+                messages=self.inbox.page_messages([row.part.message_id for leaf in pages for row in leaf.rows]),
+            )
+        keys = [row.key for row in header.rows]
+        members = groups.bucket_rows(keys)
+        if axis == "day":
+            # Local days narrow by their indexed time span before the date cast.
+            days = sorted(date.fromisoformat(key) for key in keys)
+            members = members.filter(
+                _order_at__gte=datetime.combine(days[0], time.min, self.zone),
+                _order_at__lt=datetime.combine(days[-1] + timedelta(days=1), time.min, self.zone),
+            )
+        order = MESSAGE_ORDER.ordering(oldest_first=self.options.oldest)
+        kept = members.first_per_group("_bucket", order_by=order, limit=valid_page_size(leaf_size)).order_by(*order)
+        carried_rows: dict[Any, list[InboxResultRow]] = defaultdict(list)
+        ids = []
+        for bucket, pk, sqid, order_at in kept.values_list("_bucket", "pk", "sqid", "_order_at"):
+            carried_rows[bucket].append(InboxResultRow(f"message:{sqid}", order_at, 1, 0, str(sqid)))
+            ids.append(pk)
+        return replace(
+            header,
+            rows=[replace(row, rows=carried_rows.get(row.key, [])) for row in header.rows],
+            messages=self.inbox.page_messages(ids),
+        )
+
     def page(self, *, scope: InboxGroupScope | None = None, page: int = 1, size: int = 25) -> InboxPage:
         """Page distinct content first, then fetch one bounded source use per row."""
 
-        if (not self.is_content and scope is not None and scope.axis == "conversation"
-                and (scope.value or "").startswith("thread:")):
-            read = self.conversation_pages([(scope, page, size)], include_channel=True)[0]
-            if isinstance(read, ValueError):
-                raise read
-            return read
         activity = self.scoped(scope)
-        order = "_order_at" if self.options.oldest else "-_order_at"
         if not self.is_content:
             count = activity.count()
-            page_messages = list(activity.with_title_text().order_by(order, "pk")[InboxPage.window(page, size)])
-            self.inbox.cache_readable_threads(page_messages)
+            selected = list(
+                activity.chronological(oldest_first=self.options.oldest)
+                .values_list("pk", "sqid", "_order_at")[InboxPage.window(page, size)]
+            )
             return InboxPage(
-                [
-                    InboxResultRow(f"message:{message.sqid}", message._order_at, 1, 0, message)
-                    for message in page_messages
-                ],
+                [InboxResultRow(f"message:{sqid}", order_at, 1, 0, str(sqid)) for _, sqid, order_at in selected],
                 count,
                 count,
+                self.inbox.page_messages([pk for pk, _, _ in selected]),
             )
         groups = (
             activity.scoped_for_aggregate()
@@ -202,23 +249,23 @@ class InboxResults:
             groups.order_by("latest" if self.options.oldest else "-latest", "_identity")[InboxPage.window(page, size)]
         )
         keys = [row["_identity"] for row in selected]
+        latest = {row["_identity"]: row["latest"] for row in selected}
         # The header page already knows each content identity's latest time.
         # Resolve the deterministic part tie-break only at those bounded points;
         # ranking every historical use repeats expensive content predicates.
-        source_ids = (
-            dict(
-                self.scoped(scope, require_shared=False)
-                .filter(
-                    Q(*(Q(_identity=row["_identity"], _order_at=row["latest"]) for row in selected), _connector=Q.OR)
-                )
-                .order_by()
-                .values("_identity")
-                .annotate(source_id=Max("pk"))
-                .values_list("_identity", "source_id")
-            )
+        # One identity term per row would repeat the identity's permission
+        # subquery: two key sets bound the read, then the exact pairs are kept.
+        bounded = (
+            self.scoped(scope, require_shared=False)
+            .filter(_identity__in=keys, _order_at__in=list(latest.values()))
+            .order_by()
+            .values("_identity", "_order_at")
+            .annotate(source_id=Max("pk"))
+            .values_list("_identity", "_order_at", "source_id")
             if selected
-            else {}
+            else []
         )
+        source_ids = {key: pk for key, order_at, pk in bounded if order_at == latest[key]}
         parts = {
             part.pk: part for part in self.inbox.parts.filter(pk__in=source_ids.values()).select_related("fragment")
         }
@@ -228,13 +275,7 @@ class InboxResults:
             if self.options.lens == "attachments"
             else {}
         )
-        messages = {
-            record.pk: record
-            for record in self.inbox.messages.filter(
-                pk__in=[part.message_id for part in sources.values()]
-            ).with_title_text()
-        }
-        self.inbox.cache_readable_threads(messages.values())
+        message_model = self.inbox.messages.model
         rows = []
         for group in selected:
             key = group["_identity"]
@@ -248,7 +289,7 @@ class InboxResults:
                     group["latest"],
                     group["messages"],
                     group["parts"],
-                    messages[part.message_id],
+                    message_model.public_id_from_pk(part.message_id),
                     part,
                     file,
                     fragment,
@@ -259,87 +300,16 @@ class InboxResults:
             .values("_identity", "message_id")
             .aggregate(records=Count("_identity", distinct=True), messages=Count("message_id", distinct=True))
         )
-        return InboxPage(rows, totals["records"], totals["messages"])
-
-    def conversation_pages(
-        self, pages: list[tuple[InboxGroupScope, int, int]], *, include_channel: bool = False,
-    ) -> list[InboxPage | ValueError]:
-        """Page readable conversation keys together with one thread proof."""
-
-        ids = [(scope.value or "").partition(":")[2] for scope, _, _ in pages]
-        readable = self.inbox.readable_threads(ids)
-        keys = [readable.get(public_id) for public_id in ids]
-        threads = {thread.pk: thread for thread in readable.values()}
-        selected_ids = sorted({thread.pk for thread in keys if thread is not None})
-        counts = dict(self.messages.filter(thread_id__in=selected_ids).order_by().values("thread_id")
-                      .annotate(total=Count("pk")).values_list("thread_id", "total"))
-        requested = Q(pk__in=[])
-        for thread, (_, page, size) in zip(keys, pages, strict=True):
-            window = InboxPage.window(page, size)
-            if thread is not None:
-                requested |= Q(thread_id=thread.pk, _page_rank__gt=window.start, _page_rank__lte=window.stop)
-        order = F("_order_at").asc() if self.options.oldest else F("_order_at").desc()
-        ranked = self.messages.filter(thread_id__in=selected_ids).with_title_text().annotate(
-            _page_rank=Window(RowNumber(), partition_by=[F("thread_id")], order_by=[order, F("pk").asc()]),
+        return InboxPage(
+            rows,
+            totals["records"],
+            totals["messages"],
+            self.inbox.page_messages([part.message_id for part in sources.values()]),
         )
-        messages: dict[Any, list[Any]] = {}
-        if selected_ids:
-            loaded = list(ranked.filter(requested).order_by("thread_id", "_page_rank"))
-            self.inbox.cache_readable_threads(loaded, known=threads.values())
-            if include_channel:
-                prefetch_related_objects(
-                    loaded,
-                    models.Prefetch(
-                        "channel", queryset=self.inbox.collection("messaging", "Channel").prefetch_related("vendor"),
-                    ),
-                )
-            for message in loaded:
-                messages.setdefault(message.thread_id, []).append(message)
-        results: list[InboxPage | ValueError] = []
-        for thread, (_, page, size) in zip(keys, pages, strict=True):
-            if thread is None:
-                results.append(ValueError("Conversation unavailable."))
-                continue
-            window = InboxPage.window(page, size)
-            rows = [
-                InboxResultRow(f"message:{message.sqid}", message._order_at, 1, 0, message)
-                for message in messages.get(thread.pk, [])
-                if window.start < message._page_rank <= window.stop
-            ]
-            total = counts.get(thread.pk, 0)
-            results.append(InboxPage(rows, total, total))
-        return results
-
-    def pages(
-        self, pages: list[tuple[InboxGroupScope | None, int, int]], *, include_channel: bool = False,
-    ) -> list[InboxPage | ValueError]:
-        """Share the admitted thread read across a batch of conversation pages."""
-
-        results: list[InboxPage | ValueError | None] = [None] * len(pages)
-        conversation_indices = [
-            index for index, (scope, page, size) in enumerate(pages)
-            if not self.is_content and scope is not None and scope.axis == "conversation"
-            and (scope.value or "").startswith("thread:") and page >= 1 and 1 <= size <= 100
-        ]
-        if conversation_indices:
-            grouped = self.conversation_pages(
-                [cast(tuple[InboxGroupScope, int, int], pages[index]) for index in conversation_indices],
-                include_channel=include_channel,
-            )
-            for index, read in zip(conversation_indices, grouped, strict=True):
-                results[index] = read
-        for index, (scope, page, size) in enumerate(pages):
-            if results[index] is not None:
-                continue
-            try:
-                results[index] = self.page(scope=scope, page=page, size=size)
-            except ValueError as error:
-                results[index] = error
-        return cast(list[InboxPage | ValueError], results)
 
 
 class InboxConversationGroups(InboxGroups):
-    """A mixed thread/standalone axis; model owners encode and resolve public IDs."""
+    """A mixed survivor-thread/standalone axis; model owners encode and resolve public IDs."""
 
     def __init__(self, rows: Any, *, inbox: MessageInbox, **kwargs: Any) -> None:
         super().__init__(rows, **kwargs)
@@ -348,9 +318,9 @@ class InboxConversationGroups(InboxGroups):
     def page(self, *, page: int = 1, size: int = 25) -> InboxGroupPage:
         result = super().page(page=page, size=size)
         keys = [int(cast(str, row.value)) for row in result.rows]
-        threads = list(self.inbox.threads.filter(pk__in=[key for key in keys if key > 0]).select_related("title"))
-        titles = self.inbox.threads.conversation_labels(admitted=threads)
-        context = {thread.pk: thread for thread in threads}
+        threads = self.inbox.threads.filter(pk__in=[key for key in keys if key > 0])
+        titles = threads.conversation_labels()
+        context = {thread.pk: thread for thread in threads.only("pk", "platform", "channel_id", "modality")}
         accounts = dict(self.inbox.collection("integrate", "Integration").filter(
             pk__in=[thread.channel_id for thread in context.values() if thread.channel_id],
         ).values_list("pk", "display_name"))
@@ -371,16 +341,40 @@ class InboxConversationGroups(InboxGroups):
         return replace(result, rows=rows)
 
     def scope(self, value: str | None) -> Any:
+        """Select one bucket by its public ID; a redirect under a readable survivor is not a key."""
+
         kind, _, public_id = (value or "").partition(":")
         if kind == "thread":
-            thread = self.inbox.readable_threads((public_id,)).get(public_id)
-            if thread is None:
+            record = self.inbox.threads.from_public_id(public_id)
+            if record is None or (
+                record.merged_into_id is not None
+                and self.inbox.threads.filter(pk=record.merged_into_id).exists()
+            ):
                 raise ValueError("Conversation unavailable.")
-            return self.rows.filter(**{self.scope_field: thread.pk})
-        elif kind == "message":
-            record = self.inbox.messages.from_public_id(public_id)
-        else:
+            return self.bucket_rows([record.pk])
+        if kind != "message":
             raise ValueError("Unknown conversation selection.")
+        record = self.inbox.messages.from_public_id(public_id)
         if record is None:
             raise ValueError("Conversation unavailable.")
-        return self.rows.filter(_bucket=-record.pk)
+        return self.bucket_rows([-record.pk]).filter(_bucket=-record.pk)
+
+    def bucket_rows(self, keys: Sequence[Any]) -> Any:
+        """Select buckets through member threads and message keys, never a scan of the bucket CASE.
+
+        A survivor's bucket spans :meth:`Thread.member_threads`, readable or not: a
+        redirect is identity, not content, while every message stays gated by the
+        rows. A redirect key (its survivor unreadable) and a standalone message are
+        their own buckets.
+        """
+
+        threads = list(self.inbox.threads.filter(pk__in=[key for key in keys if key > 0]).only("pk", "merged_into_id"))
+        redirects = [thread.pk for thread in threads if thread.merged_into_id is not None]
+        predicate = Q(**{f"{self.scope_field}__in": redirects}) | Q(
+            **{f"{self.message}__in": [-key for key in keys if key < 0]}
+        )
+        survivors = [thread.member_threads() for thread in threads if thread.merged_into_id is None]
+        if survivors:
+            members = reduce(operator.or_, survivors)
+            predicate |= Q(**{f"{self.scope_field}__in": Subquery(members.values("pk"))})
+        return self.rows.filter(predicate)

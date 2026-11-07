@@ -44,13 +44,12 @@ export function CredentialForm({
   const [createCredential] = useAuthoredResourceMutation(IntegrateCreateCredential, {
     invalidateModels: INTEGRATE_CREATE_CREDENTIAL_INVALIDATES,
     errorNotification: false,
-    transient: true,
   });
   const revealSecret = useSecretReveal();
 
   const revealById = React.useCallback<RecordActionRunner>(
-    async (id, context) => {
-      const result = await revealCredential({ id }, { reconciliation: context.reconciliation });
+    async (id) => {
+      const result = await revealCredential({ id });
       const secret = result?.reveal_credential.secret ?? "";
       if (!secret) throw new Error(t("credentials.reveal.noSecret"));
       await revealSecret({

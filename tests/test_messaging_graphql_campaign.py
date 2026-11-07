@@ -7,6 +7,7 @@ from django.contrib.contenttypes.models import ContentType
 from rebac import RelationshipTuple, actor_context, delete_relationship, system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import (
     Channel,
     Fragment,
@@ -25,7 +26,7 @@ from angee.messaging.testing.models import (
 )
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import File as StorageFile
-from tests.conftest import Vendor, create_platform_admin, execute_schema, result_data
+from tests.conftest import Vendor, create_platform_admin
 from tests.messaging_campaign import grant, make_user
 from tests.test_messaging_graphql import _schema, _storage_drive, messaging_schema
 
@@ -36,9 +37,7 @@ def campaign_schema():
     return _schema()
 
 
-def test_message_only_reader_gets_private_relations_redacted_and_attached_file(
-    composed_tables, campaign_schema, tmp_path,
-):
+def test_message_only_reader_gets_null_for_every_private_to_one_relation(composed_tables, campaign_schema, tmp_path):
     viewer, owner = make_user("message-viewer"), make_user("private-owner")
     with system_context(reason="test.messaging.graphql.relations"):
         vendor = Vendor.objects.create(slug="private-relations", display_name="Private")
@@ -66,9 +65,7 @@ def test_message_only_reader_gets_private_relations_redacted_and_attached_file(
         "id": message.sqid, "thread": None, "channel": None, "parent": None, "sender": None,
         "participants": [{"handle": None}],
     }
-    # A readable part implies its attached file's read. The live arm is
-    # messaging/permissions.extends.zed: storage/file.read_granted = message_part->read.
-    assert result["parts"] == [{"parent": None, "file": {"id": private_file.sqid}}]
+    assert result["parts"] == [{"parent": None, "file": None}]
 
 
 def test_fragment_counts_include_only_readable_messages_and_parts(composed_tables, campaign_schema):

@@ -7,7 +7,7 @@ from django.db.models.functions import Now
 from pydantic import BaseModel
 
 from angee.workflows.awaits import AwaitRunInput
-from angee.workflows.querysets import WorkflowRunQuerySet
+from angee.workflows.managers import WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Step, StepMode
@@ -89,7 +89,7 @@ def test_await_run_wakes_once_and_forwards_the_child_output(child_graph):
     sent.clear()
     run_until(child)
     assert [(name, payload["kwargs"]) for name, payload in sent if name == "workflows.wake_run"] == [
-        ("workflows.wake_run", {"run_id": child.pk, "using": child._state.db}),
+        ("workflows.wake_run", {"run_id": child.pk}),
     ]
     assert runner.wake_runs(child.pk) == 1
     assert runner.wake_runs(child.pk) == 0
@@ -97,7 +97,7 @@ def test_await_run_wakes_once_and_forwards_the_child_output(child_graph):
     waiter.refresh_from_db()
     assert parent.status == "succeeded" and waiter.output == {"value": 7} and waiter.outcome == "done"
     assert StepAttempt.system_queryset().filter(step_run=waiter).count() == 2
-    assert not parent.get_can_cancel(actor)
+    assert not parent.can_cancel(actor)
 
 
 @pytest.mark.parametrize("relation", ["owned", "continuation"])
@@ -262,7 +262,15 @@ def test_observing_an_already_failed_child_keeps_its_open_siblings(child_graph):
     waiter = StepRun.system_queryset().get(run=parent, node_key="await")
     assert parent.status == "succeeded" and pending.status == "ready"
     assert waiter.awaited_run_id == child.pk and waiter.outcome == "error"
-    assert parent.get_can_cancel(actor)
+    assert parent.can_cancel(actor)
+    # A run list's batched cancel facts agree with each run's own answer.
+    seeded = [WorkflowRun.system_queryset().get(pk=run.pk) for run in (parent, child)]
+    WorkflowRun.prepare_cancel(seeded, actor)
+    fresh = [WorkflowRun.system_queryset().get(pk=run.pk) for run in (parent, child)]
+    assert [run.can_cancel(actor) for run in seeded] == [run.can_cancel(actor) for run in fresh]
+    assert seeded[0].can_cancel(actor)
+    # A seed serves only the reader it was read for; another actor asks the run's policy.
+    assert not seeded[0].can_cancel(create_user("cancel-seed-outsider"))
     result = WorkflowRun.objects.cancel(parent, actor=actor)
     pending.refresh_from_db()
     child.refresh_from_db()

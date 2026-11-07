@@ -4,8 +4,9 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge import schema as knowledge_schema
-from tests.conftest import Page, addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import Page, addon_schema, create_user, vault_for
 
 
 def test_page_display_name_fetches_its_title_with_the_rows(composed_tables: None) -> None:
@@ -35,12 +36,3 @@ def test_page_display_name_fetches_its_title_with_the_rows(composed_tables: None
         counts.append(sum(f"FROM {table}" in item["sql"] for item in captured))
 
     assert counts[0] == counts[1], "Reading label titles must not add a query for each row"
-
-
-def test_record_display_paths_rejects_nested_and_missing_fields(composed_tables: None, monkeypatch) -> None:
-    """The model check catches label paths before a GraphQL query selects them."""
-
-    del composed_tables
-    monkeypatch.setattr(Page, "record_display_paths", ("vault__name", "missing"))
-    errors = [error for error in Page.check() if error.id == "angee.E050"]
-    assert len(errors) == 2

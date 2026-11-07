@@ -25,47 +25,20 @@ class CommentKind(TimelineKind):
                               "subtype", "message_type"),
         "messaging.ThreadAttachment": ("thread", "role"),
         "messaging.Thread": ("merged_into",),
-        "messaging.Reaction": ("message", "reaction", "handle"),
-        "messaging.MessageStar": ("message", "user"),
-        "messaging.ThreadFollower": (
-            "thread", "attachment", "notification_policy", "subtype_keys", "last_read_message",
-        ),
-        "messaging.ThreadNotification": ("thread", "attachment", "message", "read_at", "notification_status"),
-    }
-    previous_source_models = {
-        "messaging.Message": ("thread", "is_trashed"),
-        "messaging.ThreadAttachment": ("thread", "role"),
-        "messaging.Thread": ("merged_into",),
-        "messaging.Reaction": ("message",),
-        "messaging.MessageStar": ("message",),
-        "messaging.ThreadFollower": ("thread", "attachment"),
-        "messaging.ThreadNotification": ("thread", "attachment", "message"),
     }
 
     def eligible(self, model: type[models.Model]) -> bool:
         return issubclass(model, ThreadedModelMixin)
 
-    def source(self, record: Any, actor: Any) -> tuple[models.QuerySet, tuple[Any, Any] | None]:
+    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         messages = apps.get_model("messaging", "Message").objects
         readers = type(record).objects.with_actor(actor).with_action(record.thread_read_access)
         if not readers.filter(pk=record.pk).exists():
-            return messages.none().annotate(_order_at=messages.chronological_time()), self.fold(record)
+            return messages.none().annotate(_order_at=messages.chronological_time())
         with actor_context(actor):
-            return messages.record_scope(record).prefetch_related(None).select_related(
-                "subtype", "created_by",
-            ), self.fold(record)
-
-    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        """Hydrate admitted comments with the sender label implied by their visible ``from``.
-
-        The record read admits the message; its sender and confirmed party name
-        are display facts of that message, so this to-one join is structural.
-        Standalone message lists retain their own sender and party read gates.
-        """
-
-        rows, _ = self.source(record, actor)
-        handles = apps.get_model("parties", "Handle").objects
-        return rows.annotate(_sender_name=handles.sender_name_expression("sender__", party_read_implied=True))
+            return messages.record_scope(record).scoped().prefetch_related(None).select_related(
+                "subtype", "sender", "created_by",
+            )
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         if row._meta.label == "messaging.ThreadAttachment" and row.role != "chatter":
@@ -74,16 +47,11 @@ class CommentKind(TimelineKind):
 
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         return {row.pk: Presentation(
-            row.preview, row.subtype.name if row.subtype_id else row.get_message_type_display(),
-            row.sender_name() if row.sender_id else str(row.created_by) if row.created_by_id else "",
+            row.preview, row.subtype.name if row.subtype_id else row.get_message_type_display(), row.authorship()[1],
         ) for row in rows}
 
     def records(self, row: Any) -> Iterable[RecordIdentity]:
-        if row._meta.label in {"messaging.Reaction", "messaging.MessageStar"}:
-            record = row.message.threaded_record_ref()
-        elif row._meta.label in {"messaging.ThreadFollower", "messaging.ThreadNotification"}:
-            record = row.thread.chatter_record_ref() if row.thread_id is not None else None
-        elif row._meta.label == "messaging.Message":
+        if row._meta.label == "messaging.Message":
             record = row.threaded_record_ref()
         elif row._meta.label == "messaging.ThreadAttachment":
             record = row.record_ref
@@ -98,14 +66,7 @@ class ConversationKind(TimelineKind):
 
     id = "messaging.conversation"
     sequence = 70
-    source_models = {
-        "messaging.ThreadAttachment": ("thread", "role", "content_type", "object_id", "label"),
-        "messaging.Thread": ("title", "message_count", "merged_into"),
-    }
-    previous_source_models = {
-        "messaging.ThreadAttachment": ("thread", "role", "content_type", "object_id"),
-        "messaging.Thread": ("merged_into",),
-    }
+    source_models = ("messaging.ThreadAttachment", "messaging.Thread")
 
     def eligible(self, model: type[models.Model]) -> bool:
         return True
@@ -119,11 +80,7 @@ class ConversationKind(TimelineKind):
     def targets(self, row: Any) -> Iterable[models.Model]:
         if row._meta.label == "messaging.ThreadAttachment":
             return (row,)
-        return (
-            apps.get_model("messaging", "ThreadAttachment")._base_manager
-            .db_manager(row._state.db, hints={"instance": row})
-            .filter(thread=row, role="source")
-        )
+        return apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(thread=row, role="source")
 
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         return {row.pk: Presentation(

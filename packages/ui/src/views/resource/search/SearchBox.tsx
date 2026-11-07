@@ -15,15 +15,13 @@ import { PopoverRoot, PopoverTrigger, PopoverPortal, PopoverPositioner, PopoverC
 import { textRoleVariants } from "../../../ui/text";
 import { FilterClauseEditor } from "../../../toolbars/FilterClauseEditor";
 import { QueryConditionEditor } from "../../../toolbars/ResourceConditionEditor";
-import { useRelationOptions, useRelationSelectedOptions } from "../../relation/relation-options";
+import { useRelationOptions, useRelationSelectedOption } from "../../relation/relation-options";
 import { labelText } from "../resource-view-utils";
 import { GroupStackPanel, GroupLevelLabel, groupLevelLabel } from "./GroupStackPanel";
 import type { ResourceSearch, SearchActiveItem, SearchFacet, SearchFacetOption } from "./types";
 
 /** The three-column panel is 48rem wide; below this viewport width it stacks. */
 const SEARCH_PANEL_ROOMY_QUERY = "(min-width: 52rem)";
-/** ListView activates server facets only while a filter control is in use. */
-export const FacetReadActivationContext = React.createContext<(open: boolean) => void>(() => undefined);
 /** "+N" for the chips that do not fit: a brand chip, pressed to open the panel; its measured copy is the same chip. */
 function MoreChip({ count, ...props }: { count: number } & Omit<React.ComponentProps<typeof Chip>, "children">): React.ReactElement {
   return <Chip tone="brand" variant="soft" size="sm" {...props}>+{count}</Chip>;
@@ -79,7 +77,6 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
   inputValue: string; setInputValue: (value: string) => void;
 }): React.ReactElement {
   const t = useUiT();
-  const activateFacets = React.useContext(FacetReadActivationContext);
   // The panel is a popup: the viewport decides whether its three columns fit, not the box's own width.
   const roomy = useMediaQuery(SEARCH_PANEL_ROOMY_QUERY);
   const hostRef = React.useRef<HTMLDivElement>(null);
@@ -87,10 +84,6 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
   const [suggestionsOpen, setSuggestionsOpen] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const text = inputValue.trim();
-  // Server facets load while a filter control is in use: the panel, or typing in the box.
-  React.useEffect(() => {
-    activateFacets(panelOpen || Boolean(text));
-  }, [activateFacets, panelOpen, text]);
   const groups = suggestionsFor(search, text, remote, t);
   const suggestions = groups.flatMap((group) => group.items);
   const collapsed = box === "collapsed";
@@ -203,87 +196,47 @@ function suggestionsFor(search: ResourceSearch, text: string, remote: readonly R
   ].filter((group) => group.items.length);
 }
 
-function activeLabel(item: SearchActiveItem, t: UiTranslate, resolved?: ReadonlyMap<string, React.ReactNode>): string {
+function activeLabel(item: SearchActiveItem, t: UiTranslate): string {
   const label = labelText(item.label) ?? item.id;
   switch (item.kind) {
     case "text": return `${label}: ${item.value}`;
-    case "facet": return `${label}: ${item.options.map((option) => labelText(option.value ? resolved?.get(option.value) : undefined)
-      ?? labelText(option.label) ?? option.value).join(` ${t("search.or")} `)}`;
+    case "facet": return `${label}: ${item.options.map((option) => labelText(option.label) ?? option.value).join(` ${t("search.or")} `)}`;
     case "group": return `${t(item.index === 0 ? "resourceToolbar.groupBy" : "search.then")}: ${groupLevelLabel(item, t)}`;
     default: return label;
   }
 }
 
-function missingFacetValues(item: SearchActiveItem, facet: SearchFacet | undefined): string[] {
-  return item.kind === "facet" && facet?.relation
-    ? item.options.flatMap((option) => option.value !== undefined
-      && !facet.options.some((known) => known.id === option.id) ? [option.value] : []) : [];
-}
-
 /** A removable active item; the label truncates, and its full text names the chip and titles it. */
 function ActiveChip({ item, search, className, ...props }: { item: SearchActiveItem; search: ResourceSearch }
   & Omit<React.ComponentProps<typeof RemovableChip>, "children" | "removeLabel">): React.ReactElement {
-  const facet = item.kind === "facet" ? search.catalog.facets.find((entry) => entry.field === item.field) : undefined;
-  const missing = missingFacetValues(item, facet);
-  return facet?.relation && missing.length > 0
-    ? <RelationActiveChip item={item} facet={facet} missing={missing} className={className} {...props} />
-    : <ActiveChipContent item={item} facet={facet} className={className} {...props} />;
-}
-
-function RelationActiveChip({ item, facet, missing, ...props }: {
-  item: SearchActiveItem; facet: SearchFacet; missing: readonly string[];
-} & Omit<React.ComponentProps<typeof RemovableChip>, "children" | "removeLabel">): React.ReactElement {
-  const selected = useRelationSelectedOptions(facet.relation!, missing, []);
-  return <ActiveChipContent item={item} facet={facet}
-    resolved={new Map(selected.map((option) => [option.value, option.label]))} {...props} />;
-}
-
-function ActiveChipContent({ item, facet, resolved, className, ...props }: {
-  item: SearchActiveItem; facet?: SearchFacet; resolved?: ReadonlyMap<string, React.ReactNode>;
-} & Omit<React.ComponentProps<typeof RemovableChip>, "children" | "removeLabel">): React.ReactElement {
   const t = useUiT();
-  const label = activeLabel(item, t, resolved);
+  const label = activeLabel(item, t);
   return <RemovableChip {...props} tone="brand" size="sm" className={cn("max-w-64 focus-visible:focus-ring", className)}
     aria-label={label} title={label} removeLabel={item.kind === "group" ? groupLevelLabel(item, t) : label}>
-    <SearchActiveLabelContent item={item} facet={facet} resolved={resolved} />
+    <SearchActiveLabel item={item} search={search} />
   </RemovableChip>;
 }
 
 /** The search owner's complete label, also used by pane scope chips. */
-export function SearchActiveLabel({ item, search }: {
-  item: SearchActiveItem; search: ResourceSearch;
-}): React.ReactElement {
-  const facet = item.kind === "facet" ? search.catalog.facets.find((entry) => entry.field === item.field) : undefined;
-  const missing = missingFacetValues(item, facet);
-  return facet?.relation && missing.length > 0
-    ? <RelationActiveLabel item={item} facet={facet} missing={missing} />
-    : <SearchActiveLabelContent item={item} facet={facet} />;
-}
-
-function RelationActiveLabel({ item, facet, missing }: {
-  item: SearchActiveItem; facet: SearchFacet; missing: readonly string[];
-}): React.ReactElement {
-  const selected = useRelationSelectedOptions(facet.relation!, missing, []);
-  return <SearchActiveLabelContent item={item} facet={facet}
-    resolved={new Map(selected.map((option) => [option.value, option.label]))} />;
-}
-
-function SearchActiveLabelContent({ item, facet, resolved }: {
-  item: SearchActiveItem; facet?: SearchFacet; resolved?: ReadonlyMap<string, React.ReactNode>;
-}): React.ReactElement {
+export function SearchActiveLabel({ item, search }: { item: SearchActiveItem; search: ResourceSearch }): React.ReactElement {
   const t = useUiT();
   if (item.kind === "group") return <>{t(item.index === 0 ? "resourceToolbar.groupBy" : "search.then")}: <GroupLevelLabel item={item} /></>;
   if (item.kind === "text") return <>{item.label}: {item.value}</>;
   if (item.kind === "favorite") return <><Glyph name="star" className="inline size-3" /> {item.label}</>;
   if (item.kind === "facet") {
+    const facet = search.catalog.facets.find((facet) => facet.field === item.field);
     return <>{item.label}: {item.options.map((option, index) => <React.Fragment key={option.id}>
       {index > 0 ? ` ${t("search.or")} ` : null}
       {facet?.relation && option.value !== undefined && !facet.options.some((known) => known.id === option.id)
-        ? resolved?.get(option.value) ?? option.value
-        : option.label}
+        ? <RelationSelectedLabel facet={facet} value={option.value} /> : option.label}
     </React.Fragment>)}</>;
   }
   return <>{item.label}</>;
+}
+
+function RelationSelectedLabel({ facet, value }: { facet: SearchFacet; value: string }): React.ReactElement {
+  const selected = useRelationSelectedOption(facet.relation ?? null, value);
+  return <>{selected?.label ?? value}</>;
 }
 
 /** `lead` heads the Filters column: the collapsed box's chips and input, or every active item when chips overflow the box. */

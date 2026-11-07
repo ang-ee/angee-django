@@ -19,8 +19,6 @@ from angee.platform_integrate_vcs import catalog
 from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_integration
 from tests.wheel_fixtures import write_wheel
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 class CatalogueBackend(VCSBackend):
     """Binary remote transport over test-authored, already built artifacts."""
@@ -77,7 +75,7 @@ def snapshot():
 
 def test_remote_catalogue_reconciles_native_metadata_and_retains_removed_artifacts(catalog_source, monkeypatch):
     source, artifact = catalog_source
-    monkeypatch.setattr("angee.platform_integrate_vcs.managers.available_addons", lambda: {})
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {})
     assert source.refresh() == 2
     with system_context(reason="tests.catalogue.read"):
         row = Addon.objects.get(name="catalog_remote.base")
@@ -102,13 +100,13 @@ def test_installed_metadata_precedes_artifacts_until_the_distribution_disappears
             name=manifest["name"], distribution=manifest["distribution"], description="Installed metadata",
             source=origin, state=Addon.AddonState.ENABLED, forced=True, model_count=2,
         )
-    monkeypatch.setattr("angee.platform_integrate_vcs.managers.available_addons", lambda: {row.name: (manifest, None)})
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {row.name: (manifest, None)})
     source.refresh()
     with system_context(reason="tests.catalogue.precedence"):
         row.refresh_from_db()
         assert (row.description, row.source, row.state) == ("Installed metadata", origin, Addon.AddonState.ENABLED)
         assert row.vcs_source_id == source.pk and row.model_count == 2
-    monkeypatch.setattr("angee.platform_integrate_vcs.managers.available_addons", lambda: {})
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {})
     source.refresh()
     with system_context(reason="tests.catalogue.became_remote"):
         row.refresh_from_db()

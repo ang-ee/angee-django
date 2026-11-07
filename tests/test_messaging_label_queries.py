@@ -9,11 +9,11 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Fragment, Message, MessageStar, Thread
-from tests.conftest import execute_schema, result_data
 from tests.test_messaging_graphql import _schema
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
+pytestmark = pytest.mark.usefixtures("composed_tables")
 
 
 @pytest.mark.parametrize("root", ["threads", "messages"])
@@ -132,8 +132,6 @@ def test_message_list_starred_costs_constant_queries() -> None:
         }
     """
     expected = [{"id": str(row.sqid), "starred": index % 2 == 0} for index, row in enumerate(rows)]
-    # A transactional flush clears the first request's schema caches.
-    result_data(execute_schema(schema, query, {"limit": 1}, user=reader))
     counts = []
     for size in (1, 10):
         with CaptureQueriesContext(connection) as captured:

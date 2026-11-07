@@ -14,9 +14,6 @@ const mocks = vi.hoisted(() => ({
   mutateCalls: [] as Array<{ op: string; vars: Record<string, unknown> }>,
   failOps: new Set<string>(),
   useAuthoredQuery: vi.fn(),
-  useRecordMessageFeed: vi.fn(),
-  fetchOlder: vi.fn(),
-  fetchNewer: vi.fn(),
   upload: vi.fn(),
   uploadTasks: [] as Array<{ id: string; name: string; status: "uploading" | "failed" | "done" }>,
   onUploaded: null as null | ((files: readonly { id: string; filename: string }[]) => void),
@@ -49,7 +46,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: mocks.useAuthoredQuery,
-  useSetAuthoredQueryData: () => vi.fn(),
   useAuthoredMutation: (document: unknown) => {
     const op = operationName(document);
     const mutate = vi.fn(async (vars: Record<string, unknown>) => {
@@ -58,20 +54,6 @@ vi.mock("@angee/refine", async (importOriginal) => ({
       return {};
     });
     return [mutate, { fetching: false }];
-  },
-}));
-
-vi.mock("./record-message-feed", () => ({
-  useRecordMessageFeed: (options: unknown) => {
-    mocks.useRecordMessageFeed(options);
-    const payload = (mocks.threadData as { record_thread?: { messages?: RecordMessageRow[];
-      message_result_count?: number; has_older_messages?: boolean; has_newer_messages?: boolean } } | undefined)?.record_thread;
-    return { acceptResponse: vi.fn(), query: {
-      data: payload ? { pages: [{ rows: payload.messages ?? [], count: payload.message_result_count ?? 0,
-        through: null, hasOlder: payload.has_older_messages ?? false }], pageParams: [{ start: true }] } : undefined,
-      error: null, isFetching: false, hasNextPage: payload?.has_older_messages ?? false,
-      hasPreviousPage: payload?.has_newer_messages ?? false, fetchNextPage: mocks.fetchOlder, fetchPreviousPage: mocks.fetchNewer,
-    } };
   },
 }));
 
@@ -97,8 +79,6 @@ function part(id: string, text: string): RecordMessageRow["parts"][number] {
 function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
   return {
     id: "msg_1",
-    feed_order_key: "2026-07-06T00:00:00Z:1",
-    is_trashed: false,
     title: "",
     preview: "Ping the room",
     direction: "INTERNAL",
@@ -146,8 +126,6 @@ function threadPayload(
       subtypes: [],
       unread_count: 1,
       needaction_count: 0,
-      message_has_error: false,
-      message_has_error_counter: 0,
       attachment_count: 0,
       notifications: [],
       followers: [],
@@ -165,7 +143,7 @@ function conversationPreview(active: boolean, pending = false) {
           viewAs: active ? { userId: user.id } : null,
           currentUser: user,
           realUser: { id: "usr_admin", name: "Administrator" },
-          enter: vi.fn(), exit: vi.fn(), pending,
+          viewablePeople: [user], enter: vi.fn(), exit: vi.fn(), pending,
         },
       },
     }}>
@@ -184,9 +162,6 @@ beforeEach(() => {
   mocks.threadData = threadPayload([message()]);
   mocks.threadError = null;
   mocks.useAuthoredQuery.mockReset();
-  mocks.useRecordMessageFeed.mockClear();
-  mocks.fetchOlder.mockClear();
-  mocks.fetchNewer.mockClear();
   mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
     const op = operationName(document);
     if (op === "MessagingRecordThread") {
@@ -749,17 +724,20 @@ describe("RecordThreadStream", () => {
 });
 
 
-test("record conversation delegates older/newer discovery and anchor reset to the native feed", () => {
+test("record conversation pages by returned edge IDs and resets to latest", () => {
   mocks.threadData = { record_thread: { ...threadPayload([message({ id: "msg_latest" })]).record_thread,
     has_older_messages: true, has_newer_messages: false } };
-  const { rerender } = render(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" around="msg_latest" />);
+  const { rerender } = render(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" />);
   fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
-  expect(mocks.fetchOlder).toHaveBeenCalledTimes(1);
+  expect(mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread")
+    .at(-1)?.[1]).toMatchObject({ before: "msg_latest", after: undefined, around: undefined });
   mocks.threadData = { record_thread: { ...threadPayload([message({ id: "msg_old" })]).record_thread,
     has_older_messages: false, has_newer_messages: true } };
-  rerender(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" around="msg_latest" />);
+  rerender(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" />);
   fireEvent.click(screen.getByRole("button", { name: "Load newer messages" }));
-  expect(mocks.fetchNewer).toHaveBeenCalledTimes(1);
+  expect(mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread")
+    .at(-1)?.[1]).toMatchObject({ after: "msg_old", before: undefined });
   fireEvent.click(screen.getByRole("button", { name: "Latest messages" }));
-  expect(mocks.useRecordMessageFeed.mock.calls.filter(([options]) => options.enabled).at(-1)?.[0].around).toBeUndefined();
+  expect(mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread")
+    .at(-1)?.[1]).toMatchObject({ before: undefined, after: undefined, around: undefined });
 });

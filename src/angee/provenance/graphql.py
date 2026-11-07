@@ -14,9 +14,10 @@ from rebac.resources import model_resource_type
 from strawberry.extensions import SchemaExtension
 from strawberry_django_hasura import WriteBackend
 
-from angee.base.signals import bulk_updated, connect_for_models, publish_bulk_update
+from angee.base.permissions import require_rebac_queryset
+from angee.base.signals import bulk_updated, connect_for_models
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.iam.permissions import require_rebac_queryset
+from angee.graphql.publishing import publish_bulk_update
 from angee.provenance.context import (
     changeset,
     changeset_model,
@@ -53,7 +54,7 @@ def _claimed_create(
             ),
         )
         if replay is not None:
-            instance = require_rebac_queryset(model).with_actor(actor).filter(pk=replay.pk).first()
+            instance = require_rebac_queryset(model, actor=actor).filter(pk=replay.pk).first()
             if instance is None:
                 raise PermissionDenied("The claimed creation result is not readable.")
             return instance

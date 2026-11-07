@@ -1,4 +1,4 @@
-"""URL contributions use native includes, resolution and registered checks."""
+"""The server URLconf composes addon urls modules through native includes and checks."""
 
 import os
 import subprocess
@@ -8,7 +8,7 @@ from types import ModuleType
 
 import pytest
 from django.apps import apps
-from django.urls import resolve
+from django.urls import Resolver404, resolve
 
 from angee.graphql.apps import GraphQLConfig
 from angee.messaging.apps import MessagingConfig
@@ -24,6 +24,15 @@ def run(script):
         capture_output=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Fake app configs expose their conventional modules without packaged distributions.
+FAKE_ADDON_MODULES = """
+import angee.base.addons
+angee.base.addons.optional_addon_module = (
+    lambda config, name, index=None: getattr(config, "modules", {}).get(name)
+)
+"""
 
 
 def test_server_config_registers_native_url_check_after_setup():
@@ -42,8 +51,105 @@ assert resolve("/health/ready").url_name == "angee-server-readiness"
 """)
 
 
+PROFILING_HOST = """
+from django.conf import settings
+settings.configure(
+    INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "angee.server", "silk"],
+    ROOT_URLCONF="angee.server.urls", SECRET_KEY="profiling", DEBUG={debug!r}, STATIC_URL="/static/",
+    ALLOWED_HOSTS=["testserver"],
+    ANGEE_PROFILING_ALLOW_PRODUCTION={allow!r}, ANGEE_PROFILING_PERMISSION="operator.truth",
+)
+import django
+django.setup()
+from django.core.checks import Tags, run_checks
+from django.urls import resolve
+"""
+
+
+@pytest.mark.parametrize(
+    ("debug", "allow", "refused"),
+    [(True, False, False), (False, False, True), (False, True, False), (False, "true", True)],
+)
+def test_rooted_silk_mounts_its_ui_and_refuses_production_by_default(debug, allow, refused):
+    """Silk's UI joins the server URLconf; E002 refuses DEBUG off unless the override is the boolean True."""
+    expected = ["angee.server.E002"] if refused else []
+    run(PROFILING_HOST.format(debug=debug, allow=allow) + f"""
+assert resolve("/profiling/").view_name == "silk:summary"
+assert resolve("/profiling/requests/").namespaces == ["silk"]
+assert resolve("/health/ready").url_name == "angee-server-readiness"
+assert run_checks(tags=[Tags.urls]) == []
+errors = [error.id for error in run_checks(tags=[Tags.security]) if error.id.startswith("angee.")]
+assert errors == {expected!r}, errors
+""")
+
+
+SILK_ASSET = "/static/silk/css/pages/root_base.css"
+
+
+@pytest.mark.parametrize("debug", [True, False])
+def test_rooted_silk_assets_are_served_by_django_static_view_only_in_debug(debug):
+    """Django's static view finds silk's packaged assets in DEBUG; outside it no static route exists."""
+    run(PROFILING_HOST.format(debug=debug, allow=True) + f"""
+from django.contrib.staticfiles.views import serve
+from django.test import Client
+from django.urls import Resolver404
+if {debug!r}:
+    assert resolve({SILK_ASSET!r}).func is serve
+    response = Client().get({SILK_ASSET!r})
+    assert response.status_code == 200, response.status_code
+    response.close()
+else:
+    try:
+        resolve({SILK_ASSET!r})
+    except Resolver404:
+        pass
+    else:
+        raise AssertionError("static route exists with DEBUG off")
+assert run_checks(tags=[Tags.urls]) == []
+""")
+
+
+@pytest.mark.parametrize("debug", [True, False])
+def test_profiling_is_unmounted_and_unchecked_without_silk(debug):
+    run(f"""
+from django.conf import settings
+settings.configure(
+    INSTALLED_APPS=["angee.server"], ROOT_URLCONF="angee.server.urls", SECRET_KEY="quiet",
+    DEBUG={debug!r}, STATIC_URL="/static/",
+)
+import django
+django.setup()
+from django.core.checks import Tags, run_checks
+from django.urls import Resolver404, resolve
+try:
+    resolve("/profiling/")
+except Resolver404:
+    pass
+else:
+    raise AssertionError("/profiling/ resolved without silk")
+try:
+    resolve("/static/silk/css/pages/root_base.css")
+except Resolver404:
+    pass
+else:
+    raise AssertionError("a static route exists without silk")
+assert [error for error in run_checks(tags=[Tags.security]) if error.id.startswith("angee.")] == []
+""")
+
+
+def test_profiling_access_follows_only_the_declared_hook(settings):
+    """No hook refuses everyone; a declared predicate decides alone."""
+    from angee.server.profiling import profiling_permitted
+
+    settings.ANGEE_PROFILING_PERMISSION = ""
+    assert profiling_permitted(1) is False
+    settings.ANGEE_PROFILING_PERMISSION = "operator.truth"
+    assert profiling_permitted(1) is True
+    assert profiling_permitted(0) is False
+
+
 def test_enabled_framework_urls_share_the_server_urlconf(monkeypatch):
-    """All four addon URL declarations resolve with the server's readiness route."""
+    """Addon urls modules resolve beside readiness; an ordinary app's urls.py never opts in."""
     configs = [
         cls(name, import_module(name))
         for cls, name in (
@@ -53,11 +159,16 @@ def test_enabled_framework_urls_share_the_server_urlconf(monkeypatch):
             (MessagingConfig, "angee.messaging"),
         )
     ]
+    configs.append(apps.get_app_config("auth"))
     monkeypatch.setattr(apps, "get_app_configs", lambda: configs)
-    from angee.server.urls import _patterns, check_url_collisions
+    from angee.server.checks import check_url_collisions
+    from angee.server.urls import contributions
 
     root = ModuleType("composed_server_urls")
-    root.urlpatterns = [pattern for _, pattern in _patterns()]
+    root.urlpatterns = [pattern for _, pattern in contributions()]
+    assert [owner for owner, _ in contributions()] == [
+        "angee.server", "angee.storage", "angee.graphql", "angee.messaging",
+    ]
     assert check_url_collisions() == []
     for route, name in (
         ("/health/ready", "angee-server-readiness"),
@@ -66,10 +177,12 @@ def test_enabled_framework_urls_share_the_server_urlconf(monkeypatch):
         ("/forms/example", "messaging_public_webform"),
     ):
         assert resolve(route, urlconf=root).url_name == name
+    with pytest.raises(Resolver404):
+        resolve("/login/", urlconf=root)
 
 
 def test_native_urls_and_collisions():
-    script = """
+    run(FAKE_ADDON_MODULES + """
 import sys
 from types import ModuleType
 from django.conf import settings
@@ -80,44 +193,38 @@ from django.apps import AppConfig, apps
 from django.urls import path, include, resolve
 from django.http import HttpResponse
 from django.core.checks import run_checks, Tags
+from angee.server.checks import check_url_collisions
+from django.core.checks import register
+register(check_url_collisions, Tags.urls)
 view = lambda request, **kwargs: HttpResponse("ok")
 leaf = ModuleType("leaf")
 leaf.app_name = "leaf"
 leaf.urlpatterns = [path("<int:pk>/", view, name="detail")]
 sys.modules["leaf"] = leaf
 outer = ModuleType("outer")
-outer.urlpatterns = [path("nested/", include("leaf", namespace="inside"))]
-sys.modules["outer"] = outer
-class First(AppConfig):
-    name = "first"
+outer.urlpatterns = [path("api/nested/", include("leaf", namespace="inside"))]
+class Contribution(AppConfig):
     path = "/tmp"
-    compose_urls = "outer"
-    compose_url_prefix = "api/"
-class Second(First):
-    name = "second"
-class Unselected(AppConfig):
-    name = "unselected"
-    path = "/tmp"
-    # Merely shipping urls.py never opts in.
-configs = [First("first", ModuleType("first")), Second("second", ModuleType("second")),
-           Unselected("unselected", ModuleType("unselected"))]
-apps.get_app_configs = lambda: configs
-from angee.server import checks
+first = Contribution("first", ModuleType("first"))
+first.modules = {"urls": outer}
+second = Contribution("second", ModuleType("second"))
+second.modules = {"urls": outer}
+plain = Contribution("plain", ModuleType("plain"))
+apps.get_app_configs = lambda: [first, second, plain]
 assert "angee.server.urls" not in sys.modules
 errors = [error for error in run_checks(tags=[Tags.urls]) if error.id.endswith(".E001")]
 from angee.server import urls
-assert len(urls.urlpatterns) == 2
+assert len(urls.urlpatterns) == 3
 match = resolve("/api/nested/23/")
 assert match.kwargs == {"pk": 23}
 assert match.namespaces == ["inside"]
 assert len(errors) == 1, errors
-assert errors[0].id == "server.E001"
+assert errors[0].id == "angee.server.E001"
 assert "first" in errors[0].msg and "second" in errors[0].msg
-"""
-    run(script)
+""")
 
 
-SETUP = """
+SETUP = FAKE_ADDON_MODULES + """
 from types import ModuleType
 from django.conf import settings
 settings.configure(INSTALLED_APPS=[], ROOT_URLCONF="angee.server.urls")
@@ -135,16 +242,16 @@ class Contribution(AppConfig):
 def contributions(first_patterns, second_patterns):
     configs = []
     for name, patterns in (("first", first_patterns), ("second", second_patterns)):
+        leaf = ModuleType(name + "_leaf")
+        leaf.app_name = name
+        leaf.urlpatterns = patterns
         module = ModuleType(name + "_urls")
-        module.app_name = name
-        module.urlpatterns = patterns
+        module.urlpatterns = [path("api/", include(leaf, namespace=name))]
         config = Contribution(name, ModuleType(name))
-        config.compose_urls = module
-        config.compose_url_namespace = name
-        config.compose_url_prefix = "api/"
+        config.modules = {"urls": module}
         configs.append(config)
     apps.get_app_configs = lambda: configs
-    from angee.server.urls import check_url_collisions
+    from angee.server.checks import check_url_collisions
     return check_url_collisions()
 """
 
@@ -211,7 +318,7 @@ def test_identical_native_chains_collide_across_namespaces(expression):
         + """
 errors = contributions([first], [second])
 assert len(errors) == 1, errors
-assert errors[0].id == "server.E001"
+assert errors[0].id == "angee.server.E001"
 assert "first" in errors[0].msg and "second" in errors[0].msg
 """
     )
@@ -306,7 +413,7 @@ errors = contributions(
     [path("<custom:value>/", second_view)],
 )
 assert len(errors) == 1, errors
-assert errors[0].id == "server.E001"
+assert errors[0].id == "angee.server.E001"
 """
     )
 

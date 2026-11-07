@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => ({
   // verb and settles its outcome; these tests assert what the dialog declares to
   // it, and its own package owns testing that ceremony.
   actions: new Map<string, ReturnType<typeof vi.fn>>(),
-  actionOptions: new Map<string, { invalidateModels?: readonly string[]; transient?: boolean }>(),
+  actionOptions: new Map<string, { invalidateModels?: readonly string[] }>(),
   actionStates: new Map<string, { fetching: boolean; error: Error | null }>(),
   recordActions: new Map<string, ReturnType<typeof vi.fn>>(),
 }));
@@ -65,7 +65,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
         messages[key] ?? key,
   useActionResultMutation: (
     field: string,
-    options?: { invalidateModels?: readonly string[]; transient?: boolean },
+    options?: { invalidateModels?: readonly string[] },
   ) => {
     const action = mocks.actions.get(field) ?? vi.fn(async () => undefined);
     mocks.actions.set(field, action);
@@ -173,7 +173,6 @@ describe("PairingDialog", () => {
     mocks.pairing.state = "LOGGED_OUT";
     render(<PairingDialog channelId="chn_1" instruction="Scan in the vendor app." onClose={() => undefined} />);
 
-    expect(mocks.actionOptions.get("submit_channel_password")?.transient).toBe(true);
     for (const field of [
       "reset_channel_pairing",
       "resume_channel_pairing",

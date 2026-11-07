@@ -35,6 +35,7 @@ _ALLOWED_JWT_ALGORITHMS = (
     "RS256",
     "ES256",
 )
+_DEFAULT_JWKS_TTL_SECONDS = 3600
 
 
 class OAuthClientOidcProtocol(OAuthClientProtocol):
@@ -193,4 +194,4 @@ def _jwks_client(jwks_uri: str) -> _PinnedPyJWKClient:
 def _jwks_ttl_seconds() -> int:
     """Return the configured lifetime for PyJWT's cached JWK set."""
 
-    return int(settings.ANGEE_OIDC_JWKS_TTL)
+    return int(getattr(settings, "ANGEE_OIDC_JWKS_TTL", _DEFAULT_JWKS_TTL_SECONDS))

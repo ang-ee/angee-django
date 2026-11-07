@@ -1,4 +1,4 @@
-"""The additive REBAC-schema extension seam (``angee.iam.build``).
+"""The additive REBAC-schema extension seam (``angee.base.build``).
 
 A consumer addon contributes relations and permission arms to a definition owned
 by another addon through a sibling ``permissions.extends.zed`` fragment, instead
@@ -24,15 +24,15 @@ from rebac.backends import backend
 from rebac.schema.parser import parse_zed, validate_schema
 from rebac.types import ObjectRef
 
-from angee.iam.build import (
+from angee.base.build import (
     SchemaExtensionError,
     extension_source_map,
     merged_schema_relpath,
     merged_schemas,
     render_zed,
 )
-from angee.iam.permissions import declared_schema_path
-from angee.iam.testing.permissions import installed_field_owners
+from angee.base.permissions import declared_schema_path
+from angee.base.testing.permissions import installed_field_owners
 from tests.conftest import make_addon
 
 User = get_user_model()
@@ -54,7 +54,7 @@ def _apply_emitted_schema_paths(app_configs, runtime_dir, *, sources):
 
     from unittest.mock import patch
 
-    from angee.iam.testing.permissions import emit_permissions
+    from angee.base.testing.permissions import emit_permissions
 
     by_label = {config.label: config for config in app_configs}
     with patch.object(apps, "get_app_config", side_effect=by_label.__getitem__):
@@ -407,7 +407,7 @@ def test_render_retains_authored_metadata_and_directives():
 
 
 def test_declared_source_rewrites_do_not_leave_stale_field_gates(tmp_path, monkeypatch):
-    from angee.iam.permissions import declared_rebac_definition
+    from angee.base.permissions import declared_rebac_definition
     from tests.scopedemo.models import Scope
 
     config = apps.get_app_config(Scope._meta.app_label)
@@ -478,7 +478,7 @@ def test_native_permission_source_rejects_a_directory(tmp_path):
 def test_permission_binding_does_not_repeat_merge(tmp_path, monkeypatch):
     """Binding uses the exact rendered map, without parsing source files again."""
 
-    import angee.iam.build as permissions
+    import angee.base.build as permissions
 
     base = _base_addon(tmp_path)
     contrib = _contrib_addon(tmp_path, "definition demo/thing { permission read = anonymous }")

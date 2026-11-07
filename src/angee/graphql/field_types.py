@@ -6,11 +6,10 @@ strawberry-django maps a Django model field to its GraphQL type through
 field that subclasses a Django field but adds only a semantic declaration keeps
 the base field's wire shape, yet ``auto`` raises ``NotImplementedError`` on the
 subclass because its exact class is absent from the map. Registering the subclass
-beside the base it wraps is the strawberry-django-native fix. The owning addon's
-``AppConfig.ready()`` registers its value fields when ``angee.graphql`` is enabled.
-All app-ready callbacks precede the composer's ready-phase schema integration,
-so the mapping exists before lazy schema declarations use ``auto``. Neutral field
-modules do not import GraphQL or Strawberry.
+beside the base it wraps is the strawberry-django-native fix: a value field
+registers its GraphQL type at its own module import. Self-registration guarantees
+the type exists before any schema resource that uses the field can be constructed,
+independent of ``INSTALLED_APPS`` order.
 
 State and id fields need no map entry: strawberry-django resolves ``StateField``
 through ``django-choices-field``'s ``TextChoicesField``. Optional states declare
@@ -37,8 +36,8 @@ def register_field_type(field_class: type[models.Field[Any, Any]], wire_type: ty
     This is the extension seam a field's owning addon uses to teach
     strawberry-django its wire type: a value field that subclasses a Django field
     but adds only a semantic declaration keeps the base field's wire shape, yet the
-    exact-class ``field_type_map`` lookup misses the subclass. The owning app registers its field
-    here during ``ready()`` when GraphQL is installed, so a consumer can
+    exact-class ``field_type_map`` lookup misses the subclass. The field module
+    registers its own field here as an import-time declaration, so a consumer can
     write ``field: auto`` instead of hand-annotating the wire type. Repeating the
     same registration is a no-op; conflicting registrations fail loudly.
     """

@@ -16,17 +16,18 @@ from strawberry import auto
 from strawberry.types import get_object_definition
 from strawberry_django.optimizer import DjangoOptimizerExtension
 
+from angee.base.models.base import AngeeDataModel
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
+from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.models.base import ProtectedDataModel
-from tests.conftest import create_platform_admin, create_user, execute_schema, make_addon, result_data
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import create_platform_admin, create_user, make_addon
 from tests.linesdemo.models import Document, DocumentLine, Tag
 from tests.scopedemo.models import SharedDoc
 
 
 @strawberry_django.type(SharedDoc)
-class WriteContractDocType(ProtectedNode):
+class WriteContractDocType(AngeeNode):
     """Use an existing model without persisting the captured envelope."""
 
     title: strawberry.auto
@@ -106,14 +107,14 @@ def test_input_donors_reach_native_create_and_update_envelopes() -> None:
 
 
 @strawberry_django.type(Tag)
-class StampTagType(ProtectedNode):
+class StampTagType(AngeeNode):
     """A recorded stamp, read as a model-backed node."""
 
     name: auto
 
 
 @strawberry_django.type(DocumentLine)
-class StampedLineType(ProtectedNode):
+class StampedLineType(AngeeNode):
     """One line of a stamped document."""
 
     label: auto
@@ -125,20 +126,20 @@ class StampedLineType(ProtectedNode):
 def test_write_relation_declaration_supplies_public_id_inputs(filterable: bool) -> None:
     """A relation's write owner also declares its public scalar, even without a filter."""
 
-    class Referenced(ProtectedDataModel):
+    class Referenced(AngeeDataModel):
         key = models.IntegerField(primary_key=True)
 
         class Meta:
             app_label = "write_contract"
 
-    class Reference(ProtectedDataModel):
+    class Reference(AngeeDataModel):
         product = models.ForeignKey(Referenced, on_delete=models.CASCADE)
 
         class Meta:
             app_label = "write_contract"
 
     @strawberry_django.type(Reference)
-    class ReferenceType(ProtectedNode):
+    class ReferenceType(AngeeNode):
         pass
 
     resource = hasura_model_resource(
@@ -157,7 +158,7 @@ def test_write_relation_declaration_supplies_public_id_inputs(filterable: bool) 
 
 
 @strawberry_django.type(Document)
-class StampedDocumentType(ProtectedNode):
+class StampedDocumentType(AngeeNode):
     """A document whose writes carry the test-only ``stamp`` input extension."""
 
     title: auto
@@ -319,17 +320,6 @@ def test_an_unconsumed_input_extension_value_fails_fast_without_a_row(composed_t
 
     assert result.errors is not None
     assert _titles() == []
-
-
-def test_expected_revision_requires_a_revisioned_model(composed_tables: None) -> None:
-    """A write cannot compare a revision the target model does not own."""
-
-    document, owner = _owned_document("Kept")
-    with actor_context(owner), pytest.raises(ImproperlyConfigured, match="does not support expected_revision"):
-        AngeeHasuraWriteBackend(Document).update(cast(Any, None), document.sqid, {}, expected_revision=1)
-
-    document.refresh_from_db()
-    assert document.title == "Kept"
 
 
 def test_input_extension_fields_are_writable_in_resource_metadata() -> None:

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
 def test_composed_addon_query_budgets(tmp_path: Path) -> None:
@@ -29,6 +30,8 @@ def test_composed_addon_query_budgets(tmp_path: Path) -> None:
             "example.notes.tests.test_query_budgets",
             "--test-label",
             "angee.projects.tests.test_query_budgets",
+            "--test-label",
+            "tests.native_graphql_document_budgets",
             "--output",
             str(report),
         ],
@@ -40,4 +43,4 @@ def test_composed_addon_query_budgets(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, f"composed query budgets failed:\n{result.stdout}\n{result.stderr}"
-    assert_composed_report(report, vendor="sqlite")
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

@@ -6,7 +6,8 @@ import { CalendarClock, Inbox, Radar, Share2 } from "lucide-react";
 import { enNexusMessages, useNexusT } from "./i18n";
 import { NetworkPane } from "./NetworkPane";
 import { NexusOverviewContribution } from "./NexusOverviewContribution";
-import { FileMessages, useFileMessageCount } from "./inbox/FileMessages";
+import { FileMessages } from "./inbox/FileMessages";
+import { INBOX_MODELS } from "./inbox/state";
 
 const nexus = defineBaseAddon({
   id: "nexus",
@@ -41,7 +42,7 @@ const nexus = defineBaseAddon({
     "storage.File#groups": {
       "nexus.messages": { sequence: 40, content: {
         label: "Message backlinks",
-        useCount: useFileMessageCount,
+        relatedCount: { models: INBOX_MODELS },
         render: (context, label) => <>{label()}<li><FileMessages context={context} /></li></>,
       } },
     },

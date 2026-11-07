@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -10,7 +11,7 @@ from pathlib import Path
 from django.db import connection
 from django_compose.components import installed_components
 
-from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
 def test_composed_note_workflow(tmp_path: Path) -> None:
@@ -43,4 +44,4 @@ def test_composed_note_workflow(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, f"composed note workflow failed:\n{result.stdout}\n{result.stderr}"
-    assert_composed_report(report, vendor="postgresql" if postgresql else "sqlite")
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "postgresql" if postgresql else "sqlite"}

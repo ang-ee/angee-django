@@ -29,7 +29,10 @@ export function CyclesPage(): React.ReactElement {
   return (
     <QueueRecordPage
       eyebrow={t("queue.eyebrow.cycles")}
-      title={name ?? t("queue.loading")}
+      title={name}
+      loading={!queue.data && !queue.error}
+      loadingLabel={t("queue.loading")}
+      unavailable={!queue.data?.work_queues_by_pk}
       description={t("cycle.description")}
       verbs={<QueueSettingsLink queueId={queueId} />}
     >
@@ -42,7 +45,6 @@ export function CyclesPage(): React.ReactElement {
           completed_at: { isNull: true },
         }}
         order={{ starts_on: "ASC" }}
-        fields={["starts_on", "completed_at"]}
         rowActions={actions.rowActions}
         rowHref={(row) =>
           routeHref("work.cycle-board", { queueId, id: row.id })

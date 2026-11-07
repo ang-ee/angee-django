@@ -32,10 +32,7 @@ class IntegrationError(Exception):
     transient = False
 
     def __init__(
-        self,
-        public_message: str = "",
-        *,
-        transient: bool | None = None,
+        self, public_message: str = "", *, transient: bool | None = None,
         retry_after: timedelta | None = None,
     ) -> None:
         """Attach an optional positive provider horizon to this refusal.

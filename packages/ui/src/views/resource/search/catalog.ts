@@ -61,7 +61,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
   }, [input.declaredFacets, input.scalarFacets]);
   const fields = React.useMemo(() => mergeFilterFields(input.customFilterFields,
     mergeFilterFields(input.contributedCustomFilterFields,
-      mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0 || facet.optionForValue).map(facetField), inferredFields)))
+      mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0).map(facetField), inferredFields)))
     .filter((field) => Boolean(query.fields[field.field ?? field.id]?.filter?.operators.length)),
   [input.customFilterFields, input.contributedCustomFilterFields, contributedFacets, inferredFields, query]);
   const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, input.contributedFilterOptions ?? EMPTY, query, reported), [input.filterOptions, input.contributedFilterOptions, query, reported]);
@@ -95,7 +95,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
           const bucket = { key: { [axis.groupBy().valueKey]: value } };
           const filter = axis.drill(bucket);
           return filter ? { id: axis.bucketId(bucket), label, filter, value } : undefined;
-        } } : contributed?.optionForValue ? { optionForValue: contributed.optionForValue } : {}),
+        } } : {}),
         options: merged.flatMap((option) => {
           const key = JSON.stringify(query.toWhere(option.filter));
           if (predicates.has(key)) return [];

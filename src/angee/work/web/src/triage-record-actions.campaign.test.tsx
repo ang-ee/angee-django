@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { ActionDescriptor } from "@angee/ui";
 import type { ButtonHTMLAttributes } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -14,7 +13,6 @@ const state = vi.hoisted(() => ({
   task: null as { stage: { category?: string | null } | null } | null,
   start: vi.fn(),
   returnToTriage: vi.fn(),
-  scope: { reconcile: vi.fn(async () => undefined) },
   startPending: false,
   returnPending: false,
 }));
@@ -33,12 +31,10 @@ vi.mock("./i18n", () => ({ useWorkT: () => (key: string) => key }));
 vi.mock("@angee/ui", () => ({
   // The shared trigger/hook have their own dirty/error lifecycle tests. Here
   // their public props are the seam for the addon's branch and pending tests.
-  RecordActionBar: ({ record, actions }: { record: WorkTaskRow; actions: readonly ActionDescriptor[] }) => (
+  RecordActionBar: ({ actions }: { actions: readonly { id: string; label: string; disabled?: boolean; run?: () => unknown }[] }) => (
     <>{actions.map((action) => <button key={action.id} disabled={action.disabled}
       aria-busy={action.id === "work-start-task" ? state.startPending : action.id === "work-return-to-triage" ? state.returnPending : false}
-      onClick={() => { void action.run?.({
-        record, values: {}, refresh: vi.fn(), update: vi.fn(), prompt: vi.fn(), reconciliation: state.scope,
-      }); }}>{action.label}</button>)}</>
+      onClick={() => { void action.run?.(); }}>{action.label}</button>)}</>
   ),
   ActionTrigger: ({ loading, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
     <button {...props} disabled={props.disabled || loading} aria-busy={loading} />
@@ -72,13 +68,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("task record Start and Return to triage", () => {
-  test.each(["BACKLOG", "UNSTARTED", "backlog", "unstarted"])("offers Start for %s and passes the record id and reconciliation scope", (category) => {
+  test.each(["BACKLOG", "UNSTARTED", "backlog", "unstarted"])("offers Start for %s and passes the record id", (category) => {
     state.task = { stage: { category } };
     render(<TriageRecordActions />);
     fireEvent.click(screen.getByRole("button", { name: "task.action.start" }));
     fireEvent.click(screen.getByRole("button", { name: "triage.action.return" }));
-    expect(state.start).toHaveBeenCalledExactlyOnceWith("tsk_toolbar", undefined, { reconciliation: state.scope });
-    expect(state.returnToTriage).toHaveBeenCalledExactlyOnceWith("tsk_toolbar", undefined, { reconciliation: state.scope });
+    expect(state.start).toHaveBeenCalledExactlyOnceWith("tsk_toolbar");
+    expect(state.returnToTriage).toHaveBeenCalledExactlyOnceWith("tsk_toolbar");
   });
 
   test.each(["STARTED", "COMPLETED", "CANCELED", "DUPLICATE"])("does not offer Start for %s", (category) => {

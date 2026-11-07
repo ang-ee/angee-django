@@ -10,13 +10,13 @@ vi.mock("./documents", () => ({
 import { useTaskContext } from "./context";
 import { WorkTaskContextDocument } from "./documents";
 
-test("task context subscribes to Task and Stage models and its exact record", () => {
+test("task category subscribes to Task and Stage invalidation through the shared query owner", () => {
   useTaskContext("tsk_context");
   expect(query).toHaveBeenLastCalledWith(WorkTaskContextDocument, { id: "tsk_context" }, {
-    enabled: true, models: ["projects.Task", "work.Stage"], records: [{ model: "projects.Task", id: "tsk_context" }],
+    enabled: true, models: ["projects.Task", "work.Stage"],
   });
   useTaskContext("");
   expect(query).toHaveBeenLastCalledWith(WorkTaskContextDocument, { id: "" }, {
-    enabled: false, models: ["projects.Task", "work.Stage"], records: [{ model: "projects.Task", id: "" }],
+    enabled: false, models: ["projects.Task", "work.Stage"],
   });
 });

@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import override_settings
-from django.utils.connection import ConnectionDoesNotExist
 from rebac import system_context
 
 from angee.iam.auth import ModelBackend, can_authenticate_user
@@ -67,30 +66,3 @@ def test_workflow_service_user_tracks_identity_and_deactivates_on_delete(compose
         Workflow.objects.filter(pk=workflow.pk).delete()
         user.refresh_from_db()
         assert not user.is_active
-
-
-@pytest.mark.django_db(transaction=True)
-def test_service_principal_sync_uses_saved_identity_and_existing_link(composed_tables: None) -> None:
-    """A stale caller cannot allocate a second principal or publish an unsaved name."""
-
-    with system_context(reason="test.workflow.principal.stale"):
-        workflow = Workflow.objects.create(key="principal-stale", name="Stored name")
-        principal_id = workflow.user_id
-        workflow.user_id = None
-        workflow.name = "Unsaved name"
-        user = workflow.sync_service_user()
-        assert user.pk == principal_id == workflow.user_id
-        assert user.first_name == "Stored name"
-        assert get_user_model()._base_manager.filter(username=f"workflow-{workflow.sqid}").count() == 1
-
-
-@pytest.mark.django_db
-def test_service_factory_keeps_explicit_database() -> None:
-    """An invalid explicitly selected database must never create a default principal."""
-
-    users = get_user_model().objects
-    with pytest.raises(ConnectionDoesNotExist):
-        users.db_manager("missing-service-database").ensure_service_user(
-            username="service-routed", name="Service routed",
-        )
-    assert not get_user_model()._base_manager.filter(username="service-routed").exists()

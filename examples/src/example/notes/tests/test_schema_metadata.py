@@ -48,7 +48,6 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                 "delete": "delete_notes_by_pk",
                 "deletePreview": "delete_note",
                 "detail": "notes_by_pk",
-                "groupedRows": "notes_grouped_rows",
                 "groups": "notes_groups",
                 "groupsCount": "notes_groups_count",
                 "list": "notes",

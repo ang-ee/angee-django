@@ -13,7 +13,6 @@ from __future__ import annotations
 from django.db.models.signals import post_migrate
 from rebac import system_context
 
-from angee.base.models.persistence import require_composed_type
 from angee.base.signals import migrated_model
 from angee.platform.models import AddonManager
 
@@ -30,6 +29,7 @@ def _reconcile_addons(*, app_config: object, using: str, **kwargs: object) -> No
     addon_model = migrated_model(app_config=app_config, using=using, app_label="platform", model_name="Addon")
     if addon_model is None:
         return
-    manager = require_composed_type(addon_model._default_manager.db_manager(using), AddonManager)
+    manager = addon_model._default_manager.db_manager(using)
+    assert isinstance(manager, AddonManager)
     with system_context(reason="platform.reconcile_addons"):
         manager.reconcile_loaded_registry()

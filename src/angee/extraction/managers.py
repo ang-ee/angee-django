@@ -4,20 +4,22 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import generic_target, system_context, to_subject_ref
-from rebac.resources import model_resource_type
 
+from angee.base.managers import AngeeManager
+from angee.base.models.append_only import AppendOnlyQuerySet
 from angee.base.models.identity import public_id_of
+from angee.base.permissions import actor_user_id
+from angee.base.querysets import AngeeQuerySet
 from angee.base.refs import RecordRef
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.base.validators import validate
-from angee.extraction.acquisition import PageCarrier, PartCarrier
+from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarrier, PreparedDocument, prepare_pages
 from angee.extraction.contracts import (
     DocumentPart,
     ExtractionPartKind,
@@ -27,10 +29,6 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionStatus
 from angee.extraction.pointers import json_pointer_value, result_selectors
-from angee.iam.managers import ProtectedManager
-from angee.iam.models.append_only import ProtectedAppendOnlyQuerySet
-from angee.iam.permissions import actor_user_id
-from angee.iam.querysets import ProtectedQuerySet
 from angee.provenance.evidence import EvidenceReference, readable_records
 
 if TYPE_CHECKING:
@@ -41,49 +39,31 @@ class StaleExtraction(ValidationError):
     """The requested revision is no longer the lineage head."""
 
 
-class EvidenceQuerySet[EvidenceT: models.Model](ProtectedAppendOnlyQuerySet[EvidenceT], ProtectedQuerySet[EvidenceT]):
+class EvidenceQuerySet[EvidenceT: models.Model](AppendOnlyQuerySet[EvidenceT], AngeeQuerySet[EvidenceT]):
     """Close generic insertion as well as edits and deletion."""
 
     def validate_insert(self) -> None:
         raise ValueError("Extraction evidence can only be inserted by its retention owner.")
 
 
-EvidenceManager = ProtectedManager.from_queryset(EvidenceQuerySet)
-
-
-def _prepare_part_values(queryset: models.QuerySet[Any], rows: list[Any]) -> None:
-    """Load the retained structural rows for one admitted part page."""
-
-    if rows:
-        source_model = apps.get_model("extraction", "ExtractionSource")
-        file_model = apps.get_model("storage", "File")
-        sources = (
-            source_model._base_manager.db_manager(queryset.db)
-            .only("position")
-            .in_bulk({row.source_id for row in rows})
-        )
-        files = (
-            file_model._base_manager.db_manager(queryset.db)
-            .select_related("drive__backend")
-            .in_bulk({row.carrier_file_id for row in rows})
-        )
-        for row in rows:
-            row.__dict__["_part_source"] = sources[row.source_id]
-            row.__dict__["_part_carrier_file"] = files[row.carrier_file_id]
-
-
-class ExtractionPartQuerySet[PartT: models.Model](EvidenceQuerySet[PartT]):
-    """Select retained carrier facts after the part page's own admission."""
-
-    def with_part_values(self) -> Self:
-        return self.with_page_hook(_prepare_part_values)
-
-
-ExtractionPartManager = ProtectedManager.from_queryset(ExtractionPartQuerySet)
+EvidenceManager = AngeeManager.from_queryset(EvidenceQuerySet)
 
 
 class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
     """Retain evidence after actor, schema, source and identity validation."""
+
+    def prepare_pages(
+        self,
+        files: Sequence[Any],
+        message_parts: Sequence[Any],
+        *,
+        profile: Any,
+        config: ExtractionConfig,
+        actor: Any,
+        heartbeat: Any,
+    ) -> PreparedDocument:
+        """Acquire bounded carriers through the extraction domain owner."""
+        return prepare_pages(files, message_parts, profile=profile, config=config, actor=actor, heartbeat=heartbeat)
 
     @staticmethod
     def _require_target_write(target: Any, actor: Any) -> None:
@@ -91,14 +71,10 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
         if actor is None or not target.with_actor(actor).has_access("write"):
             raise PermissionDenied("Write access to the extraction target is required.")
 
-    @staticmethod
-    def _require_evidence_read(row: Any, actor: Any) -> None:
-        if actor is None or not row.with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to retained evidence and its sources is required.")
-
     def authorized_document_sources(self, extraction: Any, *, actor: Any) -> tuple[Source, ...]:
         """Authorize retained inputs before disclosing their carriers to inference."""
-        self._require_evidence_read(extraction, actor)
+        if actor is None or not (extraction).with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to retained evidence and its sources is required.")
         references = tuple(source.record_ref for source in extraction.sources.order_by("position"))
         readable_records(
             tuple(EvidenceReference(model=ref.model_label, id=ref.public_id) for ref in references),
@@ -137,11 +113,13 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
         if error_code == "":
             raise ValidationError("An empty failure code is not an outcome.")
         self._require_target_write(target, actor)
-        self._require_evidence_read(target, actor)
+        if actor is None or not (target).with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to retained evidence and its sources is required.")
         if not request_key:
             raise ValidationError("Retention requires a stable request key.")
         if base is not None:
-            self._require_evidence_read(base, actor)
+            if actor is None or not (base).with_actor(actor).has_access("read"):
+                raise PermissionDenied("Read access to retained evidence and its sources is required.")
             base.require_target(target)
             retained_sources = base.document_sources()
             if sources and [(s.file, s.message_part, s.content_hash) for s in sources] != [
@@ -189,7 +167,8 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 raise ValidationError("The source content identity differs from its retained record.")
         for candidate in (model, recognition_model):
             if candidate is not None:
-                self._require_evidence_read(candidate, actor)
+                if actor is None or not (candidate).with_actor(actor).has_access("read"):
+                    raise PermissionDenied("Read access to retained evidence and its sources is required.")
         roles = set(result.used_model_roles)
         if not roles <= set(ExtractionRole):
             raise ValidationError("Extraction reported an unsupported model role.")
@@ -251,7 +230,6 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 }
             )
         reference = RecordRef.from_instance(target)
-        # Keep the resource-type component for existing lineage identities.
         lineage_identity = canonical_json_sha256(
             {
                 "original_source": reference.public_id
@@ -261,7 +239,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 "target": {
                     "model_label": reference.model_label,
                     "object_id": str(reference.object_id),
-                    "resource_type": model_resource_type(type(target)) or "",
+                    "resource_type": reference.resource_type,
                 },
             }
         )
@@ -373,87 +351,8 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
         envelope.extend((sources, pages, parts, mapping, retirement))
         if strip_null_bytes(envelope) != envelope:
             raise ValidationError("Retained evidence cannot contain null characters.")
-        existing = self.model._base_manager.filter(reuse_key=values["reuse_key"]).first()
-        if existing is not None:
-            existing.require_request_digest(values["outcome"]["request_digest"])
-            return existing
-        created_files = []
-        verified_parts = []
-        try:
-            if base is None:
-                if part_carriers and len(part_carriers) != len(parts):
-                    raise ValidationError("Each evidence part requires its matching carrier.")
-                file_model = self.model._meta.apps.get_model("storage.File")
-                first_file_id = next((source["file_id"] for source in sources if source["file_id"]), None)
-                drive_id = str(file_model._base_manager.get(pk=first_file_id).drive.sqid) if first_file_id else ""
-                with system_context(reason="prepare authorized extraction carriers"):
-                    for position, part in enumerate(parts):
-                        if part_carriers:
-                            carrier = part_carriers[position]
-                            file = file_model._base_manager.get(sqid=carrier.file_id)
-                        else:
-                            carrier, file, created = PartCarrier.retain_with_status(
-                                DocumentPart(**part),
-                                actor=actor,
-                                drive_id=drive_id,
-                            )
-                            if created:
-                                created_files.append(file)
-                        recovered = carrier.read(file)
-                        if dict(asdict(recovered), metadata=recovered.metadata or {}) != part:
-                            raise ValidationError("The part carrier differs from the retained evidence.")
-                        verified_parts.append((file.pk, carrier.content_hash))
-            return self._retain_prepared(
-                values,
-                sources,
-                pages,
-                parts,
-                base,
-                mapping,
-                retirement,
-                verified_parts=verified_parts,
-            )
-        finally:
-            with system_context(reason="discard unused extraction acquisitions"):
-                for file in created_files:
-                    file.purge_if_unretained()
-
-    def _retain_prepared(
-        self,
-        values: dict[str, Any],
-        sources: list[dict[str, Any]],
-        pages: list[dict[str, Any]],
-        parts: list[dict[str, Any]],
-        base: Any,
-        mapping: Any,
-        retirement: Any,
-        *,
-        verified_parts: Sequence[tuple[Any, str]] = (),
-    ) -> Any:
         lineage_model = self.model._meta.apps.get_model("extraction.ExtractionLineage")
         with transaction.atomic(), system_context(reason="retain authorized extraction snapshot"):
-            if base is None:
-                registry = self.model._meta.apps
-                for source in sources:
-                    if source["file_id"] is not None:
-                        file_source = (
-                            registry.get_model("storage.File").objects.lock_if_supported().get(pk=source["file_id"])
-                        )
-                        digest = file_source.content_hash
-                    else:
-                        part_source = (
-                            registry.get_model("messaging.Part")
-                            .objects.lock_if_supported()
-                            .get(
-                                pk=source["message_part_id"],
-                            )
-                        )
-                        fragment = part_source.fragment
-                        if fragment is None:
-                            raise ValidationError("The source changed during carrier preparation.")
-                        digest = fragment.hash
-                    if str(digest) != source["content_hash"]:
-                        raise ValidationError("The source changed during carrier preparation.")
             lineage = lineage_model.objects.filter(identity=values["lineage_identity"]).first()
             if lineage is None:
                 try:
@@ -465,7 +364,8 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
             lineage = lineage_model.objects.lock_if_supported().get(pk=lineage.pk)
             existing = self.model._base_manager.filter(reuse_key=values["reuse_key"]).first()
             if existing is not None:
-                existing.require_request_digest(values["outcome"]["request_digest"])
+                if existing.outcome["request_digest"] != values["outcome"]["request_digest"]:
+                    raise ValidationError("This request key already owns different evidence.")
                 return existing
             previous = lineage.head
             if values["outcome"]["kind"] == ExtractionStatus.FAILED and (mapping or retirement):
@@ -513,25 +413,34 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 except ValidationError:
                     raise ValidationError("Extraction output does not match its retained schema.") from None
             if base is not None:
-                retained_parts = list(
-                    self.model._meta.apps.get_model("extraction", "ExtractionPart")
-                    ._default_manager.db_manager(base._state.db)
-                    .filter(extraction_id=base.pk)
-                    .order_by("position")
-                )
+                retained_parts = list(base.parts.order_by("position"))
                 if len(retained_parts) != len(parts):
                     raise ValidationError("The retained base has different evidence parts.")
                 for part, retained in zip(parts, retained_parts, strict=True):
                     part["carrier_file_id"] = retained.carrier_file_id
                     part["carrier_digest"] = retained.carrier_digest
             else:
+                if part_carriers and len(part_carriers) != len(parts):
+                    raise ValidationError("Each evidence part requires its matching carrier.")
                 file_model = self.model._meta.apps.get_model("storage.File")
-                for part, (file_pk, digest) in zip(parts, verified_parts, strict=True):
-                    file = file_model._base_manager.select_for_update().get(pk=file_pk)
-                    if str(file.content_hash) != digest or file.is_trashed or str(file.upload_state) != "ready":
-                        raise ValidationError("The prepared part carrier changed before retention.")
+                first_file_id = next((source["file_id"] for source in sources if source["file_id"]), None)
+                drive_id = (
+                    str(file_model._base_manager.select_related("drive").get(pk=first_file_id).drive.sqid)
+                    if first_file_id
+                    else ""
+                )
+                for position, part in enumerate(parts):
+                    carrier = (
+                        part_carriers[position]
+                        if part_carriers
+                        else PartCarrier.retain(DocumentPart(**part), actor=actor, drive_id=drive_id)
+                    )
+                    file = file_model._base_manager.get(sqid=carrier.file_id)
+                    recovered = carrier.read(file)
+                    if dict(asdict(recovered), metadata=recovered.metadata or {}) != part:
+                        raise ValidationError("The part carrier differs from the retained evidence.")
                     part["carrier_file_id"] = file.pk
-                    part["carrier_digest"] = digest
+                    part["carrier_digest"] = carrier.content_hash
             values["lineage"] = lineage
             values.pop("lineage_identity", None)
             extraction = self.model(
@@ -572,9 +481,6 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
             claims=result.claims,
             document=result.provider_metadata,
             unresolved_reasons=list((result.provider_metadata or {}).get("unresolved_reasons", ())),
-            corrections=authority.retained_corrections(
-                result.value, identity_mapping=mapping, retired_identities=retirement
-            ),
         )
 
     def _retain_children(
@@ -603,11 +509,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                     "provider_metadata": row.provider_metadata,
                     "carrier_file_id": row.carrier_file_id,
                 }
-                for row in registry.get_model("extraction", "ExtractionPage")
-                ._default_manager.db_manager(base._state.db)
-                .filter(extraction_id=base.pk)
-                .select_related("source")
-                .order_by("position")
+                for row in base.pages.order_by("position")
             ]
         for name, rows in (("ExtractionPage", pages), ("ExtractionPart", parts)):
             child_model = registry.get_model("extraction", name)
@@ -678,12 +580,14 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
 
     def inference_current_head(self, base: Any, *, actor: Any) -> Any:
         """Return this lineage's current actor-readable evidence contract."""
-        self._require_evidence_read(base, actor)
+        if actor is None or not (base).with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to retained evidence and its sources is required.")
         with system_context(reason="resolve extraction lineage head"):
             head = self.model._meta.apps.get_model("extraction.ExtractionLineage").objects.get(pk=base.lineage_id).head
         if head is None or head.schema_digest != base.schema_digest:
             raise ValidationError("The current evidence contract differs from the base.")
-        self._require_evidence_read(head, actor)
+        if actor is None or not (head).with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to retained evidence and its sources is required.")
         return head
 
     def reused_inference(self, base: Any, request_key: str, *, actor: Any) -> Any | None:
@@ -700,9 +604,11 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
 
     def latest_succeeded_identity_authority(self, head: Any, *, actor: Any) -> Any:
         """Resolve the last successful identity authority within one lineage."""
-        self._require_evidence_read(head, actor)
+        if actor is None or not (head).with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to retained evidence and its sources is required.")
         row = self._successful_identity_authority(head)
-        self._require_evidence_read(row, actor)
+        if actor is None or not (row).with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to retained evidence and its sources is required.")
         return row
 
     def _successful_identity_authority(self, head: Extraction) -> ExtractionT:
@@ -721,7 +627,8 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
     def inference_authority_base(self, base: Any, *, actor: Any) -> Any:
         """Resolve a successful base or the successful authority of its source hold."""
         if base.outcome["kind"] == ExtractionStatus.SUCCEEDED:
-            self._require_evidence_read(base, actor)
+            if actor is None or not (base).with_actor(actor).has_access("read"):
+                raise PermissionDenied("Read access to retained evidence and its sources is required.")
             return base
         return self.latest_succeeded_identity_authority(base, actor=actor)
 

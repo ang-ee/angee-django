@@ -1,20 +1,15 @@
 """Public inbox reads, filters, and the one verdict mutation."""
 
-from types import SimpleNamespace
-
 import pytest
-from django.core.exceptions import PermissionDenied
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
-from rebac.backends.local import LocalBackend
 
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.iam.graphql.actions import authorized_permission_target
-from angee.iam.permissions import PermissionProof, prove_target
-from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import addon_schema, create_user, vault_for
 
 
 @pytest.fixture
@@ -77,101 +72,6 @@ def test_public_mutation_records_only_chosen_keys_and_audit(inbox):
     assert row["is_open"] is False and row["verdict"] == ["accept"] and row["answered_at"]
 
 
-def test_public_decide_proves_act_once(inbox, monkeypatch):
-    _, reviewer, _, _, decision = inbox
-    schema = addon_schema(decision_schema.schemas, "console")
-    scope = LocalBackend.queryset_filter
-    point = LocalBackend.check_access
-    validate_verdict = Decision.validate_verdict
-    proofs = []
-    bound_actors = []
-
-    def scoped(self, **kwargs):
-        if kwargs["action"] == "act":
-            proofs.append("scope")
-        return scope(self, **kwargs)
-
-    def checked(self, **kwargs):
-        if kwargs["action"] == "act":
-            proofs.append("point")
-        return point(self, **kwargs)
-
-    def validated(self, chosen, *, actor):
-        bound_actors.append(self.actor())
-        return validate_verdict(self, chosen, actor=actor)
-
-    monkeypatch.setattr(LocalBackend, "queryset_filter", scoped)
-    monkeypatch.setattr(LocalBackend, "check_access", checked)
-    monkeypatch.setattr(Decision, "validate_verdict", validated)
-    result = result_data(
-        execute_schema(
-            schema,
-            """mutation($id: ID!, $revision: Int!) {
-              decide(id: $id, revision: $revision, chosen: ["accept"]) { ok }
-            }""",
-            {"id": decision.sqid, "revision": decision.revision},
-            user=reviewer,
-        )
-    )
-    assert result["decide"]["ok"]
-    assert proofs == ["scope"]
-    assert bound_actors == [to_subject_ref(reviewer)]
-
-
-def test_decide_rejects_unissued_and_mismatched_proofs(inbox):
-    requester, reviewer, outsider, subject, first = inbox
-    second = Decision.objects.ask(
-        DecisionRequest(
-            kind="review_note",
-            records=(subject,),
-            assignees=(reviewer,),
-            requester=requester,
-            proposal=DecisionProposal.model_validate(first.proposal),
-        ),
-        actor=requester,
-    )
-    info = SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace(user=reviewer)))
-    target, proof = authorized_permission_target(info, Decision, first.sqid, "act", with_proof=True)
-    assert prove_target(Decision, first.sqid, requester, "act") == (None, None)
-
-    with pytest.raises(PermissionDenied):
-        PermissionProof(target, to_subject_ref(outsider), "act")
-    forged = object.__new__(PermissionProof)
-    object.__setattr__(forged, "target", target)
-    object.__setattr__(forged, "actor", to_subject_ref(outsider))
-    object.__setattr__(forged, "permission", "act")
-    with pytest.raises(PermissionDenied):
-        target.decide(actor=outsider, chosen=["accept"], act_proof=forged)
-
-    with pytest.raises(PermissionDenied):
-        second.decide(actor=reviewer, chosen=["accept"], act_proof=proof)
-    with pytest.raises(PermissionDenied):
-        target.decide(actor=outsider, chosen=["accept"], act_proof=proof)
-    read_target, read_proof = authorized_permission_target(info, Decision, first.sqid, "read", with_proof=True)
-    with pytest.raises(PermissionDenied):
-        read_target.decide(actor=reviewer, chosen=["accept"], act_proof=read_proof)
-
-    original_pk = target.pk
-    target.pk = second.pk
-    try:
-        with pytest.raises(PermissionDenied):
-            target.decide(actor=reviewer, chosen=["accept"], act_proof=proof)
-    finally:
-        target.pk = original_pk
-
-    original_db = target._state.db
-    target._state.db = "other"
-    assert not proof.matches(target, reviewer, "act")
-    target._state.db = None
-    try:
-        with pytest.raises(PermissionDenied):
-            target.decide(actor=reviewer, chosen=["accept"], act_proof=proof)
-    finally:
-        target._state.db = original_db
-
-    assert Decision.system_queryset().filter(pk__in=(first.pk, second.pk), verdict__isnull=True).count() == 2
-
-
 def test_decide_returns_one_optimized_reader_projection(inbox):
     requester, reviewer, _, subject, first = inbox
     second = Decision.objects.ask(DecisionRequest(
@@ -205,7 +105,7 @@ def test_decide_returns_one_optimized_reader_projection(inbox):
 
 def test_record_answer_history_returns_only_answered_decisions_for_the_readable_record(inbox):
     requester, reviewer, _, subject, answered = inbox
-    answered.decide(actor=reviewer, chosen=["accept"])
+    Decision.objects.decide(answered, actor=reviewer, chosen=["accept"])
     open_question = Decision.objects.ask(
         DecisionRequest(
             kind="second_review",

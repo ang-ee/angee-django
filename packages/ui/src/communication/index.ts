@@ -8,10 +8,9 @@ export {
   type TimelineRailKind,
   type TimelineRailProps,
 } from "./TimelineRail";
-export { PaneLabel, PaneLabelAction, PaneLabelPopover, PaneRow, PaneRows, ScopeChip, type PaneLabelProps, type PaneRowProps, type ScopeChipProps } from "./pane-list";
+export { PaneLabel, PaneLabelAction, PaneLabelPopover, PaneRow, PaneRows, PaneRowsSkeleton, ScopeChip, type PaneLabelProps, type PaneRowProps, type PaneRowsSkeletonProps, type ScopeChipProps } from "./pane-list";
 export { CHATTER_CONTAINERS, RELATED_GROUPS_CONTAINER, RELATED_TAB_ID } from "./chatter-containers";
 export { RelatedPane, RelatedCountProbe, useRelatedGroups } from "./RelatedPane";
-export { relatedCount } from "./related-count";
 export {
   ChatterProvider,
   CHATTER_TAB_SEARCH_KEY,

@@ -25,7 +25,6 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
   filter,
   textSearchField,
   textSearchFields,
-  defaultExpandedGroups = "all",
 }: {
   rows: readonly TRow[];
   query?: ResourceQuery;
@@ -38,13 +37,9 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
   filter?: ResourceViewFilter;
   textSearchField?: string;
   textSearchFields?: readonly string[];
-  /** The grouped surface's default: root groups open (`all`) or closed (`none`). */
-  defaultExpandedGroups?: "all" | "none";
 }): FlatResourceViewPresentationSurface<TRow> & { mergedFilter: QueryFilter } {
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
-  const [expanded, setExpanded] = React.useState<ExpandedState>(
-    defaultExpandedGroups === "none" ? {} : true,
-  );
+  const [expanded, setExpanded] = React.useState<ExpandedState>({});
   const tableState = useResourceViewTableState({
     columns,
     resourceView,
@@ -113,10 +108,10 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
     // re-render storm (grouped rows + opening the filter popover) keeps it fed.
     autoResetPageIndex: false,
     autoResetExpanded: false,
-    // A page is `pageSize` top-level rows — records flat, root groups grouped, each group
-    // carrying its expanded records inside its page — so the page count, the pager's total
-    // (`table.getRowCount()`) and the rows on the page agree; the server grouped surface
-    // pages its root groups the same way.
+    // A page is `pageSize` top-level rows (records flat, root groups grouped, each open
+    // group carrying its records inside its page), so the page count, the pager's total
+    // (`table.getRowCount()`) and the rows on the page agree, as on the server grouped
+    // surface. The owning surface clamps the page once its read settles.
     paginateExpandedRows: false,
   });
   return {

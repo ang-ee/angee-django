@@ -19,14 +19,6 @@ class MCPConfig(AppConfig):
     default = True
     name = "angee.mcp"
 
-    def compose_asgi(self):
-        """Contribute FastMCP's mount and native lifespan as one capability."""
-
-        from angee.mcp.asgi import http_mounts, lifespans
-        from angee.server.asgi import AsgiContribution
-
-        return AsgiContribution(http_mounts=dict(http_mounts()), lifespans=tuple(lifespans()))
-
     def ready(self) -> None:
         """Register the console-resource tool compiler as a Django system check."""
 

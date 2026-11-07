@@ -9,28 +9,24 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
-from django.db.models import Prefetch
 from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.decisions.schema import DecisionType
-from angee.graphql.actions import ActionResult, action_guard
-from angee.graphql.data.hasura import SortAlias, hasura_model_resource, public_pk_decoder
+from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
+from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
-from angee.iam.graphql.actions import authorized_permission_target, session_user
-from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
-from angee.iam.graphql.inputs import AuthorizedInputReference
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import actor_scoped_to_one
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.intake.choices import NeedAccessAction
-from angee.intake.querysets import filer_name_expression, task_requester_name, task_requester_rows
+from angee.intake.models import task_requester_name, task_requester_rows
 from angee.messaging.schema import ChannelType, MessageType
-from angee.parties.schema import PartyIdentity, PartyType
+from angee.parties.schema import PartyType
 from angee.projects.schema import ProjectType, TaskType
 from angee.work.schema import WorkQueueType
 
@@ -53,7 +49,7 @@ class ProjectIntakeSetupInput:
     """Assign the Need's party through the shared setup input."""
 
     party: PublicID | None = strawberry.field(
-        default=None, metadata={InputReference: AuthorizedInputReference("parties.Party")},
+        default=None, metadata={InputReference: InputReference("parties.Party")},
     )
 
 
@@ -66,7 +62,7 @@ class NeedTargetInput:
 
 
 @strawberry_django.type(Need)
-class NeedType(ProtectedNode):
+class NeedType(AngeeNode):
     """GraphQL projection of one external-request evidence row."""
 
     importance: auto
@@ -98,29 +94,7 @@ class NeedType(ProtectedNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(
-        only=["party_id", "task_id"],
-        prefetch_related=[
-            lambda info: Prefetch(
-                "party",
-                queryset=Party.objects.sudo(reason="intake.admitted_need").with_display_avatars(session_user(info)),
-                to_attr="_need_party",
-            ),
-        ],
-    )
-    def party(self, info: strawberry.Info) -> PartyIdentity | None:
-        """Project a task-filed Need's requester; keep project-filed visibility unchanged."""
-
-        need = cast(Any, self)
-        if need.party_id is None:
-            return None
-        if need.task_id is None:
-            party = Party.objects.with_actor(session_user(info)).filter(pk=need.party_id).first()
-        else:
-            party = getattr(need, "_need_party", None)
-            if party is None:
-                party = Party._base_manager.filter(pk=need.party_id).first()
-        return PartyIdentity(party=party) if party is not None else None
+    party: PartyType | None = actor_scoped_to_one("party")
     task: TaskType | None = actor_scoped_to_one("task")
     project: ProjectType | None = actor_scoped_to_one("project")
     source_message: MessageType | None = actor_scoped_to_one("source_message")
@@ -181,7 +155,6 @@ class ConsoleTaskIntakeExtension(TaskIntakeFields):
 class ChannelIntakeExtension:
     """Contribute intake configuration onto messaging's channel node."""
 
-    intake_trigger: auto
     intake_field_map: auto
     intake_requester_domains: auto
     intake_queue: WorkQueueType | None = actor_scoped_to_one("intake_queue")
@@ -296,7 +269,6 @@ _NEED_RESOURCE = hasura_model_resource(
     NeedType,
     model=Need,
     name="intake_needs",
-    identity_policies={"PartyIdentity": "id"},
     filterable=[
         "id",
         "party",
@@ -316,9 +288,7 @@ _NEED_RESOURCE = hasura_model_resource(
         "importance",
         "created_at",
         "updated_at",
-        "filer_name",
     ],
-    sortable_aliases={"filer_name": SortAlias("_filer_name", lambda _info, queryset: filer_name_expression(queryset))},
     aggregatable=["id"],
     groupable=["party", "task", "project", "importance"],
     insertable=["party", "task", "project", "importance", "body"],
@@ -330,7 +300,7 @@ _NEED_RESOURCE = hasura_model_resource(
         "project": public_pk_decoder(Project),
         "source_message": public_pk_decoder(Message),
     },
-    write_backend=ProtectedHasuraWriteBackend(
+    write_backend=AngeeHasuraWriteBackend(
         Need,
         public_id_fields=("party", "task", "project"),
     ),

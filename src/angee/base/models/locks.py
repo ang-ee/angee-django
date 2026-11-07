@@ -10,14 +10,19 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import DatabaseError, models, router, transaction
 from django.db.models import F
-from django_compose.models import Composable
+from rebac import (
+    RebacMixin,
+    system_context,
+)
+from rebac.actors import is_sudo
+from rebac.managers import RebacQuerySet
 
 from angee.base.exceptions import DomainError
 from angee.base.models.persistence import PersistenceMixin
-from angee.base.querysets import AngeeQuerySet, by_key
+from angee.base.querysets import AngeeUnscopedQuerySet, by_key
 
 
-class ImmutableFieldsMixin(PersistenceMixin):
+class ImmutableFieldsMixin(models.Model):
     """Reject changes to loaded immutable attnames declared anywhere in the MRO.
 
     Donors contribute plain tuples. An owning verb permits its next write through
@@ -39,38 +44,28 @@ class ImmutableFieldsMixin(PersistenceMixin):
         self._allowed_immutable_fields = allowed
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Compare immutable facts and save on the same selected native write database."""
+        """Persist after comparing immutable facts with the committed row."""
 
         allowed = set(getattr(self, "_allowed_immutable_fields", set()))
         try:
-            using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-            kwargs["using"] = using
             if self.pk is not None and not self._state.adding:
                 declared = dict.fromkeys(
                     name for base in type(self).__mro__ for name in base.__dict__.get("immutable_fields", ())
                 )
-                written = kwargs.get("update_fields")
-                checked = tuple(
-                    name for name in declared
-                    if name not in allowed and name in self.__dict__
-                    and (written is None or bool({name, name.removesuffix("_id")}.intersection(written)))
-                )
+                checked = tuple(name for name in declared if name not in allowed and name in self.__dict__)
                 if checked:
                     # Compare committed identities without loading unrelated deferred columns.
-                    persisted = PersistenceMixin.persisted_for_save(cast(Any, self), using=using)
+                    with system_context(reason=f"{self._meta.label_lower}.immutable_fields"):
+                        persisted = type(self)._base_manager.filter(pk=self.pk).values(*checked).first()
                     if persisted is not None:
-                        changed = [name for name in checked if getattr(persisted, name) != getattr(self, name)]
+                        changed = [name for name in checked if persisted[name] != getattr(self, name)]
                         if changed:
                             raise ValidationError(
-                                {
-                                    name.removesuffix("_id"): "This identity or receipt is immutable."
-                                    for name in changed
-                                }
+                                {name.removesuffix("_id"): "This identity or receipt is immutable." for name in changed}
                             )
             super().save(*args, **kwargs)
         finally:
             self._allowed_immutable_fields = set()
-            self.__dict__.pop("_persisted_save_snapshot", None)
 
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -80,11 +75,7 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
     """Apply the row owner's invariant to native collection persistence."""
 
     def _lock_bypassed(self) -> bool:
-        return False
-
-    def row_lock_write_scope(self) -> Self:
-        """Return this Django collection; a protection donor supplies write scoping."""
-        return self
+        return self.effective_actor(strict=True)[1] if isinstance(self, RebacQuerySet) else is_sudo()
 
     def update(self, **kwargs: Any) -> int:
         """Validate prospective values, including native SQL expressions, under row locks."""
@@ -94,7 +85,7 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
         rows = self.select_for_update()
         alias = rows.db
         with transaction.atomic(using=alias):
-            rows = rows.row_lock_write_scope()
+            rows = rows.with_action("write").scoped() if isinstance(rows, RebacQuerySet) else rows
             fields: dict[str, models.Field[Any, Any]] = {}
             for name in kwargs:
                 field = self.model._meta.get_field(name)
@@ -152,11 +143,11 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
         )
 
 
-class RowLockQuerySet(_RowLockWritesQuerySet[_ModelT]):
+class RowLockQuerySet(_RowLockWritesQuerySet[_ModelT], RebacQuerySet[_ModelT]):
     """Compose before an Angee queryset for models with system-owned rows."""
 
 
-class _RowLockBaseQuerySet(_RowLockWritesQuerySet[_ModelT], AngeeQuerySet[_ModelT]):
+class _RowLockBaseQuerySet(_RowLockWritesQuerySet[_ModelT], AngeeUnscopedQuerySet[_ModelT]):
     """Keep the same invariant on native unfiltered manager writes."""
 
 
@@ -167,7 +158,7 @@ def refuse_locked_row_delete(sender: Any, instance: RowLockMixin, origin: Any, *
     """Apply the row's declared direct/cascade delete policy in Django's collector."""
 
     del sender, kwargs
-    elevated = instance.row_lock_delete_bypassed(origin)
+    elevated = origin.effective_actor(strict=True)[1] if isinstance(origin, (RebacQuerySet, RebacMixin)) else is_sudo()
     if elevated:
         return
     if instance.row_lock_cascade_parent:
@@ -183,7 +174,7 @@ def refuse_locked_row_delete(sender: Any, instance: RowLockMixin, origin: Any, *
     instance.validate_row_delete()
 
 
-class RowLockMixin(Composable):
+class RowLockMixin(models.Model):
     """Lock a row's system-owned fields against user writes.
 
     :meth:`locked_fields` names the fields a row's own loaded state locks; a row
@@ -206,8 +197,6 @@ class RowLockMixin(Composable):
 
     locked_rows_label: ClassVar[str | None] = None
     """Plural phrase naming the system rows in refusals; defaults to ``System <plural>``."""
-    row_lock_snapshot_fields: ClassVar[tuple[str, ...] | None] = None
-    """Columns deriving and comparing locks; None preserves a full snapshot."""
 
     class Meta:
         """Django options for the shared system-row lock."""
@@ -276,35 +265,27 @@ class RowLockMixin(Composable):
     def _row_lock_bypassed(self) -> bool:
         """Use native instance authority, including pinned actor precedence."""
 
-        return False
-
-    def row_lock_delete_bypassed(self, origin: Any) -> bool:
-        """Neutral Django deletions enforce the row's declared lock."""
-        return False
+        return self.effective_actor()[1] if isinstance(self, RebacMixin) else is_sudo()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Check a user write against the committed row's lock before persisting it."""
 
-        try:
-            if not self._row_lock_bypassed():
-                persisted = None
-                using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-                if self.pk is not None and not self._state.adding:
-                    persisted = cast(PersistenceMixin, self).persisted_for_save(using=using)
-                self.validate_row_lock(None if persisted is None else cast(Any, persisted).row_lock())
-            super().save(*args, **kwargs)
-        finally:
-            self.__dict__.pop("_persisted_save_snapshot", None)
+        if not self._row_lock_bypassed():
+            persisted = None
+            using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+            if self.pk is not None and not self._state.adding:
+                with system_context(reason=f"{self._meta.label_lower}.row_lock"):
+                    persisted = type(self)._base_manager.using(using).filter(pk=self.pk).first()
+            self.validate_row_lock(None if persisted is None else persisted.row_lock())
+        super().save(*args, **kwargs)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Refuse a user deleting a committed system row."""
 
         if not self._row_lock_bypassed():
-            using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-            rows = type(self)._base_manager.using(using).filter(pk=self.pk)
-            if self.row_lock_snapshot_fields is not None:
-                rows = rows.only(*self.row_lock_snapshot_fields)
-            persisted = rows.first()
+            with system_context(reason=f"{self._meta.label_lower}.row_lock"):
+                using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+                persisted = type(self)._base_manager.using(using).filter(pk=self.pk).first()
             (persisted or self).validate_row_delete()
         return cast(tuple[int, dict[str, int]], super().delete(*args, **kwargs))
 

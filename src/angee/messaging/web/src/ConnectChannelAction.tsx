@@ -105,7 +105,6 @@ function MutationConnectChannelAction<
 ): React.ReactElement {
   const [connect] = useAuthoredMutation(props.document, {
     invalidateModels: [CHANNEL_MODEL],
-    transient: true,
   });
   return (
     <ConnectChannelDialog

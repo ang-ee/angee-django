@@ -58,11 +58,27 @@ class Command(BaseCommand):
             if options["dry_run"]:
                 return
             chunk_size = max(1, int(options["chunk_size"]))
-            purged = stale_drafts.purge(chunk_size=chunk_size, on_error=self._report_purge_failure)
-            purged += expired_trash.purge(chunk_size=chunk_size, on_error=self._report_purge_failure)
+            purged = self._purge(stale_drafts, chunk_size=chunk_size)
+            purged += self._purge(expired_trash, chunk_size=chunk_size)
         self.stdout.write(f"storage_prune: purged={purged}")
 
-    def _report_purge_failure(self, pk: Any, error: Exception) -> None:
-        """Render an individual failure reported by the selected-set owner."""
+    def _purge(self, queryset: Any, *, chunk_size: int) -> int:
+        """Purge every row still matching ``queryset`` and return the count.
 
-        self.stderr.write(f"storage_prune: purge failed for pk={pk}: {error}")
+        Each row is re-fetched against the queryset predicate immediately
+        before purging, so a row that flipped state (e.g. finalized or
+        restored) after the pass started is left alone.
+        """
+
+        purged = 0
+        for pk in queryset.values_list("pk", flat=True).iterator(chunk_size=chunk_size):
+            row = queryset.filter(pk=pk).first()
+            if row is None:
+                continue
+            try:
+                row.purge()
+            except Exception as error:
+                self.stderr.write(f"storage_prune: purge failed for pk={pk}: {error}")
+                continue
+            purged += 1
+        return purged

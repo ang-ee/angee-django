@@ -7,25 +7,25 @@ import { AppRuntimeProvider, ChatterProvider, RecordChromeProvider, RecordFieldM
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-const response = vi.hoisted(() => ({ changesetId: "chg_9" as string | null, reads: 0 }));
+const response = vi.hoisted(() => ({ changesetId: "chg_9" as string | null }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/refine")>(),
-  useAuthoredQuery: () => { response.reads += 1; return { data: { field_provenance: [{
+  useAuthoredQuery: () => ({ data: { field_provenance: [{
     field: "reference", authority: "SOURCE", origin: "Imported source",
     changeset_id: response.changesetId,
     statement_model: "example.DocumentStatement", statement_id: "stmt_9",
-  }] } }; },
+  }] } }),
 }));
 vi.mock("./documents.console", () => ({ FieldProvenanceDocument: {} }));
 
-import { FieldProvenanceChrome } from "./FieldProvenanceMarks";
+import { FieldProvenanceMarks } from "./FieldProvenanceMarks";
 
 const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://field-provenance",
   resources: [testDataResource("example.Document")],
 });
 
-beforeEach(() => { response.changesetId = "chg_9"; response.reads = 0; });
+beforeEach(() => { response.changesetId = "chg_9"; });
 afterEach(() => { cleanup(); clearClients(); vi.restoreAllMocks(); });
 
 function PaneState() {
@@ -33,19 +33,19 @@ function PaneState() {
   return <output>{activeTab}:{collapsed ? "collapsed" : "expanded"}</output>;
 }
 
-function renderMarks(history = true, fieldProvenance = true, model = "example.Document") {
+function renderMarks(history = true) {
   const root = createRootRoute();
   const route = createRoute({
     getParentRoute: () => root,
     path: "/records/$id",
-    component: () => <Provider resources={[testDataResource(model, { history, fieldProvenance })]}><AppRuntimeProvider runtime={{}}>
+    component: () => <Provider resources={[testDataResource("example.Document", { history })]}><AppRuntimeProvider runtime={{}}>
       <ChatterProvider defaultCollapsed defaultTab="timeline">
         <RecordChromeProvider value={{
-          resource: model, canonicalResource: model, dataProviderName: "console",
+          resource: "example.Document", canonicalResource: "example.Document", dataProviderName: "console",
           recordId: "doc_7", record: { id: "doc_7" }, formReadOnly: true,
         }}>
           <RecordFieldMarksProvider>
-            <FieldProvenanceChrome />
+            <FieldProvenanceMarks />
             <RecordFieldMarkControl field="reference" label="Reference" />
             <PaneState />
           </RecordFieldMarksProvider>
@@ -87,21 +87,12 @@ test("a historical statement without a changeset retains its source tooltip with
 });
 
 test("a statement subject without native history keeps its origin without opening a missing pane", async () => {
-  const router = renderMarks(false, true);
+  const router = renderMarks(false);
   const mark = await screen.findByLabelText("Source: Reference");
   expect(screen.queryByRole("button", { name: "Source: Reference" })).toBeNull();
   const trigger = mark.parentElement!;
   expect(trigger.tabIndex).toBe(0);
   fireEvent.focus(trigger);
   expect(await screen.findByText("Imported source")).toBeTruthy();
-  expect(router.state.location.search).not.toHaveProperty("chatterTab");
-  expect(response.reads).toBeGreaterThan(0);
-});
-
-test("Message declares no field statements and does not mount provenance", async () => {
-  const router = renderMarks(false, false, "messaging.Message");
-  await waitFor(() => expect(screen.getByText("timeline:collapsed")).toBeTruthy());
-  expect(screen.queryByLabelText("Source: Reference")).toBeNull();
-  expect(response.reads).toBe(0);
   expect(router.state.location.search).not.toHaveProperty("chatterTab");
 });

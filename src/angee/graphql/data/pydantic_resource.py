@@ -10,22 +10,21 @@ through the same ``useList`` path as a model resource — no bespoke client path
 
 from __future__ import annotations
 
-import types as _types
+import datetime
+import enum
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-import strawberry
 import strawberry.experimental.pydantic
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.utils import timezone
 from pydantic import BaseModel
-from strawberry.scalars import JSON
-from strawberry.types import get_object_definition
-from strawberry.types.field import StrawberryField
-from strawberry_django.resolvers import django_resolver
-from strawberry_django_aggregates import AggregateBuilder, compute_row_aggregation, group_by_alias
-from strawberry_django_aggregates.granularity import NumberGranularity
+from strawberry_django_aggregates import group_by_alias, group_by_range_alias
+from strawberry_django_aggregates.granularity import TimeGranularity
 from strawberry_django_hasura import (
+    GroupFieldBatch,
     HasuraResource,
     InMemoryRowSource,
     RowSource,
@@ -33,13 +32,12 @@ from strawberry_django_hasura import (
 )
 
 from angee.graphql.data.contracts import DataAggregateMeasureMetadata
-from angee.graphql.data.hasura import grouped_rows_page_result_type, hasura_query_axes
+from angee.graphql.data.hasura import group_rows_field, hasura_query_axes
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
     attach_data_resource_contribution,
 )
-from graphql import GraphQLEnumType, GraphQLObjectType, GraphQLScalarType, get_named_type
 
 
 def pydantic_node(row_model: type[BaseModel], *, name: str, include_computed: bool = False) -> type:
@@ -54,103 +52,6 @@ def pydantic_node(row_model: type[BaseModel], *, name: str, include_computed: bo
     return strawberry.experimental.pydantic.type(
         model=row_model, all_fields=True, name=name, include_computed=include_computed
     )(type(name, (), {"__annotations__": {}}))
-
-
-def _attach_grouped_rows(
-    resource: HasuraResource,
-    *,
-    node: type,
-    source: RowSource,
-    groupable: Sequence[str],
-) -> None:
-    """Page computed buckets using the source and the native group key codec."""
-
-    assert resource.name is not None
-    assert resource.row_model is not None
-    assert resource.group_key_type is not None
-    assert resource.group_by_spec_type is not None
-    assert resource.filter_type is not None
-    assert resource.order_by_type is not None
-    page_type = strawberry.input(
-        type(
-            f"{resource.name}_grouped_rows_page",
-            (),
-            {"__annotations__": {"key": JSON | None, "limit": int, "offset": int}, "offset": 0},
-        ),
-        name=f"{resource.name}_grouped_rows_page",
-    )
-    resource.types.append(page_type)
-    result_type = grouped_rows_page_result_type(resource.name, node)
-    resource.types.append(result_type)
-    builder = AggregateBuilder(
-        model=resource.row_model,
-        name_prefix=resource.name,
-        aggregate_fields=[],
-        group_by_fields=list(groupable),
-    )
-
-    def resolve_grouped_rows(
-        self: Any,
-        info: strawberry.Info,
-        group_by: Any,
-        pages: list[Any],
-        where: Any = None,
-        order_by: Any = None,
-    ) -> list[Any]:
-        del self
-        if len(pages) > 50:
-            raise ValueError("A grouped row read accepts at most 50 visible groups.")
-        if not pages:
-            return []
-        spec = builder.translate_group_by([group_by])
-        path, granularity = spec[0]
-        if path not in groupable:
-            raise ValueError(f"Unsupported grouped row key {path!r}.")
-        if isinstance(granularity, NumberGranularity):
-            raise ValueError("Grouped row pages require a date bucket, not a numeric date part.")
-        alias = group_by_alias(path, granularity)
-        key_type = info.schema._schema.get_type(get_object_definition(resource.group_key_type, strict=True).name)
-        assert isinstance(key_type, GraphQLObjectType)
-        scalar = get_named_type(key_type.fields[alias].type)
-        assert isinstance(scalar, (GraphQLScalarType, GraphQLEnumType))
-        keys: list[Any] = []
-        for page in pages:
-            if page.limit < 0 or page.offset < 0:
-                raise ValueError("Grouped row limit and offset must be nonnegative.")
-            key = scalar.parse_value(page.key) if page.key is not None else None
-            if key in keys:
-                raise ValueError("A grouped row read accepts each key once.")
-            keys.append(key)
-        matching: list[list[Any]] = [[] for _ in pages]
-        rows = source.query(info, where=where, order_by=order_by, limit=None, offset=None)
-        for row in rows:
-            [bucket] = compute_row_aggregation((row,), model=resource.row_model, group_by=spec)
-            group_key = builder.shape_group_key(resource.group_key_type, bucket, spec)
-            value = getattr(group_key, alias)
-            key = scalar.parse_value(scalar.serialize(value)) if value is not None else None
-            for index, page_key in enumerate(keys):
-                if key == page_key:
-                    matching[index].append(row)
-                    break
-        return [
-            result_type(key=page.key, rows=matched[page.offset : page.offset + page.limit])
-            for page, matched in zip(pages, matching, strict=True)
-        ]
-
-    resolve_grouped_rows.__annotations__ = {
-        "self": Any,
-        "info": strawberry.Info,
-        "group_by": cast(Any, resource.group_by_spec_type),
-        "pages": _types.GenericAlias(list, (page_type,)),
-        "where": resource.filter_type | None,
-        "order_by": _types.GenericAlias(list, (resource.order_by_type,)) | None,
-        "return": _types.GenericAlias(list, (result_type,)),
-    }
-    root = f"{resource.name}_grouped_rows"
-    resolve_grouped_rows.__name__ = root
-    field = cast(StrawberryField, strawberry.field(resolver=django_resolver(resolve_grouped_rows), name=root))
-    field.python_name = root
-    get_object_definition(resource.query, strict=True).fields.append(field)
 
 
 def hasura_pydantic_resource(
@@ -178,8 +79,8 @@ def hasura_pydantic_resource(
     every matching row when grouping asks for ``limit=None``.
 
     ``groupable`` names scalar row columns exposed through the library's
-    ``<name>_groups`` roots and the grouped-row page root. Their group axes
-    are read from the library's ``HasuraResource.row_model``.
+    ``<name>_groups`` roots; their group axes are read from the library's
+    ``HasuraResource.row_model``, as the model path reads its Django model.
 
     The attached ``DataResourceMetadata`` carries ``roots.list`` so the frontend
     treats the resource as Hasura-backed and drives it through ``useList``.
@@ -188,7 +89,8 @@ def hasura_pydantic_resource(
     if source is None:
         if rows is None:
             raise TypeError("hasura_pydantic_resource requires rows= or source=")
-        source = InMemoryRowSource(rows, id_field=id_field)
+        source = InMemoryRowSource(rows)
+    row_source: RowSource = source
     node = pydantic_node(row_model, name=node_name or row_model.__name__)
     resource = hasura_run_query_resource(
         node,
@@ -198,9 +100,11 @@ def hasura_pydantic_resource(
         groupable=list(groupable),
         source=source,
         id_field=id_field,
+        group_fields=(
+            {"rows": group_rows_field(node, lambda batch, limit: _row_group_pages(row_source, batch, limit))}
+            if groupable else None
+        ),
     )
-    if groupable:
-        _attach_grouped_rows(resource, node=node, source=source, groupable=groupable)
     if resource.detail_root is None:
         raise ImproperlyConfigured(f"{model_label or name} Hasura resource did not expose a detail root.")
     attach_data_resource_contribution(
@@ -233,3 +137,43 @@ def hasura_pydantic_resource(
     # bundle's types so a schema bucket carries it explicitly (mirrors the
     # model path, where the addon registers the node type).
     return replace(resource, types=[node, *resource.types])
+
+
+def _row_group_pages(source: RowSource, batch: GroupFieldBatch, limit: int) -> list[list[Any]]:
+    """Each group's first page over the source's filtered, ordered rows, partitioned in memory.
+
+    A row belongs to the group whose key it matches on every dimension, as the
+    library's in-memory grouping assigned it; a time bucket matches its range.
+    """
+
+    order_by = batch.arguments.get("order_by")
+    rows = source.query(batch.info, where=batch.where, order_by=order_by, limit=None, offset=None)
+    pages: list[list[Any]] = [[] for _ in batch.groups]
+    for row in rows:
+        for index, group in enumerate(batch.groups):
+            if all(_in_bucket(row, group.key, path, granularity) for path, granularity in batch.group_by):
+                if len(pages[index]) < limit:
+                    pages[index].append(row)
+                break
+    return pages
+
+
+def _in_bucket(row: Any, key: Any, path: str, granularity: Any) -> bool:
+    """Match one row to one group on one translated ``(path, granularity)`` dimension."""
+    value = _plain(getattr(row, path))
+    if granularity is None:
+        return value == _plain(getattr(key, group_by_alias(path, None)))
+    if not isinstance(granularity, TimeGranularity):
+        raise ValueError(f"Group axis {path!r} by {granularity.value} has no drill, so its groups carry no rows.")
+    span = getattr(key, group_by_range_alias(path, granularity))
+    if span is None or value is None:
+        return span is None and value is None
+    if isinstance(value, datetime.datetime):
+        if settings.USE_TZ and timezone.is_naive(value):
+            value = timezone.make_aware(value)
+        return bool(span.from_ <= value < span.to)
+    return bool(span.from_.date() <= value < span.to.date())
+
+
+def _plain(value: Any) -> Any:
+    return value.value if isinstance(value, enum.Enum) else value

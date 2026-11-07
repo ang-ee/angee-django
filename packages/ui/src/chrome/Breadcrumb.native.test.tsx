@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { testDataResource } from "@angee/metadata/testing";
 import { tanStackRouterProvider } from "@angee/refine";
-import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, useMatches, useRouterState } from "@tanstack/react-router";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, useRouterState } from "@tanstack/react-router";
 import { afterEach, expect, test } from "vitest";
 
 import { ConsoleLayout } from "../layouts/ConsoleLayout";
@@ -29,8 +29,6 @@ afterEach(() => { cleanup(); ui.clearClients(); });
 function Page() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const modelId = pathname.startsWith("/models/") ? pathname.split("/").at(-1) : undefined;
-  // The controller reads the leaf match, which can lead the pathname during a navigation.
-  const modelRecord = useMatches({ select: (matches) => matches.at(-1)?.routeId === "/models/$id" });
   useBreadcrumbLeafLabel(pathname === "/agents/demo" ? "Demo Agent" : modelId ? `Model ${modelId === "one" ? "One" : modelId === "two" ? "Two" : modelId}` : null);
   return <>
     <RecordReference model="agents.Agent" id="demo" label="Open agent" />
@@ -38,7 +36,7 @@ function Page() {
     <NavLink href="/models/two?view=all" variant="inline">Follow another model</NavLink>
     <NavLink href="/models/one?view=other" variant="inline">Follow same model with another query</NavLink>
     {modelId && /^\d+$/.test(modelId) ? <NavLink href={`/models/${Number(modelId) + 1}`} variant="inline">Next model</NavLink> : null}
-    {modelRecord ? <RoutedRecordController resource="models.Model" newRecordId="new">
+    {modelId ? <RoutedRecordController resource="models.Model" newRecordId="new">
       {(controller) => <button onClick={() => controller.onRecordTabChange?.("details")}>Details tab</button>}
     </RoutedRecordController> : null}
     {modelId ? <ResourceViewProvider resource="models.Model"><ViewSearchControls /></ResourceViewProvider> : null}
@@ -68,16 +66,8 @@ function renderConsole(path = "/agents/demo", drawer = false) {
       },
     }}><ConsoleLayout><Page /></ConsoleLayout></AppRuntimeProvider></ui.Provider>
   </InAppLinkProvider> });
-  // RoutedRecordController needs the record routes nested under their collections.
-  const deskRoute = createRoute({ getParentRoute: () => root, path: "/desk" });
-  const agentsRoute = createRoute({ getParentRoute: () => root, path: "/agents" });
-  const modelsRoute = createRoute({ getParentRoute: () => root, path: "/models" });
   const router = createRouter({
-    routeTree: root.addChildren([
-      deskRoute,
-      agentsRoute.addChildren([createRoute({ getParentRoute: () => agentsRoute, path: "$id" })]),
-      modelsRoute.addChildren([createRoute({ getParentRoute: () => modelsRoute, path: "$id" })]),
-    ]),
+    routeTree: root.addChildren(["/desk", "/agents", "/agents/$id", "/models", "/models/$id"].map((path) => createRoute({ getParentRoute: () => root, path }))),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   const navigate = routerNavigator(router);

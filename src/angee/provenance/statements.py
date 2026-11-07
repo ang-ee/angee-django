@@ -6,6 +6,7 @@ and evidence contracts. The native capture modules have no dependency on them.
 
 from __future__ import annotations
 
+import importlib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
@@ -16,7 +17,7 @@ from typing import Any, ClassVar, Self, cast
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.db.models.query import ModelIterable
 from django.utils import timezone
@@ -26,38 +27,33 @@ from rebac import (
     SubjectRef,
     actor_context,
     current_actor,
-    is_sudo,
     system_context,
     to_subject_ref,
 )
+from rebac.actors import is_sudo
 from rebac.resources import model_for_subject_type, model_resource_type
+from simple_history.manager import HistoryDescriptor
+from simple_history.models import HistoricalRecords
 from simple_history.utils import get_history_manager_for_model
 
 from angee.base.fields.state import StateField
 from angee.base.lineage import most_derived_concrete
+from angee.base.managers import AngeeManager
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import SqidMixin
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.merge_references import MergeContractMixin
-from angee.base.models.persistence import PersistenceMixin, require_composed_type
+from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import TimestampMixin, update_fields_with_auto_now
-from angee.base.models.trash import TrashQuerySet
+from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.permissions import instance_actor, require_rebac_queryset
+from angee.base.prefetch import ReaderMemo
 from angee.base.querysets import by_key, query_batch_size
 from angee.base.validators import validate_value
-from angee.iam.managers import ProtectedManager
-from angee.iam.models.trash import ProtectedTrashMixin
-from angee.iam.permissions import instance_actor, require_rebac_queryset
 from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryDocumentMixin, HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
-from angee.provenance.contrib.angee.policy import angee_policy
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
-from angee.provenance.engine.base import ChangesetAttribution
-from angee.provenance.engine.statements import Aspect as NativeAspect
-from angee.provenance.engine.statements import StatementEditMixin, StatementWriteMixin
-from angee.provenance.engine.statements import StatementLinkMixin as NativeStatementLinkMixin
-from angee.provenance.engine.statements import StatementRecords as NativeStatementRecords
-from angee.provenance.engine.statements import StatementSourceMixin as NativeStatementSourceMixin
 from angee.provenance.evidence import (
     EvidenceReference,
     FactAuthority,
@@ -65,6 +61,7 @@ from angee.provenance.evidence import (
     readable_evidence_records,
     readable_records,
 )
+from angee.provenance.history import _ChangesetHistory
 
 
 def _statement_column(model: type[models.Model], name: str) -> models.Field:
@@ -95,8 +92,7 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
         """
 
         if "changeset" not in kwargs and "changeset_id" not in kwargs:
-            boundary = current_changeset(required=True, record=True, using=self.db)
-            kwargs["changeset_id"] = boundary.pk if boundary is not None else None
+            kwargs["changeset"] = current_changeset(required=True, record=True)
         return super().update(**kwargs)
 
     def delete(self) -> Any:
@@ -129,12 +125,7 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
 
         if actor is None:
             return self.none()
-        subjects = (
-            require_rebac_queryset(self.model.statement_subject_model)
-            .using(self.db)
-            .with_actor(actor)
-            .with_action("read")
-        )
+        subjects = require_rebac_queryset(self.model.statement_subject_model, actor=actor).with_action("read")
         rows = self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
         member_names = sorted({name for aspect in self.model.statement_aspects.values() for name in aspect.members})
         for name in member_names:
@@ -144,7 +135,7 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
             related = field.remote_field.model
             if model_resource_type(related) is None:
                 continue
-            members = require_rebac_queryset(related).using(self.db).with_actor(actor).with_action("read").scoped()
+            members = require_rebac_queryset(related, actor=actor).with_action("read").scoped()
             rows = rows.filter(
                 Q(**{f"{field.attname}__isnull": True})
                 | Q(**{f"{field.attname}__in": models.Subquery(members.values(field.target_field.name))})
@@ -194,60 +185,99 @@ class StatementQuerySet[T: Statement](_StatementQuerySet[T], AngeeHistoryQuerySe
         return rows if actor is None else rows.with_actor(actor)
 
 
-def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
-    """Resolve a statement page's evidence and asserting principals by model."""
+_READABLE = ReaderMemo("_provenance_readable_statement")
+"""A statement page's readable evidence and asserting principal, for the reader its page read them for."""
 
-    if not rows:
-        return
-    using = rows[0]._state.db
+
+def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
+    """Resolve a statement page's evidence and asserting principals by model, remembered for ``actor``.
+
+    ``rows`` are live statements or their historical versions. Each row then answers
+    :func:`readable_statement_read` for that reader from this batch. Under sudo
+    nothing is remembered, and each row reads its own answer for the reader it is
+    asked for.
+    """
+
+    for row, records, source in _readable_statement_reads(rows, actor):
+        _READABLE.remember(row, "evidence_records", actor, records)
+        _READABLE.remember(row, "asserting_source", actor, source)
+
+
+def readable_statement_read(
+    row: Any, actor: Any,
+) -> tuple[tuple[tuple[EvidenceReference, models.Model], ...], models.Model | None]:
+    """A statement row's readable origins and asserting principal: its page's batch for ``actor``, else read now.
+
+    ``row`` is a live statement or a historical version. A batch remembers both
+    answers together, so a remembered origin tuple means an absent principal is
+    unreadable. A miss (another reader, a row read alone, or sudo, under which
+    nothing is remembered) reads the answer for ``actor``.
+    """
+
+    records = _READABLE.get(row, "evidence_records", actor)
+    if records is not None:
+        return records, _READABLE.get(row, "asserting_source", actor)
+    [(_row, records, source)] = _readable_statement_reads([row], actor)
+    _READABLE.remember(row, "evidence_records", actor, records)
+    _READABLE.remember(row, "asserting_source", actor, source)
+    return records, source
+
+
+def _readable_statement_reads(
+    rows: Sequence[Any], actor: Any,
+) -> list[tuple[Any, tuple[tuple[EvidenceReference, models.Model], ...], models.Model | None]]:
+    """Each row's readable origins with their rows and its readable asserting principal, read by model for ``actor``."""
+
     evidence_by_row: list[tuple[Any, tuple[EvidenceReference, ...]]] = []
     refs: list[EvidenceReference] = []
     sources_by_model: dict[tuple[type[models.Model], str], set[str]] = defaultdict(set)
-    sources_by_row: list[tuple[Any, tuple[type[models.Model], str, str] | None]] = []
+    sources_by_row: list[tuple[type[models.Model], str, str] | None] = []
     for row in rows:
-        evidence = tuple(EvidenceReference.model_validate(value) for value in row.evidence[: Statement.EVIDENCE_LIMIT])
+        evidence = tuple(
+            EvidenceReference.model_validate(value) for value in row.evidence[: Statement.EVIDENCE_LIMIT]
+        )
         evidence_by_row.append((row, evidence))
         refs.extend(evidence)
         source = SubjectRef.parse(row.asserted_by)
         resolved = model_for_subject_type(source.subject_type)
         if resolved is None:
-            sources_by_row.append((row, None))
+            sources_by_row.append(None)
             continue
         model, id_attr = resolved
         sources_by_model[(model, id_attr)].add(source.subject_id)
-        sources_by_row.append((row, (model, id_attr, source.subject_id)))
+        sources_by_row.append((model, id_attr, source.subject_id))
 
-    evidence_records = readable_evidence_records(refs, actor, using=using)
-    readable_evidence = {(ref.model.lower(), ref.id, ref.pointer): record for ref, record in evidence_records}
-    for row, evidence in evidence_by_row:
-        row._readable_evidence = tuple(
-            ref for ref in evidence if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
-        )
-        row._readable_evidence_records = tuple(
-            (ref, readable_evidence[ref.model.lower(), ref.id, ref.pointer])
-            for ref in evidence
-            if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
-        )
-
+    readable_evidence = {
+        (ref.model.lower(), ref.id, ref.pointer): record for ref, record in readable_evidence_records(refs, actor)
+    }
     readable_sources: dict[tuple[type[models.Model], str, str], models.Model] = {}
     for (model, id_attr), sources in sources_by_model.items():
         visible = (
-            require_rebac_queryset(model)
-            .using(using)
-            .with_actor(actor)
+            require_rebac_queryset(model, actor=actor)
             .with_action("read")
             .filter(**{f"{id_attr}__in": sources})
         )
-        readable_sources.update({(model, id_attr, str(getattr(row, id_attr))): row for row in visible})
-    for row, source_key in sources_by_row:
-        row._asserting_source_readable = source_key in readable_sources
-        row._readable_asserting_source = readable_sources.get(source_key) if source_key is not None else None
+        readable_sources.update({
+            (model, id_attr, str(getattr(row, id_attr))): row for row in visible
+        })
+    return [
+        (
+            row,
+            tuple(
+                (ref, readable_evidence[ref.model.lower(), ref.id, ref.pointer])
+                for ref in evidence
+                if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
+            ),
+            readable_sources.get(source_key) if source_key else None,
+        )
+        for (row, evidence), source_key in zip(evidence_by_row, sources_by_row, strict=True)
+    ]
 
 
-_StatementManagerBase = ProtectedManager.from_queryset(StatementQuerySet)
+_StatementManagerBase = AngeeManager.from_queryset(StatementQuerySet)
 
 
-class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMixin):
+class StatementManager[T: Statement](_StatementManagerBase[T]):
     """Locked upserts and survivorship on the generated assertion model."""
 
     def __init__(self, model: type[T] | None = None, instance: models.Model | None = None) -> None:
@@ -310,28 +340,17 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
                 snak=snak,
                 basis_hash=basis_hash,
             )
-            return self._write_assertion(
-                subject, str(source), declaration, {"aspect": aspect, **members}, defaults, using=self.db
-            )
-
-    def _assertion_write_context(self) -> Any:
-        return system_context(reason="statements.set")
-
-    def _store_assertion(self, row: Any, previous: Any, *, content: Mapping[str, Any], using: str) -> Any:
-        """Keep the historical current-row identity for this protected storage format."""
-        statement, _ = self.model._base_manager.db_manager(using).update_or_create(
-            **row.current_key(), superseded=None, defaults=content
-        )
-        return statement
-
-    def _resolve_assertion(
-        self, row: Any, subject: Any, definition: NativeAspect[models.Model], identity: Mapping[str, Any], *, using: str
-    ) -> Any:
-        self.resolve(
-            subject=subject, aspect=identity["aspect"], members={name: identity[name] for name in definition.members}
-        )
-        row.refresh_from_db(using=using)
-        return row
+            key = dict(subject=subject, asserted_by=str(source), aspect=aspect, superseded=None, **members)
+            candidate = self.model(**key, **defaults)
+            candidate.full_clean(validate_unique=False, validate_constraints=False)
+            existing = self.model._base_manager.using(self.db).filter(**key).first()
+            if existing is not None and existing.same_values(candidate, defaults):
+                return existing
+            with system_context(reason="statements.set"):
+                statement, _ = self.model._base_manager.db_manager(self.db).update_or_create(**key, defaults=defaults)
+                self.resolve(subject=subject, aspect=aspect, members=members)
+            statement.refresh_from_db()
+            return statement
 
     def asserting_source(self, asserted_by: Any = None) -> SubjectRef:
         """Resolve the asserting principal and require its actor or trusted delegation."""
@@ -344,7 +363,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
     def _admit(
         self,
         subject: Any,
-        declaration: Aspect[models.Model],
+        declaration: Aspect,
         member_key: dict[str, Any],
         *,
         values: Mapping[str, Any],
@@ -357,7 +376,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
         basis_hash: str,
     ) -> tuple[SubjectRef, dict[str, Any], dict[str, Any]]:
         source = self.asserting_source(asserted_by)
-        kind = StatementSourceMixin.source_kind_for(source, using=self.db)
+        kind = StatementSourceMixin.source_kind_for(source)
         if kind is None:
             raise ValidationError("The source must declare a known per-row source_kind.")
         rank = self.model.StatementRank.NORMAL if rank is None else rank
@@ -374,7 +393,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
             raise ValidationError("Only value snaks carry the declared aspect's values.")
         refs = validate_value(list[EvidenceReference], list(evidence), field="evidence")
         if kind == SourceKind.PERSON:
-            readable_records(refs, (source,), using=self.db)
+            readable_records(refs, (source,))
         members = declaration.coerce_members(self.model, source, member_key, kind=SourceKind(kind), using=self.db)
         defaults = {name: values.get(name) for name in declaration.fields}
         defaults.update(
@@ -387,15 +406,9 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
             basis_hash=basis_hash,
         )
         if self.model.statement_link:
-            if (
-                link is not None
-                and not type(link)
-                .objects.using(self.db)
-                .with_actor(source)
-                .with_action("read")
-                .filter(pk=link.pk)
-                .exists()
-            ):
+            if link is not None and not type(link).objects.with_actor(source).with_action("read").filter(
+                pk=link.pk
+            ).exists():
                 raise PermissionDenied("The asserting source requires read on the link.")
             defaults["link"] = link
         elif link is not None:
@@ -521,12 +534,47 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
             for key, grouped in groupby(rows.order_by("aspect", *member_names), key=group):
                 candidates = list(grouped)
                 declaration = self.model.statement_aspects[key[0]]
-                winner, values = declaration.resolve(subject, candidates)
+                asserted = [row for row in candidates if row.status == self.model.StatementStatus.ASSERTED]
+                preferred = sorted(
+                    (row for row in asserted if row.rank == self.model.StatementRank.PREFERRED),
+                    key=lambda row: row.sort_key(declaration),
+                )
+                normal: Sequence[Any] = [row for row in asserted if row.rank == self.model.StatementRank.NORMAL]
+                if declaration.candidates is not None:
+                    normal = declaration.candidates(subject, normal)
+                if any(row not in asserted or row.rank != self.model.StatementRank.NORMAL for row in normal):
+                    raise ValidationError("Candidate policy may only select asserted normal statements.")
+                ordered = sorted(normal, key=lambda row: row.sort_key(declaration))
+                winner = (
+                    preferred[0]
+                    if preferred
+                    else next((row for row in ordered if row.snak == self.model.StatementSnak.VALUE), None)
+                )
+                values = {
+                    name: _statement_column(type(winner), name).value_from_object(winner)
+                    if winner is not None and winner.snak == self.model.StatementSnak.VALUE
+                    else None
+                    for name in declaration.fields
+                }
+                if winner is not None and winner.snak == self.model.StatementSnak.VALUE and declaration.allow_fill:
+                    for name, value in values.items():
+                        if value in (None, ""):
+                            values[name] = next(
+                                (
+                                    _statement_column(type(row), name).value_from_object(row)
+                                    for row in ordered
+                                    if row.snak == self.model.StatementSnak.VALUE
+                                    and _statement_column(type(row), name).value_from_object(row) not in (None, "")
+                                ),
+                                value,
+                            )
                 for row in sorted(candidates, key=lambda row: row is winner):
                     if row.applied != (row is winner):
                         row.applied = row is winner
                         row.save(using=using, update_fields=("applied",))
-                if values is None:
+                if (winner is not None and winner.snak == self.model.StatementSnak.SOME_VALUE) or (
+                    winner is None and any(row.snak == self.model.StatementSnak.SOME_VALUE for row in asserted)
+                ):
                     continue
                 subject.apply_resolved(
                     aspect=key[0],
@@ -569,7 +617,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
             self.db_manager(rows.db).resolve(subject=subject)
 
 
-_StatementPairManagerBase = ProtectedManager.from_queryset(AngeeHistoryQuerySet)
+_StatementPairManagerBase = AngeeManager.from_queryset(AngeeHistoryQuerySet)
 
 
 class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
@@ -584,7 +632,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
             self._db = instance._state.db
 
     def get_queryset(self) -> AngeeHistoryQuerySet[T]:
-        rows = require_composed_type(super().get_queryset(), AngeeHistoryQuerySet)
+        rows = super().get_queryset()
         return (
             rows if self.instance is None else rows.filter(models.Q(left=self.instance) | models.Q(right=self.instance))
         )
@@ -594,18 +642,10 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
 
         first, second = sorted((left.pk, right.pk))
         statements = self.model.statements
-        return (
-            statements.using(left._state.db)
-            .current()
-            .filter(
-                subject__left_id=first,
-                subject__right_id=second,
-                aspect=self.model.pair_name,
-                applied=True,
-                snak=statements.model.StatementSnak.NO_VALUE,
-            )
-            .exists()
-        )
+        return statements.using(left._state.db).current().filter(
+            subject__left_id=first, subject__right_id=second, aspect=self.model.pair_name,
+            applied=True, snak=statements.model.StatementSnak.NO_VALUE,
+        ).exists()
 
     def for_pair(self, left: Any, right: Any) -> Any:
         model = _statement_foreign_key(self.model, "left").remote_field.model
@@ -616,7 +656,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
             raise ValidationError("Pair endpoints must belong to the same database.")
         actor = instance_actor(left)
         for endpoint in (left, right):
-            visible = require_rebac_queryset(model).with_actor(actor).with_action("read").using(using)
+            visible = require_rebac_queryset(model, actor=actor).with_action("read").using(using)
             if not visible.filter(pk=endpoint.pk).exists():
                 raise PermissionDenied("A pair requires read on both endpoints.")
         ordered = sorted((left, right), key=lambda endpoint: endpoint.pk)
@@ -624,8 +664,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
             for endpoint in ordered:
                 endpoint.lock_subject()
             pair, _ = self.model._base_manager.using(using).get_or_create(
-                left_id=ordered[0].pk,
-                right_id=ordered[1].pk,
+                left_id=ordered[0].pk, right_id=ordered[1].pk,
             )
             pair.with_actor(actor)
             if pair.is_trashed:
@@ -656,12 +695,11 @@ class StatementSubjectQuerySet[T: models.Model](TrashQuerySet[T], AngeeHistoryQu
         return self.untrashed().filter(~Exists(statements) | Exists(remaining))
 
 
-_StatementSubjectManagerBase = ProtectedManager.from_queryset(StatementSubjectQuerySet)
+_StatementSubjectManagerBase = AngeeManager.from_queryset(StatementSubjectQuerySet)
 
 
 class StatementSubjectManager[T: models.Model](_StatementSubjectManagerBase[T]):
     """Shared scope for canonical models whose presence is asserted."""
-
 
 class SourceKind(models.TextChoices):
     """Source classification, never a global precedence order."""
@@ -677,7 +715,7 @@ class SourceKind(models.TextChoices):
     RULE = "rule", "Rule"
 
 
-class StatementSourceMixin(NativeStatementSourceMixin):
+class StatementSourceMixin(models.Model):
     """Principal contract for assertion-time, per-row source classification.
 
     Principals compose this mixin and implement ``source_kind`` as their own
@@ -692,17 +730,24 @@ class StatementSourceMixin(NativeStatementSourceMixin):
         raise ImproperlyConfigured("Statement principals must implement source_kind.")
 
     @classmethod
-    def source_kind_for(cls, subject: Any, *, using: str | None = None) -> SourceKind | None:
-        """Classify a persisted principal through the protected native policy owner."""
-        policy = angee_policy()
+    def source_kind_for(cls, subject: Any) -> SourceKind | None:
+        """Classify a persisted principal through its declared model contract."""
+
+        source = to_subject_ref(subject)
+        resolved = model_for_subject_type(source.subject_type)
+        if resolved is None or source.optional_relation or source.subject_id == "*":
+            return None
+        model, id_attr = resolved
+        if not issubclass(model, cls):
+            return None
         try:
-            principal = policy.resolve_source(subject, using=using)
-            return SourceKind(policy.source_kind(principal))
-        except TypeError, ValueError, ImproperlyConfigured, ValidationError:
+            principal = model._base_manager.get(**{id_attr: source.subject_id})
+            kind = principal.source_kind
+            return SourceKind(kind) if kind is not None else None
+        except (model.DoesNotExist, TypeError, ValueError, ImproperlyConfigured, ValidationError):
             return None
 
-
-class StatementLinkMixin(NativeStatementLinkMixin):
+class StatementLinkMixin(models.Model):
     """Contract of the model a ``StatementRecords(link=…)`` declaration names.
 
     The link carries the stream fact survivorship reads: ``authoritative`` says
@@ -724,17 +769,56 @@ class StatementLinkMixin(NativeStatementLinkMixin):
     class Meta:
         abstract = True
 
+    @property
+    def authoritative(self) -> bool:
+        return False
+
 
 @dataclass(frozen=True)
-class Aspect[SubjectT: models.Model](NativeAspect[SubjectT]):
+class Aspect:
     """One field group and its optional typed membership identity.
 
     ``member`` reuses a canonical field name or maps names to new Django fields.
     Shared members reuse one field. ``allow_fill`` fills missing winner values.
     """
 
+    fields: tuple[str, ...] = ()
+    member: str | Mapping[str, models.Field] | None = None
     precedence: tuple[SourceKind, ...] = ()
+    allow_fill: bool = False
+    candidates: Callable[[Any, Sequence[Any]], Sequence[Any]] | None = None
     apply: Callable[..., None] | None = None
+
+    @property
+    def members(self) -> tuple[str, ...]:
+        """Return deterministic member-column names for the aspect's key."""
+
+        if isinstance(self.member, str):
+            return (self.member,)
+        return tuple(sorted(self.member or ()))
+
+    def priority(self, row: Any) -> int:
+        """Place the row's source in this precedence; unlisted kinds sort last.
+
+        A statement from an ``authoritative`` system-of-record stream precedes
+        PERSON wherever this aspect lists both kinds: the stream is the system of
+        record for the aspect, a plain stream is a system of reference below
+        people. Every row is placed in one order, so rows of one group compare:
+        where the precedence lists the system of record after PERSON, that order has
+        an authoritative system-of-record place just before PERSON. Preferred rank is
+        decided before this, so a person's confirm or dismiss stays on top.
+        """
+
+        kinds = self.precedence
+        index = kinds.index(row.source_kind) if row.source_kind in kinds else len(kinds)
+        if SourceKind.PERSON not in kinds or SourceKind.SYSTEM_OF_RECORD not in kinds:
+            return index
+        person = kinds.index(SourceKind.PERSON)
+        if kinds.index(SourceKind.SYSTEM_OF_RECORD) < person:
+            return index
+        if row.source_kind == SourceKind.SYSTEM_OF_RECORD and row.authoritative:
+            return person
+        return index + 1 if index >= person else index
 
     def coerce_members(
         self, model: type[models.Model], source: SubjectRef, key: dict[str, Any], *, kind: SourceKind, using: str
@@ -749,7 +833,7 @@ class Aspect[SubjectT: models.Model](NativeAspect[SubjectT]):
             if isinstance(field, models.ForeignKey):
                 pk = field.target_field.value_from_object(value) if isinstance(value, models.Model) else value
                 rows = (
-                    require_rebac_queryset(field.remote_field.model).with_actor(source).with_action("read")
+                    require_rebac_queryset(field.remote_field.model, actor=source).with_action("read")
                     if kind == SourceKind.PERSON and not is_sudo()
                     else field.remote_field.model._base_manager.all()
                 )
@@ -759,7 +843,7 @@ class Aspect[SubjectT: models.Model](NativeAspect[SubjectT]):
         return members
 
 
-class StatementsMixin(StatementEditMixin, PersistenceMixin, HistoryDocumentMixin):
+class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
     """Subject-owned eligibility and application hooks for typed statements."""
 
     class Meta:
@@ -776,22 +860,14 @@ class StatementsMixin(StatementEditMixin, PersistenceMixin, HistoryDocumentMixin
 
     @classmethod
     def history_related_scopes(
-        cls,
-        predicate: Q,
-        root_pk: Any,
-        *,
-        direct: bool,
-        using: str | None,
+        cls, predicate: Q, root_pk: Any, *, direct: bool, using: str | None,
     ) -> dict[type[models.Model], Q]:
         """Contribute assertions for direct subjects or the document's retained owned lines."""
 
         scopes = super().history_related_scopes(predicate, root_pk, direct=direct, using=using)
-        subjects = get_history_manager_for_model(cls).using(using).filter(predicate)
+        subjects = get_history_manager_for_model(cls).using(using).filter(predicate).values(cls._meta.pk.attname)
+        subject_scope = Q(subject_id=root_pk) if direct else Q(subject_id__in=models.Subquery(subjects))
         for statement in cls.statement_models():
-            target = _statement_foreign_key(statement, "subject").target_field
-            subject_scope = Q(subject_id=root_pk) if direct and target.model is cls else Q(
-                subject_id__in=models.Subquery(subjects.values(target.attname)),
-            )
             scopes[statement] = scopes[statement] | subject_scope if statement in scopes else subject_scope
         return scopes
 
@@ -807,26 +883,14 @@ class StatementsMixin(StatementEditMixin, PersistenceMixin, HistoryDocumentMixin
                 yield declaration.model
 
     @classmethod
-    def has_field_statements(cls) -> bool:
-        """Whether a declared statement has an aspect that names subject fields."""
-
-        return any(
-            aspect.fields
-            for statement_model in cls.statement_models()
-            for aspect in statement_model.statement_aspects.values()
-        )
-
-    @classmethod
     def pair_models(cls) -> tuple[type[StatementPair], ...]:
         """Read generated pair carriers from Django's declared endpoint relations."""
 
         carriers = {
             relation.related_model
             for relation in cls._meta.get_fields(include_hidden=True)
-            if relation.auto_created
-            and relation.one_to_many
-            and relation.related_model is not None
-            and issubclass(relation.related_model, StatementPair)
+            if relation.auto_created and relation.one_to_many
+            and relation.related_model is not None and issubclass(relation.related_model, StatementPair)
         }
         return tuple(sorted(carriers, key=lambda model: model._meta.label_lower))
 
@@ -854,43 +918,74 @@ class StatementsMixin(StatementEditMixin, PersistenceMixin, HistoryDocumentMixin
             raise ImproperlyConfigured(f"Expected one statement owner for {aspect!r}.")
         return owners[0]
 
-    def resolve_statements(self) -> None:
-        """Re-derive this surviving subject after all native replay phases finish."""
-        if type(self)._base_manager.using(self._state.db).filter(pk=self.pk).exists():
-            for manager in self.statement_managers():
-                manager.resolve()
-
     def revert_subjects(self) -> list[Any]:
         """A restored subject re-derives its aspects after the whole replay."""
 
         return [self]
 
-    def _statement_editor(self, *, using: str) -> models.Model | None:
-        if is_sudo() or (actor := instance_actor(self)) is None:
-            return None
-        policy = angee_policy()
-        try:
-            principal = policy.resolve_source(actor, using=using)
-            return principal if policy.source_kind(principal) == SourceKind.PERSON else None
-        except TypeError, ValueError, ImproperlyConfigured, ValidationError:
-            return None
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Ordinary person edits assert normal statements; resolved saves stay ordinary.
 
-    def _statement_edit_context(self, editor: models.Model) -> Any:
-        return actor_context(editor)
+        An aspect whose declared precedence leaves PERSON out is not a person's to
+        state: its fields belong to the native owner, so a person's save writes them
+        as an ordinary save and records no statement that later resolution could
+        restore over the owner's writes. A create states no group whose values are
+        all empty: an empty field on insert is the absence of a fact, so it never
+        outranks a later source. Explicit confirm and dismiss stay available.
+        """
 
-    def _edit_managers(self, *, using: str) -> Iterable[Any]:
-        yield from self.statement_managers()
+        if is_sudo():
+            super().save(*args, **kwargs)
+            return
+        actor = instance_actor(self)
+        if actor is None or StatementSourceMixin.source_kind_for(actor) != SourceKind.PERSON:
+            super().save(*args, **kwargs)
+            return
+        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
+        update_fields = kwargs.get("update_fields")
+        saved_fields = (
+            None
+            if update_fields is None
+            else {
+                field.name
+                for field in self._meta.concrete_fields
+                if field.name in update_fields or field.attname in update_fields
+            }
+        )
+        with actor_context(actor), transaction.atomic(using=using):
+            previous = type(self)._base_manager.using(using).filter(pk=self.pk).first() if self.pk else None
+            super().save(*args, **kwargs)
+            resolved_fields: set[str] = set()
+            for manager in self.statement_managers():
+                for aspect, declaration in manager.model.statement_aspects.items():
+                    fields = declaration.fields
+                    if (
+                        declaration.members
+                        or not fields
+                        or (declaration.precedence and SourceKind.PERSON not in declaration.precedence)
+                        or not any(
+                            (saved_fields is None or name in saved_fields)
+                            and (previous is None or getattr(previous, name) != getattr(self, name))
+                            for name in fields
+                        )
+                    ):
+                        continue
+                    values = {
+                        name: getattr(self if saved_fields is None or name in saved_fields else previous, name)
+                        for name in fields
+                    }
+                    if previous is None and all(value in (None, "") for value in values.values()):
+                        # A field left empty on create is no fact; a later edit that clears one is.
+                        continue
+                    manager.set(aspect=aspect, values=values, asserted_by=actor)
+                    resolved_fields.update(fields if saved_fields is None else set(fields) & saved_fields)
+            if resolved_fields:
+                self.refresh_from_db(using=using, fields=sorted(resolved_fields))
 
     def require_statement_write(self, actor: SubjectRef | None) -> None:
         """Admit assertions through the subject's native REBAC write scope."""
 
-        rows = (
-            require_rebac_queryset(type(self))
-            .using(self._state.db)
-            .filter(pk=self.pk)
-            .with_actor(actor)
-            .with_action("write")
-        )
+        rows = require_rebac_queryset(type(self), actor=actor).filter(pk=self.pk).with_action("write")
         if not rows.exists():
             raise PermissionDenied("The asserting source requires write on the subject.")
 
@@ -1009,7 +1104,9 @@ class StatementHistory(ModelHistory):
         model = type(row)
         using = first._state.db
         values = {
-            field.attname: getattr(row, field.attname) for field in model._meta.concrete_fields if not field.primary_key
+            field.attname: getattr(row, field.attname)
+            for field in model._meta.concrete_fields
+            if not field.primary_key
         }
         values.pop("changeset_id", None)  # the update attributes the writing changeset
         values.update(applied=False)
@@ -1035,7 +1132,7 @@ class StatementPairHistory(ModelHistory):
             (previous or last).instance.require_statement_write(to_subject_ref(actor))
 
 
-class Statement(MergeContractMixin, HistoryMixin, ChangesetAttribution, SqidMixin, TimestampMixin, RebacMixin):
+class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, TimestampMixin, RebacMixin):
     """Retained shadow row; its canonical subject owns admission and field gates."""
 
     class StatementSnak(models.TextChoices):
@@ -1057,7 +1154,7 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetAttribution, SqidMixi
     objects = StatementManager()
     _angee_base = _StatementUnscopedManager()
     statement_subject_model: type[StatementsMixin]
-    statement_aspects: dict[str, Aspect[models.Model]]
+    statement_aspects: dict[str, Aspect]
     statement_link: str | None
     subject: models.ForeignKey[Any, Any]
     asserted_by = models.TextField()
@@ -1142,8 +1239,9 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetAttribution, SqidMixi
             if claimed.intersection(aspect.fields) or len(set(aspect.fields)) != len(aspect.fields):
                 error("A value field belongs to exactly one aspect.", "E041")
             claimed.update(aspect.fields)
-            if len(set(aspect.precedence)) != len(aspect.precedence) or any(
-                kind not in SourceKind.values for kind in aspect.precedence
+            if (
+                len(set(aspect.precedence)) != len(aspect.precedence)
+                or any(kind not in SourceKind.values for kind in aspect.precedence)
             ):
                 error(f"Invalid source precedence on {key!r}.", "E042")
             columns = {name: cls.statement_subject_model._meta.get_field(name) for name in aspect.fields}
@@ -1172,7 +1270,7 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetAttribution, SqidMixi
 
     EVIDENCE_LIMIT: ClassVar[int] = 20
 
-    def sort_key(self, aspect: Aspect[models.Model] | None = None) -> tuple[Any, ...]:
+    def sort_key(self, aspect: Aspect | None = None) -> tuple[Any, ...]:
         """The one trust ordering: preferred rank, source precedence, confidence, ties, recency, identity.
 
         Survivorship, cross-subject member resolution and merge collapse all sort
@@ -1221,11 +1319,20 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetAttribution, SqidMixi
             return FactAuthority.UNVERIFIED
         return FactAuthority.SOURCE
 
-    @property
-    def readable_asserting_source(self) -> SubjectRef | None:
-        """Return the asserting principal only when ``for_reader`` admitted it."""
+    def readable_asserting_source(self, actor: Any) -> SubjectRef | None:
+        """Return the asserting principal only when ``actor`` may read it."""
 
-        return SubjectRef.parse(self.asserted_by) if self.__dict__.get("_asserting_source_readable") else None
+        return SubjectRef.parse(self.asserted_by) if self.readable_asserting_record(actor) is not None else None
+
+    def readable_asserting_record(self, actor: Any) -> models.Model | None:
+        """The asserting principal's row when ``actor`` may read it."""
+
+        return readable_statement_read(self, actor)[1]
+
+    def readable_evidence_records(self, actor: Any) -> tuple[tuple[Any, models.Model], ...]:
+        """The readable origins and their rows for ``actor``."""
+
+        return readable_statement_read(self, actor)[0]
 
     @property
     def is_confirmed(self) -> bool:
@@ -1258,11 +1365,24 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetAttribution, SqidMixi
         return len(self.evidence) > self.EVIDENCE_LIMIT
 
     def readable_evidence(self, actor: Any) -> list[Any]:
-        """The bounded origins ``actor`` may read; each origin keeps its own read gate."""
+        """The bounded origins ``actor`` may read; each origin keeps its own read gate.
 
+        A page ``for_reader(actor)`` read answers from its batch.
+        """
+
+        remembered = _READABLE.get(self, "evidence_records", actor)
+        if remembered is not None:
+            return [ref for ref, _record in remembered]
         self.subject.require_access("read", actor)
         refs = [EvidenceReference.model_validate(value) for value in self.evidence[: self.EVIDENCE_LIMIT]]
         return readable_evidence(refs, actor)
+
+    def same_values(self, other: Statement, names: Iterable[str]) -> bool:
+        return all(
+            _statement_column(type(self), name).value_from_object(self)
+            == _statement_column(type(self), name).value_from_object(other)
+            for name in names
+        )
 
     def current_key(self) -> dict[str, Any]:
         """The aspect's identity, shared by merge collapse and its inverse."""
@@ -1284,10 +1404,7 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetAttribution, SqidMixi
 
         if not is_sudo():
             raise PermissionDenied("Write statements through their owning manager verbs.")
-        using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
-        boundary = current_changeset(required=True, record=True, using=using)
-        self.changeset_id = boundary.pk if boundary is not None else None
-        kwargs["using"] = using
+        self.changeset = current_changeset(required=True, record=True)
         if kwargs.get("update_fields") is not None:
             kwargs["update_fields"] = (*kwargs["update_fields"], "changeset")
         super().save(*args, **kwargs)
@@ -1319,7 +1436,9 @@ _StatementPairManager = StatementPairManager.from_queryset(StatementPairQuerySet
 _StatementPairUnscopedManager = AngeeHistoryUnscopedManager.from_queryset(_StatementPairUnscopedQuerySet)
 
 
-class StatementPair(ProtectedTrashMixin, StatementsMixin, HistoryMixin, SqidMixin):
+class StatementPair(
+    MergeContractMixin, TrashMixin, StatementsMixin, HistoryMixin, SqidMixin, TimestampMixin, RebacMixin
+):
     """Ordered pair subject; admission and application stay on its endpoints."""
 
     history = StatementPairHistory(inherit=True)
@@ -1365,7 +1484,7 @@ class StatementPair(ProtectedTrashMixin, StatementsMixin, HistoryMixin, SqidMixi
         self.left.apply_pair(aspect=self.pair_name, other=self.right, statement=statement)
 
 
-class StatementRecords[SubjectT: models.Model = models.Model](NativeStatementRecords[SubjectT]):
+class StatementRecords(HistoricalRecords):
     """Generate typed assertions with simple-history's native model generator.
 
     A concrete MTI child declaring its own aspects gets its own statement table.
@@ -1379,7 +1498,7 @@ class StatementRecords[SubjectT: models.Model = models.Model](NativeStatementRec
     def __init__(
         self,
         *,
-        aspects: Mapping[str, Aspect[SubjectT]],
+        aspects: Mapping[str, Aspect],
         sqid_prefix: str = "",
         excluded_fields: Sequence[str] = (),
         link: str | None = None,
@@ -1391,15 +1510,23 @@ class StatementRecords[SubjectT: models.Model = models.Model](NativeStatementRec
         """``model_name`` names the generated model when ``<Subject>Statement`` is taken by a domain model."""
 
         super().__init__(
-            aspects=aspects,
+            inherit=True,
             bases=bases,
             history_manager=history_manager,
             historical_queryset=historical_queryset,
             excluded_fields=excluded_fields,
-            model_name=model_name,
-            link=link,
+            custom_model_name=(lambda name: f"{name}Statement") if model_name is None else (lambda name: model_name),
         )
+        self.model_name = model_name
+        self.aspects = dict(aspects)
         self.sqid_prefix = sqid_prefix
+        self.link = link
+
+    def contribute_to_class(self, cls: Any, name: str) -> None:
+        super().contribute_to_class(cls, name)
+        # Keep source declarations available for additive abstract donors.
+        # Native finalization replaces this with HistoryDescriptor on concrete rows.
+        setattr(cls, name, self)
 
     def aspects_for(self, model: Any) -> dict[str, Any]:
         aspects: dict[str, Any] = {}
@@ -1418,7 +1545,7 @@ class StatementRecords[SubjectT: models.Model = models.Model](NativeStatementRec
                     aspects[key] = None if key in aspects and aspects[key] != aspect else aspect
         return aspects
 
-    def declaration_for(self, model: Any) -> StatementRecords[SubjectT] | None:
+    def declaration_for(self, model: Any) -> StatementRecords | None:
         """The declaration owning ``model``'s one statement table, or None when a parent's table serves it.
 
         Declarations are read down the MRO until an inherited concrete table's
@@ -1436,6 +1563,19 @@ class StatementRecords[SubjectT: models.Model = models.Model](NativeStatementRec
             elif declared is not None and owner is not model:
                 break
         return declarations[-1] if declarations else None
+
+    def finalize(self, sender: Any, **kwargs: Any) -> None:
+        if sender._meta.abstract or sender._meta.proxy or not issubclass(sender, self.cls):
+            return
+        if self.declaration_for(sender) is not self:
+            return
+        module = importlib.import_module(sender.__module__)
+        name = self.get_history_model_name(sender)
+        if name.lower() in sender._meta.apps.all_models[sender._meta.app_label] or hasattr(module, name):
+            raise ImproperlyConfigured(f"Generated model {name} already exists.")
+        model = self.create_history_model(sender, inherited=sender is not self.cls)
+        setattr(module, name, model)
+        setattr(sender, self.manager_name, HistoryDescriptor(model, self.history_manager, self.historical_queryset))
 
     def fields_included(self, model: Any) -> list[models.Field]:
         fields = {}
@@ -1467,24 +1607,39 @@ class StatementRecords[SubjectT: models.Model = models.Model](NativeStatementRec
         for name, field in list(fields.items()):
             currency_field = getattr(field, "angee_currency_field", None)
             if currency_field is not None and currency_field not in fields:
-                # Retain the subject's currency binding when only the amount is asserted.
-                fields[name] = models.DecimalField(
-                    max_digits=field.max_digits,
-                    decimal_places=field.decimal_places,
-                    db_index=field.db_index,
-                    null=field.null,
-                    blank=field.blank,
-                    default=field.default,
-                    db_default=field.db_default,
+                # A money column copied without its currency column states the amount
+                # alone; the subject keeps the currency binding (money's E011 check).
+                field = fields[name] = models.DecimalField(
+                    max_digits=field.max_digits, decimal_places=field.decimal_places, db_index=field.db_index
                 )
+            field.null = field.blank = True
+            field.default = field.db_default = models.NOT_PROVIDED
+            field.auto_created = False
+            if isinstance(field, models.ForeignKey):
+                field.remote_field.on_delete = models.PROTECT
+                field.remote_field.parent_link = False
+                field.db_constraint = True
         return fields
 
     def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:
-        extra = super().get_extra_fields(model, fields)
-        extra["sqid_prefix"] = self.sqid_prefix
-        # Preserve the historical reverse relation on the generated subject FK.
-        extra["subject"] = models.ForeignKey(model, on_delete=models.PROTECT)
-        return extra
+        return {
+            "__module__": model.__module__,
+            "sqid_prefix": self.sqid_prefix,
+            "statement_subject_model": model,
+            "statement_aspects": self.aspects_for(model),
+            "statement_link": self.link,
+            "subject": models.ForeignKey(model, on_delete=models.PROTECT),
+            "aspect": models.CharField(max_length=64, choices={name: name for name in sorted(self.aspects_for(model))}),
+            **(
+                {
+                    "link": models.ForeignKey(
+                        self.link, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+                    )
+                }
+                if self.link
+                else {}
+            ),
+        }
 
     def get_meta_options(self, model: Any) -> dict[str, Any]:
         constraints = [*Statement._meta.constraints, Statement.stance_constraint()]

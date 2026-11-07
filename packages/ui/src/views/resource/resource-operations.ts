@@ -1,11 +1,12 @@
 import { useCallback } from "react";
+import { useInvalidate } from "@refinedev/core";
 import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
 import {
   refineResourceIdentifier,
   refineResourceName,
   resourceOperationTarget,
-  refineInvalidationParams,
+  useResourceInvalidates,
   type DataResourceMetadata,
   type DataResourceRootMetadata,
   type ModelMetadata,
@@ -14,9 +15,7 @@ import {
   maybeOperationDocument,
   useAngeeDeletePreview,
   useOperationDocuments,
-  useReconcileMutationResponse,
   type CustomGraphQLOperationTarget,
-  type MutationExecutionOptions,
   type ListBatchTarget,
   type OperationDocumentKind,
   type UseAngeeDeletePreviewResult,
@@ -89,14 +88,15 @@ export function useDeletePreviewOperation(
 export interface UseDeleteWithPreviewResult extends UseAngeeDeletePreviewResult {
   available: boolean;
   /** Resolves false when confirmation has no result or is blocked; rejects transport failures. */
-  remove: (id: string, execution?: MutationExecutionOptions & Parameters<UseAngeeDeletePreviewResult["mutate"]>[1]) => Promise<boolean>;
+  remove: (id: string, options?: Parameters<UseAngeeDeletePreviewResult["mutate"]>[1]) => Promise<boolean>;
 }
 
 /**
  * Own the standard single-record delete-preview confirmation plus Refine cache
- * invalidation tail. Domain callers retain their own confirmation copy and any
- * related-resource invalidations, while the generated operation/document seam
- * stays in one place.
+ * invalidation tail. A blocked or empty confirmation toasts through the shared
+ * toast owner and resolves false without invalidating. Domain callers retain
+ * their own confirmation copy and any related-resource invalidations, while the
+ * generated operation/document seam stays in one place.
  * @owner DeletePreviewDialog
  */
 export function useDeleteWithPreview(
@@ -108,26 +108,20 @@ export function useDeleteWithPreview(
   const preview = useAngeeDeletePreview(operation.target, {
     document: operation.document,
   });
-  const reconcileMutationResponse = useReconcileMutationResponse();
-  const remove = useCallback(async (id: string, execution?: MutationExecutionOptions & Parameters<UseAngeeDeletePreviewResult["mutate"]>[1]): Promise<boolean> => {
+  const invalidate = useInvalidate();
+  const invalidations = useResourceInvalidates(resource ? [resource.modelLabel] : undefined);
+  const remove = useCallback(async (id: string, options?: Parameters<UseAngeeDeletePreviewResult["mutate"]>[1]): Promise<boolean> => {
     if (!resource || !operation.target) {
       throw new Error("Delete preview is unavailable for this resource.");
     }
-    const { errorNotification, ...reconciliation } = execution ?? {};
-    const result = await preview.mutate({ id, confirm: true }, { errorNotification });
+    const result = await preview.mutate({ id, confirm: true }, options);
     if (!result || result.hasBlockers) {
       toast.danger({ title: t("deletePreview.failedTitle"), description: t(result ? "deletePreview.blockedGeneric" : "deletePreview.emptyPreview") });
       return false;
     }
-    await reconcileMutationResponse(undefined, undefined, {
-      ...reconciliation,
-      records: [{ model: resource.modelLabel, id }],
-      invalidates: [refineInvalidationParams({
-        resource: refineResourceIdentifier(resource), dataProviderName: resource.schemaName, id,
-      })],
-    });
+    await Promise.all(invalidations.map((target) => invalidate(target)));
     return true;
-  }, [operation.target, preview.mutate, reconcileMutationResponse, resource, t, toast]);
+  }, [invalidate, invalidations, operation.target, preview.mutate, resource, t, toast]);
   return {
     ...preview,
     available: Boolean(resource && operation.target && operation.document),
@@ -157,13 +151,4 @@ export function listBatchTarget(
     resourceIdentifier: refineResourceIdentifier(resource),
     resourceName: refineResourceName(resource),
   };
-}
-
-export function groupedListTarget(resource: DataResourceMetadata | null) {
-  const list = listBatchTarget(resource);
-  if (!list || !resource) return null;
-  const { groupedRows: groupedRowsRoot } = resource.roots;
-  const { groupBySpec: groupByType, groupedRowPage: groupedRowPageType } = resource.typeNames;
-  if (!groupedRowsRoot || !groupByType || !groupedRowPageType) return null;
-  return { ...list, groupedRowsRoot, groupByType, groupedRowPageType };
 }

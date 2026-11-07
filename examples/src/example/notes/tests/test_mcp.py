@@ -26,7 +26,7 @@ from rebac import SubjectRef, system_context, to_subject_ref
 from angee.agents.models import MCPPlacement
 from angee.integrate.credentials import CredentialKind
 from angee.mcp.graphql import GraphQLTool, register_graphql_tools
-from angee.mcp.server import mcp_app, mcp_server
+from angee.mcp.server import MOUNT_PATH, mcp_app, mcp_server
 
 Agent = apps.get_model("agents", "Agent")
 Credential = apps.get_model("integrate", "Credential")
@@ -129,8 +129,8 @@ class MCPStreamableHTTPMixin:
             "http_version": "1.1",
             "method": "POST",
             "scheme": "http",
-            "path": "/",
-            "raw_path": b"/",
+            "path": MOUNT_PATH,
+            "raw_path": MOUNT_PATH.encode(),
             "query_string": b"",
             "root_path": "",
             "headers": headers,

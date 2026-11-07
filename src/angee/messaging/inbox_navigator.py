@@ -25,13 +25,14 @@ from django.db.models import (
     When,
     Window,
 )
-from django.db.models.functions import Coalesce, RowNumber
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
 from angee.base.expressions import WindowSum
 from angee.messaging.inbox import InboxCoverage, InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroup, InboxGroupPage, InboxGroups, InboxGroupScope
+from angee.messaging.managers import MESSAGE_ORDER
 
 
 @dataclass(frozen=True)
@@ -271,6 +272,19 @@ class InboxNavigator(MessageInbox):
             )
         raise ValueError("Unknown navigator grouping.")
 
+    def group_page(self, axis: str, *, page: int = 1, size: int = 25, leaf_size: int = 0) -> InboxGroupPage:
+        """Page headers; with ``leaf_size`` each carries its first identity page.
+
+        Identity rows aggregate inside their bucket and circle/organisation buckets
+        overlap, so each header pages through :meth:`page` within the one request.
+        """
+
+        header = self.groups(axis).page(page=page, size=size)
+        if leaf_size < 1:
+            return header
+        carried, _ = header.carry(axis, leaf_size, lambda scope, size: self.page(scope=scope, size=size))
+        return carried
+
     def page(
         self, *, scope: InboxGroupScope | None = None, parent: str | None = None, page: int = 1, size: int = 25
     ) -> InboxPage:
@@ -314,14 +328,7 @@ class InboxNavigator(MessageInbox):
         keys = [row["_identity"] for row in selected]
         previews = (
             activity.filter(_identity__in=keys)
-            .annotate(
-                _rank=Window(
-                    RowNumber(),
-                    partition_by=[F("_identity")],
-                    order_by=[F("_order_at").desc(), F("pk").desc()],
-                )
-            )
-            .filter(_rank=1)
+            .first_per_group("_identity", order_by=[F("_order_at").desc(), F("pk").desc()], limit=1)
             .values_list("_identity", "preview")
         )
         preview_by_identity = dict(previews)
@@ -428,9 +435,9 @@ class InboxMembershipGroups:
         return self.objects.annotate(
             _records=Coalesce(Subquery(aggregate.values("records")[:1]), Value(0)),
             _messages=Coalesce(Subquery(aggregate.values("messages")[:1]), Value(0)),
-            _latest=Subquery(activity.order_by("-_order_at", "-pk").values("_order_at")[:1]),
-            _first=Subquery(activity.order_by("_order_at", "pk").values("_order_at")[:1]),
-            _preview=Subquery(activity.order_by("-_order_at", "-pk").values("preview")[:1]),
+            _latest=Subquery(activity.order_by(*MESSAGE_ORDER.ordering()).values("_order_at")[:1]),
+            _first=Subquery(activity.order_by(*MESSAGE_ORDER.ordering(oldest_first=True)).values("_order_at")[:1]),
+            _preview=Subquery(activity.order_by(*MESSAGE_ORDER.ordering()).values("preview")[:1]),
         )
 
     def page(self, *, page: int = 1, size: int = 25) -> InboxGroupPage:

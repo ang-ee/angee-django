@@ -17,18 +17,18 @@ from __future__ import annotations
 from django.db import models
 from rebac import to_object_ref
 
-from angee.iam.models.base import ProtectedDataModel
+from angee.base.models.base import AngeeDataModel
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class MtiParent(ProtectedDataModel):
+class MtiParent(AngeeDataModel):
     """A REBAC-gated parent — the shared identity an MTI child IS-A."""
 
     sqid_prefix = "mtp_"
 
     title = models.CharField(max_length=200, blank=True, default="")
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         """Django model options for the gated MTI parent."""
 
         abstract = False
@@ -89,13 +89,13 @@ class MtiParentProxy(MtiParent):
         app_label = "mtidemo"
 
 
-class UntypedCaptureParent(ProtectedDataModel):
+class UntypedCaptureParent(AngeeDataModel):
     """Concrete stored ancestor without its own polymorphic resource identity."""
 
     sqid_prefix = "ucp_"
     title = models.CharField(max_length=64)
 
-    class Meta(ProtectedDataModel.Meta):
+    class Meta(AngeeDataModel.Meta):
         """Keep this parent deliberately untyped for the native lock contract."""
 
         abstract = False

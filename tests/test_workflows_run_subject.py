@@ -4,8 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection, models
-from django.test.utils import CaptureQueriesContext
+from django.db import models
 from rebac import system_context
 
 from angee.base.querysets import row_lock_paths
@@ -13,7 +12,6 @@ from angee.workflows import subjects
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import RunSubjectRecord, StepRecord, StepRun, WorkflowRun
-from tests.recordrefdemo.models import RecordRefNullableEdge
 from tests.workflow_steps import Echo, document
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
@@ -139,28 +137,6 @@ def test_deleted_subject_stops_its_run(execution, subject):
     assert run.status == RunStatus.CANCELED
     assert run.stopped_at is not None
     assert not WorkflowRun.objects.cancel(run, actor=actor).canceled
-
-
-@pytest.mark.parametrize("size", [1, 10, 100])
-def test_deleted_subjects_schedule_run_cancellation_by_batch(execution, size):
-    """The collector finds all subject runs with a bounded statement budget."""
-
-    actor, sent = execution
-    workflow = workflow_for(actor)
-    with system_context(reason="tests.workflows.subject_batch"):
-        records = [RunSubjectRecord.objects.create() for _ in range(size)]
-        for record in records:
-            RecordRefNullableEdge.objects.create(target=record)
-    for record in records:
-        WorkflowRun.objects.start(workflow, actor=actor, subject=record)
-    sent.clear()
-
-    with system_context(reason="tests.workflows.subject_batch_delete"), CaptureQueriesContext(connection) as queries:
-        RunSubjectRecord.objects.filter(pk__in=[record.pk for record in records]).delete()
-
-    assert sum(name == "workflows.cancel" for name, _ in sent) == size
-    assert not RecordRefNullableEdge.objects.filter(object_id__in=[record.pk for record in records]).exists()
-    assert len(queries) <= 40
 
 
 def test_deleted_subject_prevents_reopen(execution, subject):

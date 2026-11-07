@@ -57,9 +57,9 @@ verifier.resolve_actor = lambda token: SubjectRef.of('tests/actor', '1') if toke
 sys.modules[verifier.__name__] = verifier
 settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee.base', 'angee.mcp'],
-    SECRET_KEY='native-mcp-mount', ANGEE_MERGE_GUARDS=[],
+    SECRET_KEY='native-mcp-mount', ANGEE_MERGE_GUARDS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
     ALLOWED_HOSTS=['localhost'], CSRF_TRUSTED_ORIGINS=['http://localhost'],
-    ANGEE_MCP_ACTOR_VERIFIER='native_mcp_verifier.resolve_actor', ANGEE_WEB_STATEMENT_TIMEOUT=0,
+    ANGEE_MCP_ACTOR_VERIFIER='native_mcp_verifier.resolve_actor',
 )
 import django
 django.setup()
@@ -91,8 +91,12 @@ with patch.object(server, '_registrars', return_value=(register_probe,)):
 
 
 def test_native_compose_owns_ready_web_and_graphql_artifacts():
+    """A composed project serves its URLconf, ASGI app and launcher from angee.server."""
+
     _run(r'''
 import json
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from angee.base.testing.packages import write_addon_distribution
@@ -127,6 +131,22 @@ schemas = {"public": {"query": Query}}
             'schemas/public.metadata.json', 'schemas/publishers.json'} <= set(receipt.OWNED_FILES)
     assert apps.is_installed('django_compose')
     assert 'django_compose' not in settings.COMPOSE_SNAPSHOT.dependencies
+    assert settings.ROOT_URLCONF == 'angee.server.urls'
+    assert settings.ASGI_APPLICATION == 'angee.server.application'
+    from django.core.handlers.asgi import ASGIHandler
+    from django.urls import get_resolver, resolve
+    from angee.server.asgi import _Application, application
+    assert get_resolver().urlconf_module.__name__ == 'angee.server.urls'
+    assert isinstance(application, _Application)
+    assert isinstance(application.http, ASGIHandler)
+    assert 'websocket' in application.protocols
+    assert resolve('/health/ready').url_name == 'angee-server-readiness'
+    assert resolve('/graphql/public/').route == 'graphql/<str:schema_name>/'
+    launcher = root / 'manage.py'
+    launcher.write_text('from angee.server.management import execute\nexecute()\n')
+    checked = subprocess.run([sys.executable, str(launcher), 'check'], cwd=root,
+        capture_output=True, text=True)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
     manifest = json.loads(artifact_path('web/manifest.json').read_text())
     assert any(package['app'] == 'ready_probe' for package in manifest['addonPackages'])
     assert 'ready_probe' in artifact_path('schemas/public.graphql').read_text()
@@ -166,10 +186,7 @@ resource = hasura_model_resource(GroupNode, model=Group, name="probe_groups",
 schemas = {"public": {"query": resource.query, "types": resource.types,
     "subscription": changes(Group, field="probeGroupChanged")}}
 """)
-    # 28ce9633a removed auth from GraphQL's closure; this probe declares the app its schema imports.
-    write_addon_distribution(
-        package, 'publisher_probe', depends_on=('angee.graphql', 'django.contrib.auth'), metadata_root=root,
-    )
+    write_addon_distribution(package, 'publisher_probe', depends_on=('angee.graphql',), metadata_root=root)
     runtime = root / 'runtime'
     boot(Path.cwd(), runtime, [root], include_examples=False, root_apps=['publisher_probe'])
     projection = runtime / 'schemas/publishers.json'

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator,
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.fields.text import ModelLabelField
+from angee.base.implementations import impl_registry
 from angee.base.refs import generic_pointer_model
 from angee.base.schemas.forms import relation_positions
 from angee.base.schemas.references import schemas_match
@@ -57,6 +58,18 @@ _ACTION: TypeAdapter[NodeKey] = TypeAdapter(NodeKey)
 def map_body_key(key: str) -> str:
     """Name the execution row for a map node's declared body."""
     return key + MAP_BODY_SUFFIX
+
+
+def _has_path(value: Any, path: tuple[str | int, ...]) -> bool:
+    """Whether a JSON value holds an item at ``path``."""
+    for part in path:
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        elif isinstance(value, list) and isinstance(part, int) and 0 <= part < len(value):
+            value = value[part]
+        else:
+            return False
+    return True
 
 
 class Issue(BaseModel):
@@ -745,6 +758,20 @@ class Definition(BaseModel):
         """Resolve one node's class once, without resolving unrelated draft nodes."""
         return self.node(key).implementation
 
+    @cached_property
+    def unregistered_steps(self) -> frozenset[str]:
+        """Declarations whose step key the step registry no longer binds.
+
+        A retained run of such a graph stays readable: its reads answer from the
+        published document and the Step base contract instead of the missing class.
+        """
+        registered = impl_registry(Step.registry_setting)
+        return frozenset(key for key, node, _ in self.declarations() if node.step not in registered)
+
+    def effect_idempotent(self, key: str) -> bool:
+        """A node's effect idempotency; an unregistered step keeps the fail-closed Step default."""
+        return Step.effect_idempotent if key in self.unregistered_steps else self.step(key).effect_idempotent
+
     def output_schema(self, key: str, outcomes: set[str] | None = None) -> dict[str, Any]:
         """Resolve node output, including the map body's typed item contract."""
         step = self.step(key)
@@ -1265,20 +1292,12 @@ class Definition(BaseModel):
         """A map body reports failure through its parent's failed port."""
         return "failed" if "." in key else ERROR_OUTCOME
 
-    def ready_nodes(
-        self,
-        rows: Iterable[StepRow],
-        *,
-        map_concurrency: int = 10,
-        body_progress: Mapping[str, tuple[int, int, int, int]] | None = None,
-    ) -> list[PlannedNode]:
+    def ready_nodes(self, rows: Iterable[StepRow], *, map_concurrency: int = 10) -> list[PlannedNode]:
         """Plan missing rows once all sources settle, propagating skips in one pass.
 
         Incoming edges are grouped by source: two alternative outcomes leading
         to the same target count as one predecessor for an ``all`` join.
         Failed ``error`` edges are live, matching the failure-routing contract.
-        Indexed body slots are created lowest first and never deleted, so the
-        maximum retained index identifies the next uncreated slot.
         """
         if type(map_concurrency) is not int or map_concurrency < 1:
             raise ValueError("Map concurrency must be a positive integer.")
@@ -1292,26 +1311,19 @@ class Definition(BaseModel):
                 parent = existing[key]
                 if (self.nodes[key].body is not None and parent.status == StepRunStatus.WAITING
                         and parent.waiting_kind == WaitingKind.MAP):
+                    bodies = {row.map_index: row for row in rows if row.node_key == map_body_key(key)}
                     total = len(parent.input["items"])
-                    if body_progress is None:
-                        bodies = {row.map_index: row for row in rows if row.node_key == map_body_key(key)}
-                        count = len(bodies)
-                        open_count = sum(row.status not in StepRunStatus.terminal_values() for row in bodies.values())
-                        next_indices: Iterable[int] = (index for index in range(total) if index not in bodies)
-                    else:
-                        count, open_count, last_index, _failed_count = body_progress.get(
-                            map_body_key(key), (0, 0, -1, 0)
-                        )
-                        next_indices = iter(range(last_index + 1, total))
-                    if count == total and not open_count:
+                    open_count = sum(row.status not in StepRunStatus.terminal_values() for row in bodies.values())
+                    if len(bodies) == total and not open_count:
                         planned.append(PlannedNode(key, "ready", rank, existing=True))
                     else:
                         slots = max(0, map_concurrency - open_count)
-                        for index in next_indices:
+                        for index in range(total):
                             if not slots:
                                 break
-                            planned.append(PlannedNode(map_body_key(key), "ready", rank, map_index=index))
-                            slots -= 1
+                            if index not in bodies:
+                                planned.append(PlannedNode(map_body_key(key), "ready", rank, map_index=index))
+                                slots -= 1
                 continue
             sources = incoming[key]
             if not sources:
@@ -1369,15 +1381,58 @@ class Definition(BaseModel):
             raise ValidationError("A whole step input cannot be null.")
         return value
 
-    def _input_bindings(self) -> Iterator[tuple[SourceBinding, dict[str, Any], bool]]:
+    def _consumer_schema(
+        self, key: str, path: tuple[str | int, ...], opaque: list[tuple[str | int, ...]] | None,
+    ) -> dict[str, Any] | None:
+        """One input consumer's contract; a reader sets aside one an unregistered step owns.
+
+        Any other configuration failure still raises, so a broken registered
+        contract is never mistaken for a removed step.
+        """
+        try:
+            return schema_at(self.node_input_schema(key), []) or {}
+        except ImproperlyConfigured:
+            if opaque is None or not self._reads_unregistered(key):
+                raise
+            opaque.append(path)
+            return None
+
+    def _reads_unregistered(self, key: str) -> bool:
+        """Whether an unregistered step owns part of ``key``'s input contract.
+
+        A node's contract reads its own step. A map's also reads its body and the
+        upstream producer whose output it maps, so its control ancestors and their
+        bodies count too.
+        """
+        reads = {key}
+        if key in self.nodes and self.nodes[key].body is not None:
+            upstream = self.ancestors(key)
+            reads |= {map_body_key(key), *upstream, *(map_body_key(source) for source in upstream)}
+        return not self.unregistered_steps.isdisjoint(reads)
+
+    def _input_bindings(
+        self, opaque: list[tuple[str | int, ...]] | None = None,
+    ) -> Iterator[tuple[SourceBinding, dict[str, Any], bool]]:
         for key, node, _ in self.declarations():
             for field, binding in self._bindings(node.input).items():
                 if isinstance(binding, SourceBinding) and INPUT_SOURCE in binding.sources:
-                    target = schema_at(self.node_input_schema(key), []) or {}
+                    target = self._consumer_schema(key, tuple(binding.path), opaque)
+                    if target is None:
+                        continue
                     expected = self._field_schema(target, field)
                     if expected is None:
                         raise ValidationError("Unknown target input field.")
                     yield binding, expected, field is None or field in target.get("required", [])
+
+    def _compose_input(self, opaque: list[tuple[str | int, ...]] | None = None) -> dict[str, Any]:
+        entry = self.nodes[self.entry]
+        schema: dict[str, Any] = {"type": "object"}
+        if entry.input is None:
+            schema = self._consumer_schema(self.entry, (), opaque) or schema
+        return compose_schema(schema, (
+            (binding.path, expected, required, binding.project)
+            for binding, expected, required in self._input_bindings(opaque)
+        ))
 
     @cached_property
     def input_schema(self) -> dict[str, Any]:
@@ -1387,14 +1442,17 @@ class Definition(BaseModel):
         Multiple consumers of the same path must declare equal schemas; broader
         schema implication is deliberately outside the binding contract.
         """
-        entry = self.nodes[self.entry]
-        schema = {"type": "object"}
-        if entry.input is None:
-            schema = schema_at(self.node_input_schema(self.entry), []) or schema
-        return compose_schema(schema, (
-            (binding.path, expected, required, binding.project)
-            for binding, expected, required in self._input_bindings()
-        ))
+        return self._compose_input()
+
+    @cached_property
+    def _reader_input(self) -> tuple[dict[str, Any], tuple[tuple[str | int, ...], ...]]:
+        """The retained input's reader contract and the paths only unregistered steps consume.
+
+        Admission keeps failing on an unregistered step; a reader instead treats the
+        input that step consumed as unreadable, since its references are unknown.
+        """
+        opaque: list[tuple[str | int, ...]] = []
+        return self._compose_input(opaque), tuple(opaque)
 
     def validate_input(self, value: Any) -> Any:
         """Normalize the entry and validate the derived workflow-input schema."""
@@ -1422,7 +1480,7 @@ class Definition(BaseModel):
         """Locate the declared record references in the admitted run input."""
         return tuple(
             (path, EvidenceReference(model=relation["resource"], id=item))
-            for path, relation, item in relation_positions(self.input_schema, value)
+            for path, relation, item in relation_positions(self._reader_input[0], value)
         )
 
     def input_evidence(self, value: Any) -> tuple[EvidenceReference, ...]:
@@ -1431,12 +1489,16 @@ class Definition(BaseModel):
         return tuple(EvidenceReference(model=model, id=public_id) for model, public_id in sorted(references))
 
     def redacted_input(self, value: Any, readable: set[tuple[str, str]]) -> Any:
-        """Null only reference-marked values whose current source read is absent."""
+        """Null reference-marked values whose current source read is absent.
+
+        Input consumed only by an unregistered step is nulled too: its references are unknown.
+        """
         hidden = [path for path, ref in self._input_references(value) if (ref.model.lower(), ref.id) not in readable]
+        hidden += [path for path in self._reader_input[1] if _has_path(value, path)]
         if not hidden:
             return value
         projected = copy.deepcopy(value)
-        for path in hidden:
+        for path in sorted(hidden, key=len, reverse=True):
             if not path:
                 return None
             parent = projected

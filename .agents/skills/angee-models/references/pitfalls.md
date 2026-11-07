@@ -23,7 +23,7 @@ and [Direct record access](../../../../docs/backend/guidelines.md#direct-record-
   enrichment roll a foreign write back, and never defer IAM's own person
   linkage ([`person_created`](../../../../src/angee/iam/events.py) fires before commit).
 - **IAM stores the canonical person email.** `bulk_create` and queryset
-  `update()` bypass [`UserManager.normalize_email`](../../../../src/angee/iam/managers.py);
+  `update()` bypass [`UserManager.normalize_email`](../../../../src/angee/iam/models.py);
   normalize before writing email through them
   ([persistence contract](../../../../docs/backend/guidelines.md#persistence-primitives)).
 - **Integration children use the ordinary emitted Django MRO.** The composer

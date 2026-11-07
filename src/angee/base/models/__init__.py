@@ -1,6 +1,6 @@
-"""Foundation model package, inert outside Django's model-loading phase.
+"""Native discovery entrypoint for foundation model declarations.
 
-Addons import abstract capabilities from their declaring modules. BaseConfig's
-native import_models hook exposes the addressable scope contracts for compiler
-discovery after Django starts loading models.
+The foundation currently provides only abstract capabilities. Addons import
+those capabilities from their declaring modules. Concrete or composed source
+declarations added to this app must be imported here for native discovery.
 """

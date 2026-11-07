@@ -6,8 +6,7 @@ from django.apps import apps
 
 from angee.graphql.ids import PublicID
 from angee.graphql.inputs import InputReference
-from angee.iam.graphql.inputs import AuthorizedInputReference
-from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.graphql.relations import actor_scoped_to_one
 from angee.work.schema import WorkQueueType
 
 Round = apps.get_model("proposals", "Round")
@@ -25,7 +24,7 @@ class RoundQuestionsQueueSetupInput:
     """Contribute question routing to the typed round setup input."""
 
     clarification_queue: PublicID | None = strawberry.field(
-        default=None, metadata={InputReference: AuthorizedInputReference("work.Queue")},
+        default=None, metadata={InputReference: InputReference("work.Queue")},
     )
 
 

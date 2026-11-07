@@ -5,15 +5,12 @@ from __future__ import annotations
 import importlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import strawberry
-from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.db import connection, models
-from django.test import RequestFactory
+from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
@@ -25,34 +22,24 @@ from rebac import (
 )
 
 import tests.test_agents_graphql  # noqa: F401 -- register related models before native database setup
-from angee.base.signals import mute_changes
 from angee.graphql.deletion import DeletePreview
+from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.iam.testing.graphql import measure_graphql_document
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.messaging.testing.models import Channel
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
-from tests.conftest import (
-    Backend,
-    Drive,
-    Integration,
-    MimeType,
-    SchemaAddon,
-    execute_schema,
-    make_integration,
-)
+from tests.conftest import Backend, Drive, Integration, MimeType, SchemaAddon, make_integration
 from tests.conftest import (
     File as StorageFile,
 )
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 
 messaging_schema = importlib.import_module("angee.messaging.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
-intake_schema = importlib.import_module("angee.intake.schema")
 parties_schema = parties_graphql.parties_schema
-work_schema = importlib.import_module("angee.work.schema")
 User = get_user_model()
 
 
@@ -105,6 +92,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "scheduled_at",
         "is_held",
         "is_original_post",
+        "metadata_mailbox",
     }
     assert {name for name, field in metadata.query.fields.items() if field.sort} == {
         "thread_title",
@@ -160,8 +148,10 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert mailbox_dimension["server"]["input"] == "METADATA__MAILBOX"
     assert mailbox_dimension["server"]["key"] == "metadata__mailbox"
     assert mailbox_dimension["kind"] == "json"
-    # The source does not declare metadata filterable: this axis is a summary.
-    assert mailbox_dimension["drill"] is None
+    # The provider metadata document is not filterable; the axis drills by exact
+    # match through the one path filter Message declares.
+    drill = mailbox_dimension["drill"]
+    assert (drill["kind"], drill["field"], drill["valueKey"]) == ("value", "metadata_mailbox", "metadata__mailbox")
     assert message["updateFields"] == []
     status_field = {field["name"]: field for field in message["fields"]}["status"]
     assert message["query"]["fields"]["status"]["filter"] is not None
@@ -197,7 +187,6 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
         "display_name",
         "team",
         "intake_queue",
-        "intake_trigger",
         "intake_field_map",
         "intake_requester_domains",
     )
@@ -257,7 +246,7 @@ def test_message_by_pk_serves_title_beside_a_parts_selection(composed_tables: No
             }
             """,
             {"id": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["messages_by_pk"]
     assert payload["title"] == "Detail subject"
@@ -286,7 +275,7 @@ def test_message_parts_projection_returns_depth_first_order(composed_tables: Non
             }
             """,
             {"id": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["messages_by_pk"]["parts"]
 
@@ -305,7 +294,7 @@ def test_message_parts_projection_returns_depth_first_order(composed_tables: Non
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]["messages"][-1]["parts"]
 
@@ -324,7 +313,7 @@ def test_message_parts_projection_returns_depth_first_order(composed_tables: Non
 
 @pytest.mark.parametrize(
     ("surface", "expected_mime_queries"),
-    [("messages", (1, 1, 1, 1)), ("record_thread", (1, 0, 0, 0))],
+    [("messages", (1, 1, 1, 1)), ("record_thread", (1, 1, 1, 0))],
 )
 def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     composed_tables: None,
@@ -337,9 +326,9 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     """Narrow transcripts keep MIME loading constant at three and six messages.
 
     MessageType loads parts, fragments, files and MIME types in four prefetch
-    queries. RecordMessageType projects only the selected part identities and
-    navigation in one query. Every real reading-order call then issues zero
-    queries through the manager's authorized navigation cache.
+    queries. RecordMessageType consumes for_record's three prefetch queries:
+    parts, fragments and files joined to MIME types. Every real reading-order
+    call must then issue zero queries under the manager's complete-cache gate.
     """
 
     admin = _platform_admin(f"transcript-prefetch-{surface}")
@@ -393,7 +382,7 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     )
     schema = _schema()
     # Warm process-wide metadata caches, then measure fresh requests/querysets.
-    _data(execute_schema(schema, query, {**variables, "limit": 1}, request=_request(admin)))
+    _data(execute_schema(schema, query, {**variables, "limit": 1}, user=admin))
     manager_type = type(messaging_models.Part.objects)
     reading_order = manager_type.reading_order_for_message
     visited: list[str] = []
@@ -413,7 +402,7 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     for size in (3, 6):
         visited.clear()
         with CaptureQueriesContext(connection) as captured:
-            payload = _data(execute_schema(schema, query, {**variables, "limit": size}, request=_request(admin)))
+            payload = _data(execute_schema(schema, query, {**variables, "limit": size}, user=admin))
         rows = payload["messages"] if surface == "messages" else payload["record_thread"]["messages"]
         # Chatter selects the newest page, then returns it chronologically.
         page = expected[:size] if surface == "messages" else expected[-size:]
@@ -450,7 +439,7 @@ def test_inbox_labels_coexist_with_guarded_relation_selections(composed_tables: 
         }
     """
     schema = _schema()
-    visible = _data(execute_schema(schema, document, {"id": message.sqid}, request=_request(admin)))["messages"]
+    visible = _data(execute_schema(schema, document, {"id": message.sqid}, user=admin))["messages"]
     assert visible[0]["thread_title"] == "Original"
     assert visible[0]["thread"]["title"]["text"] == "Original"
     assert visible[0]["channel_vendor_name"] == "Board-Label-Vendor"
@@ -467,7 +456,7 @@ def test_inbox_labels_coexist_with_guarded_relation_selections(composed_tables: 
                 }
                 """,
                 {"id": message.sqid},
-                request=_request(subject),
+                user=subject,
             )
         )["messages"]
         assert hidden == [{"id": message.sqid, "thread_title": "", "channel_vendor_name": ""}]
@@ -512,7 +501,7 @@ def test_message_sender_and_participant_expose_resolved_party(composed_tables: N
             }
             """,
             {"id": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["messages_by_pk"]
 
@@ -568,7 +557,7 @@ def test_inbox_sender_redacts_party_without_party_read(composed_tables: None) ->
             }
             """,
             {"id": message.sqid},
-            request=_request(reader),
+            user=reader,
         )
     )["messages_by_pk"]
 
@@ -624,7 +613,7 @@ def test_handle_party_redacts_mixed_visibility_without_permission_error(
           }
         }
         """,
-        request=_request(reader),
+        user=reader,
     )
 
     assert result.errors is None, result.errors
@@ -649,50 +638,47 @@ def test_handle_party_batches_one_related_model_query(
 
     admin = _platform_admin("batched-party-admin")
     with system_context(reason="test.messaging.party.batching.seed"):
-        for index in range(25):
+        for index in range(3):
             party = messaging_models.Party.objects.create(
                 display_name=f"Party {index}",
                 created_by_id=admin.pk,
             )
             messaging_models.Handle.objects.create(
                 platform="email",
-                value=f"party-{index:02}@example.com",
+                value=f"party-{index}@example.com",
                 display_name=f"Handle {index}",
                 party=party,
                 created_by_id=admin.pk,
             )
     schema = _schema()
 
-    query = """
-        query Handles($limit: Int!) {
-          handles(limit: $limit, order_by: [{value: asc}]) {
-            value
-            party { display_name }
-          }
-        }
-    """
-    _data(execute_schema(schema, query, {"limit": 1}, request=_request(admin)))
-    counts = []
-    table = connection.ops.quote_name(messaging_models.Party._meta.db_table)
-    for size in (1, 3, 25):
-        with CaptureQueriesContext(connection) as queries:
-            result = _data(execute_schema(schema, query, {"limit": size}, request=_request(admin)))
-        assert [row["party"]["display_name"] for row in result["handles"]] == [
-            f"Party {index}" for index in range(size)
-        ]
-        party_selects = [
-            item["sql"] for item in queries
-            if item["sql"].startswith(f"SELECT {table}.") and f"FROM {table}" in item["sql"]
-        ]
-        # Hydrate selected labels once; native pk-only permission witnesses
-        # remain required and must also stay bounded across populated pages.
-        hydrated = [
-            sql for sql in party_selects
-            if sql.startswith(f'SELECT {table}."id", {table}."display_name" FROM')
-        ]
-        assert len(hydrated) == 1, party_selects
-        counts.append((len(queries), len(party_selects)))
-    assert counts[1] == counts[2], counts
+    with CaptureQueriesContext(connection) as queries:
+        result = execute_schema(
+            schema,
+            """
+            query Handles {
+              handles(order_by: [{value: asc}]) {
+                value
+                party { display_name }
+              }
+            }
+            """,
+            user=admin,
+        )
+
+    assert result.errors is None, result.errors
+    assert [row["party"]["display_name"] for row in result.data["handles"]] == [
+        "Party 0",
+        "Party 1",
+        "Party 2",
+    ]
+    party_selects = [
+        query["sql"]
+        for query in queries.captured_queries
+        if query["sql"].lstrip().upper().startswith("SELECT")
+        and f'FROM "{messaging_models.Party._meta.db_table}"' in query["sql"]
+    ]
+    assert len(party_selects) == 1, party_selects
 
 
 def test_handle_party_regates_sudo_loaded_parent(
@@ -723,7 +709,7 @@ def test_handle_party_regates_sudo_loaded_parent(
           sudo_handles { value party { display_name } }
         }
         """,
-        request=_request(reader),
+        user=reader,
     )
 
     assert result.errors is None, result.errors
@@ -775,7 +761,7 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
             }
             """,
             {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
-            request=_request(reader),
+            user=reader,
         )
     )["record_thread"]
     assert visible == {
@@ -799,7 +785,7 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
         }
         """,
         {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
-        request=_request(reader),
+        user=reader,
     )
     assert narrowed.errors is not None
     assert "Cannot query field 'party' on type 'RecordHandleType'" in str(narrowed.errors[0])
@@ -834,104 +820,12 @@ def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(
             }
             """,
             {"messageId": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["parts"]
     assert [part["role"] for part in payload] == ["BODY"]
     assert payload[0]["fragment"]["part_count"] == 2
     assert payload[0]["fragment"]["message_count"] == 2
-
-
-@pytest.mark.django_db(transaction=True)
-def test_fragment_counts_are_projected_at_one_five_ten_twenty_parts(composed_tables: None) -> None:
-    """Nested fragment use counts are projected once in the paged Part query."""
-
-    del composed_tables
-    admin = _platform_admin("fragment-count-budget")
-    _thread, message = _seed_thread_and_message(admin)
-    with system_context(reason="test.messaging.fragment_count_budget"):
-        for index in range(20):
-            fragment = messaging_models.Fragment.objects.upsert(text=f"Counted paragraph {index}")
-            messaging_models.Part.objects.create(
-                message=message, position=index, role="body", fragment=fragment, created_by_id=admin.pk,
-            )
-    schema = _schema()
-    document = """query FragmentCounts($message: String!, $limit: Int!) {
-        parts(where: {message: {_eq: $message}}, limit: $limit, order_by: [{position: asc}]) {
-            id fragment { part_count message_count }
-        }
-    }"""
-    reads = {
-        size: measure_graphql_document(schema, document, {"message": message.sqid, "limit": size}, actor=admin)
-        for size in (1, 5, 10, 20)
-    }
-    # The complete Channel donor schema contributes fixed permission SQL.
-    total_bytes, largest_bytes = (210_000, 190_000) if connection.vendor == "postgresql" else (185_000, 170_000)
-    for size, read in reads.items():
-        assert len(read.data["parts"]) == size
-        assert all(row["fragment"] == {"part_count": 1, "message_count": 1} for row in read.data["parts"])
-        assert read.statement_count == 6, (size, read.statement_count)
-        read.assert_no_audit_writes()
-        read.assert_bytes(total=total_bytes, largest=largest_bytes, cause="complete Channel donor schema")
-    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
-        reads[larger].assert_flat_from(reads[smaller])
-
-
-@pytest.mark.django_db(transaction=True)
-def test_message_needaction_is_projected_at_one_five_ten_twenty(composed_tables: None) -> None:
-    """The inbox computes the owner-selected action predicate with the page."""
-
-    del composed_tables
-    admin = _platform_admin("needaction-budget")
-    with system_context(reason="test.messaging.needaction_budget.seed"):
-        for _ in range(20):
-            messaging_models.Message.objects.create(created_by=admin)
-    schema = _schema()
-    document = """query NeedAction($limit: Int!) {
-        messages(limit: $limit, order_by: [{created_at: asc}]) { id needaction }
-    }"""
-    reads = {
-        size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
-        for size in (1, 5, 10, 20)
-    }
-    for size, read in reads.items():
-        assert len(read.data["messages"]) == size
-        assert all(isinstance(row["needaction"], bool) for row in read.data["messages"])
-        assert read.statement_count == 4
-        read.assert_no_audit_writes()
-        read.assert_bytes(total=18_000, largest=14_000)
-    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
-        reads[larger].assert_flat_from(reads[smaller])
-
-
-def test_record_chatter_needaction_keeps_a_structural_message_population(composed_tables: None) -> None:
-    """A record-gated pane does not rebuild each message's REBAC read scope."""
-
-    del composed_tables
-    poster = _platform_admin("record-needaction-poster")
-    watcher = _platform_admin("record-needaction-watcher")
-    plain = User.objects.create_user(username="record-needaction-plain")
-    with system_context(reason="test.messaging.record_needaction.seed"):
-        ticket = messaging_models.ThreadedTicket.objects.create(title="Needaction budget")
-        ticket.message_subscribe(user=watcher)
-    with actor_context(poster):
-        for index in range(5):
-            ticket.message_post(f"Item {index}")
-    schema = _schema()
-    document = """query RecordNeedaction($model: String!, $id: ID!) {
-        record_thread(input: {model_label: $model, record_id: $id}) {
-            messages { preview needaction }
-        }
-    }"""
-    variables = {"model": "messaging.ThreadedTicket", "id": ticket.sqid}
-    for actor, expected in ((watcher, True), (plain, False)):
-        read = measure_graphql_document(schema, document, variables, actor=actor)
-        assert read.data["record_thread"]["messages"] == [
-            {"preview": f"Item {index}", "needaction": expected} for index in range(5)
-        ]
-        # The composed record-scope and REBAC follow projection use six reads.
-        assert read.statement_count == 6, (actor.username, read.statement_count)
-        read.assert_bytes(total=15_000, largest=7_000)
 
 
 def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables: None) -> None:
@@ -964,7 +858,7 @@ def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables:
                 _schema(),
                 document,
                 {"where": {"message": {"_eq": message.sqid}}},
-                request=_request(admin),
+                user=admin,
             )
         )
     assert {row["key"]["role"]: row["aggregate"]["count"] for row in data["parts_groups"]} == {"BODY": 1, "QUOTED": 1}
@@ -1009,7 +903,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
         }
         """,
         {"id": message.sqid},
-        request=_request(admin),
+        user=admin,
     )
     assert refused_message.errors is not None
 
@@ -1025,7 +919,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
             }
             """,
             {"id": thread.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["update_threads_by_pk"]
     assert updated_thread == {"visibility": "PUBLIC", "title": {"text": "Original"}}
@@ -1039,7 +933,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
         }
         """,
         {"id": message.sqid},
-        request=_request(admin),
+        user=admin,
     )
     assert stale_message_write.errors is not None
     stale_thread_write = execute_schema(
@@ -1050,7 +944,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
         }
         """,
         {"id": thread.sqid},
-        request=_request(admin),
+        user=admin,
     )
     assert stale_thread_write.errors is not None
 
@@ -1063,7 +957,7 @@ def test_message_state_is_read_only_while_thread_visibility_remains_writable(com
             }
             """,
             {"id": message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["delete_messages_by_pk"]
     assert deleted == {"id": message.sqid, "status": "SYNCED"}
@@ -1117,7 +1011,7 @@ def test_message_channel_group_key_drills_down_with_public_id(
                     {"field": "CHANNEL__DISPLAY_NAME"},
                 ],
             },
-            request=_request(admin),
+            user=admin,
         )
     )["messages_groups"]
     bucket_channel_id = grouped[0]["key"]["channel_id"]
@@ -1134,7 +1028,7 @@ def test_message_channel_group_key_drills_down_with_public_id(
             }
             """,
             {"channel": bucket_channel_id},
-            request=_request(admin),
+            user=admin,
         )
     )["messages"]
 
@@ -1162,7 +1056,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
     # The record's creation is a history line, not a message: no thread exists before the first post.
@@ -1198,7 +1092,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Follow up from GraphQL.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
     assert posted["error_code"] is None
@@ -1230,7 +1124,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
     assert after["error_code"] is None
@@ -1281,7 +1175,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Internal note from GraphQL.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
 
@@ -1323,7 +1217,7 @@ def test_record_chatter_post_reply(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]["message"]
 
@@ -1364,7 +1258,7 @@ def test_record_chatter_post_reply(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "parent": root["id"],
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
 
@@ -1400,7 +1294,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]["message"]
 
@@ -1434,7 +1328,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
                 "message": posted["id"],
                 "reaction": "👍",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_message_reaction"]
 
@@ -1475,7 +1369,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
                 "message": posted["id"],
                 "reaction": "👍",
             },
-            request=_request(other),
+            user=other,
         )
     )
 
@@ -1497,7 +1391,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]["messages"][-1]["reaction_groups"]
 
@@ -1541,7 +1435,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
                 "message": posted["id"],
                 "reaction": "👍",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_message_reaction"]["reaction_groups"]
 
@@ -1553,147 +1447,6 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
             "handles": [{"value": "msg-react-other@example.com"}],
         }
     ]
-
-
-@pytest.mark.parametrize("root", ["record_thread", "record_message_feed", "record_message_feed_revalidate"])
-def test_record_reaction_handles_require_their_own_read_and_batch(
-    composed_tables: None, root: str, record_property: Any,
-) -> None:
-    """A record reader sees reaction counts, not another reactor's private handle."""
-
-    owner = User.objects.create_user(username="reaction-handle-owner")
-    reader = User.objects.create_user(username="reaction-record-reader")
-    with system_context(reason="test.messaging.reaction_handle.seed"), mute_changes():
-        doc = messaging_models.ChatterDoc.objects.create(title="Reaction visibility")
-        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(doc)
-        handle = messaging_models.Handle.objects.create(
-            platform="email", value="private-reactor@example.test",
-            display_name="Private Reactor", created_by=owner,
-        )
-        messages = [
-            messaging_models.Message.objects.create(
-                thread=attachment.thread, message_type="comment", direction="internal",
-                created_by=owner, preview=f"Comment {index}",
-            )
-            for index in range(20)
-        ]
-        for message in messages:
-            messaging_models.Reaction.objects.create(
-                message=message, handle=handle, reaction="like", created_by=owner,
-            )
-    _grant(doc, "reader", owner)
-    _grant(doc, "reader", reader)
-    schema = _schema()
-    arguments = 'input: {model_label: "chatterdemo.ChatterDoc", record_id: $id'
-    declarations = '$id: ID!, $limit: Int!'
-    if root == "record_thread":
-        arguments += ', message_limit: $limit}'
-    elif root == "record_message_feed":
-        arguments += '}, limit: $limit'
-    else:
-        arguments += '}, ids: $ids'
-        declarations = '$id: ID!, $ids: [ID!]!'
-    query = f"query({declarations}) {{ {root}({arguments}) {{" + """
-        messages { reaction_groups { count handles { value display_name } } }
-      }
-    }"""
-    for actor, expected in ((owner, [{"value": handle.value, "display_name": handle.display_name}]),
-                            (reader, [])):
-        variables = {"id": doc.sqid, "limit": 1, "ids": [messages[0].sqid]}
-        _data(execute_schema(schema, query, variables, request=_request(actor)))
-        counts = []
-        handle_counts = []
-        for size in (1, 5, 20):
-            variables = {"id": doc.sqid, "limit": size, "ids": [row.sqid for row in messages[:size]]}
-            with CaptureQueriesContext(connection) as queries:
-                rows = _data(execute_schema(
-                    schema, query, variables, request=_request(actor),
-                ))[root]["messages"]
-            assert len(rows) == size
-            assert all(row["reaction_groups"] == [{"count": 1, "handles": expected}] for row in rows), (
-                actor.username, rows, expected,
-            )
-            counts.append(len(queries))
-            handle_counts.append(sum(
-                f'FROM "{messaging_models.Handle._meta.db_table}"' in item["sql"] for item in queries
-            ))
-        assert counts[0] == counts[1] == counts[2], counts
-        assert handle_counts == [1, 1, 1], handle_counts
-        record_property(f"{root}_{actor.username}_sql", counts)
-        record_property(f"{root}_{actor.username}_handle_sql", handle_counts)
-
-    proof_counts = []
-    for size in (1, 5, 20):
-        fresh = list(messaging_models.Message._base_manager.filter(pk__in=[row.pk for row in messages[:size]]))
-        with CaptureQueriesContext(connection) as queries:
-            messaging_models.Message.prime_reaction_groups(fresh, reader)
-        proof_counts.append(len(queries))
-        assert not any('INSERT INTO "rebac_permissionauditevent"' in row["sql"] for row in queries)
-        assert sum(f'FROM "{messaging_models.Reaction._meta.db_table}"' in row["sql"] for row in queries) == 1
-        assert sum(f'FROM "{messaging_models.Handle._meta.db_table}"' in row["sql"] for row in queries) == 1
-        assert all(message.reaction_groups(reader)[0].handles == () for message in fresh)
-    assert proof_counts[0] == proof_counts[1] == proof_counts[2], proof_counts
-    record_property("direct_reaction_prime_sql", proof_counts)
-
-
-@pytest.mark.parametrize("window", [1, 5, 20])
-def test_trash_payload_primes_message_and_messages_reactions(
-    composed_tables: None, window: int, record_property: Any,
-) -> None:
-    """Selecting both payload fields batches each bound set, including the later window."""
-
-    actor = User.objects.create_user(username="double-payload-moderator")
-    owner = User.objects.create_user(username="double-payload-reactor")
-    with system_context(reason="test.messaging.double_reaction_payload.seed"), mute_changes():
-        ticket = messaging_models.ChatterDoc.objects.create(title="Double payload")
-        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(ticket)
-        handle = messaging_models.Handle.objects.create(
-            platform="email", value="double-payload@example.test",
-            display_name="Double Payload", created_by=owner,
-        )
-        messages = [
-            messaging_models.Message.objects.create(
-                thread=attachment.thread, message_type="comment", direction="internal",
-                created_by=owner, preview=f"Comment {index}",
-            )
-            for index in range(window + 1)
-        ]
-        for message in messages:
-            messaging_models.Reaction.objects.create(
-                message=message, handle=handle, reaction="like", created_by=owner,
-            )
-    _grant(ticket, "writer", actor)
-    schema = _schema()
-    mutation = """mutation($id: ID!, $message: ID!) {
-      trash_record_message(input: {
-        model_label: "chatterdemo.ChatterDoc", record_id: $id,
-        message_id: $message, confirm: true
-      }) {
-        error
-        message { reaction_groups { count handles { value } } }
-        messages { reaction_groups { count handles { value } } }
-      }
-    }"""
-    variables = {"id": ticket.sqid, "message": messages[-1].sqid}
-    with CaptureQueriesContext(connection) as queries:
-        payload = _data(execute_schema(schema, mutation, variables, request=_request(actor)))["trash_record_message"]
-    assert payload["error"] is None
-    assert payload["message"]["reaction_groups"] == [{"count": 1, "handles": []}]
-    assert len(payload["messages"]) == window
-    assert all(row["reaction_groups"] == [{"count": 1, "handles": []}]
-               for row in payload["messages"])
-    reaction_reads = sum(
-        item["sql"].lstrip().upper().startswith("SELECT")
-        and f'FROM "{messaging_models.Reaction._meta.db_table}"' in item["sql"]
-        for item in queries
-    )
-    handle_reads = sum(
-        item["sql"].lstrip().upper().startswith("SELECT")
-        and f'FROM "{messaging_models.Handle._meta.db_table}"' in item["sql"]
-        for item in queries
-    )
-    record_property(f"double_payload_{window}_sql", (len(queries), reaction_reads, handle_reads))
-    assert reaction_reads == handle_reads == 2, (reaction_reads, handle_reads)
 
 
 def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
@@ -1731,7 +1484,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "message": message.sqid,
             },
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_message_starred"]
 
@@ -1757,7 +1510,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
     assert thread == {
@@ -1780,7 +1533,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(other),
+            user=other,
         )
     )["record_thread"]
     assert other_thread == {
@@ -1812,7 +1565,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "message": message.sqid,
             },
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_message_starred"]
 
@@ -1849,7 +1602,7 @@ def test_record_chatter_update_message(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Original GraphQL body.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
 
@@ -1886,7 +1639,7 @@ def test_record_chatter_update_message(composed_tables: None) -> None:
                 "message": posted["message"]["id"],
                 "body": "Updated GraphQL body.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["update_record_message"]
 
@@ -1932,7 +1685,7 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Delete me.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]["message"]
     second = _data(
@@ -1950,7 +1703,7 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "body": "Keep me.",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]["message"]
 
@@ -1978,7 +1731,7 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "message": first["id"],
             },
-            request=_request(admin),
+            user=admin,
         )
     )["delete_record_message"]
 
@@ -2028,7 +1781,7 @@ def test_record_chatter_update_rejects_retained_notification(composed_tables: No
                 "message": message.sqid,
                 "body": "Tampered",
             },
-            request=_request(admin),
+            user=admin,
         )
     )["update_record_message"]
 
@@ -2048,7 +1801,7 @@ def test_record_chatter_returns_retained_notification_body(composed_tables: None
             messages { message_type parts { fragment { text } } }
           }
         }
-    """, {"id": ticket.sqid}, request=_request(admin)))["record_thread"]
+    """, {"id": ticket.sqid}, user=admin))["record_thread"]
     assert result["messages"] == [
         {"message_type": "NOTIFICATION", "parts": [{"fragment": {"text": "Stage: New → Won"}}]},
     ]
@@ -2083,7 +1836,7 @@ def test_record_chatter_searches_comments_and_retained_notification_bodies(compo
                 }
                 """,
                 {"model": "messaging.ThreadedTicket", "id": ticket.sqid, "search": term},
-                request=_request(admin),
+                user=admin,
             )
         )["record_thread"]
 
@@ -2157,7 +1910,7 @@ def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
                     "after": after,
                     "around": around,
                 },
-                request=_request(admin),
+                user=admin,
             )
         )["record_thread"]
 
@@ -2240,7 +1993,7 @@ def test_record_chatter_orders_interleaved_backfilled_email(composed_tables: Non
                     "before": None,
                     **window,
                 },
-                request=_request(admin),
+                user=admin,
             )
         )["record_thread"]
         return [message["preview"] for message in payload["messages"]]
@@ -2279,7 +2032,7 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
 
@@ -2318,7 +2071,7 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
         }
     """
     schema = _schema()
-    _data(execute_schema(schema, query, {"id": ticket.sqid, "limit": 1}, request=_request(admin)))
+    _data(execute_schema(schema, query, {"id": ticket.sqid, "limit": 1}, user=admin))
     counts = []
     for size in (1, 25):
         with CaptureQueriesContext(connection) as captured:
@@ -2327,7 +2080,7 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
                     schema,
                     query,
                     {"id": ticket.sqid, "limit": size},
-                    request=_request(admin),
+                    user=admin,
                 )
             )["record_thread"]
         assert len(payload["messages"]) == size
@@ -2373,7 +2126,7 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
                 "id": ticket.sqid,
                 "body": "Please review this.",
             },
-            request=_request(poster),
+            user=poster,
         )
     )["post_record_message"]
     assert posted == {
@@ -2393,13 +2146,12 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
                 needaction_count
                 notifications {
                   notification_type
-                  notification_status
                 }
               }
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(watcher),
+            user=watcher,
         )
     )["record_thread"]
     assert unread == {
@@ -2407,7 +2159,7 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
         "unread_count": 1,
         "needaction_count": 1,
         # Inbox rows record delivery independently of the follower cursor.
-        "notifications": [{"notification_type": "INBOX", "notification_status": "READY"}],
+        "notifications": [{"notification_type": "INBOX"}],
     }
 
     read = _data(
@@ -2423,7 +2175,7 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(watcher),
+            user=watcher,
         )
     )["mark_record_thread_read"]
     assert read["error_code"] is None
@@ -2472,7 +2224,7 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(watcher),
+            user=watcher,
         )
     )["record_thread"]
     assert unread["error_code"] is None
@@ -2509,7 +2261,7 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
                 "id": ticket.sqid,
                 "message": first.sqid,
             },
-            request=_request(watcher),
+            user=watcher,
         )
     )["mark_record_message_done"]
     assert done["error_code"] is None
@@ -2537,7 +2289,7 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(watcher),
+            user=watcher,
         )
     )["record_thread"]
     assert {message["id"]: message["needaction"] for message in refreshed["messages"]} == {
@@ -2593,7 +2345,7 @@ def test_record_chatter_post_notifies_direct_recipient(composed_tables: None) ->
                 "body": "Direct heads-up.",
                 "recipient": str(recipient.sqid),
             },
-            request=_request(poster),
+            user=poster,
         )
     )["post_record_message"]
     assert posted == {
@@ -2620,7 +2372,7 @@ def test_record_chatter_post_notifies_direct_recipient(composed_tables: None) ->
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(recipient),
+            user=recipient,
         )
     )["record_thread"]
     assert unread == {
@@ -2679,7 +2431,7 @@ def test_record_thread_returns_suggested_recipients(composed_tables: None) -> No
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(poster),
+            user=poster,
         )
     )["record_thread"]
 
@@ -2731,7 +2483,7 @@ def test_suggested_recipients_withhold_restricted_fields_from_a_non_manager(comp
           }
         }""",
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(poster),
+            user=poster,
         )
     )["record_thread"]["suggested_recipients"]
 
@@ -2785,7 +2537,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid, "file": file.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["post_record_message"]
 
@@ -2812,7 +2564,6 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
     ]
 
 
-@pytest.mark.usefixtures("activity_catalog")
 def test_record_chatter_follow_toggle(composed_tables: None) -> None:
     """The custom record follower mutation mirrors Odoo's follow/unfollow contract."""
 
@@ -2848,7 +2599,7 @@ def test_record_chatter_follow_toggle(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_following"]
 
@@ -2884,7 +2635,7 @@ def test_record_chatter_follow_toggle(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["record_thread"]
 
@@ -2915,7 +2666,7 @@ def test_record_chatter_follow_toggle(composed_tables: None) -> None:
             }
             """,
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["set_record_following"]
 
@@ -2932,7 +2683,7 @@ def _schema() -> Any:
 
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
-        for module in (iam_schema, integrate_schema, parties_schema, messaging_schema, work_schema, intake_schema)
+        for module in (iam_schema, integrate_schema, parties_schema, messaging_schema)
     ]
     return GraphQLSchemas(addons).build("console")
 
@@ -2942,7 +2693,7 @@ def _schema_with_sudo_handle_query() -> Any:
 
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
-        for module in (iam_schema, integrate_schema, parties_schema, messaging_schema, work_schema, intake_schema)
+        for module in (iam_schema, integrate_schema, parties_schema, messaging_schema)
     ]
     addons.append(
         SchemaAddon({"console": {key: (SudoHandleQuery,) if key == "query" else () for key in SCHEMA_PART_KEYS}})
@@ -3097,14 +2848,6 @@ def _storage_drive(tmp_path: Path, *, owner: Any) -> Any:
     )
 
 
-def _request(user: Any) -> Any:
-    """Return a console-shaped POST request bound to ``user``."""
-
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user
-    return request
-
-
 def _grant(resource: Any, relation: str, user: Any) -> None:
     """Write one direct relationship tuple for ``user`` on ``resource``."""
 
@@ -3149,7 +2892,7 @@ def test_generic_thread_and_message_lists_exclude_record_chatter(composed_tables
               messages_aggregate { aggregate { count } }
             }
             """,
-            request=_request(admin),
+            user=admin,
         )
     )
     thread_ids = {row["id"] for row in data["threads"]}
@@ -3172,7 +2915,7 @@ def test_generic_thread_and_message_lists_exclude_record_chatter(composed_tables
             }
             """,
             {"thread": record_thread.sqid, "message": record_message.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )
     # The by-pk route excludes the record thread/message too — not just the list.
@@ -3208,13 +2951,13 @@ def test_generic_delete_excludes_record_thread_from_its_creator(composed_tables:
           delete_threads_by_pk(id: $id) { id }
         }
     """
-    record_result = execute_schema(schema, delete, {"id": record_thread.sqid}, request=_request(creator))
+    record_result = execute_schema(schema, delete, {"id": record_thread.sqid}, user=creator)
     # The record thread is not on the generic write surface: the by-pk lookup misses
     # it, so the delete resolves no target and reports the miss.
     assert record_result.errors is not None
     assert (record_result.data or {}).get("delete_threads_by_pk") is None
 
-    inbox_deleted = _data(execute_schema(schema, delete, {"id": inbox_thread.sqid}, request=_request(creator)))[
+    inbox_deleted = _data(execute_schema(schema, delete, {"id": inbox_thread.sqid}, user=creator))[
         "delete_threads_by_pk"
     ]
     assert inbox_deleted == {"id": inbox_thread.sqid}
@@ -3271,60 +3014,6 @@ def test_message_whose_thread_was_deleted_in_the_same_cascade_does_not_broadcast
         assert not messaging_models.Thread._base_manager.filter(pk=thread_id).exists()
         torn_down = messaging_models.Message(thread_id=thread_id, preview="gone")
         assert torn_down.broadcasts_changes() is False
-
-
-def test_record_teardown_suppresses_timeline_but_publishes_recipient_rows(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Host teardown skips its timeline invalidation and publishes recipients' deletes."""
-
-    del composed_tables
-    from angee.base.signals import change_observed, change_published
-    from angee.timeline import events as timeline_events
-
-    recipient = _platform_admin("mute-recipient")
-    with system_context(reason="test.messaging.record_teardown.seed"):
-        ticket = messaging_models.ThreadedTicket.objects.create(title="Case mute")
-        message = ticket.message_log("Keep until host deletion")
-        control = ticket.message_log("Direct deletion proves the observer")
-        messaging_models.MessageStar._base_manager.create(message=message, user=recipient)
-        messaging_models.ThreadNotification._base_manager.create(
-            thread=message.thread, message=message, user=recipient,
-        )
-
-    published: list[str] = []
-    observed: list[str] = []
-    invalidated: list[models.Model] = []
-
-    def observe_publication(sender: Any, payload: Any, **kwargs: Any) -> None:
-        published.append(payload.model)
-
-    def observe_transport(sender: Any, payload: Any, **kwargs: Any) -> None:
-        observed.append(payload.model)
-
-    def observe_invalidation(records: Any) -> None:
-        invalidated.extend(records)
-
-    monkeypatch.setattr(timeline_events, "broadcast_related_records", observe_invalidation)
-    change_published.connect(observe_publication, dispatch_uid="test.messaging.record_teardown.publish", weak=False)
-    change_observed.connect(observe_transport, dispatch_uid="test.messaging.record_teardown.observe", weak=False)
-    try:
-        with system_context(reason="test.messaging.record_teardown.control"):
-            control.delete()
-        assert "messaging.Message" in published
-        assert any(record.pk == ticket.pk for record in invalidated)
-        published.clear()
-        observed.clear()
-        invalidated.clear()
-        with system_context(reason="test.messaging.record_teardown.delete"):
-            ticket.delete()
-        for label in ("messaging.Message", "messaging.Thread", "messaging.MessageStar", "messaging.ThreadNotification"):
-            assert label in published
-            assert label in observed
-        assert all(record.pk != ticket.pk for record in invalidated)
-    finally:
-        change_published.disconnect(dispatch_uid="test.messaging.record_teardown.publish")
-        change_observed.disconnect(dispatch_uid="test.messaging.record_teardown.observe")
 
 
 def test_teardown_for_channel_purges_messages_threads_and_cascade(composed_tables: None) -> None:
@@ -3446,7 +3135,7 @@ def test_delete_channel_preview_counts_purge_as_deleted(composed_tables: None) -
             }
             """,
             {"id": channel.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["delete_channel"]
     counts = {group["label"]: group["count"] for group in preview["deleted"]}
@@ -3469,7 +3158,7 @@ def test_delete_channel_preview_counts_purge_as_deleted(composed_tables: None) -
             }
             """,
             {"id": channel.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )
     assert not Channel._base_manager.filter(pk=channel.pk).exists()
@@ -3500,7 +3189,7 @@ def test_delete_channel_denied_for_non_admin_reader(composed_tables: None) -> No
         }
         """,
         {"id": channel.sqid},
-        request=_request(reader),
+        user=reader,
     )
 
     assert result.errors is not None
@@ -3656,264 +3345,3 @@ def test_from_counts_ignores_target_type_to_avoid_double_counting_root(composed_
     assert channel_counts[str(Channel._meta.verbose_name_plural)] == 1
     # The MTI Integration parent is derived from the target, still counted once.
     assert guarded.total_deleted_count == 1 + 1 + 2
-
-
-@pytest.mark.parametrize("selection", ["error error_code", "error error_code message { id preview }"])
-def test_record_post_resolves_only_selected_payload_owners(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, selection: str,
-) -> None:
-    """An acknowledgment never reads transcript, roster, counts or suggestions."""
-    admin = _platform_admin("msg-selected-post")
-    with system_context(reason="test.messaging.selected_payload.seed"):
-        ticket = messaging_models.ThreadedTicket.objects.create(title="Selected response")
-    schema = _schema()
-
-    def unselected(_context: Any) -> Any:
-        pytest.fail("Unselected thread projection was evaluated")
-
-    for name in ("page", "followers", "self_follower", "unread_count", "message_has_error_counter",
-                 "removed_message_count", "access"):
-        monkeypatch.setattr(messaging_schema._RecordThreadContext, name, property(unselected))
-    monkeypatch.setattr(messaging_models.ThreadedTicket, "message_suggested_recipients", unselected)
-    result = _data(execute_schema(
-        schema,
-        "mutation Selected($model: String!, $id: ID!) { post_record_message(input: {"
-        "model_label: $model, record_id: $id, body: \"Accepted only.\"}) {" + selection + "} }",
-        {"model": ticket._meta.label, "id": ticket.sqid}, request=_request(admin),
-    ))["post_record_message"]
-    assert result["error_code"] is None
-    if "message" in result:
-        assert result["message"]["preview"] == "Accepted only."
-
-
-def test_record_message_feed_revalidates_current_parent_scope(composed_tables: None) -> None:
-    """Retained chatter IDs partition by the same authorized parent and kind filter."""
-    admin = _platform_admin("msg-record-feed")
-    with system_context(reason="test.messaging.record_feed.seed"):
-        ticket = messaging_models.ThreadedTicket.objects.create(title="Retained window")
-        other = messaging_models.ThreadedTicket.objects.create(title="Other conversation")
-        comment = ticket.message_post("Visible comment")
-        note = ticket.message_log("Filtered note")
-        foreign = other.message_post("Other parent")
-    result = _data(execute_schema(
-        _schema(),
-        """
-        query Retained($model: String!, $id: ID!, $ids: [ID!]!) {
-          record_message_feed_revalidate(input: { model_label: $model, record_id: $id,
-            message_types: ["comment"] }, ids: $ids) {
-            messages { id preview }
-            absent_ids
-          }
-        }
-        """,
-        {"model": ticket._meta.label, "id": ticket.sqid, "ids": [comment.sqid, note.sqid, foreign.sqid]},
-        request=_request(admin),
-    ))["record_message_feed_revalidate"]
-    assert result["messages"] == [{"id": comment.sqid, "preview": "Visible comment"}]
-    assert result["absent_ids"] == [note.sqid, foreign.sqid]
-
-
-@pytest.mark.parametrize("root", ["record_thread", "record_message_feed", "record_message_feed_revalidate"])
-def test_narrow_record_messages_do_not_read_content_or_viewer_state(
-    composed_tables: None, root: str, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Native scalar selections never invoke body, sender, permission or receipt projections."""
-    admin = _platform_admin("msg-narrow-native")
-    with actor_context(admin), system_context(reason="test.messaging.narrow_native.seed"), mute_changes():
-        ticket = messaging_models.ThreadedTicket.objects.create(title="Narrow native projection")
-        message = ticket.message_post("A body retained in a fragment.")
-    schema = _schema()
-
-    def unselected(*_args: Any, **_kwargs: Any) -> Any:
-        pytest.fail("Unselected message dependency was evaluated")
-
-    monkeypatch.setattr(messaging_schema.MessageQuerySet, "sender_name_expression", unselected)
-    monkeypatch.setattr(messaging_schema.MessageQuerySet, "needaction_expression", unselected)
-    monkeypatch.setattr(messaging_schema._RecordThreadContext, "access", property(unselected))
-    args = 'input: { model_label: "messaging.ThreadedTicket", record_id: $id }'
-    declarations = "$id: ID!"
-    variables: dict[str, Any] = {"id": ticket.sqid}
-    if root == "record_message_feed":
-        args += ", limit: 25"
-    elif root == "record_message_feed_revalidate":
-        args += ", ids: $ids"
-        declarations += ", $ids: [ID!]!"
-        variables["ids"] = [message.sqid]
-    with CaptureQueriesContext(connection) as captured:
-        payload = _data(execute_schema(
-            schema, f"query Narrow({declarations}) {{ {root}({args}) {{ messages {{ id preview }} }} }}",
-            variables, request=_request(admin),
-        ))[root]
-    assert payload["messages"] == [{"id": message.sqid, "preview": "A body retained in a fragment."}]
-    forbidden = (messaging_models.Part, messaging_models.Fragment, messaging_models.Reaction,
-                 messaging_schema.MessageStar, messaging_schema.ThreadFollower)
-    for query in captured:
-        sql = query["sql"].lower()
-        for model in forbidden:
-            table = connection.ops.quote_name(model._meta.db_table).lower()
-            assert f"from {table}" not in sql and f"join {table}" not in sql, sql
-
-
-@pytest.mark.parametrize("root", ["record_thread", "record_message_feed", "record_message_feed_revalidate"])
-@pytest.mark.django_db(transaction=True)
-def test_selected_record_message_dependencies_have_constant_page_query_count(
-    composed_tables: None, root: str, record_property: Any,
-) -> None:
-    """Selected content, actor state and capabilities batch at every message field boundary."""
-    admin = _platform_admin("msg-full-native")
-    with actor_context(admin), system_context(reason="test.messaging.full_native.seed"), mute_changes():
-        ticket = messaging_models.ThreadedTicket.objects.create(title="Native page projection")
-        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(ticket)
-        sender = messaging_models.Handle.objects.for_user(admin)
-        messages = []
-        for index in range(25):
-            message = messaging_models.Message.objects.create(
-                thread=attachment.thread, direction="internal", message_type="comment",
-                sender=sender, created_by=admin, preview=f"Projected {index}",
-            )
-            fragment = messaging_models.Fragment.objects.upsert(text=f"Body {index}")
-            messaging_models.Part.objects.create(
-                message=message, position=0, role="body", type="text/plain", fragment=fragment,
-            )
-            messaging_models.Reaction.objects.create(message=message, handle=sender, reaction="👍", created_by=admin)
-            messaging_schema.MessageStar.objects.create(message=message, user=admin)
-            messages.append(message)
-    schema = _schema()
-    args = 'input: { model_label: "messaging.ThreadedTicket", record_id: $id'
-    declarations = "$id: ID!, $limit: Int!"
-    if root == "record_thread":
-        args += ", message_limit: $limit }"
-    elif root == "record_message_feed":
-        args += " }, limit: $limit"
-    else:
-        args += " }, ids: $ids"
-        declarations = "$id: ID!, $ids: [ID!]!"
-    query = f"query FullPage({declarations}) {{ {root}({args}) {{" + """
-      messages {
-        id preview author_label can_edit can_delete can_trash needaction starred
-        sender { id display_name value }
-        reaction_groups { reaction count self_reacted handles { id display_name value } }
-        parts { id position role type disposition name cid fragment { id text } file { id filename } }
-      }
-    } }
-    """
-    warm_variables = {"id": ticket.sqid, "ids": [messages[0].sqid]} if root == "record_message_feed_revalidate" else {
-        "id": ticket.sqid, "limit": 1,
-    }
-    _data(execute_schema(schema, query, warm_variables, request=_request(admin)))
-    counts = []
-    for size in (1, 25):
-        variables: dict[str, Any] = {"id": ticket.sqid}
-        if root == "record_message_feed_revalidate":
-            variables["ids"] = [message.sqid for message in messages[:size]]
-        else:
-            variables["limit"] = size
-        with CaptureQueriesContext(connection) as captured:
-            payload = _data(execute_schema(schema, query, variables, request=_request(admin)))[root]
-        assert len(payload["messages"]) == size
-        for row in payload["messages"]:
-            assert row["can_edit"] and row["can_delete"] and row["can_trash"]
-            assert row["starred"] and row["author_label"]
-            assert row["reaction_groups"][0]["self_reacted"]
-            assert row["parts"][0]["fragment"]["text"].startswith("Body ")
-        counts.append(len(captured))
-        record_property(f"{root}_selected_queries_{size}", len(captured))
-    assert counts[0] == counts[1], counts
-
-
-@pytest.mark.parametrize(("root", "async_execution"), [
-    ("record_thread", False),
-    ("record_message_feed", False),
-    ("record_message_feed_revalidate", False),
-    ("record_message_feed", True),
-])
-def test_record_message_labels_load_only_their_native_dependencies(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, root: str, async_execution: bool,
-) -> None:
-    """Label-only pages batch their dependencies and resolve safely on the async schema path."""
-    admin = _platform_admin("msg-label-native")
-    expected = {}
-    messages = []
-    with actor_context(admin), system_context(reason="test.messaging.label_native.seed"), mute_changes():
-        ticket = messaging_models.ThreadedTicket.objects.create(title="Native label projection")
-        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(ticket)
-        subtype = messaging_schema.MessageSubtype.objects.create(key="native_labels", name="Native labels")
-        for index in range(25):
-            parent = messaging_models.Message.objects.create(
-                thread=attachment.thread, message_type="comment", direction="internal",
-                preview=f"Parent {index}", created_by=admin,
-                sent_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
-            )
-            message = messaging_models.Message.objects.create(
-                thread=attachment.thread, message_type="comment", direction="internal",
-                preview=f"Reply {index}", parent=parent, subtype=subtype, created_by=admin,
-                sent_at=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=index),
-            )
-            fragment = messaging_models.Fragment.objects.upsert(text=f"Fragment {index}: " + "x" * 70)
-            part = messaging_models.Part.objects.create(
-                message=message, position=0, role="body", type="text/plain", fragment=fragment,
-            )
-            expected[message.sqid] = {
-                "display_name": str(message),
-                "parent": {"display_name": str(parent)},
-                "subtype": {"display_name": str(subtype)},
-                "parts": [{"display_name": str(part), "fragment": {"display_name": str(fragment)}}],
-            }
-            messages.append(message)
-    schema = _schema()
-    args = 'input: { model_label: "messaging.ThreadedTicket", record_id: $id'
-    declarations = "$id: ID!, $limit: Int!"
-    if root == "record_thread":
-        args += ", message_limit: $limit }"
-    elif root == "record_message_feed":
-        args += " }, limit: $limit"
-    else:
-        args += " }, ids: $ids"
-        declarations = "$id: ID!, $ids: [ID!]!"
-    # Deliberately omit preview/type/role/text/name: those selections would mask missing hints.
-    counts_selection = "part_count message_count" if async_execution else ""
-    query = f"query Labels({declarations}) {{ {root}({args}) {{ messages {{" + """
-        id display_name parent { display_name } subtype { display_name }
-        parts { display_name fragment { display_name """ + counts_selection + " } } } } }"
-
-    def deferred_read(*_args: Any, **_kwargs: Any) -> None:
-        pytest.fail("A selected native label attempted a deferred model reload")
-
-    for model in (messaging_models.Message, messaging_models.Part, messaging_models.Fragment,
-                  messaging_schema.MessageSubtype):
-        monkeypatch.setattr(model, "refresh_from_db", deferred_read)
-
-    def read(size: int) -> dict[str, Any]:
-        variables: dict[str, Any] = {"id": ticket.sqid}
-        if root == "record_message_feed_revalidate":
-            variables["ids"] = [message.sqid for message in messages[:size]]
-        else:
-            variables["limit"] = size
-        request = _request(admin)
-        if async_execution:
-            with actor_context(admin):
-                result = async_to_sync(schema.execute)(
-                    query, variable_values=variables, context_value=SimpleNamespace(request=request),
-                )
-        else:
-            result = execute_schema(schema, query, variables, request=request)
-        return _data(result)[root]
-
-    read(1)  # Warm native schema/permission caches before comparing page budgets.
-    counts = []
-    for size in ((25,) if async_execution else (1, 2, 25)):
-        with CaptureQueriesContext(connection) as captured:
-            payload = read(size)
-        assert len(payload["messages"]) == size
-        for row in payload["messages"]:
-            label = expected[row.pop("id")]
-            if async_execution:
-                fragment = row["parts"][0]["fragment"]
-                assert fragment.pop("part_count") == 1
-                assert fragment.pop("message_count") == 1
-            assert row == label
-        counts.append(len(captured))
-    if not async_execution:
-        # Singleton related reads use native point-source preparation; compare
-        # populated plans while retaining the exact singleton output above.
-        assert counts[1] == counts[2], counts

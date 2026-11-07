@@ -17,6 +17,7 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 from rebac.models import active_relationship_model
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.storage import exceptions
 from angee.storage import schema as storage_schema
 from angee.storage.models import FileAttachmentManager, FileManager, FileVisibility, UploadState
@@ -28,8 +29,6 @@ from tests.conftest import (
     addon_schema,
     create_platform_admin,
     create_user,
-    execute_schema,
-    result_data,
     vault_for,
 )
 from tests.mtidemo.models import MtiChild, MtiParent
@@ -293,7 +292,6 @@ def test_prune_cascades_failed_and_abandoned_edges_without_deleting_surviving_by
     assert (tmp_path / survivor.storage_path).read_bytes() == PNG_BYTES
 
 
-@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL canonical upload-target locking contract")
 def test_draft_locks_canonical_mti_target_before_inserting_file(drive: Any, composed_permissions: None) -> None:
     admin = create_platform_admin("target-lock-admin")
@@ -327,7 +325,6 @@ def test_draft_locks_canonical_mti_target_before_inserting_file(drive: Any, comp
     assert edge.object_id == child.pk
 
 
-@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL two-writer ingest collision contract")
 def test_two_ingest_writers_converge_without_losing_rows_or_objects(
     drive: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

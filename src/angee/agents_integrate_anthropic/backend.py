@@ -61,6 +61,7 @@ async def _rewrite_oauth_messages_request(request: Any) -> None:
         request.headers["content-length"] = str(len(content))
 
 
+DEFAULT_MODEL_LIMIT = 1000
 DEFAULT_BROKER_NAME = "anthropic"
 
 
@@ -78,6 +79,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
         "name": "Anthropic",
     }
     default_broker_name = DEFAULT_BROKER_NAME
+    default_model_limit = DEFAULT_MODEL_LIMIT
     client_class_path = "anthropic.Anthropic"
     async_client_class_path = "anthropic.AsyncAnthropic"
     sdk_package_name = "anthropic"

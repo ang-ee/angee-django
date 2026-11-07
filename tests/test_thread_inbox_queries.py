@@ -10,7 +10,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
-from angee.messaging.testing.models import Fragment, Message, Thread, ThreadAttachment
+from angee.messaging.testing.models import Fragment, Message, Part, Thread, ThreadAttachment
 from tests.chatterdemo.models import ChatterDoc
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
@@ -80,7 +80,7 @@ def test_inbox_excludes_owned_thread_when_its_record_is_inaccessible() -> None:
 
 
 def test_inbox_excludes_the_whole_redirect_group_of_record_chatter() -> None:
-    """Chatter merged into a plain survivor makes the survivor and its messages record chatter."""
+    """Chatter merged into a plain survivor makes the survivor, its messages and their parts record chatter."""
 
     with system_context(reason="test.thread.inbox.redirect_group"):
         record = ChatterDoc.objects.create(title="Merged record")
@@ -98,7 +98,10 @@ def test_inbox_excludes_the_whole_redirect_group_of_record_chatter() -> None:
             for index, thread in enumerate((ordinary, None))
         ]
 
+        parts = {message.pk: Part._base_manager.create(message=message).pk for message in (*in_group, *kept)}
+
         assert list(Thread.objects.inbox().values_list("pk", flat=True)) == [ordinary.pk]
         inbox = set(Message.objects.inbox().values_list("pk", flat=True))
         assert inbox == {message.pk for message in kept}
         assert not inbox & {message.pk for message in in_group}
+        assert set(Part.objects.inbox().values_list("pk", flat=True)) == {parts[message.pk] for message in kept}

@@ -1,21 +1,20 @@
 import * as React from "react";
-import { ResourceQuery, refineResourceIdentifier, refineResourceName, type DataResourceMetadata } from "@angee/metadata";
-import { useKeys, useList, type HttpError } from "@refinedev/core";
-import { useQueryClient } from "@tanstack/react-query";
-import { listQueryMeta, sharedAuthoredMeta, useAuthoredLiveInterest, type AuthoredQueryOptions } from "@angee/refine";
+import { ResourceQuery, refineResourceName, type DataResourceMetadata } from "@angee/metadata";
+import { useList, type HttpError } from "@refinedev/core";
+import { listQueryMeta } from "@angee/refine";
 import { listBatchTarget } from "../resource-operations";
 import type { ListViewNavigationScope, RowRecord } from "./types";
 
 /** The native server-list read shared by rendered tables and record navigation. */
 export function useResourceListQuery({
-  resource, scope, fields, enabled = true, refetchInterval, records, relatedModels,
+  resource, scope, fields, enabled = true, refetchInterval,
 }: {
   resource: DataResourceMetadata | null | undefined;
   scope: ListViewNavigationScope | null;
   fields: readonly string[];
   enabled?: boolean;
   refetchInterval?: number | false;
-} & Pick<AuthoredQueryOptions, "records" | "relatedModels">) {
+}) {
   const request = React.useMemo(() => {
     if (!resource || !scope) return { meta: undefined, error: null };
     try {
@@ -27,21 +26,12 @@ export function useResourceListQuery({
       return { meta: undefined, error: error instanceof Error ? error : new Error("Invalid resource query.") };
     }
   }, [resource, scope?.filter, scope?.order, fields]);
-  const client = useQueryClient();
-  const { keys } = useKeys();
-  const pagination = { mode: "server" as const, currentPage: scope?.page ?? 1, pageSize: scope?.pageSize ?? 1 };
-  const liveMeta = resource && request.meta ? sharedAuthoredMeta(client,
-    keys().data(resource.schemaName).resource(refineResourceIdentifier(resource)).action("list")
-      .params({ ...request.meta, filters: [], pagination, sorters: [] }).get(),
-    [resource.canonicalLabel ?? resource.modelLabel, ...(relatedModels ?? [])], records, relatedModels,
-  ) : undefined;
-  useAuthoredLiveInterest(enabled && Boolean(resource && scope) && !request.error, relatedModels ?? []);
   const result = useList<RowRecord, HttpError, RowRecord>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
-    pagination,
+    pagination: { mode: "server", currentPage: scope?.page ?? 1, pageSize: scope?.pageSize ?? 1 },
     filters: [], sorters: [], meta: request.meta,
-    queryOptions: { enabled: enabled && Boolean(resource && scope) && !request.error, placeholderData: undefined, refetchInterval, meta: liveMeta },
+    queryOptions: { enabled: enabled && Boolean(resource && scope) && !request.error, placeholderData: undefined, refetchInterval },
   });
   if (!request.error) return result;
   const failed = {

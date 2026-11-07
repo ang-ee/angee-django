@@ -1,5 +1,4 @@
-import { holdsPermission, refineResourceName, useModelMetadata, useResourceInvalidates } from "@angee/metadata";
-import { useReconcileMutationResponse } from "@angee/refine";
+import { holdsPermission, refineResourceName, useModelMetadata } from "@angee/metadata";
 import { useUpdate } from "@refinedev/core";
 import { Button, Glyph, useRecordChromeContext, useRuntimeViewAs } from "@angee/ui";
 import type { ReactElement } from "react";
@@ -12,16 +11,10 @@ export function RecordChrome(): ReactElement | null {
   const context = useRecordChromeContext();
   const metadata = useModelMetadata(context.resource);
   const preview = useRuntimeViewAs();
-  const reconcile = useReconcileMutationResponse();
-  const invalidates = useResourceInvalidates(["notes.Note"],
-    (_data: unknown, input: { id?: string | number }) => [{ model: "notes.Note", id: String(input.id) }]);
   const update = useUpdate({
     resource: refineResourceName(metadata?.resource ?? null),
     dataProviderName: context.dataProviderName,
-    invalidates: [],
-    mutationOptions: { onSuccess: (result, input) => reconcile(result.data, input, {
-      records: [{ model: "notes.Note", id: String(input.id) }], invalidates,
-    }) },
+    invalidates: ["list", "many", "detail"],
   });
   if (context.resource !== "notes.Note") return null;
   const starred = context.record?.is_starred;

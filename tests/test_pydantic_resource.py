@@ -7,13 +7,9 @@ frontend drives it through ``useList`` like any other resource.
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Any
-
 import pytest
 import strawberry
 from pydantic import BaseModel, computed_field
-from strawberry_django_hasura import InMemoryRowSource, RowSource
 
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource, pydantic_node
 from angee.graphql.schema import GraphQLSchemas
@@ -152,25 +148,23 @@ class CatalogueEntry(BaseModel):
     category: str
     shelf: str | None
     active: bool
-    created: date
 
 
 _ENTRIES = [
-    CatalogueEntry(id="hammer", category="tools", shelf="A", active=True, created=date(2026, 11, 1)),
-    CatalogueEntry(id="saw", category="tools", shelf="", active=False, created=date(2026, 11, 2)),
-    CatalogueEntry(id="atlas", category="books", shelf=None, active=True, created=date(2026, 10, 1)),
+    CatalogueEntry(id="hammer", category="tools", shelf="A", active=True),
+    CatalogueEntry(id="saw", category="tools", shelf="", active=False),
+    CatalogueEntry(id="atlas", category="books", shelf=None, active=True),
 ]
 
 
-def _grouped_schema(*, source: RowSource | None = None) -> object:
+def _grouped_schema() -> object:
     resource = hasura_pydantic_resource(
         CatalogueEntry,
         name="catalogue_entries",
         model_label="catalogue.entry",
-        filterable=["id", "category", "shelf", "active", "created"],
-        sortable=["category", "id"],
-        groupable=["category", "shelf", "active", "created"],
-        source=source,
+        filterable=["id", "category", "shelf", "active"],
+        sortable=["category"],
+        groupable=["category", "shelf", "active"],
         rows=lambda info: _ENTRIES,
         frontend_row_model="server",
     )
@@ -185,8 +179,6 @@ def test_pydantic_resource_groupable_columns_project_server_axes() -> None:
     [meta] = _grouped_schema().angee_resources
     assert meta.roots.group_name == "catalogue_entries_groups"
     assert meta.roots.group_count_name == "catalogue_entries_groups_count"
-    assert meta.roots.grouped_rows_name == "catalogue_entries_grouped_rows"
-    assert meta.type_names.grouped_row_page == "catalogue_entries_grouped_rows_page"
     assert meta.type_names.group_key is not None
     assert meta.type_names.group_by_spec is not None
     assert {
@@ -197,66 +189,7 @@ def test_pydantic_resource_groupable_columns_project_server_axes() -> None:
         "category": ("CATEGORY", "category", "category"),
         "shelf": ("SHELF", "shelf", "shelf"),
         "active": ("ACTIVE", "active", "active"),
-        "created": ("CREATED", "created", "created"),
     }
-
-
-def test_pydantic_grouped_rows_use_group_keys_and_one_source_read_per_request() -> None:
-    calls: list[tuple[Any, Any, int | None, int | None]] = []
-
-    class CountingSource(InMemoryRowSource):
-        def query(
-            self,
-            info: strawberry.Info,
-            *,
-            where: Any,
-            order_by: list[Any] | None,
-            limit: int | None,
-            offset: int | None,
-        ) -> list[Any]:
-            calls.append((where, order_by, limit, offset))
-            return super().query(info, where=where, order_by=order_by, limit=limit, offset=offset)
-
-    schema = _grouped_schema(source=CountingSource(lambda info: _ENTRIES))
-    groups = schema.execute_sync(
-        """{ catalogue_entries_groups(group_by: [{field: CREATED, granularity: MONTH}]) {
-          key { created_month }
-        } }"""
-    )
-    assert groups.errors is None, groups.errors
-    keys = [group["key"]["created_month"] for group in groups.data["catalogue_entries_groups"]]
-    calls.clear()
-    rows = schema.execute_sync(
-        """query($pages: [catalogue_entries_grouped_rows_page!]!) {
-          catalogue_entries_grouped_rows(
-            group_by: {field: CREATED, granularity: MONTH}, pages: $pages,
-            order_by: [{id: desc}]
-          ) { key rows { id } }
-        }""",
-        variable_values={
-            "pages": [{"key": key, "limit": 1, "offset": 1 if index else 0} for index, key in enumerate(keys)]
-        },
-    )
-    assert rows.errors is None, rows.errors
-    result = rows.data["catalogue_entries_grouped_rows"]
-    assert [page["key"] for page in result] == keys
-    assert [[row["id"] for row in page["rows"]] for page in result] == [["atlas"], ["hammer"]]
-    assert len(calls) == 1
-    assert all(limit is None and offset is None for _, _, limit, offset in calls)
-
-    blanks = schema.execute_sync(
-        """{ catalogue_entries_grouped_rows(
-          group_by: {field: SHELF}, pages: [
-            {key: null, limit: 2}, {key: "", limit: 2}, {key: "A", limit: 2}
-          ], where: {active: {_eq: true}}
-        ) { key rows { id } } }"""
-    )
-    assert blanks.errors is None, blanks.errors
-    assert blanks.data["catalogue_entries_grouped_rows"] == [
-        {"key": None, "rows": [{"id": "atlas"}]},
-        {"key": "", "rows": []},
-        {"key": "A", "rows": [{"id": "hammer"}]},
-    ]
 
 
 def test_pydantic_resource_groups_filtered_rows_with_distinct_blank_and_null() -> None:
@@ -293,3 +226,30 @@ def test_pydantic_resource_groups_filtered_rows_with_distinct_blank_and_null() -
         {"key": {"shelf": None}, "aggregate": {"count": 1}},
     ]
     assert result.data["catalogue_entries_groups_count"] == 3
+
+
+def test_pydantic_resource_groups_carry_each_groups_first_rows() -> None:
+    """A computed groups page carries every group's first page, blank and NULL buckets apart."""
+
+    result = _grouped_schema().execute_sync(
+        """
+        query {
+          by_category: catalogue_entries_groups(group_by: [{field: CATEGORY}]) {
+            key { category } rows(limit: 1, order_by: [{category: asc}]) { id }
+          }
+          by_shelf: catalogue_entries_groups(group_by: [{field: SHELF}]) {
+            key { shelf } rows(limit: 5) { id }
+          }
+        }
+        """
+    )
+    assert result.errors is None, result.errors
+    assert result.data["by_category"] == [
+        {"key": {"category": "books"}, "rows": [{"id": "atlas"}]},
+        {"key": {"category": "tools"}, "rows": [{"id": "hammer"}]},
+    ]
+    assert result.data["by_shelf"] == [
+        {"key": {"shelf": ""}, "rows": [{"id": "saw"}]},
+        {"key": {"shelf": "A"}, "rows": [{"id": "hammer"}]},
+        {"key": {"shelf": None}, "rows": [{"id": "atlas"}]},
+    ]

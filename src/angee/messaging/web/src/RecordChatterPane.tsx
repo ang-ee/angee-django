@@ -1,3 +1,4 @@
+import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
 import {
   Button, Checkbox, Dialog, EmptyState, FieldRoot, Glyph, PaneToolbar, PaneToolbarMenu, ScopeChip, SearchInput, Select,
@@ -5,9 +6,8 @@ import {
 } from "@angee/ui";
 import type { ChatterSelection, ChatterViewContext } from "@angee/ui/runtime";
 
-import { useRecordFollowing } from "./useRecordThreadQuery";
 import { useMessagingT, type MessagingT } from "./i18n";
-import type { RecordThreadPayload } from "./documents";
+import { READ_MODELS, SetRecordFollowingDocument, type RecordThreadPayload } from "./documents";
 import {
   RecordThreadConversation,
   type RecordThreadConversationChrome,
@@ -129,7 +129,10 @@ function NotificationSettingsDialog({ payload, modelLabel, recordId, reportError
   onClose: () => void;
   t: MessagingT;
 }): React.ReactElement {
-  const [setFollowing, followState] = useRecordFollowing(modelLabel, recordId);
+  const [setFollowing, followState] = useAuthoredMutation(SetRecordFollowingDocument, {
+    invalidateModels: READ_MODELS,
+    errorFrom: (data) => data?.set_record_following,
+  });
   const selfFollower = payload.self_follower ?? null;
   const subtypeOptions = React.useMemo(() => [...(payload.subtypes ?? [])].filter((subtype) => !subtype.internal), [payload.subtypes]);
   const selectedSubtypeKeys = React.useMemo(() => {

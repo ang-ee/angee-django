@@ -4,7 +4,7 @@ The upload behavior lives on the model (``File.objects.draft``,
 ``File.receive_bytes`` / ``File.finalize``); this module holds only the token
 constants and byte-level helpers they compose with — stream hashing, MIME
 detection, and the capped body reader. Keeping it free of any model import is
-what lets the native model package import from here without a cycle.
+what lets ``models.py`` import from here without a cycle.
 """
 
 from __future__ import annotations
@@ -12,14 +12,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import mimetypes
-import posixpath
-import re
 from io import Reader
 
 import magic
 from django.conf import settings
-from django.core.exceptions import SuspiciousFileOperation
-from django.utils.text import get_valid_filename
 
 from angee.storage import exceptions
 
@@ -238,48 +234,3 @@ class CappedReader:
         close = getattr(self._reader, "close", None)
         if callable(close):
             close()
-
-
-_SHA256_HEX = re.compile(r"[a-f0-9]{64}")
-_OBJECT_KEY_LEAF_MAX_BYTES = 240
-
-
-def _normalized_hash(value: str) -> str:
-    """Return the lowercase SHA-256 hex digest, rejecting malformed input."""
-
-    digest = str(value or "").strip().lower()
-    if not _SHA256_HEX.fullmatch(digest):
-        raise exceptions.UploadError("content_hash must be a SHA-256 hex digest")
-    return digest
-
-
-def _clamp_utf8(value: str, max_bytes: int) -> str:
-    """Return ``value`` trimmed to at most ``max_bytes`` UTF-8 bytes."""
-
-    used = 0
-    chars: list[str] = []
-    for char in value:
-        size = len(char.encode("utf-8"))
-        if used + size > max_bytes:
-            break
-        chars.append(char)
-        used += size
-    return "".join(chars)
-
-
-def _object_key_leaf(filename: str) -> str:
-    """Return a backend path leaf that stays within common filesystem limits."""
-
-    try:
-        safe_name = get_valid_filename(posixpath.basename(str(filename)))
-    except SuspiciousFileOperation:
-        safe_name = ""
-    safe_name = safe_name or "upload.bin"
-    if len(safe_name.encode("utf-8")) <= _OBJECT_KEY_LEAF_MAX_BYTES:
-        return safe_name
-    stem, dot, suffix = safe_name.rpartition(".")
-    extension = f"{dot}{suffix}" if dot and stem else ""
-    extension_bytes = len(extension.encode("utf-8"))
-    if extension and extension_bytes < _OBJECT_KEY_LEAF_MAX_BYTES:
-        return f"{_clamp_utf8(stem, _OBJECT_KEY_LEAF_MAX_BYTES - extension_bytes)}{extension}"
-    return _clamp_utf8(safe_name, _OBJECT_KEY_LEAF_MAX_BYTES)

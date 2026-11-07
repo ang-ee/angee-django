@@ -76,22 +76,13 @@ export const IntegrationSyncStream = graphql(`
   }
 `);
 
-/** Total remote identities for one readable record, under the rows' record-reference guard. */
-export const RecordSourcesCountDocument = graphql(`
-  query IntegrateRecordSourcesCount($modelLabel: String!, $recordId: String!) {
-    record_links_aggregate(
-      where: { model_label: { _eq: $modelLabel }, record_id: { _eq: $recordId } }
-    ) { aggregate { count } }
-  }
-`);
-
-/** Remote identities attached to one readable record. */
+/** Remote identities attached to one readable record, up to the page bound its related count stops at. */
 export const RecordSourcesDocument = graphql(`
-  query IntegrateRecordSources($modelLabel: String!, $recordId: String!) {
+  query IntegrateRecordSources($modelLabel: String!, $recordId: String!, $limit: Int!) {
     record_links(
       where: { model_label: { _eq: $modelLabel }, record_id: { _eq: $recordId } }
       order_by: [{ updated_at: desc }]
-      limit: 100
+      limit: $limit
     ) {
       id
       external_key

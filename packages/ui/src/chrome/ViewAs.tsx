@@ -1,6 +1,4 @@
 import { useEffect, useRef } from "react";
-import { useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
-import { gql } from "graphql-tag";
 
 import { useUiT } from "../i18n";
 import { useRuntimeViewAs } from "../runtime";
@@ -35,14 +33,7 @@ export function ViewAsBanner() {
   </>;
 }
 
-const ViewablePeople: TypedDocumentNode<{
-  viewable_people: { id: string; name: string }[];
-}, Record<string, never>> = gql`
-  query AngeeViewablePeople { viewable_people { id name: display_name } }
-`;
-
-/** Optional record scope intersects IAM's authorized preview candidates.
- * The shell menu mounts this picker on open; its read never gates identity.
+/** Optional record scope intersects the identity owner's authorized people.
  * @kind contribution
  */
 export function ViewAsPicker({ userIds, label }: { userIds?: readonly string[]; label?: string } = {}) {
@@ -52,22 +43,14 @@ export function ViewAsPicker({ userIds, label }: { userIds?: readonly string[]; 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const userId = preview.viewAs?.userId;
   const previousUserId = useRef(userId);
-  const candidates = useAuthoredQuery(ViewablePeople, {}, {
-    dataProviderName: "console",
-    enabled: Boolean(preview.currentUser) && !preview.pending,
-    models: ["iam.User"],
-    errorNotification: false,
-  });
-  const available = preview.pending ? [] : candidates.data?.viewable_people ?? [];
-  const people = userIds === undefined ? available
-    : available.filter((person) => userIds.includes(person.id));
+  const people = userIds === undefined ? preview.viewablePeople
+    : preview.viewablePeople.filter((person) => userIds.includes(person.id));
   useEffect(() => {
     if (preview.pending) return;
     if (previousUserId.current && !userId) triggerRef.current?.focus();
     previousUserId.current = userId;
   }, [userId, preview.pending]);
-  if (!preview.currentUser && !preview.pending) return null;
-  if (people.length === 0 && candidates.isSuccess && !preview.pending && !preview.error) return null;
+  if (people.length === 0 && (userIds !== undefined || (!preview.pending && !preview.error))) return null;
   return <>
     <RelationField
       triggerRef={triggerRef}
@@ -75,15 +58,9 @@ export function ViewAsPicker({ userIds, label }: { userIds?: readonly string[]; 
       placeholder={pickLabel}
       value={preview.viewAs?.userId}
       options={people.map((person) => ({ value: person.id, label: person.name }))}
-      searchState={{
-        pending: candidates.isPending,
-        error: candidates.error?.message,
-        retry: () => { void candidates.refetch(); },
-      }}
       readOnly={preview.pending}
       onChange={preview.enter}
     />
-    <ErrorBanner description={candidates.error?.message} />
     {!preview.viewAs ? <ErrorBanner description={preview.error} /> : null}
   </>;
 }

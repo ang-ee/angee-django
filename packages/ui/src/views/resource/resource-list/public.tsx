@@ -134,9 +134,6 @@ export interface ResourceListProps<TRow extends Row = Row> {
   presentation?: ListViewProps<TRow>["presentation"];
   chrome?: ListViewProps<TRow>["chrome"];
   baseFilter?: ListViewProps<TRow>["baseFilter"];
-  /** Explicit live interests for grouped reads; omitted interests remain model-wide. */
-  records?: ListViewProps<TRow>["records"];
-  relatedModels?: ListViewProps<TRow>["relatedModels"];
   /** Initial editable filter for a new view; route state and saved views remain authoritative thereafter. */
   defaultFilter?: ResourceViewFilter;
   filterOptions?: ListViewProps<TRow>["filterOptions"];

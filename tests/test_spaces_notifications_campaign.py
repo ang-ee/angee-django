@@ -5,11 +5,12 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.iam.checks import check_ownership
+from angee.base.checks import check_ownership
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.models import NotificationPolicy
 from angee.messaging.testing.models import MessageSubtype, Party, Person, ThreadFollower
 from angee.spaces.testing.models import Membership
-from tests.conftest import create_user, execute_schema, result_data
+from tests.conftest import create_user
 from tests.spaces_campaign_helpers import ROLES
 from tests.spaces_campaign_helpers import roster as roster
 from tests.spaces_campaign_helpers import spaces_console as spaces_console

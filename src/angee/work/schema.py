@@ -9,25 +9,30 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db.models import F
-from rebac import to_subject_ref
+from rebac import system_context, to_subject_ref
 from strawberry import auto
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
-from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard, many_actions
-from angee.graphql.data.hasura import HasuraLines, hasura_model_resource, public_pk_decoder
+from angee.base.identity import public_subject_ref
+from angee.base.pagination import clamp_page_size
+from angee.graphql.actions import (
+    ActionResult,
+    ActionSelectionInput,
+    action_guard,
+    authorized_action_target,
+    authorized_permission_target,
+    many_actions,
+)
+from angee.graphql.capabilities import permissions_field
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id, to_public_id
 from angee.graphql.inputs import InputReference
+from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
-from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
-from angee.iam.graphql.capabilities import permissions_field
-from angee.iam.graphql.inputs import AuthorizedInputReference
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
-from angee.iam.identity import public_subject_ref, user_display_labels, user_label, user_public_id
+from angee.iam.identity import user_display_labels, user_label, user_public_id
 from angee.projects.schema import DroppedReason, TaskType
-from angee.spaces.managers import MembershipQuerySet
 from angee.spaces.schema import SpaceGroupType
 from angee.work.models import Stage as StageModel
 
@@ -57,7 +62,7 @@ class WorkStagePolicyQuery:
 
 
 @strawberry_django.type(Queue)
-class WorkQueueType(ProtectedNode):
+class WorkQueueType(AngeeNode):
     """GraphQL projection of one operational queue."""
 
     name: auto
@@ -87,7 +92,7 @@ class WorkQueueType(ProtectedNode):
 
 
 @strawberry_django.type(Stage)
-class WorkStageType(ProtectedNode):
+class WorkStageType(AngeeNode):
     """GraphQL projection of an ordered queue stage."""
 
     name: auto
@@ -109,7 +114,7 @@ class WorkStageType(ProtectedNode):
 
 
 @strawberry_django.type(Cycle)
-class WorkCycleType(ProtectedNode):
+class WorkCycleType(AngeeNode):
     """GraphQL projection of one generated queue cycle."""
 
     number: auto
@@ -176,10 +181,7 @@ class TaskWorkExtension:
 
         return optional_public_id(user_public_id(cast(Any, self).snoozed_by_id))
 
-    @strawberry_django.field(
-        only=["queue_id", "number"],
-        annotate={"_work_queue_key": lambda info: Task.work_queue_key_expression()},
-    )
+    @strawberry.field
     def work_key(self) -> str | None:
         """Return the queue-keyed task number, such as ``ENG-42``."""
 
@@ -208,10 +210,7 @@ class ConsoleTaskWorkExtension:
 
         return optional_public_id(user_public_id(cast(Any, self).snoozed_by_id))
 
-    @strawberry_django.field(
-        only=["queue_id", "number"],
-        annotate={"_work_queue_key": lambda info: Task.work_queue_key_expression()},
-    )
+    @strawberry.field
     def work_key(self) -> str | None:
         """Return the queue-keyed task number, such as ``ENG-42``."""
 
@@ -222,7 +221,7 @@ class ConsoleTaskWorkExtension:
 class ProjectWorkSetupInput:
     """Work contributes the project team without coupling projects to work."""
 
-    team: PublicID = strawberry.field(metadata={InputReference: AuthorizedInputReference("spaces.Group")})
+    team: PublicID = strawberry.field(metadata={InputReference: InputReference("spaces.Group")})
 
 
 @strawberry.input(name="ProjectMilestoneSetupInput", extend=True)
@@ -230,7 +229,7 @@ class MilestoneWorkSetupInput:
     """Work contributes the stage mapping to the typed milestone template."""
 
     active_stage: PublicID | None = strawberry.field(
-        default=None, metadata={InputReference: AuthorizedInputReference("work.Stage")},
+        default=None, metadata={InputReference: InputReference("work.Stage")},
     )
 
 
@@ -283,7 +282,7 @@ def restore_task(info: strawberry.Info, task: PublicID, expected_revision: int) 
 class ProjectManagerPersonType:
     """One account holding the project's team moderator seat."""
 
-    subject: str
+    subject: str | None
     label: str
     seat_id: PublicID | None
     removable: bool
@@ -335,7 +334,7 @@ class WorkRemovedTaskQuery:
             if owner is None:
                 return []
             scope[name] = owner
-        rows = list(Task.objects.removed_for(user, **scope)[: max(1, min(limit, 100))])
+        rows = list(Task.removed_for(user, **scope)[: clamp_page_size(limit)])
         labels = user_display_labels(
             (row.trashed_by_id for row in rows),
             request=get_request(info),
@@ -363,26 +362,28 @@ class WorkPeopleQuery:
         """List only person accounts on the project's current team."""
 
         target = authorized_permission_target(info, Project, project, "read")
-        team = target.team
-        if team is None:
+        if target.team_id is None:
             return ProjectManagerRosterType(offered=False, people=[])
         offered = target.has_access("share") and (
-            Membership.MembershipRole.MODERATOR in Membership.objects.available_roles(group=team)
+            Membership.MembershipRole.MODERATOR in Membership.objects.available_roles(group=target.team)
         )
-        reveal_seats = team.with_actor(get_current_user(info)).has_access("read")
-        seats = list(MembershipQuerySet.confirmed(cast(Any, Membership._base_manager.all())).filter(
-            group_id=target.team_id, role=Membership.MembershipRole.MODERATOR,
-        ).order_by("pk")[:100])
-        people = {
-            person.pk: person.user for person in Person._base_manager.filter(
-                pk__in=[seat.party_id for seat in seats], user__kind="person",
-            ).select_related("user")
-        }
+        seats = list(
+            Membership.objects.system_context(reason="work.project.manager_roster").confirmed()
+            .filter(group_id=target.team_id, role=Membership.MembershipRole.MODERATOR)
+            .with_can_read().order_by("pk")[:100]
+        )
+        with system_context(reason="work.project.manager_roster"):
+            people = {
+                person.pk: person.user for person in Person._base_manager.filter(
+                    pk__in=[seat.party_id for seat in seats], user__kind="person",
+                ).select_related("user")
+            }
         return ProjectManagerRosterType(offered=offered, people=[
             ProjectManagerPersonType(
-                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))) if reveal_seats else "",
+                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))) if seat.can_read else None,
                 label=user_label(people[seat.party_id]),
-                seat_id=seat.sqid if reveal_seats else None, removable=offered and reveal_seats,
+                seat_id=seat.sqid if seat.can_read else None,
+                removable=offered and seat.can_read,
             )
             for seat in seats if seat.party_id in people
         ])
@@ -597,7 +598,7 @@ _QUEUE_RESOURCE = hasura_model_resource(
         "default_stage": public_pk_decoder(Stage),
     },
     lines=_STAGE_LINES,
-    write_backend=ProtectedHasuraWriteBackend(
+    write_backend=AngeeHasuraWriteBackend(
         Queue,
         public_id_fields=("parent", "default_stage"),
         lines=_STAGE_LINES,
@@ -629,7 +630,7 @@ _STAGE_RESOURCE = hasura_model_resource(
     insertable=["queue", "name", "tone", "position", "category", "rule_owned"],
     updatable=["name", "tone", "position", "category", "rule_owned"],
     field_id_decode={"queue": public_pk_decoder(Queue)},
-    write_backend=ProtectedHasuraWriteBackend(Stage, public_id_fields=("queue",)),
+    write_backend=AngeeHasuraWriteBackend(Stage, public_id_fields=("queue",)),
 )
 
 _CYCLE_RESOURCE = hasura_model_resource(
@@ -662,7 +663,7 @@ _CYCLE_RESOURCE = hasura_model_resource(
     insert=False,
     updatable=["name"],
     delete=False,
-    write_backend=ProtectedHasuraWriteBackend(Cycle),
+    write_backend=AngeeHasuraWriteBackend(Cycle),
 )
 
 _RESOURCE_TYPES = [*_QUEUE_RESOURCE.types, *_STAGE_RESOURCE.types, *_CYCLE_RESOURCE.types]

@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any, ClassVar
 
 from django.apps import apps
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.fields.encrypted import EncryptedField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
+from angee.base.managers import AngeeManager
 from angee.base.models.audit import AuditMixin
-from angee.base.models.persistence import require_composed_type
-from angee.iam.managers import ProtectedManager
-from angee.iam.models.base import ProtectedDataModel
+from angee.base.models.base import AngeeDataModel
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
-from angee.integrate_vcs.backend import VCSBackend
-from angee.integrate_vcs.managers import RepositoryManager, TemplateManager
+from angee.integrate_vcs.backend import Checkout, VCSBackend
+from angee.integrate_vcs.templates import parse_template_meta
 
 
 class RepoVisibility(models.TextChoices):
@@ -35,7 +37,7 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
     """The VCS sync child model over ``Integration``.
 
     A :class:`Bridge`: the scheduler refreshes its repositories' sources over the
-    host REST API. The
+    host REST API and an inbound push webhook triggers the same refresh. The
     host-specific wire format is the integration child row's non-model
     :class:`~angee.integrate_vcs.backend.VCSBackend` implementation — so
     github/gitlab/bitbucket share this one table, differing only in behavior.
@@ -51,6 +53,8 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
         create_only=True,
     )
     """Registry key for the VCS backend bound to this bridge."""
+    webhook_secret = EncryptedField(blank=True)
+    """Shared secret for verifying inbound push webhooks (per account, not per repo)."""
 
     class Meta:
         """Django model options for the VCS bridge child model."""
@@ -93,18 +97,29 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
         """Refresh every inventoried repository's sources over REST (Bridge contract).
 
         Repository discovery (creating rows from the account) is the explicit
-        ``discoverRepositories`` action; the scheduled ``sync`` refreshes the
+        ``discoverRepositories`` action; the scheduled/webhook ``sync`` refreshes the
         content of already-inventoried repositories.
         """
 
         source_model = apps.get_model("integrate_vcs", "Source")
         with system_context(reason="integrate.vcs_bridge.sync.sources"):
             sources = tuple(
-                source_model.objects.db_manager(self._state.db).filter(repository__vcs_bridge=self)
+                source_model.objects.filter(repository__vcs_bridge=self)
                 .select_related("repository", "repository__vcs_bridge")
                 .order_by("repository_id", "pk")
             )
         return sum(source.refresh() for source in sources)
+
+    def handle_webhook(self, payload: Any) -> None:
+        """Re-sync this bridge's inventory on an inbound push webhook."""
+
+        del payload
+        self.sync()
+
+    def verify_webhook(self, request: Any) -> bool:
+        """Return whether an inbound push webhook is authentic for this bridge."""
+
+        return self.backend.verify_webhook(self, request)
 
     def search_repositories(self, query: str) -> list[Any]:
         """Return host repositories whose name matches ``query`` (the add typeahead)."""
@@ -116,23 +131,103 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
         """Inventory one repository by its host ``name`` (a picked typeahead result)."""
 
         repository_model = apps.get_model("integrate_vcs", "Repository")
-        return repository_model.objects.db_manager(self._state.db).add(self, self.backend.get_repo(name))
+        return repository_model.objects.add(self, self.backend.get_repo(name))
 
     def discover_repositories(self, *, org: str = "") -> int:
         """Inventory every repository the account exposes (bulk import; prunes vanished)."""
 
         repository_model = apps.get_model("integrate_vcs", "Repository")
-        return repository_model.objects.db_manager(self._state.db).reconcile(self, self.backend.ls_repos(org=org))
+        return repository_model.objects.reconcile(self, self.backend.ls_repos(org=org))
 
 
+class RepositoryManager(AngeeManager):
+    """Manager owning the upsert/reconcile of repository rows from a host listing."""
+
+    def reconcile(self, vcs_bridge: Any, descriptors: Iterable[Any]) -> int:
+        """Upsert one repository row per descriptor and prune rows that vanished.
+
+        Bulk import for ``discoverRepositories``: prunes against the full listing,
+        so the caller must pass every repository (see ``GitHubBackend.ls_repos``
+        pagination), never a partial page.
+        """
+
+        descriptor_list = list(descriptors)
+        descriptors_by_name = {str(descriptor.name): descriptor for descriptor in descriptor_list}
+        now = timezone.now()
+        with system_context(reason="integrate.repository.reconcile"), transaction.atomic():
+            self.bulk_create(
+                [
+                    self._row_from_descriptor(vcs_bridge, descriptor, now=now)
+                    for descriptor in descriptors_by_name.values()
+                ],
+                update_conflicts=True,
+                unique_fields=["vcs_bridge", "name"],
+                update_fields=[
+                    "org",
+                    "remote",
+                    "ssh_remote",
+                    "remote_id",
+                    "default_branch",
+                    "visibility",
+                    "web_url",
+                    "archived",
+                    "updated_at",
+                ],
+            )
+            self.filter(vcs_bridge=vcs_bridge).exclude(name__in=descriptors_by_name).delete()
+        return len(descriptor_list)
+
+    def add(self, vcs_bridge: Any, descriptor: Any) -> Any:
+        """Inventory one repository (no prune) — the typeahead "add this repo" path."""
+
+        with system_context(reason="integrate.repository.add"), transaction.atomic():
+            return self._upsert(vcs_bridge, descriptor)
+
+    def _upsert(self, vcs_bridge: Any, descriptor: Any) -> Any:
+        """Create or update one repository row from a host descriptor."""
+
+        repository, _created = self.update_or_create(
+            vcs_bridge_id=vcs_bridge.pk,
+            name=descriptor.name,
+            defaults={
+                "org": descriptor.org,
+                "remote": descriptor.remote,
+                "ssh_remote": descriptor.ssh_remote,
+                "remote_id": descriptor.remote_id,
+                "default_branch": descriptor.default_branch,
+                "visibility": descriptor.visibility,
+                "web_url": descriptor.web_url,
+                "archived": descriptor.archived,
+            },
+        )
+        return repository
+
+    def _row_from_descriptor(self, vcs_bridge: Any, descriptor: Any, *, now: datetime) -> Any:
+        """Return an unsaved repository row projected from one host descriptor."""
+
+        return self.model(
+            vcs_bridge_id=vcs_bridge.pk,
+            name=descriptor.name,
+            org=descriptor.org,
+            remote=descriptor.remote,
+            ssh_remote=descriptor.ssh_remote,
+            remote_id=descriptor.remote_id,
+            default_branch=descriptor.default_branch,
+            visibility=descriptor.visibility,
+            web_url=descriptor.web_url,
+            archived=descriptor.archived,
+            created_at=now,
+            updated_at=now,
+        )
 
 
-class Repository(AuditMixin, ProtectedDataModel, concrete=True):
+class Repository(AuditMixin, AngeeDataModel, concrete=True):
     """Inventory of one git remote, reached through its ``VcsBridge``.
 
     A plain noun: Django records the remote; the operator clones it. ``org`` groups
     the account's repositories in the browse list.
     """
+
 
     sqid_prefix = "repo_"
     vcs_bridge = models.ForeignKey(
@@ -175,7 +270,7 @@ class Repository(AuditMixin, ProtectedDataModel, concrete=True):
         return self.name
 
 
-class Source(AuditMixin, ProtectedDataModel, concrete=True):
+class Source(AuditMixin, AngeeDataModel, concrete=True):
     """A pointer into a ``Repository`` at a ``ref`` and ``path``, with a ``kind``.
 
     One noun for every source kind. ``kind`` binds the source to an output model
@@ -183,6 +278,7 @@ class Source(AuditMixin, ProtectedDataModel, concrete=True):
     dispatches there. The operator materializes a source from
     :meth:`materialize_spec`.
     """
+
 
     sqid_prefix = "src_"
     repository = models.ForeignKey("integrate_vcs.Repository", on_delete=models.CASCADE, related_name="sources")
@@ -194,7 +290,7 @@ class Source(AuditMixin, ProtectedDataModel, concrete=True):
     """Pathspec of the subtree this source points at within the repository."""
     last_synced_at = models.DateTimeField(null=True, blank=True)
 
-    objects = ProtectedManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for source inventory."""
@@ -236,22 +332,22 @@ class Source(AuditMixin, ProtectedDataModel, concrete=True):
         known = ", ".join(cls.available_kinds()) or "none registered"
         raise ValueError(f"No output model for source kind {kind!r} (known: {known}).")
 
-    def complete_sync(self, *, now: datetime | None = None) -> None:
-        """Stamp successful output persistence inside its caller's transaction."""
-
-        self.last_synced_at = now or timezone.now()
-        self.save(using=self._state.db, update_fields=["last_synced_at", "updated_at"])
-
     def refresh(self) -> int:
         """Re-enumerate over REST into the kind's output rows; return the row count."""
 
-        manager = require_composed_type(
-            type(self).target_for_kind(self.kind)._default_manager.db_manager(
-                self._state.db, hints={"instance": self},
-            ),
-            registry.VcsOutputManager,
-        )
+        manager = type(self).target_for_kind(self.kind)._default_manager
+        assert isinstance(manager, registry.VcsOutputManager)
         return manager.sync_from_source(self)
+
+    @contextmanager
+    def materialized(self, *, checkout: Checkout) -> Iterator[tuple[Path, str]]:
+        """Hold the selected backend's source view while a consumer prepares facts."""
+
+        repository = self.repository
+        with repository.vcs_bridge.backend.materialize(
+            repository, ref=self.ref or repository.default_branch, checkout=checkout,
+        ) as source:
+            yield source
 
     def materialize_spec(self) -> dict[str, str]:
         """Return the operator handoff coordinates to clone and check out this source."""
@@ -265,9 +361,44 @@ class Source(AuditMixin, ProtectedDataModel, concrete=True):
         }
 
 
+class TemplateManager(AngeeManager, registry.VcsOutputManager):
+    """Manager owning the reconcile of template rows from a template source."""
+
+    def sync_from_source(self, source: Any) -> int:
+        """Walk the source for ``copier.yml`` and upsert/prune ``Template`` rows."""
+
+        repository: Any = source.repository
+        vcs_bridge = repository.vcs_bridge
+        descriptors = vcs_bridge.discover(source, marker="copier.yml", parse=parse_template_meta)
+        descriptors_by_path = {str(descriptor.get("path", "")): descriptor for descriptor in descriptors}
+        now = timezone.now()
+        with system_context(reason="integrate.template.sync"), transaction.atomic():
+            self.bulk_create(
+                [self._row_from_descriptor(source, descriptor, now=now) for descriptor in descriptors_by_path.values()],
+                update_conflicts=True,
+                unique_fields=["source", "path"],
+                update_fields=["name", "kind", "inputs", "updated_at"],
+            )
+            self.filter(source=source).exclude(path__in=descriptors_by_path).delete()
+            source.last_synced_at = now
+            source.save(update_fields=["last_synced_at", "updated_at"])
+        return len(descriptors)
+
+    def _row_from_descriptor(self, source: Any, descriptor: dict[str, Any], *, now: datetime) -> Any:
+        """Return an unsaved template row projected from one discovered descriptor."""
+
+        return self.model(
+            source_id=source.pk,
+            path=str(descriptor.get("path", "")),
+            name=str(descriptor.get("name", "")),
+            kind=str(descriptor.get("kind", "")),
+            inputs=list(descriptor.get("inputs", [])),
+            created_at=now,
+            updated_at=now,
+        )
 
 
-class Template(registry.VcsOutput, AuditMixin, ProtectedDataModel, concrete=True):
+class Template(registry.VcsOutput, AuditMixin, AngeeDataModel, concrete=True):
     """One Copier template discovered under a ``Source`` (``source_kind="template"``).
 
     The operator renders these; the kind here is the *template* kind from the

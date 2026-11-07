@@ -15,8 +15,6 @@ def test_tags_initial_migration_can_be_authored_without_rebac_tables(tmp_path: P
     (tmp_path / "settings.yaml").write_text(
         "SECRET_KEY: permission-authoring-test\n"
         "INSTALLED_APPS: ['angee.tags']\n"
-        # 190d3b7a9 requires production-mode disposable hosts to opt in to in-memory channels.
-        "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER: true\n"
         f"COMPOSE_OUTPUT_DIR: {str(tmp_path / 'runtime')!r}\n"
         "COMPOSE_OUTPUT_MODULE: runtime\n"
         "DATABASES:\n  default:\n    ENGINE: django.db.backends.sqlite3\n    NAME: ':memory:'\n",

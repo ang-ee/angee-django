@@ -2,37 +2,42 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, TypedDict
 
 from django.core.exceptions import ValidationError
-from django.db import router, transaction
-from rebac import PermissionDenied, SubjectRef, check_new, current_actor, database_context, is_sudo, to_subject_ref
+from django.db import models, transaction
+from rebac import PermissionDenied, SubjectRef, check_new, current_actor, to_subject_ref
 from rebac.errors import MissingActorError
 from rebac.resources import model_resource_type
 
 from angee.base.fields.state import enum_member_for
+from angee.base.managers import AngeeManager
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.iam.managers import ProtectedManager
-from angee.iam.querysets import ProtectedQuerySet
-from angee.messaging.managers import ThreadManager, ThreadQuerySet
+from angee.base.permissions import require_rebac_queryset
+from angee.base.querysets import AngeeQuerySet
 
 if TYPE_CHECKING:
-    from angee.messaging.models import Thread
+    from django_stubs_ext import WithAnnotations
+
     from angee.spaces.models import Group, Membership
 
 
-class GroupQuerySet[GroupT: Group](HierarchyQuerySet[GroupT], ProtectedQuerySet[GroupT]):
+class GroupQuerySet[GroupT: Group](HierarchyQuerySet[GroupT], AngeeQuerySet[GroupT]):
     """Group read scopes with hierarchy subtree and ancestor traversal."""
 
 
-_GroupManagerBase = ProtectedManager.from_queryset(GroupQuerySet)
+_GroupManagerBase = AngeeManager.from_queryset(GroupQuerySet)
 
 
 class GroupManager[GroupT: Group](_GroupManagerBase[GroupT]):
     """Keep a stable import identity for shared group tree managers."""
 
 
-class MembershipQuerySet[MembershipT: Membership](ProtectedQuerySet[MembershipT]):
+class _MembershipCanRead(TypedDict):
+    can_read: bool
+
+
+class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
     """Canonical roster selections shared by admission and the team audience."""
 
     def confirmed(self) -> Self:
@@ -40,8 +45,18 @@ class MembershipQuerySet[MembershipT: Membership](ProtectedQuerySet[MembershipT]
 
         return self.filter(is_confirmed=True, is_dismissed=False)
 
+    def with_can_read(self) -> MembershipQuerySet[WithAnnotations[MembershipT, _MembershipCanRead]]:
+        """Annotate ``can_read``: whether the ambient actor may read each membership.
 
-_MembershipManagerBase = ProtectedManager.from_queryset(MembershipQuerySet)
+        A record that displays another group's roster admits its seats' labels
+        only; a seat's id and its holder's subject stay with ``can_read`` rows.
+        """
+
+        readers = require_rebac_queryset(self.model, actor=current_actor()).scoped_for_aggregate()
+        return self.annotate(can_read=models.Exists(readers.filter(pk=models.OuterRef("pk"))))
+
+
+_MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)
 
 
 class MembershipManager[MembershipT: Membership](_MembershipManagerBase[MembershipT]):
@@ -88,39 +103,16 @@ class MembershipManager[MembershipT: Membership](_MembershipManagerBase[Membersh
         group/party key.
         """
 
-        return self._confirm(group=group, party=party, role=role)
-
-    def provision_confirmed(self, *, group: Group, party: Any, role: Any, provisioned_by: Any) -> MembershipT:
-        """Provision a roster seat under an explicit system context with attribution."""
-
-        if not is_sudo():
-            raise PermissionDenied("System context is required to provision a roster seat.")
-        return self._confirm(group=group, party=party, role=role, provisioned_by=provisioned_by)
-
-    def _confirm(self, *, group: Group, party: Any, role: Any, provisioned_by: Any = None) -> MembershipT:
-        """Persist one confirmation for both authorized admission and system provisioning."""
-
         role_member = enum_member_for(self.model.MembershipRole, role)
         if role_member is None:
             raise ValidationError({"role": ["Select a valid membership role."]})
 
-        using = self._db or group._state.db or router.db_for_write(self.model, instance=group)
-        for related in (group, party):
-            if related._state.db is not None and related._state.db != using:
-                raise ValidationError("Roster members must share their group's database.")
-        with database_context(using), transaction.atomic(using=using):
-            type(group).system_queryset(lock=("self",)).using(using).get(pk=group.pk)
-            memberships = self.get_queryset().using(using)
-            memberships = memberships.lock_if_supported().filter(group=group, party=party)
+        with transaction.atomic():
+            memberships = self.get_queryset().lock_if_supported().filter(group=group, party=party)
             membership = memberships.first()
             if membership is not None:
-                if provisioned_by is None and not membership.has_access("write"):
+                if not membership.has_access("write"):
                     raise PermissionDenied("write access to this membership is required")
-                if provisioned_by is not None and (
-                    membership.role == role_member and membership.confidence == 1.0
-                    and membership.is_confirmed and not membership.is_dismissed
-                ):
-                    return membership
                 update_fields = ["confidence", "is_confirmed", "is_dismissed", "updated_at"]
                 if membership.role != role_member:
                     membership.role = role_member
@@ -128,10 +120,10 @@ class MembershipManager[MembershipT: Membership](_MembershipManagerBase[Membersh
                 membership.confidence = 1.0
                 membership.is_confirmed = True
                 membership.is_dismissed = False
-                membership.save(using=using, update_fields=update_fields)
+                membership.save(update_fields=update_fields)
                 return membership
 
-            actor = self.check_role_create(group=group, role=role_member) if provisioned_by is None else None
+            actor = self.check_role_create(group=group, role=role_member)
             membership = self.model(
                 group=group,
                 party=party,
@@ -140,25 +132,9 @@ class MembershipManager[MembershipT: Membership](_MembershipManagerBase[Membersh
                 is_confirmed=True,
                 is_dismissed=False,
             )
-            membership._state.db = using
-            if provisioned_by is not None:
-                membership.created_by_id = provisioned_by.pk
-                membership.updated_by_id = provisioned_by.pk
             membership.full_clean(validate_unique=False, validate_constraints=False)
             membership.sudo(reason="spaces.membership.add_confirmed")
-            membership.save(using=using)
+            membership.save()
             if actor is not None:
                 membership.with_actor(actor)
             return membership
-
-
-class ThreadSpaceQuerySet[ThreadT: Thread](ThreadQuerySet[ThreadT]):
-    """Actor-scoped group-thread population contributed by Spaces."""
-
-    def bound_to_groups(self) -> Self:
-        """Select group conversations with at least one governed group audience."""
-
-        return self.filter(modality=self.model.Modality.GROUP, groups__isnull=False).distinct()
-
-
-ThreadSpaceManager = ThreadManager.from_queryset(ThreadSpaceQuerySet)

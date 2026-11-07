@@ -7,29 +7,6 @@ The current record owns read and post admission. Messaging contributes comments,
 its existing composer, and linked source conversations to the framework Activity
 stream; provenance contributes record history independently through the same owner.
 
-Record chatter responses resolve selected fields through one private
-record/role/request context. Posting and editing select only the accepted message;
-followers, suggestions, notifications and totals remain independent selections.
-The record queryset supplies membership and ordering without hydrating content.
-Native Strawberry-Django message-field annotations and prefetch hints load sender,
-capability, unread, part, reaction and star projections only when selected, before
-materializing the authorized row/window. The same field boundary serves legacy,
-keyset and retained-ID reads; Python list APIs materialize the same queryset owner.
-The conversation adopts that authoritative projection into native Query pages,
-then reconciles derived state. `record_message_feed` and its retained-ID
-revalidation root use the same parent read gate and `MessageQuerySet.record_scope`
-as the legacy `record_thread` fields. Signed fixed-window cuts, opaque chronology
-keys and explicit survivor/absence partitions remain owned by the keyset query.
-An accepted post inserts only into a loaded unfiltered latest scope; search and
-membership changes continue through authoritative revalidation.
-
-Chatter notifications use the existing Timeline parent-record invalidation owner,
-including reactions, follows and receipts. Private Message broadcasts remain
-disabled. An inaccessible parent's event can be withheld by the read gate;
-read-gated silence is never an absence or removal. Current-parent revalidation,
-reconnect and explicit recovery still require authoritative reads; the transport
-provides no replay or immediate revocation guarantee.
-
 Source threads and messages remain channel occurrences. A native `same_as` pair
 statement is the identity fact, and applying it folds the newer copy into the
 older through core `MergeableMixin` as a retained redirect (`merged_into`): no
@@ -52,13 +29,8 @@ both threads to belong to that channel, and refuses locally authored messages.
 It preserves content and repairs participants and both physical thread counters.
 `ingest(..., explicit_thread=..., expected_thread=...)` composes the same command
 with envelope ingestion; absent the exact precondition, changing an explicit
-source thread remains refused. Wrap a historical source import in
-`messaging.events.historical_import()` to mute live message, GraphQL change,
-timeline and workflow hooks while retaining native content history and counter
-updates. Legacy `ingest(historical=True)` and `land_posts(historical=True)` enter
-the same context. A changed provider envelope sends `message_ingested` inside its
-batch transaction with `instance` for every row. The final event carries the
-whole changed `created_batch`; workflows capture it before commit.
+source thread remains refused. Historical ingestion suppresses live message
+events while retaining native content history and counter updates.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
@@ -193,15 +165,3 @@ A channel asserts statements only through its protocol's declaration:
 its capability child. Takeout and export backends declare `SourceKind.IMPORT` and
 assert as the channel's `integration_ptr`, the same row that owns the takeout's
 `SyncStream` and observed `RecordLink`s.
-
-## Native source owners
-
-`models/channels.py` owns Channel and its webform contribution;
-`models/threads.py` owns source conversations and record chatter;
-`models/messages.py` owns messages and their content rows;
-`models/notifications.py` owns follower preferences and receipts.
-The matching `managers/` modules own factories and persistence, with
-`managers/content.py` owning content-addressed fragments, parts and quote edges.
-Selected-set predicates and projections remain in `querysets.py`.
-Public model and manager imports remain available from their package exports;
-historical history-class and queryset imports resolve to these same owners.

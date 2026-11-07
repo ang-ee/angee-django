@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import asdict
 from functools import partial
 from typing import Any, Self, cast
@@ -17,9 +16,7 @@ from strawberry.utils.str_converters import to_snake_case
 from angee.base.fields import ImplClassField
 from angee.base.implementations import ImplChoice as BaseImplChoice
 from angee.base.implementations import impl_choices as registry_impl_choices
-from angee.base.models.identity import public_id_of
-from angee.base.models.implementations import _relation_default_queryset
-from angee.graphql.data.extensions import resource_extensions
+from angee.base.models.implementations import readable_impl_defaults
 from angee.graphql.mixins import ImplementationChoicesMixin
 
 
@@ -55,33 +52,8 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     field_name = _field_name(field)
     choices = [ImplChoice.from_choice(choice) for choice in model_impl_choices(django_model, field_name)]
     for choice in choices:
-        choice.defaults = JSON(public_impl_defaults(django_model, cast(dict[str, Any], choice.defaults)))
+        choice.defaults = JSON(readable_impl_defaults(django_model, cast(dict[str, Any], choice.defaults)))
     return choices
-
-
-def public_impl_defaults(model: type[models.Model], defaults: Mapping[str, Any]) -> dict[str, Any]:
-    """Project field-owned relation defaults as visible public identities."""
-
-    def related_queryset(related: type[models.Model]) -> models.QuerySet[Any]:
-        rows = related._default_manager.all()
-        transform = resource_extensions(related).relation_queryset
-        return transform(related, rows) if transform is not None else rows
-
-    result = dict(defaults)
-    for name, value in tuple(result.items()):
-        try:
-            field = model._meta.get_field(name)
-        except FieldDoesNotExist:
-            continue
-        targets = _relation_default_queryset(field, value, querysets=related_queryset)
-        if targets is None:
-            continue
-        target = targets.first()
-        if target is None:
-            del result[name]
-        else:
-            result[name] = public_id_of(target)
-    return result
 
 
 def model_impl_choices(model: type[models.Model], field_name: str) -> list[BaseImplChoice]:

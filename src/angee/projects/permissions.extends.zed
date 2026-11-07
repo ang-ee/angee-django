@@ -13,7 +13,7 @@ definition storage/drive {
 definition storage/file {
     relation task_record: projects/task // rebac:field={"path":"attachments__task","filters":{"visibility":"record"}}
 
-    permission read_granted = task_record->read
+    permission read = task_record->read
     permission write = task_record->write
     permission share = task_record->share
 }
@@ -36,18 +36,27 @@ definition integrate/integration {
     permission delete = project->write
 }
 
+// A bound project's readers read the conversation, in the inbox too; a project's
+// or task's readers read its own chatter.
 definition messaging/thread {
     relation project: projects/project // rebac:field=project_bindings__project
     relation record_project: projects/project // rebac:field={"path":"attachments__projects_project","filters":{"attachments__role":"chatter"}}
     relation record_task: projects/task // rebac:field={"path":"attachments__projects_task","filters":{"attachments__role":"chatter"}}
 
-    permission read_granted = project->read + record_project->read + record_task->read
+    permission read_granted = project->read
+    permission chatter_read = record_project->read + record_task->read
     permission write = project->write
 }
 
+definition knowledge/vault {
+    relation project: projects/project // rebac:field=project_bindings__project
 
+    permission read_granted = project->read
+    permission write_granted = project->write
+    permission share = project->share
+}
 
-// Tasks carry files, and tasks and projects carry source
+// Tasks carry files, and tasks and projects carry knowledge bindings, source
 // conversations and tags: each edge's target arm follows the record.
 definition storage/file_attachment {
     relation task: projects/task // rebac:field=target
@@ -62,7 +71,13 @@ definition messaging/thread_attachment {
     permission target_write = task->write + project->write
 }
 
+definition knowledge/record_binding {
+    relation task: projects/task // rebac:field=target
+    relation project: projects/project // rebac:field=target
 
+    permission target_read = task->read + project->read
+    permission target_write = task->write + project->write
+}
 
 definition tags/tag_assignment {
     relation task: projects/task // rebac:field=target
@@ -77,12 +92,14 @@ definition projects/task {
     relation subject_task: projects/task // rebac:field=subject
     relation subject_project: projects/project // rebac:field=subject
     relation subject_party: parties/party // rebac:field=subject
+    relation subject_page: knowledge/page // rebac:field=subject
+    relation subject_vault: knowledge/vault // rebac:field=subject
 
     // Each subject lends its direct holders (`*_as_subject`), never its whole read:
     // a point check inlines every arm, and the full reads together overflow
     // SQLite's expression depth. A project lends its read as before.
-    permission subject_read = subject_task->read_as_subject + subject_project->read + subject_party->read_as_subject
-    permission subject_write = subject_task->write_as_subject + subject_project->write + subject_party->write_as_subject
+    permission subject_read = subject_task->read_as_subject + subject_project->read + subject_party->read_as_subject + subject_page->read_as_subject + subject_vault->read_as_subject
+    permission subject_write = subject_task->write_as_subject + subject_project->write + subject_party->write_as_subject + subject_page->write_as_subject + subject_vault->write_as_subject
     permission subject_withheld = subject_task->withheld_as_subject
     permission subject_keeper = subject_task->keeper_as_subject
 }

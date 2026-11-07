@@ -41,9 +41,6 @@ from angee.spaces.testing import models as spaces_models  # noqa: F401 -- regist
 class Directory(AbstractDirectory, Integration):
     """Concrete contacts directory (Integration child) used by messaging tests."""
 
-    created_at = Integration.created_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
-    updated_at = Integration.updated_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
-
     class Meta(AbstractDirectory.Meta):
         """Django model options for the canonical test directory."""
 
@@ -81,9 +78,6 @@ class Party(AbstractParty):
 
 class Person(AbstractPerson, Party):
     """Concrete identity required by party-keyed messaging followers."""
-
-    created_at = Party.created_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
-    updated_at = Party.updated_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
 
     class Meta(AbstractPerson.Meta):
         """Django model options for the canonical test person."""
@@ -124,9 +118,6 @@ class Fragment(AbstractFragment):
 
 class Channel(ChannelIntake, ChannelSpace, ImapChannelSampling, AbstractChannel, Integration):
     """Concrete Integration child used to verify channel-owned message access."""
-
-    created_at = Integration.created_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
-    updated_at = Integration.updated_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
 
     rebac_grantable = AbstractChannel.rebac_grantable
 
@@ -231,9 +222,6 @@ class ThreadNotification(AbstractThreadNotification):
 
 class Organization(AbstractOrganization, Party):
     """Concrete organization matching the composer inheritance shape."""
-
-    created_at = Party.created_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
-    updated_at = Party.updated_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
 
     class Meta(AbstractOrganization.Meta):
         """Django model options for the canonical test organization."""

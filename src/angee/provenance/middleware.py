@@ -21,12 +21,6 @@ FAILED_STATUS = 400
 """The first response status that closes a request's changeset as failed."""
 
 
-def _principal(actor: object | None) -> object | None:
-    """Do not attribute an anonymous authentication placeholder."""
-
-    return actor if actor is not None and getattr(actor, "is_authenticated", True) else None
-
-
 @sync_and_async_middleware
 def ChangesetMiddleware(
     get_response: Callable[[HttpRequest], HttpResponse | Awaitable[HttpResponse]],
@@ -43,8 +37,7 @@ def ChangesetMiddleware(
         async_response = cast(Callable[[HttpRequest], Awaitable[HttpResponse]], get_response)
 
         async def async_middleware(request: HttpRequest) -> HttpResponse:
-            actor = await request.auser() if hasattr(request, "auser") else getattr(request, "user", None)
-            async with changeset(actor=_principal(actor), fresh=True) as mark_failed:
+            async with changeset(fresh=True) as mark_failed:
                 response = await async_response(request)
                 if response.status_code >= FAILED_STATUS:
                     mark_failed()
@@ -54,7 +47,7 @@ def ChangesetMiddleware(
     sync_response = cast(Callable[[HttpRequest], HttpResponse], get_response)
 
     def middleware(request: HttpRequest) -> HttpResponse:
-        with changeset(actor=_principal(getattr(request, "user", None)), fresh=True) as mark_failed:
+        with changeset(fresh=True) as mark_failed:
             response = sync_response(request)
             if response.status_code >= FAILED_STATUS:
                 mark_failed()
@@ -64,7 +57,7 @@ def ChangesetMiddleware(
 
 
 class ChangesetScopeMiddleware:
-    """Own a fresh boundary for the life of one ASGI websocket connection.
+    """Own a fresh boundary for the life of one ASGI connection scope.
 
     Channels consumers (GraphQL subscriptions, the agent ACP transport) run every
     handler and ``database_sync_to_async`` call inside the connection's context,
@@ -76,8 +69,5 @@ class ChangesetScopeMiddleware:
         self.inner = inner
 
     async def __call__(self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
-        if scope["type"] != "websocket":
-            await self.inner(scope, receive, send)
-            return
-        async with changeset(actor=_principal(scope.get("user")), fresh=True):
+        async with changeset(fresh=True):
             await self.inner(scope, receive, send)

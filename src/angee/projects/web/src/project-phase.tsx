@@ -1,5 +1,5 @@
-import { holdsPermission, refineResourceName, useModelMetadata, useResourceInvalidates } from "@angee/metadata";
-import { extractActionOutcome, refineFieldsFromPaths, useReconcileMutationResponse } from "@angee/refine";
+import { holdsPermission, refineResourceName, useModelMetadata } from "@angee/metadata";
+import { extractActionOutcome, refineFieldsFromPaths } from "@angee/refine";
 import {
   Button,
   Card,
@@ -67,19 +67,11 @@ export function ProjectPhaseControl({ value, row, field, readOnly = false }: Wid
   });
   const metadata = useModelMetadata(MILESTONE_MODEL);
   const resource = metadata?.resource ?? null;
-  const reconcile = useReconcileMutationResponse();
-  const invalidates = useResourceInvalidates([MILESTONE_MODEL],
-    (_data: unknown, input: { id?: string | number }) => [{ model: MILESTONE_MODEL, id: String(input.id) }]);
   const update = useUpdate({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     meta: { fields: refineFieldsFromPaths(["id", "start_date", "target_date", "revision", "permissions"]) },
-    invalidates: [],
-    mutationOptions: { onSuccess: (result, input) => reconcile(result.data, input, {
-      invalidates,
-      records: [{ model: MILESTONE_MODEL, id: String(input.id),
-        relatedRecords: recordId ? [{ model: PROJECT_MODEL, id: recordId }] : [] }],
-    }) },
+    invalidates: ["list", "many", "detail"],
   });
   const canEditDates = !preview.viewAs && !preview.pending && !update.mutation.isPending;
   const [selectPhase, state] = useAuthoredResourceMutation(SetProjectCurrentMilestoneDocument, {
@@ -117,6 +109,7 @@ export function ProjectPhaseControl({ value, row, field, readOnly = false }: Wid
       meta: { fields: refineFieldsFromPaths(["id", "start_date", "target_date", "revision", "permissions"]),
         gqlVariables: { expected_revision: milestone.revision } },
     }).then(() => {
+      list.refetch();
       setOpenDate(null);
       setEditingDates(null);
     }).catch(() => undefined);

@@ -18,7 +18,7 @@ export function AddonDetail(): ReactElement {
     <DetailSurface
       publishBreadcrumbLabel
       loading={fetching && !addon}
-      loadingMessage={t("detail.addon.loading")}
+      loadingLabel={t("detail.addon.loading")}
       empty={
         !addon
           ? {

@@ -85,14 +85,20 @@ def _projection(**kwargs: object) -> ResourceQueryProjection:
             DataResourceFieldMetadata(name="created", kind="scalar", scalar="DateTime"),
         ),
         identity="id",
-        representation_policies={"Channel": "display_name"},
         filter_fields=("channel", "state", "created"),
         **kwargs,
     )
 
 
 def test_query_separates_row_selections_from_bucket_keys() -> None:
-    query = _projection(
+    schema = build_schema(
+        _SCHEMA.replace(
+            "input EntryFilter {",
+            "input JSON_comparison_exp { _eq: JSON, _contains: JSON }\n"
+            "input EntryFilter { payload: JSON_comparison_exp,",
+        )
+    )
+    projection = _projection(
         axes=(
             DataQueryAxis(
                 field="channel",
@@ -105,11 +111,15 @@ def test_query_separates_row_selections_from_bucket_keys() -> None:
                 server=DataQueryServerAxis("CHANNEL__DISPLAY_NAME", "channel__display_name"),
             ),
             DataQueryAxis(
-                field="payload.mailbox", kind="json", server=DataQueryServerAxis("PAYLOAD__MAILBOX", "payload__mailbox")
+                field="payload.mailbox",
+                kind="json",
+                server=DataQueryServerAxis("PAYLOAD__MAILBOX", "payload__mailbox"),
+                drill=DataQueryDrill("json", "payload", "payload__mailbox", json_path="mailbox", null_mode="value"),
             ),
         ),
         label_axes={"channel": "channel__display_name"},
-    ).build()
+    )
+    query = replace(projection, schema=schema, filter_fields=(*projection.filter_fields, "payload")).build()
     assert set(query.axes) == {"channel", "payload.mailbox"}
     channel = query.axes["channel"]
     assert channel.identity_path == "channel.id"
@@ -121,82 +131,11 @@ def test_query_separates_row_selections_from_bucket_keys() -> None:
     mailbox = query.axes["payload.mailbox"]
     assert mailbox.identity_path == "payload.mailbox"
     assert mailbox.paths == ("payload",)
-    assert mailbox.drill is None
+    assert (mailbox.drill.kind, mailbox.drill.field, mailbox.drill.json_path) == ("json", "payload", "mailbox")
     assert query.fields["payload.mailbox"].row.path == "payload.mailbox"
     assert query.fields["payload.mailbox"].row.paths == ("payload",)
     assert query.fields["channel"].row.path == "channel.id"
     assert query.fields["channel"].row.paths == ("channel.id",)
-
-
-def test_group_drill_requires_a_selectable_row_identity_at_schema_build() -> None:
-    """A grouped page cannot match returned rows without its axis identity."""
-
-    projection = _projection(
-        axes=(DataQueryAxis(
-            field="channel", kind="relation",
-            server=DataQueryServerAxis("CHANNEL", "channel_id"),
-            drill=DataQueryDrill("identity", "channel", "channel_id"),
-        ),),
-    )
-    schema = build_schema(_SCHEMA.replace(
-        "type Channel implements Node { id: ID!, display_name: String! }",
-        "type Channel { display_name: String! }",
-    ))
-    message = r"Relation group axes \['channel'\] have a drill but no selectable row identity"
-    with pytest.raises(ImproperlyConfigured, match=message):
-        replace(projection, schema=schema).build()
-
-
-def test_unexposed_relation_drill_fails_in_a_complete_schema() -> None:
-    projection = _projection(
-        axes=(DataQueryAxis(
-            field="channel", kind="relation",
-            server=DataQueryServerAxis("CHANNEL", "channel_id"),
-            drill=DataQueryDrill("identity", "channel", "channel_id"),
-        ),),
-    )
-    schema = build_schema(_SCHEMA.replace("channel: Channel, ", ""))
-
-    with pytest.raises(ImproperlyConfigured) as error:
-        replace(projection, schema=schema).build()
-    assert "Relation group axes ['channel'] have a drill but no selectable row identity" in str(error.value)
-    assert "'Entry'" in str(error.value)
-    assert "expose the related row's public ID or remove the drill" in str(error.value)
-
-
-def test_unexposed_relation_drill_drops_only_in_a_declared_partial_schema() -> None:
-    projection = _projection(
-        axes=(DataQueryAxis(
-            field="channel", kind="relation",
-            server=DataQueryServerAxis("CHANNEL", "channel_id"),
-            drill=DataQueryDrill("identity", "channel", "channel_id"),
-        ),),
-    )
-    schema = build_schema(_SCHEMA.replace("channel: Channel, ", ""))
-
-    axis = replace(projection, schema=schema, partial_schema=True).build().axes["channel"]
-    assert axis.server is not None
-    assert axis.drill is None
-    assert axis.identity_path is None
-
-
-def test_scalar_group_drill_needs_no_related_row_identity() -> None:
-    # The row does not expose `created`, so the identity check would fail a
-    # relation axis; a scalar axis drills through its own filter field instead.
-    projection = replace(
-        _projection(
-            axes=(DataQueryAxis(
-                field="created", kind="date",
-                server=DataQueryServerAxis("CREATED", "created"),
-                drill=DataQueryDrill("identity", "created", "created"),
-            ),),
-        ),
-        schema=build_schema(_SCHEMA.replace(", created: DateTime }", " }")),
-    )
-
-    axis = projection.build().axes["created"]
-    assert axis.identity_path is None
-    assert axis.drill == DataQueryDrill("identity", "created", "created")
 
 
 def test_client_filter_only_field_has_no_invented_row_accessor() -> None:
@@ -254,6 +193,7 @@ def test_query_has_explicit_client_grouping_and_optional_extraction_drill() -> N
                 field="created",
                 kind="date",
                 server=DataQueryServerAxis("CREATED", "created"),
+                drill=DataQueryDrill("value", "created", "created"),
                 extractions=(month, day_of_week),
             ),
         ),
@@ -273,7 +213,11 @@ def test_query_axes_follow_composed_group_inputs_keys_and_range_fields() -> None
     )
     projection = _projection(
         axes=(
-            DataQueryAxis(field="channel", server=DataQueryServerAxis("CHANNEL", "channel_id")),
+            DataQueryAxis(
+                field="channel",
+                server=DataQueryServerAxis("CHANNEL", "channel_id"),
+                drill=DataQueryDrill("identity", "channel", "channel_id"),
+            ),
             DataQueryAxis(
                 field="channel__display_name",
                 server=DataQueryServerAxis("CHANNEL__DISPLAY_NAME", "channel__display_name"),
@@ -282,6 +226,7 @@ def test_query_axes_follow_composed_group_inputs_keys_and_range_fields() -> None
                 field="created",
                 kind="date",
                 server=DataQueryServerAxis("CREATED", "created"),
+                drill=DataQueryDrill("value", "created", "created"),
                 extractions=tuple(
                     DataQueryExtraction(
                         name,
@@ -303,6 +248,29 @@ def test_query_axes_follow_composed_group_inputs_keys_and_range_fields() -> None
     ]
     without_field = build_schema(_SCHEMA.replace("PAYLOAD__MAILBOX CREATED", "PAYLOAD__MAILBOX"))
     assert "created" not in replace(projection, schema=without_field).build().axes
+
+
+@pytest.mark.parametrize(
+    ("axis", "message"),
+    [
+        (
+            DataQueryAxis(field="created", kind="date", server=DataQueryServerAxis("CREATED", "created")),
+            "declares group axis 'created' without a drill",
+        ),
+        (
+            DataQueryAxis(
+                field="payload.mailbox",
+                kind="json",
+                server=DataQueryServerAxis("PAYLOAD__MAILBOX", "payload__mailbox"),
+                drill=DataQueryDrill("json", "payload", "payload__mailbox", json_path="mailbox", null_mode="value"),
+            ),
+            "group axis 'payload.mailbox' drills through filter 'payload'",
+        ),
+    ],
+)
+def test_query_group_axis_without_an_executable_drill_fails_the_build(axis: DataQueryAxis, message: str) -> None:
+    with pytest.raises(ImproperlyConfigured, match=f"Entry {message}"):
+        _projection(axes=(axis,)).build()
 
 
 def test_query_resolves_nested_final_aliases_without_rewriting_filter_keys() -> None:
@@ -345,40 +313,15 @@ def test_query_does_not_infer_relation_identity_from_an_unrelated_id_field() -> 
     assert relation.label_path == "channel.display_name"
 
 
-def test_query_uses_the_only_public_id_on_an_identity_projection() -> None:
-    """A declared non-Node identity can page a relation group."""
-
-    schema = build_schema(
-        _SCHEMA.replace(
-            "type Channel implements Node { id: ID!, display_name: String! }",
-            "type Channel { id: ID!, display_name: String! }",
-        )
-    )
-    assert replace(
-        _projection(), schema=schema, identity_policies={"Channel": "id"},
-    ).build().fields["channel"].relation.identity_path == "channel.id"
-
-
-def test_query_does_not_guess_non_node_identity_from_id_name() -> None:
-    schema = build_schema(
-        _SCHEMA.replace(
-            "type Channel implements Node { id: ID!, display_name: String! }",
-            "type Channel { id: ID!, display_name: String! }",
-        )
-    )
-    assert replace(_projection(), schema=schema).build().fields["channel"].relation.identity_path is None
-
-
-def test_unexposed_relation_uses_declared_identity_policy() -> None:
+def test_unexposed_relation_uses_public_identity_constant(monkeypatch) -> None:
+    monkeypatch.setattr("angee.graphql.data.query.PUBLIC_ID_FIELD_NAME", "public_key")
     schema = build_schema(
         _SCHEMA.replace(
             "type Channel implements Node { id: ID!, display_name: String! }",
             "type Channel { sqid: ID!, public_key: ID!, display_name: String! }",
         )
     )
-    relation = replace(
-        _projection(), schema=schema, identity_policies={"Channel": "public_key"},
-    ).build().fields["channel"].relation
+    relation = replace(_projection(), schema=schema).build().fields["channel"].relation
     assert relation.identity_path == "channel.public_key"
 
 
@@ -483,7 +426,6 @@ def _native_operator_resource(schema):
         types=types,
         fields=(),
         identity="id",
-        representation_policies={"Channel": "display_name"},
         filter_fields=tuple(_SCALAR_OPERANDS),
         model=QueryPattern,
         filter_operators=tuple(resource_filter_lookups(QueryPattern, ("name",))),

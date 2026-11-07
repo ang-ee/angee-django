@@ -1,6 +1,7 @@
 """Cross-addon contracts exercised through the emitted model graph."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import replace
 from threading import Barrier
 from unittest import skipUnless
@@ -16,14 +17,16 @@ from fastmcp.exceptions import ToolError
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.integrate.discovery import ConnectionDiscovery
+from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError
+from angee.integrate.locks import bridge_advisory_lock
 from angee.knowledge.mcp_tools import register
 from angee.messaging.backends import ParsedHandle
 from angee.posts.backends import FeedBackend
 from angee.posts.ingest import land_posts
 from angee.posts.models import CommentAnswered
-from angee.provenance.engine.exceptions import CreationKeyConflict
-from tests.native_messaging_delivery import DeliveryFixtures, Feed, Message
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from tests.native_messaging_delivery import Channel, DeliveryFixtures, Feed, Message
 
 
 class ReplyJoins(DeliveryFixtures):
@@ -139,6 +142,30 @@ class ReplyJoins(DeliveryFixtures):
             self.feed.attach_credential(self.feed.credential)
             self.feed.refresh_from_db()
             self.assertEqual(self.feed.live_since, first)
+
+    def test_parent_addressed_inbound_uses_the_concrete_capability_lock(self):
+        def inbound():
+            close_old_connections()
+            try:
+                with system_context(reason="parent addressed webhook"):
+                    return Channel.objects.get(pk=self.feed.pk).dispatch_inbound({})
+            finally:
+                close_old_connections()
+
+        with patch.object(Feed, "verify_webhook", return_value=True), patch.object(Feed, "handle_webhook") as land:
+            with bridge_advisory_lock(self.feed) as acquired, ThreadPoolExecutor(max_workers=1) as pool:
+                self.assertTrue(acquired)
+                with self.assertRaises(IntegrationError) as refusal:
+                    pool.submit(copy_context().run, inbound).result(timeout=10)
+                self.assertTrue(refusal.exception.transient)
+                land.assert_not_called()
+            self.assertTrue(inbound())
+            land.assert_called_once()
+
+    def test_inbound_refuses_an_enclosing_transaction(self):
+        with transaction.atomic(), self.assertRaisesMessage(IntegrationError, "autocommit"):
+            self.feed.dispatch_inbound({})
+
 
 class MemoryJoins(DeliveryFixtures):
     def test_create_page_tool_writes_only_a_granted_vault(self):

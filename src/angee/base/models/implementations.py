@@ -9,9 +9,12 @@ from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.fields.reverse_related import ForeignObjectRel
+from rebac import system_context
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.implementations import ImplBase, resolve_all_impl_classes
+from angee.base.models.identity import public_id_of
+from angee.base.permissions import require_rebac_queryset
 
 if TYPE_CHECKING:
     from django.db.models.fetch_modes import FetchMode
@@ -178,7 +181,8 @@ class ImplDefaultsMixin(models.Model):
             if field.attname not in loaded:
                 if updated is not None and field.name not in updated and field.attname not in updated:
                     continue
-                stored_row = type(self)._base_manager.filter(pk=self.pk).values_list(field.attname).first()
+                with system_context(reason="base.impl.validate_stored_key"):
+                    stored_row = type(self)._base_manager.filter(pk=self.pk).values_list(field.attname).first()
                 if stored_row is None and self._state.adding:
                     continue
                 if stored_row is None:
@@ -273,7 +277,8 @@ class ImplDefaultsMixin(models.Model):
             before = getattr(self, attname)
             targets = _relation_default_queryset(field, value, querysets=lambda related: related._base_manager.all())
             if targets is not None:
-                target = targets.first()
+                with system_context(reason="base.impl.materialize_fk"):
+                    target = targets.first()
                 if target is None:
                     raise ValueError(
                         f"{type(self).__name__}.{field.name} impl default references "
@@ -305,3 +310,24 @@ def _relation_default_queryset(
             f"{related._meta.label}, which must declare a slug field."
         ) from error
     return querysets(related).filter(slug=value)
+
+
+def readable_impl_defaults(model: type[models.Model], defaults: Mapping[str, Any]) -> dict[str, Any]:
+    """Project row defaults through native field policy and actor-visible identities."""
+    result = dict(defaults)
+    for name, value in tuple(result.items()):
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist:
+            continue
+        targets = _relation_default_queryset(
+            field, value, querysets=lambda related: require_rebac_queryset(related).scoped()
+        )
+        if targets is None:
+            continue
+        target = targets.first()
+        if target is None:
+            del result[name]
+        else:
+            result[name] = public_id_of(target)
+    return result

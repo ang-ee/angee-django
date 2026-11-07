@@ -44,7 +44,6 @@ test("native install policy preserves consumer settings while enforcing framewor
       "nuqs@2.10.1": fileURLToPath(new URL("../../scripts/patches/nuqs-2.10.1.patch", import.meta.url)),
       "consumer-package": "consumer.patch",
       "@refinedev/core@5.0.12": fileURLToPath(new URL("../../scripts/patches/refinedev-core-5.0.12.patch", import.meta.url)),
-      "@refinedev/hasura@7.0.1": fileURLToPath(new URL("../../scripts/patches/refinedev-hasura-7.0.1.patch", import.meta.url)),
     },
   });
 });
@@ -56,7 +55,6 @@ test("native install policy accepts roots with no existing dependency policy", (
     packageExtensions: { "@refinedev/core@5.0.12": { dependencies: { graphql: "^16.14.0" } } },
     patchedDependencies: {
       "@refinedev/core@5.0.12": expect.stringContaining("refinedev-core-5.0.12.patch"),
-      "@refinedev/hasura@7.0.1": expect.stringContaining("refinedev-hasura-7.0.1.patch"),
       "nuqs@2.10.1": expect.stringContaining("nuqs-2.10.1.patch"),
     },
   });

@@ -12,9 +12,6 @@ const mocks = vi.hoisted(() => ({
   recipientData: { colleagues: [] as unknown[] } as unknown,
   mutateCalls: [] as Array<{ op: string; vars: Record<string, unknown> }>,
   useAuthoredQuery: vi.fn(),
-  useRecordMessageFeed: vi.fn(),
-  fetchOlder: vi.fn(),
-  fetchNewer: vi.fn(),
 }));
 
 function operationName(document: unknown): string {
@@ -46,7 +43,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: mocks.useAuthoredQuery,
-  useSetAuthoredQueryData: () => vi.fn(),
   useAuthoredMutation: (document: unknown) => {
     const op = operationName(document);
     const mutate = vi.fn(async (vars: Record<string, unknown>) => {
@@ -54,20 +50,6 @@ vi.mock("@angee/refine", async (importOriginal) => ({
       return {};
     });
     return [mutate, { fetching: false }];
-  },
-}));
-
-vi.mock("./record-message-feed", () => ({
-  useRecordMessageFeed: (options: unknown) => {
-    mocks.useRecordMessageFeed(options);
-    const payload = (mocks.threadData as { record_thread?: { messages?: RecordMessageRow[];
-      message_result_count?: number; has_older_messages?: boolean; has_newer_messages?: boolean } } | undefined)?.record_thread;
-    return { acceptResponse: vi.fn(), query: {
-      data: payload ? { pages: [{ rows: payload.messages ?? [], count: payload.message_result_count ?? 0,
-        through: null, hasOlder: payload.has_older_messages ?? false }], pageParams: [{ start: true }] } : undefined,
-      error: null, isFetching: false, hasNextPage: payload?.has_older_messages ?? false,
-      hasPreviousPage: payload?.has_newer_messages ?? false, fetchNextPage: mocks.fetchOlder, fetchPreviousPage: mocks.fetchNewer,
-    } };
   },
 }));
 
@@ -83,8 +65,6 @@ import messaging from "./index";
 function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
   return {
     id: "msg_1",
-    feed_order_key: "2026-07-06T00:00:00Z:1",
-    is_trashed: false,
     title: "",
     preview: "Hello there",
     direction: "INTERNAL",
@@ -128,8 +108,6 @@ function threadPayload(messages: RecordMessageRow[]): unknown {
       subtypes: [],
       unread_count: 0,
       needaction_count: 0,
-      message_has_error: false,
-      message_has_error_counter: 0,
       attachment_count: 0,
       notifications: [],
       followers: [],
@@ -150,9 +128,6 @@ beforeEach(() => {
   mocks.mutateCalls = [];
   mocks.recipientData = { colleagues: [] };
   mocks.useAuthoredQuery.mockReset();
-  mocks.useRecordMessageFeed.mockClear();
-  mocks.fetchOlder.mockClear();
-  mocks.fetchNewer.mockClear();
   mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
     const op = operationName(document);
     if (op === "MessagingRecordThread") {
@@ -180,17 +155,17 @@ describe("RecordChatterPane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
     fireEvent.change(screen.getByLabelText("Search comments", { selector: "input" }), { target: { value: "unrelated" } });
     await waitFor(() => {
-      const last = mocks.useRecordMessageFeed.mock.calls.filter(([options]) => options.enabled).at(-1);
-      expect(last?.[0]).toMatchObject({ search: "unrelated", messageTypes: ["notification"] });
+      const last = mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+      expect(last?.[1]).toMatchObject({ search: "unrelated", messageTypes: ["notification"] });
     });
 
     const selection = { target: "msg_older", focus: "message" };
     mocks.threadData = threadPayload([]);
-    mocks.useRecordMessageFeed.mockClear();
+    mocks.useAuthoredQuery.mockClear();
     view.rerender(<>{discussion.render?.(context, selection)}</>);
-    const reads = mocks.useRecordMessageFeed.mock.calls.filter(([options]) => options.enabled && options.around);
+    const reads = mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread");
     expect(reads.length).toBeGreaterThan(0);
-    for (const [variables] of reads) {
+    for (const [, variables] of reads) {
       expect(variables).toMatchObject({ around: "msg_older", search: "", messageTypes: [] });
     }
     expect(screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("true");
@@ -224,8 +199,8 @@ describe("RecordChatterPane", () => {
     const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
     mocks.threadData = threadPayload([message()]);
     render(<RecordChatterPane context={context} selection={selection} />);
-    const last = mocks.useRecordMessageFeed.mock.calls.filter(([options]) => options.enabled).at(-1);
-    expect(last?.[0].around).toBeUndefined();
+    const last = mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+    expect(last?.[1].around).toBeUndefined();
     expect(document.getElementById("message-msg_1")?.hasAttribute("aria-current")).toBe(false);
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
@@ -246,11 +221,13 @@ describe("RecordChatterPane", () => {
     mocks.threadData = threadPayload([message()]);
     render(<RecordChatterPane context={context} />);
     fireEvent.click(screen.getByRole("button", { name: "Notes" }));
-    const last = mocks.useRecordMessageFeed.mock.calls.filter(([options]) => options.enabled).at(-1);
-    expect(last?.[0]).toMatchObject({ messageTypes: ["notification"] });
+    const last = mocks.useAuthoredQuery.mock.calls
+      .filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+    expect(last?.[1]).toMatchObject({ messageTypes: ["notification"] });
     fireEvent.click(screen.getByRole("button", { name: "All" }));
-    const after = mocks.useRecordMessageFeed.mock.calls.filter(([options]) => options.enabled).at(-1);
-    expect(after?.[0]).toMatchObject({ messageTypes: [] });
+    const after = mocks.useAuthoredQuery.mock.calls
+      .filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+    expect(after?.[1]).toMatchObject({ messageTypes: [] });
   });
 
   test("the head reveals search on demand and marks the thread read from its badge", () => {

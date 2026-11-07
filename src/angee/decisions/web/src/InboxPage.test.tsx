@@ -18,17 +18,16 @@ const { Provider, clearClients } = createUiTestProviders({
 beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture(initialEntry = "/decisions", authenticated = true, rows: Array<{ id: string; [key: string]: unknown }> = [{
+function fixture(initialEntry = "/decisions", authenticated = true) {
+  const getList = vi.fn(async (_params: GetListParams) => ({ data: [{
     id: "decision-1", kind: "review", kind_label: "Review",
     requester: { display_name: "River" }, verdict: null,
-  }], pageSize?: number) {
-  const getList = vi.fn(async (_params: GetListParams) => ({ data: rows, total: rows.length }));
+  }], total: 1 }));
   const root = createRootRoute({
     validateSearch: (search: Record<string, unknown>) => search,
     component: () => <AppRuntimeProvider runtime={{
       widgets: defaultWidgets, icons: baseIcons,
-      resourceViews: Object.fromEntries((decisions.resourceViews ?? []).map((view) =>
-        [view.id, pageSize === undefined ? view : { ...view, pageSize }])),
+      resourceViews: Object.fromEntries((decisions.resourceViews ?? []).map((view) => [view.id, view])),
       defaultResourceView: "decisions.inbox",
       menuResourceViewIds: decisions.resourceViews?.map((view) => view.id),
       auth: { user: authenticated ? { id: "user-1", name: "Sky" } : null,
@@ -45,23 +44,8 @@ function fixture(initialEntry = "/decisions", authenticated = true, rows: Array<
   });
   const getOne = vi.fn(async () => ({ data: { id: "note-1", display_name: "Review notes" } }));
   render(<Provider resources={[resource, decisionRecordFixture]} dataProvider={{ getList, getOne }}><RouterProvider router={router} /></Provider>);
-  return { getList, getOne, router };
+  return { getList, router };
 }
-
-test("22 distinct concerns use the list document and no per-record detail reads", async () => {
-  const rows = Array.from({ length: 22 }, (_, index) => ({
-    id: `decision-${index}`, kind: "review", kind_label: `Review ${index}`,
-    is_open: true, verdict: null,
-    records: [{ record_model: "notes.Note", record_id: `party-${index}`, record_label: `Party ${index}` }],
-  }));
-  const { getList, getOne } = fixture("/decisions", true, rows, 22);
-  expect(await screen.findByText("Party 0")).toBeTruthy();
-  expect(screen.getAllByText(/^Party \d+$/)).toHaveLength(22);
-  expect(getList).toHaveBeenCalledTimes(1);
-  expect(getList.mock.calls[0]![0].pagination).toMatchObject({ currentPage: 1, pageSize: 22 });
-  expect(JSON.stringify(getList.mock.calls[0]![0].meta?.gqlQuery)).toContain('"value":"record_label"');
-  expect(getOne).not.toHaveBeenCalled();
-});
 
 test("queries the open inbox and links the loaded decision", async () => {
   const { getList } = fixture();
@@ -71,15 +55,6 @@ test("queries the open inbox and links the loaded decision", async () => {
   });
   expect(screen.getByRole("link", { name: "Open Review" }).getAttribute("href")).toMatch(/^\/decisions\/decision-1\?recordNav=/);
   expect(screen.queryByRole("button", { name: /New Decision/ })).toBeNull();
-});
-
-test("the answered inbox selects the verdict rendered by its answer column", async () => {
-  const { getList } = fixture("/decisions?preset=decisions.all", true, [{
-    id: "decision-answered", kind: "review", kind_label: "Review",
-    is_open: false, verdict_label: "Approved", records: [],
-  }]);
-  expect(await screen.findByText("Approved")).toBeTruthy();
-  expect(JSON.stringify(getList.mock.calls[0]![0].meta?.gqlQuery)).toContain('"value":"verdict_label"');
 });
 
 test("the native filter box edits personal predicates and preserves unrelated search", async () => {

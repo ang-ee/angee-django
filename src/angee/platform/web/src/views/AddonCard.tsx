@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type ReactElement, type ReactNode } from "react";
-import { Chip, Button, Glyph, OverflowChipList, StatusBadge, errorMessage, textRoleVariants, useActionResultRun, useAuthoredResourceMutation } from "@angee/ui";
+import { Chip, Button, Glyph, OverflowChipList, StatusBadge, errorMessage, textRoleVariants, useActionResultRun, useAuthoredResourceMutation, type CardActionContext } from "@angee/ui";
 import { useAuthoredQuery } from "@angee/refine";
 import type { AddonKind } from "@angee/gql/console/graphql";
 
@@ -81,8 +81,10 @@ export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
 /** Root changes use a revision-bound preview; packages use native held dependency jobs. */
 export function AddonCardActions({
   row,
+  context,
 }: {
   row: AddonResourceRow;
+  context: CardActionContext;
 }): ReactNode {
   const t = usePlatformT();
   const settle = useActionResultRun({ noResultTitle: t("apps.actionFailed") });
@@ -138,6 +140,7 @@ export function AddonCardActions({
           : (await disable({ addon: row.name, revision: change.revision }))?.disable);
         if (outcome?.ok) {
           setAction(null);
+          context.refresh();
         } else {
           setApplyError(outcome?.message ?? t("apps.actionFailed"));
           await preview.refetch();
@@ -146,7 +149,7 @@ export function AddonCardActions({
         applyingRef.current = false;
       }
     },
-    [action, disable, enable, preview.data, preview.refetch, row.name, settle, t],
+    [action, context, disable, enable, preview.data, preview.refetch, row.name, settle, t],
   );
 
   const dialog = action ? (

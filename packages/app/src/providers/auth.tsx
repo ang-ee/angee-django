@@ -77,6 +77,7 @@ export interface AuthState {
 /** The native Refine identity entry also carries IAM's preview projection. */
 export interface AuthIdentity extends AuthUser {
   realUser?: AuthUser | null;
+  viewablePeople?: RuntimeViewAs["viewablePeople"];
 }
 
 export type CurrentUserPayload = Omit<
@@ -102,7 +103,7 @@ export interface AngeeAuthProviderOptions extends AngeeHasuraClientOptions {
   loginPath?: string;
   onAuthChange?: () => void;
   queryClient?: QueryClient;
-  /** Console IAM owns real_user; public IAM owns login. */
+  /** Console IAM owns real_user and viewable_people; public IAM owns login. */
   identityClient?: AngeeHasuraClientOptions;
   /** The composition's `requires` refs; the identity read asks `current_user.permitted` which it holds. */
   requires?: readonly string[];
@@ -189,7 +190,7 @@ export function createAngeeAuthProviderFromRequest(
     return currentUserPayload(data.current_user);
   };
   const sharedIdentity = async (): Promise<AuthIdentity | null> => {
-    const query = identityQueryOptions(provider, options.queryClient);
+    const query = identityQueryOptions(provider);
     // The mounted identity observer refreshes invalidations; route checks reuse
     // its last answer instead of issuing a second public and preview read.
     return options.queryClient ? options.queryClient.ensureQueryData(query) : query.queryFn();
@@ -219,13 +220,14 @@ export function createAngeeAuthProviderFromRequest(
       // The read that yields the identity asks which `requires` refs it holds: the console read when one follows.
       const payload = await currentUser(options.identityRequest ? [] : refs);
       if (!payload || !options.identityRequest) return currentUserToAuthState(payload).user;
-      // The preview projection requires a session: never send the console read
-      // for an anonymous login page. Both reads share Refine's identity query.
+      // viewable_people requires a session: never send the console read for an
+      // anonymous login page. Both reads live in Refine's one identity query.
       const identity = await options.identityRequest(AngeeViewAsIdentityDocument, { refs });
       const user = currentUserToAuthState(currentUserPayload(identity.current_user)).user;
       return user ? {
         ...user,
         realUser: currentUserToAuthState(currentUserPayload(identity.real_user)).user,
+        viewablePeople: identity.viewable_people,
       } satisfies AuthIdentity : null;
     },
     async getPermissions() {
@@ -272,7 +274,7 @@ export function createAngeeAuthProviderFromRequest(
       try {
         const identity = options.queryClient
           ? await options.queryClient.fetchQuery({
-              ...identityQueryOptions(provider, options.queryClient),
+              ...identityQueryOptions(provider),
               staleTime: 0,
             })
           : await currentUser();
@@ -290,22 +292,20 @@ export function createAngeeAuthProviderFromRequest(
  * The identity-query contract, owned once. Refine's `useGetIdentity` reads the
  * react-query entry keyed `keys().auth().action("identity")`; the route gate
  * (`@angee/app` `beforeLoad`) reaches that SAME entry through
- * `queryClient.ensureQueryData(identityQueryOptions(authProvider))`, so the gate
- * `useRuntimeAuthState`, `check`, and `getPermissions` share one
- * session/preview identity query.
+ * `queryClient.ensureQueryData(identityQueryOptions(authProvider))`, as do
+ * `check` and `getPermissions`, so the gate, `useRuntimeAuthState`, `check`,
+ * and `getPermissions` share one session/preview identity query and reuse its
+ * answer: the mounted observer re-reads an invalidated entry, and the host's
+ * `onAuthChange` reset leaves a login or logout nothing to reuse.
  * Its public session read gates the console-only preview projection.
  * `staleTime: Infinity` keeps warm navigations from
  * re-issuing it — refine's `useInvalidateAuthStore` (login/logout and preference
- * writes) refreshes the entry. Canonical self interests also let the shared
- * live scheduler revalidate it after registration/reconnect and user changes;
- * a delivered preference event rebases its document immediately. A mid-session
- * server expiry still surfaces at the data layer as
+ * writes) refreshes the entry, a live preference delivery writes its document
+ * into it, and a mid-session server expiry still surfaces at the data layer as
  * an unauthorized data response asks the authoritative Django `current_user`
  * endpoint to confirm session loss before logout. This matters because one
  * Refine auth provider serves data providers with independent credentials.
  * Client gates remain UX only; the server is the authorization boundary.
- * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 const IDENTITY_STALE_TIME = Number.POSITIVE_INFINITY;
 const IDENTITY_QUERY_SETTINGS = {
@@ -319,25 +319,12 @@ const identityQueryKey = () => keys().auth().action("identity").get();
  * @kind null
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
-export function identityQueryOptions(authProvider: RefineAuthProvider, client?: QueryClient) {
+export function identityQueryOptions(authProvider: RefineAuthProvider) {
   return {
     queryKey: identityQueryKey(),
     queryFn: async (): Promise<AuthIdentity | null> =>
       ((await authProvider.getIdentity?.()) ?? null) as AuthIdentity | null,
-    ...identityQuerySettings(client),
-  };
-}
-
-function identityQuerySettings(client?: QueryClient) {
-  const id = client?.getQueryData<AuthIdentity | null>(identityQueryKey())?.id;
-  return {
     ...IDENTITY_QUERY_SETTINGS,
-    // This native auth entry has one current actor, not accumulated authored
-    // interests. Native auth reset removes the query and its session metadata.
-    meta: {
-      angeeModels: USER_PREFERENCES_LIVE_MODELS,
-      ...(id ? { angeeRecords: [{ model: "iam.User", id }] } : {}),
-    },
   };
 }
 
@@ -346,9 +333,8 @@ function identityQuerySettings(client?: QueryClient) {
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
-  const client = useQueryClient();
   const identity = useGetIdentity<AuthIdentity | null>({
-    queryOptions: identityQuerySettings(client),
+    queryOptions: IDENTITY_QUERY_SETTINGS,
   });
   const auth = useMemo(() => identity.data === undefined && identity.isFetching
     ? { user: null, status: "resolving", hasRole: () => false } satisfies AuthState
@@ -411,10 +397,6 @@ export function useLogoutAction(): {
   };
 }
 
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
 function useUpdatePreferences(
   options: UseUpdatePreferencesOptions = {},
 ): UseUpdatePreferencesResult {

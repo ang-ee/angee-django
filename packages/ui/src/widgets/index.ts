@@ -60,7 +60,6 @@ export {
   DATE_STORAGE_FORMAT,
   DATETIME_STORAGE_FORMAT,
   TIME_INPUT_FORMAT,
-  calendarDay,
   dateFromValue,
   formatDate,
   formatDateRange,

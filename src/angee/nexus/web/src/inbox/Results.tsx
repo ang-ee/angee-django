@@ -20,7 +20,7 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
   const view = useResourceView();
   const selected = Boolean(navigation.sender || navigation.circle);
   const updates = statusCoverage(view.state.filter);
-  const selectionLabel = useInboxBreadcrumbs(navigation);
+  const selection = useInboxBreadcrumbs(navigation);
   const group = view.state.groupStack[0];
   const lens = resultLensForGroup(navigation.lens, group);
   const groupField = group?.field ?? "";
@@ -29,8 +29,9 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
   const columns = useMemo(() => [{ field: "latest", header: t("inbox.latest") }], [t]);
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={t("inbox.results")}>
-      <RecordHeader density="compact" title={selected
-        ? selectionLabel
+      <RecordHeader density="compact" loading={selection.loading} loadingLabel={t("inbox.loading")}
+        unavailable={selection.unavailable} title={selected
+        ? selection.label
         : t(updates.only ? "inbox.allUpdates" : updates.includes ? "inbox.allActivity" : "inbox.anyKind")}
         meta={updates.only ? t("inbox.updatesHint") : selected ? t("inbox.selectionHint") : t("inbox.coverageHint", { timezone })}
         actions={selected ? <Button size="iconSm" variant="ghost" aria-label={t("inbox.clearSelection")}
@@ -72,7 +73,7 @@ function ConversationLabel({ bucket, label, timezone, navigation }: GroupLabelCo
     sub={[typeof platform === "string" && platform ? optionLabel(platforms, platform) : undefined,
       typeof account === "string" ? account : undefined].filter(Boolean).join(" · ")}
     meta={typeof latest === "string" ? <AbsoluteTime value={latest} timeZone={timezone} display="date" /> : undefined}
-    label={t(statusFeed ? "inbox.viewUpdates" : target.startsWith("thread:") ? "inbox.openConversation" : "inbox.read")}
+    label={t(statusFeed ? "inbox.viewUpdates" : "inbox.openConversation")}
     onOpen={() => statusFeed ? navigation.showUpdates(view.state) : target.startsWith("thread:") ? navigation.conversation(target.slice(7)) : navigation.read(target.slice(8))} />;
 }
 

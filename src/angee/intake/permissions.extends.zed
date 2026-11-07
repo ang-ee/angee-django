@@ -1,14 +1,23 @@
-// Requester access is derived from the account admitted by the Need owner;
-// following grants no access. An admitted Need projects its requester's display
-// identity without granting a party or person page.
+// Requester access is derived from the account admitted by the Need owner; following grants no access.
+// Task writers read the requester through the task and party, never by previewing the account.
 // @rebac_package: intake
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 9
+// @rebac_schema_revision: 8
 
 definition projects/task {
     relation requester: auth/user // rebac:field=needs__admitted_user
     permission read_granted = requester
     permission comment_granted = requester
+}
+
+definition parties/party {
+    relation filed_task: projects/task // rebac:field=needs__task
+    permission read_granted = filed_task->read
+}
+
+definition parties/person {
+    relation filed_task: projects/task // rebac:field=needs__task
+    permission read_granted = filed_task->read
 }
 
 definition decisions/decision {

@@ -37,13 +37,14 @@ from angee.graphql.data.hasura import (
     hasura_model_resource,
     public_pk_decoder,
 )
-from angee.iam.graphql.node import ProtectedNode
-from tests.conftest import create_user, execute_schema, result_data
+from angee.graphql.node import AngeeNode
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import create_user
 from tests.scopedemo.models import Scope, ScopedDoc
 
 
 @strawberry_django.type(ScopedDoc)
-class ScopedDocType(ProtectedNode):
+class ScopedDocType(AngeeNode):
     """GraphQL projection of a locally scoped document."""
 
     title: auto

@@ -332,13 +332,11 @@ test("to-many relation cells link each retained record label without another rea
         row={{ assignees: [
           { id: "usr_1", display_name: "Ada" },
           { id: "usr_2", display_name: "Lin" },
-          { id: "usr_3", display_name: null },
         ] }}
       />
     </AppRuntimeProvider></Provider>);
     expect(screen.getByRole("link", { name: "Ada" }).getAttribute("href")).toBe("/iam/users/usr_1");
     expect(screen.getByRole("link", { name: "Lin" }).getAttribute("href")).toBe("/iam/users/usr_2");
-    expect(screen.getByRole("link", { name: "usr_3" }).getAttribute("href")).toBe("/iam/users/usr_3");
     expect(getOne).not.toHaveBeenCalled();
   } finally {
     cleanup();

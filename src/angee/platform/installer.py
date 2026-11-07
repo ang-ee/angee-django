@@ -140,16 +140,13 @@ class InstallResult:
     on enable, or already absent on disable. ``refused`` is a non-empty reason when
     the edit was *not applied* — a forced (depended-on) addon, an addon that is not
     materialised, or a deployment whose ``settings.yaml`` cannot be edited — and is
-    then the only not-:attr:`ok` outcome. ``reconciliation_pending`` means the
-    source settings committed but their derived catalogue mirror needs refresh;
-    it is an applied edit, not a refusal.
+    then the only not-:attr:`ok` outcome.
     """
 
     name: str
     action: str
     already: bool = False
     refused: str = ""
-    reconciliation_pending: bool = False
 
     @classmethod
     def refusal(cls, name: str, action: str, reason: str) -> InstallResult:
@@ -176,14 +173,10 @@ class InstallResult:
             return self.refused
         enabling = self.action == "enable"
         if self.already:
-            summary = f"{self.name} is already enabled." if enabling else f"{self.name} is not enabled."
-        elif enabling:
-            summary = f"Enabled {self.name}; the change is pending a restart."
-        else:
-            summary = f"Disabled {self.name}; the change is pending a restart."
-        if self.reconciliation_pending:
-            summary += " Catalogue refresh is pending; restart to reconcile it."
-        return summary
+            return f"{self.name} is already enabled." if enabling else f"{self.name} is not enabled."
+        if enabling:
+            return f"Enabled {self.name}; the change is pending a restart."
+        return f"Disabled {self.name}; the change is pending a restart."
 
 
 @dataclass(frozen=True, slots=True)

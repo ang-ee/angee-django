@@ -1,5 +1,4 @@
 import * as React from "react";
-import type { AuthoredQueryOptions } from "@angee/refine";
 import type { SearchFacet } from "../resource/search/types";
 import {
   useAngeeFacets,
@@ -36,14 +35,12 @@ export interface ScalarFacetDeclaration {
   spec: FacetRequestSpec;
 }
 
-/** Build enum choices from metadata and non-enum buckets from the server. */
+/** Build server-backed scalar choice facets from the model's resource metadata. */
 export function useScalarFacets<TRow extends object>(
   _model: string,
   columns: readonly ColumnDescriptor<TRow>[],
   metadata: ModelMetadata | null,
   activeFilter?: ResourceViewFilter,
-  interests: Pick<AuthoredQueryOptions, "records" | "relatedModels"> = {},
-  enabled = true,
 ): ScalarFacets {
   const t = useUiT();
   const facets = React.useMemo(
@@ -53,46 +50,27 @@ export function useScalarFacets<TRow extends object>(
   const resource = metadata?.resource ?? null;
   const groupOperation = useGroupOperation(resource);
   const facetSpecs = React.useMemo(
-    () => resource ? facets.filter((facet) => metadata?.fields[facet.field]?.kind !== "enum").map((facet) => ({
+    () => resource ? facets.map((facet) => ({
       ...facet.spec, ...ResourceQuery.from(resource).toFacet(facet.field, activeFilter),
     })) : [],
-    [activeFilter, facets, metadata, resource],
+    [activeFilter, facets, resource],
   );
   const facetQuery = useAngeeFacets(groupOperation.target, {
-    ...interests,
     document: groupOperation.document,
     facets: facetSpecs,
-    enabled: enabled && resource !== null && facetSpecs.length > 0,
+    enabled: resource !== null && facetSpecs.length > 0,
   });
   return React.useMemo(() => facets.map((facet): SearchFacet => {
-    const query = ResourceQuery.from(metadata!);
-    const axis = query.axis(facet.field);
-    const field = metadata?.fields[facet.field];
-    const optionForBucket = (bucket: { key: Record<string, unknown> }) => {
-      const filter = axis.drill(bucket);
-      if (!filter) return undefined;
-      const value = Filter.facetFromFilter(filter)?.value;
-      return { id: axis.bucketId(bucket), label: groupLabel(axis.bucketLabel(bucket), facet.group, metadata, t),
-        filter, ...(value === undefined ? {} : { value }) };
-    };
-    const optionForValue = (value: string) => {
-      const bucketValue = axis.declaration.drill?.valueMap?.find((entry) => Object.is(entry.to, value))?.from ?? value;
-      return optionForBucket({ key: { [axis.groupBy().valueKey]: bucketValue } });
-    };
-    const staticOptions = field?.kind === "enum" ? [
-      ...(field.values ?? []).map(({ value }) => value),
-      ...(query.fields[facet.field]?.nullable
-        && query.fields[facet.field]?.filter?.operators.includes("isNull") ? [null] : []),
-    ].flatMap((value) => {
-      const option = optionForBucket({ key: { [axis.groupBy().valueKey]: value } });
-      return option ? [option] : [];
-    }) : null;
+    const axis = ResourceQuery.from(metadata!).axis(facet.field);
     return {
       field: facet.field, label: facet.label, source: "scalar",
-      optionForValue,
-      options: staticOptions ?? (facetQuery.facets[facet.id]?.options ?? []).flatMap((option) => {
-        const bucket = optionForBucket({ key: option.key });
-        return bucket ? [bucket] : [];
+      options: (facetQuery.facets[facet.id]?.options ?? []).flatMap((option) => {
+        const filter = axis.drill({ key: option.key });
+        if (!filter) return [];
+        const value = Filter.facetFromFilter(filter)?.value;
+        return [{ id: axis.bucketId({ key: option.key }),
+          label: groupLabel(axis.bucketLabel({ key: option.key }), facet.group, metadata, t),
+          filter, ...(value === undefined ? {} : { value }) }];
       }),
     };
   }), [facets, facetQuery.facets, metadata, t]);

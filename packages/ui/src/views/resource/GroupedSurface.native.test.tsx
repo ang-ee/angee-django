@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { GetListParams } from "@refinedev/core";
 import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
@@ -22,7 +23,7 @@ for (const field of ["status", "title"]) {
   contract.axes[field]!.drill = { kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [] };
 }
 const resource = testDataResource("notes.Note", {
-  roots: { groups: "notes_groups", groupedRows: "notes_grouped_rows", aggregate: "notes_aggregate" }, typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy", groupBySpec: "NoteGroupBySpec", groupedRowPage: "notes_grouped_rows_page" }, query: contract,
+  roots: { groups: "notes_groups", aggregate: "notes_aggregate" }, typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" }, query: contract,
   fields: ["id", "title", "status"].map((name) => ({ name, kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
 });
@@ -34,7 +35,7 @@ const { Provider, clients, clearClients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture({ failedRoot = false, page = 1, summaryOnly = false, singleGroup = false }: { failedRoot?: boolean; page?: number; summaryOnly?: boolean; singleGroup?: boolean } = {}) {
+function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failedRoot?: boolean; page?: number; summaryOnly?: boolean } = {}) {
   const activeResource = summaryOnly ? { ...resource, query: { ...contract, axes: { status: {
     ...contract.axes.status!, identityPath: null, paths: [], drill: null,
   } } } } : resource;
@@ -44,29 +45,28 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false, singleGrou
   let surface!: GroupedResourceViewSurface<Row>;
   let show!: React.Dispatch<React.SetStateAction<boolean>>;
   let delayPage: number | null = null;
-  let rootGate: Promise<void> | null = null;
-  let releaseRoot = () => {};
   let rowTotal = 120;
-  let resolvePage!: (value: { data: { data: Record<string, unknown> } }) => void;
+  let resolvePage!: (value: { data: Row[]; total: number }) => void;
   const lifecycle = { mounts: 0, unmounts: 0 };
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    const batch = meta!.gqlVariables as Record<string, unknown>;
-    if ("pages" in batch) {
-      const selected = (batch.pages as { key: string; limit: number; offset: number }[])[0]!;
-      const page = (selected.offset / selected.limit) + 1;
-      if (page === delayPage) {
-        return new Promise<{ data: { data: Record<string, unknown> } }>((resolve) => { resolvePage = resolve; });
-      }
-      return { data: { data: {
-        rows: [{ key: selected.key, rows: [{ id: `page-${page}`, title: selected.key, status: "active" }] }],
-      } } };
-    }
-    const variables = meta!.gqlVariables as { group_by: { field: string }[]; limit: number; offset: number };
+    const variables = meta!.gqlVariables as {
+      group_by: { field: string }[]; limit: number; offset: number; with_rows?: boolean; rows_limit?: number;
+    };
     const field = variables.group_by[0]!.field;
-    if (field === "status" && rootGate) await rootGate;
     if (failedRoot && field === "status") throw new Error("Group query unavailable");
+    // The leaf groups read carries each group's first page.
+    const carried = variables.with_rows
+      ? { rows: Array.from({ length: Math.min(rowTotal, variables.rows_limit ?? 0) }, (_, index) => ({
+          id: `carried-${index}`, title: "Native row", status: "active" })) }
+      : {};
     return { data: { notes_groups: [{ key: { [field]: field === "status" ? "active" : `Title ${variables.offset}` },
-      aggregate: { count: rowTotal } }], totalCount: field === "status" ? 1 : 130 } };
+      aggregate: { count: rowTotal }, ...carried }], totalCount: field === "status" ? 1 : 130 } };
+  });
+  const getList = vi.fn(async ({ pagination }: GetListParams) => {
+    if (pagination?.currentPage === delayPage) {
+      return new Promise<{ data: Row[]; total: number }>((resolve) => { resolvePage = resolve; });
+    }
+    return { data: [{ id: `page-${pagination?.currentPage}`, title: "Native row", status: "active" }], total: rowTotal };
   });
   function Surface() {
     const resourceView = useResourceView();
@@ -84,49 +84,23 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false, singleGrou
     return visible ? <Surface /> : <span>Record form owns this region</span>;
   }
   render(
-    <Provider metadata={activeMetadata} dataProvider={{ custom }}>
+    <Provider metadata={activeMetadata} dataProvider={{ custom, getList }}>
       <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
-        <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ ...initialState, page, ...((summaryOnly || singleGroup) ? { groupStack: [{ field: "status" }] } : {}) }}><Parent /></ResourceViewProvider>
+        <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ ...initialState, page, ...(summaryOnly ? { groupStack: [{ field: "status" }] } : {}) }}><Parent /></ResourceViewProvider>
       </OperationDocumentsProvider>
     </Provider>,
   );
   const client = clients.at(-1)!;
   const header = (depth: number) => surface.groupedItems.filter((item) => item.kind === "groupHeader").find((item) => item.depth === depth);
-  const leafQueries = () => custom.mock.calls.map(([request]) => request.meta?.gqlVariables as Record<string, unknown>)
-    .filter((variables) => variables && "pages" in variables);
-  const groupQueries = () => custom.mock.calls.map(([request]) => request.meta?.gqlVariables as
-    { group_by?: { field: string }[]; limit?: number; offset?: number }).filter((variables) => Array.isArray(variables?.group_by));
   return { get view() { return view; }, get surface() { return surface; }, header, show: (visible: boolean) => show(visible),
-    custom, leafQueries, groupQueries, lifecycle, refreshCount: async (count: number) => { rowTotal = count; await client.invalidateQueries(); },
-    delay: (page: number) => { delayPage = page; },
-    delayRoot: () => { rootGate = new Promise<void>((resolve) => { releaseRoot = resolve; }); },
-    releaseRoot: () => { releaseRoot(); rootGate = null; },
-    release: () => resolvePage({ data: { data: { rows: [{ key: "Old filter row", rows: [{ id: "obsolete", title: "Old filter row" }] }] } } }) };
+    custom, getList, lifecycle, refreshCount: async (count: number) => { rowTotal = count; await client.invalidateQueries(); }, delay: (page: number) => { delayPage = page; }, release: () => resolvePage({ data: [{ id: "obsolete", title: "Old filter row" }], total: 120 }) };
 }
-
-test("cached group keys let the grouped row read start while headers revalidate", async () => {
-  const f = fixture({ singleGroup: true });
-  await waitFor(() => expect(f.leafQueries()).toHaveLength(1));
-  expect(f.groupQueries()).toHaveLength(1);
-  act(() => f.show(false));
-  const client = clients.at(-1)!;
-  await client.invalidateQueries({ refetchType: "none" });
-  f.delayRoot();
-  const previousRows = f.leafQueries().length;
-  act(() => f.show(true));
-  try {
-    await waitFor(() => expect(f.leafQueries()).toHaveLength(previousRows + 1));
-    expect(f.groupQueries()).toHaveLength(2);
-  } finally {
-    await act(async () => f.releaseRoot());
-  }
-});
 
 test("server summary axes without a row identity render buckets without leaf requests", async () => {
   const f = fixture({ summaryOnly: true });
   await waitFor(() => expect(f.header(0)?.label).toBe("active"));
   expect(f.surface.list.error).toBeNull();
-  expect(f.leafQueries()).toHaveLength(0);
+  expect(f.getList).not.toHaveBeenCalled();
   expect(f.surface.requestedFields).toEqual(["id", "title", "status"]);
 });
 
@@ -145,9 +119,9 @@ test("native subgroup and leaf page sizes, page 2 and expansion survive an actua
   await waitFor(() => expect(f.header(1)?.kind === "groupHeader" && f.header(1)?.pager).toBeTruthy());
   const leafKey = leaf.bucketKey;
   act(() => f.surface.setScopePageSize(leafKey, 50));
-  await waitFor(() => expect((f.leafQueries().at(-1)?.pages as { limit: number }[])[0]?.limit).toBe(50));
+  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination?.pageSize).toBe(50));
   act(() => f.surface.setScopePage(leafKey, 2));
-  await waitFor(() => expect((f.leafQueries().at(-1)?.pages as { offset: number }[])[0]?.offset).toBe(50));
+  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination?.currentPage).toBe(2));
   await waitFor(() => expect(f.surface.groupedItems.some((item) => item.kind === "record" && item.nav.page === 2)).toBe(true));
 
   act(() => f.show(false));
@@ -172,7 +146,7 @@ test("native subgroup and leaf page sizes, page 2 and expansion survive an actua
   // A late old-filter page must not restore its interaction state after reset.
   f.delay(3);
   act(() => f.surface.setScopePage(leafKey, 3));
-  await waitFor(() => expect((f.leafQueries().at(-1)?.pages as { offset: number }[])[0]?.offset).toBe(100));
+  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination?.currentPage).toBe(3));
   act(() => f.view.setFilter({ title: { iContains: "changed" } }));
   expect(f.view.paginationByScope).toEqual({});
   await act(async () => f.release());
@@ -187,7 +161,7 @@ test("native grouped root and leaf pagination clamp oversized page sizes", async
 
   act(() => f.view.setPageSize(500));
   await waitFor(() => expect(f.view.state.pagination.pageSize).toBe(100));
-  await waitFor(() => expect(f.groupQueries().findLast((variables) => variables.group_by?.[0]?.field === "status")?.limit).toBe(100));
+  expect((f.custom.mock.calls.at(-1)?.[0].meta?.gqlVariables as { limit: number }).limit).toBe(100);
 
   const root = f.header(0)!;
   if (root.kind !== "groupHeader") throw new Error("missing root header");
@@ -199,7 +173,7 @@ test("native grouped root and leaf pagination clamp oversized page sizes", async
   act(() => f.surface.toggleGroup(leaf.bucketKey));
   await waitFor(() => expect(f.header(1)?.pager).toBeTruthy());
   act(() => f.surface.setScopePageSize(leaf.bucketKey, 500));
-  await waitFor(() => expect((f.leafQueries().at(-1)?.pages as { limit: number }[])[0]?.limit).toBe(100));
+  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination?.pageSize).toBe(100));
   expect(f.view.paginationByScope[leaf.bucketKey]).toEqual({ pageIndex: 0, pageSize: 100 });
   expect(f.surface.groupedItems.find((item) => item.kind === "record")?.nav.pageSize).toBe(100);
 });
@@ -209,19 +183,21 @@ test("a native grouped header sort updates the leaf query and preserves the pare
   act(() => f.view.setFilter({ title: { iContains: "kept" } }));
   await waitFor(() => expect(f.header(1)).toBeDefined());
   act(() => f.surface.toggleGroup(f.header(1)!.bucketKey));
-  await waitFor(() => expect(f.leafQueries().length).toBeGreaterThan(0));
+  // Page 1 rides on the groups read; only a resized or later page reads rows on its own.
+  await waitFor(() => expect(f.surface.groupedItems.some((item) => item.kind === "record")).toBe(true));
+  expect(f.getList).not.toHaveBeenCalled();
   const leafKey = f.header(1)!.bucketKey;
   act(() => f.surface.setScopePageSize(leafKey, 50));
   act(() => f.surface.setScopePage(leafKey, 2));
-  await waitFor(() => expect(f.leafQueries().at(-1)?.pages).toMatchObject([{ offset: 50, limit: 50 }]));
+  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination).toMatchObject({ currentPage: 2, pageSize: 50 }));
   fireEvent.click(screen.getByRole("button", { name: "Sort Title (not sorted)" }));
   await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "title", desc: false }]));
   // Sorting resets row windows while keeping the same group tree expanded.
   await waitFor(() => expect(f.header(1)?.expanded).toBe(true));
   expect(f.view.paginationByScope[leafKey]).toEqual({ pageIndex: 0, pageSize: 50 });
-  await waitFor(() => expect(f.leafQueries().at(-1)?.order_by).toEqual({ title: "asc" }));
+  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.order_by).toEqual({ title: "asc" }));
   expect(f.view.state.filter).toEqual({ title: { iContains: "kept" } });
-  expect(JSON.stringify(f.leafQueries().at(-1)?.where)).toContain('"_ilike":"%kept%"');
+  expect(JSON.stringify(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where)).toContain('"_ilike":"%kept%"');
   expect(screen.getByRole("columnheader", { name: "Title" }).getAttribute("aria-sort")).toBe("ascending");
 });
 

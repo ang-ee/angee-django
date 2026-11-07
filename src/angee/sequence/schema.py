@@ -12,13 +12,13 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
+from angee.graphql.node import AngeeNode
 
 Sequence = apps.get_model("sequence", "Sequence")
 
 
 @strawberry_django.type(Sequence)
-class SequenceType(ProtectedNode):
+class SequenceType(AngeeNode):
     """Admin projection of one sequence's numbering configuration."""
 
     key: auto

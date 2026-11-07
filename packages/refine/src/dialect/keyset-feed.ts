@@ -11,7 +11,6 @@ import {
   type UseInfiniteQueryResult,
 } from "@tanstack/react-query";
 import { useCallback } from "react";
-import { useAcceptQueryData, type QueryDataAcceptance, type AuthoredLiveChange } from "../query-invalidation";
 import { useDataProvider } from "@refinedev/core";
 import type { DocumentData } from "../typed-document";
 import type { AuthoredDocument, AuthoredVariables } from "./authored-hooks";
@@ -61,15 +60,12 @@ export interface KeysetFeedPage<TRow extends KeysetRow, TMetadata = undefined> {
 interface KeysetFeedReads<TRow extends KeysetRow, TMetadata = undefined> {
   queryKey: QueryKey;
   pageSize: number;
-  /** Full current rows in the same authorized scope and projection as revalidate. */
   window: (
     before: string | null,
     through: string | null,
     limit: number,
     context: QueryFunctionContext,
   ) => Promise<KeysetFeedWindow<TRow, TMetadata>>;
-  /** Exact row models whose retained updates can use bounded revalidation. */
-  revalidateModels?: readonly string[];
   revalidate?: (
     ids: string[],
     context: QueryFunctionContext,
@@ -79,7 +75,7 @@ interface KeysetFeedReads<TRow extends KeysetRow, TMetadata = undefined> {
 
 /**
  * Loaded history lives only in native InfiniteData. Refetch walks each original
- * fixed window and revalidates its owned IDs not observed in those reads when revalidation is
+ * fixed window and revalidates all IDs owned by that page when revalidation is
  * supplied. Without it, native sequential reads replace pages on refetch.
  * A moved row in a revalidated feed keeps its native-page owner; the derived
  * presentation applies the server's order.
@@ -96,13 +92,6 @@ export function keysetFeedOptions<TRow extends KeysetRow, TMetadata = undefined>
 >> {
   type Page = KeysetFeedPage<TRow, TMetadata>;
   const cached = () => client.getQueryData<InfiniteData<Page, KeysetFeedCursor>>(reads.queryKey);
-  // One in-flight native infinite fetch shares a bounded revalidation request
-  // across its pages. Clear on completion/abort; no rows survive outside Query.
-  let targetedRead: { signal: AbortSignal; result: Promise<KeysetFeedRevalidation<TRow>>; stop: () => void } | undefined;
-  const clearTargetedRead = () => {
-    targetedRead?.stop();
-    targetedRead = undefined;
-  };
   if (!Number.isInteger(reads.pageSize) || reads.pageSize < 1 || reads.pageSize > 200) {
     throw new Error("Keyset feed page size must be between 1 and 200.");
   }
@@ -111,128 +100,80 @@ export function keysetFeedOptions<TRow extends KeysetRow, TMetadata = undefined>
     initialPageParam: { start: true },
     placeholderData: undefined,
     async queryFn(context): Promise<Page> {
-      try {
-        const previous = reads.revalidate ? cached() : undefined;
-        const index = previous?.pageParams.findIndex(param => hashKey([param ?? { start: true }]) === hashKey([context.pageParam ?? { start: true }])) ?? -1;
-        const oldPage = index < 0 ? undefined : previous?.pages[index];
-        const owned = new Set(previous?.pages.flatMap((page) => page.rows.map((row) => row.id)));
-        const changes = context.meta?.angeeChanges as readonly AuthoredLiveChange[] | undefined;
-        const targeted = reads.revalidate && oldPage && previous && changes?.length
-          && previous.pages.every((page) => page.metadata === undefined)
-          && changes.every((change) => change.action === "update" && change.id
-            && reads.revalidateModels?.includes(change.model) && owned.has(change.id));
-        if (targeted && reads.revalidate && previous && oldPage && changes) {
-          const signal = context.signal;
-          if (!targetedRead || targetedRead.signal !== signal) {
-            clearTargetedRead();
-            const ids = [...new Set(changes.map((change) => change.id!))];
-            const result = (async () => {
-              const rows: TRow[] = [];
-              const absent_ids: string[] = [];
-              for (let offset = 0; offset < ids.length; offset += reads.pageSize) {
-                const requested = ids.slice(offset, offset + reads.pageSize);
-                const fresh = await reads.revalidate!(requested, context);
-                signal.throwIfAborted();
-                assertRevalidationPartition(requested, fresh);
-                rows.push(...fresh.rows);
-                absent_ids.push(...fresh.absent_ids);
-              }
-              return { rows, absent_ids };
-            })();
-            const abort = () => clearTargetedRead();
-            signal.addEventListener("abort", abort, { once: true });
-            targetedRead = { signal, result, stop: () => signal.removeEventListener("abort", abort) };
-          }
-          let fresh: KeysetFeedRevalidation<TRow>;
-          try {
-            fresh = await targetedRead.result;
-          } catch (error) {
-            clearTargetedRead();
-            throw error;
-          }
-          if (index === previous.pages.length - 1) clearTargetedRead();
-          // Absence changes membership/counts/cursors. Every page falls back to
-          // its normal fixed-window refresh; silence alone never removes a row.
-          if (fresh.absent_ids.length === 0) {
-            const replacements = new Map(fresh.rows.map((row) => [row.id, row]));
-            if (context.meta) context.meta.angeeTargetedRound = changes;
-            return { ...oldPage, rows: oldPage.rows.map((row) => replacements.get(row.id) ?? row) };
-          }
-        }
-        const newer = context.pageParam !== null && typeof context.pageParam === "object" && "after" in context.pageParam
-          ? context.pageParam : null;
-        const older = typeof context.pageParam === "string" ? context.pageParam : null;
-        if (!reads.revalidate || !oldPage || oldPage.through === null) {
-          if (newer && !reads.newer) throw new Error("Keyset feed does not support newer-page reads.");
-          const page = newer && reads.newer
-            ? await reads.newer(newer.after, reads.pageSize, context)
-            : await reads.window(older, null, reads.pageSize, context);
-          context.signal.throwIfAborted();
-          return {
-            rows: reads.revalidate ? page.rows.filter((row) => !owned.has(row.id)
-              || oldPage?.rows.some((retained) => retained.id === row.id)) : page.rows,
-            through: page.older_cursor,
-            hasOlder: page.has_older,
-            count: page.count,
-            metadata: page.metadata,
-            before: newer ? page.newer_cursor : undefined,
-            newer: page.newer_cursor,
-            hasNewer: page.has_newer,
-          };
-        }
-
-        // These indexes contain IDs, live only for this request, and retain no rows.
-        if (!previous) throw new Error("Keyset feed lost its retained page context.");
-        const earlierIds = new Set(previous.pages.slice(0, index).flatMap((page) => page.rows.map((row) => row.id)));
-        const mine = [...new Set(oldPage.rows.map((row) => row.id).filter((id) => !earlierIds.has(id)))];
-        const observed = new Map<string, TRow>();
-        const visited = new Set<string | null>();
-        let before = newer ? oldPage.before ?? null : older;
-        let page: KeysetFeedWindow<TRow, TMetadata>;
-        let firstWindow: KeysetFeedWindow<TRow, TMetadata> | undefined;
-        do {
-          visited.add(before);
-          page = await reads.window(before, oldPage.through, reads.pageSize, context);
-          firstWindow ??= page;
-          context.signal.throwIfAborted();
-          for (const row of page.rows) {
-            // The later full observation wins within this producing page.
-            observed.set(row.id, row);
-          }
-          before = page.older_cursor;
-          if (page.has_more_in_window && (before === null || visited.has(before))) {
-            throw new Error("Keyset feed returned no advancing window cursor.");
-          }
-        } while (page.has_more_in_window);
-
-        // Window omission is not absence: moved or hidden owned rows still
-        // require the adapter's exact permission-filtered partition.
-        const survivors = mine.flatMap((id) => {
-          const row = observed.get(id);
-          return row ? [row] : [];
-        });
-        const unobserved = mine.filter((id) => !observed.has(id));
-        for (let offset = 0; offset < unobserved.length; offset += reads.pageSize) {
-          const ids = unobserved.slice(offset, offset + reads.pageSize);
-          const result = await reads.revalidate(ids, context);
-          context.signal.throwIfAborted();
-          assertRevalidationPartition(ids, result);
-          survivors.push(...result.rows);
-        }
+      const previous = reads.revalidate ? cached() : undefined;
+      const index = previous?.pageParams.findIndex(param => hashKey([param ?? { start: true }]) === hashKey([context.pageParam ?? { start: true }])) ?? -1;
+      const oldPage = index < 0 ? undefined : previous?.pages[index];
+      const owned = new Set(previous?.pages.flatMap((page) => page.rows.map((row) => row.id)));
+      const newer = context.pageParam !== null && typeof context.pageParam === "object" && "after" in context.pageParam
+        ? context.pageParam : null;
+      const older = typeof context.pageParam === "string" ? context.pageParam : null;
+      if (!reads.revalidate || !oldPage || oldPage.through === null) {
+        if (newer && !reads.newer) throw new Error("Keyset feed does not support newer-page reads.");
+        const page = newer && reads.newer
+          ? await reads.newer(newer.after, reads.pageSize, context)
+          : await reads.window(older, null, reads.pageSize, context);
+        context.signal.throwIfAborted();
         return {
-          rows: [...survivors, ...[...observed.values()].filter((row) => !owned.has(row.id))],
-          through: oldPage.through,
-          hasOlder: page.has_older_than_through,
+          rows: reads.revalidate ? page.rows.filter((row) => !owned.has(row.id)) : page.rows,
+          through: page.older_cursor,
+          hasOlder: page.has_older,
           count: page.count,
           metadata: page.metadata,
-          before: oldPage.before,
-          newer: newer ? oldPage.newer : firstWindow.newer_cursor,
-          hasNewer: newer ? firstWindow.has_newer_than_before : firstWindow.has_newer,
+          before: newer ? page.newer_cursor : undefined,
+          newer: page.newer_cursor,
+          hasNewer: page.has_newer,
         };
-      } catch (error) {
-        clearTargetedRead();
-        throw error;
       }
+
+      // These indexes contain IDs, live only for this request, and retain no rows.
+      if (!previous) throw new Error("Keyset feed lost its retained page context.");
+      const earlierIds = new Set(previous.pages.slice(0, index).flatMap((page) => page.rows.map((row) => row.id)));
+      const mine = [...new Set(oldPage.rows.map((row) => row.id).filter((id) => !earlierIds.has(id)))];
+      const fresh: TRow[] = [];
+      const freshIds = new Set<string>();
+      const visited = new Set<string | null>();
+      let before = newer ? oldPage.before ?? null : older;
+      let page: KeysetFeedWindow<TRow, TMetadata>;
+      let firstWindow: KeysetFeedWindow<TRow, TMetadata> | undefined;
+      do {
+        visited.add(before);
+        page = await reads.window(before, oldPage.through, reads.pageSize, context);
+        firstWindow ??= page;
+        context.signal.throwIfAborted();
+        for (const row of page.rows) {
+          if (!owned.has(row.id) && !freshIds.has(row.id)) {
+            freshIds.add(row.id);
+            fresh.push(row);
+          }
+        }
+        before = page.older_cursor;
+        if (page.has_more_in_window && (before === null || visited.has(before))) {
+          throw new Error("Keyset feed returned no advancing window cursor.");
+        }
+      } while (page.has_more_in_window);
+
+      const survivors: TRow[] = [];
+      for (let offset = 0; offset < mine.length; offset += reads.pageSize) {
+        const ids = mine.slice(offset, offset + reads.pageSize);
+        const result = await reads.revalidate(ids, context);
+        context.signal.throwIfAborted();
+        const represented = [...result.rows.map((row) => row.id), ...result.absent_ids];
+        const checked = new Set(represented);
+        if (represented.length !== ids.length || checked.size !== ids.length || ids.some((id) => !checked.has(id))) {
+          throw new Error("Keyset feed revalidation did not partition every requested ID.");
+        }
+        survivors.push(...result.rows);
+      }
+      return {
+        rows: [...survivors, ...fresh],
+        through: oldPage.through,
+        hasOlder: page.has_older_than_through,
+        count: page.count,
+        metadata: page.metadata,
+        before: oldPage.before,
+        newer: newer ? oldPage.newer : firstWindow.newer_cursor,
+        hasNewer: newer ? firstWindow.has_newer_than_before : firstWindow.has_newer,
+      };
     },
     getNextPageParam(lastPage, allPages) {
       // Native sequential refetch must not move older cuts with a growing head.
@@ -248,22 +189,6 @@ export function keysetFeedOptions<TRow extends KeysetRow, TMetadata = undefined>
       return reads.newer && firstPage.hasNewer && firstPage.newer ? { after: firstPage.newer } : undefined;
     },
   });
-}
-
-function assertRevalidationPartition<TRow extends KeysetRow>(
-  ids: readonly string[], result: KeysetFeedRevalidation<TRow>,
-): void {
-  const represented = [...result.rows.map((row) => row.id), ...result.absent_ids];
-  const checked = new Set(represented);
-  if (represented.length !== ids.length || checked.size !== ids.length || ids.some((id) => !checked.has(id))) {
-    throw new Error("Keyset feed revalidation did not partition every requested ID.");
-  }
-}
-
-/** A domain may prove new head membership or explicit authorized absence. */
-export interface KeysetFeedAcceptance {
-  insert?: boolean;
-  absent_ids?: readonly string[];
 }
 
 /** Derive display order without retaining a second copy outside Query's pages. */
@@ -314,8 +239,6 @@ export interface AuthoredKeysetFeedOptions<
   };
   /** Omit for snapshot feeds whose explicit refresh restarts native page discovery. */
   revalidate?: {
-    /** Canonical row models; unknown models, membership and aggregates refresh windows. */
-    models?: readonly string[];
     document: TRevalidation;
     variables: (ids: string[]) => AuthoredVariables<TRevalidation>;
     select: (data: DocumentData<TRevalidation>) => KeysetFeedRevalidation<TRow>;
@@ -333,11 +256,8 @@ export function useAuthoredKeysetFeed<
   query: UseInfiniteQueryResult<InfiniteData<KeysetFeedPage<TRow, TMetadata>, KeysetFeedCursor>, Error>;
   /** Discard loaded history and explicitly fetch the first page, including disabled/static feeds. */
   restart: () => Promise<void>;
-  /** Adopt full returned rows in native pages; never manufacture pagination facts. */
-  acceptResponse: (rows: readonly TRow[], options?: KeysetFeedAcceptance) => Promise<QueryDataAcceptance | undefined>;
 } {
   const client = useQueryClient();
-  const accept = useAcceptQueryData();
   const dataProvider = useDataProvider();
   const activeProvider = useActiveDataProviderName();
   const provider = options.dataProviderName ?? activeProvider ?? "default";
@@ -360,7 +280,6 @@ export function useAuthoredKeysetFeed<
         dataProvider, provider, window.document, window.newerVariables!(after, limit), context,
       ),
     ) : undefined,
-    revalidateModels: revalidate?.models,
     revalidate: revalidate ? async (ids, context) => revalidate.select(
       await requestAuthoredData<DocumentData<TRevalidation>>(
         dataProvider, provider, revalidate.document, revalidate.variables(ids), context,
@@ -382,30 +301,5 @@ export function useAuthoredKeysetFeed<
     // Native reset refetches active queries, but skips disabled/static observers.
     if (client.getQueryData(queryKey) === undefined) await refetch({ throwOnError: true });
   }, [actor, client, queryHash, refetch]);
-  const acceptResponse = useCallback(async (rows: readonly TRow[], acceptance: KeysetFeedAcceptance = {}) => {
-    if (!actor) throw new Error("Keyset feed acceptance requires an actor.");
-    return accept<InfiniteData<KeysetFeedPage<TRow, TMetadata>, KeysetFeedCursor>>(
-      queryKey, (current) => {
-        if (!current?.pages.length) throw new Error("Load the keyset head before accepting rows.");
-        const replacements = new Map(rows.map((row) => [row.id, row]));
-        const absent = new Set(acceptance.absent_ids ?? []);
-        if (rows.some((row) => absent.has(row.id))) throw new Error("Accepted feed rows cannot also be absent.");
-        const retained = new Set(current.pages.flatMap((page) => page.rows.map((row) => row.id)));
-        const added = acceptance.insert ? rows.filter((row) => !retained.has(row.id)) : [];
-        return {
-          ...current,
-          pages: current.pages.map((page, index) => ({
-            ...page,
-            rows: [
-              ...(index === 0 ? added : []),
-              ...page.rows.filter((row) => !absent.has(row.id)).map((row) => replacements.get(row.id) ?? row),
-            ],
-          })),
-        };
-      },
-      // Counts, cursor flags and projection metadata still need the server.
-      { complete: false },
-    );
-  }, [actor, accept, queryHash]);
-  return { query: result, restart, acceptResponse };
+  return { query: result, restart };
 }

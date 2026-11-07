@@ -11,6 +11,7 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db.models import Prefetch
 from graphql import GraphQLError
 from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
@@ -21,8 +22,11 @@ from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
 from strawberry_django.utils.gql_compat import get_field_arguments
 
-from angee.graphql.actions import ActionResult, action_guard
+from angee.base.prefetch import prefetched
+from angee.graphql import capabilities
+from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
     SortAlias,
     declared_hasura_resource_fields,
     declared_hasura_write_relation_fields,
@@ -31,15 +35,11 @@ from angee.graphql.data.hasura import (
     row_annotations,
 )
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id
-from angee.graphql.inputs import input_values
-from angee.graphql.relations import RecordPointerType
+from angee.graphql.inputs import InputReference, input_values
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.relations import RecordPointerType, actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
-from angee.iam.graphql import capabilities
-from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
@@ -150,7 +150,7 @@ class TaskOrderFields:
     task_order: TaskOrderInput | None = strawberry.UNSET
 
 
-class TaskHasuraWriteBackend(ProtectedHasuraWriteBackend):
+class TaskHasuraWriteBackend(AngeeHasuraWriteBackend):
     """Acquire Task ordering ownership before the native backend locks its row."""
 
     def update(
@@ -183,6 +183,7 @@ class ProjectSetupInput:
     """Project-owned setup facts, extended additively by installed addons."""
 
     milestones: list[ProjectMilestoneSetupInput]
+    vault_template: PublicID = strawberry.field(metadata={InputReference: InputReference("knowledge.Vault")})
 
 
 @strawberry.input
@@ -246,14 +247,14 @@ def overdue_milestone_count_field(model: Any) -> Any:
 
 @strawberry.type
 class ProjectSetupFields:
-    """Project readiness and phase attention shared by both schema projections."""
+    """Project readiness and phase attention, shared by both schema projections."""
 
     setup_state: ProjectSetupState = setup_state_field(Project)
     overdue_milestone_count: int = overdue_milestone_count_field(Project)
 
 
 @strawberry_django.type(Project)
-class ProjectType(ProjectSetupFields, AuthoredRefMixin, ProtectedNode):
+class ProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a bounded project."""
 
     title: auto
@@ -288,7 +289,7 @@ class ProjectType(ProjectSetupFields, AuthoredRefMixin, ProtectedNode):
 
 
 @strawberry_django.type(Project)
-class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, TaggedNode, ProtectedNode):
+class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, TaggedNode, AngeeNode):
     """Console project projection with a label-bearing lead relation."""
 
     title: auto
@@ -318,7 +319,7 @@ class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, TaggedNode, Prote
 
 
 @strawberry_django.type(Milestone)
-class MilestoneType(AuthoredRefMixin, ProtectedNode):
+class MilestoneType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a project milestone."""
 
     name: auto
@@ -340,68 +341,32 @@ def _visibility_allowed(value: str, info: Any) -> Any:
     return Task.visibility_allowed_expression(current_actor(), value)
 
 
-def _task_action_permission(permission: str, info: Any) -> Any:
-    return Task.action_permission_expression(current_actor(), permission)
-
-
-def _task_action_blocked(action: str, info: Any) -> Any:
-    return Task.action_blocked_expression(action)
+def _task_action_allowed(action: str, info: Any) -> Any:
+    return Task.action_allowed_expression(current_actor(), action)
 
 
 _VISIBILITY_ANNOTATIONS = {
     f"_visibility_allowed_{value}": partial(_visibility_allowed, value) for value in Task.TaskVisibility.values
 }
 _TASK_ACTION_ANNOTATIONS = {
-    **{
-        f"_task_permission_{permission}": partial(_task_action_permission, permission)
-        for permission in sorted({Task.action_permission(action) for action in Task.hand_actions()})
-    },
-    **{f"_task_blocked_{action}": partial(_task_action_blocked, action) for action in Task.hand_actions()},
+    f"_task_action_{action}": partial(_task_action_allowed, action) for action in Task.hand_actions()
 }
 
 
 
-def _subject_label(reference: Any) -> str:
-    """Return one subject's display label through the reader's own scope.
-
-    A subject the reader cannot read keeps its public id as its label.
-    """
-
-    actor = current_actor()
-    if actor is None:
-        return ""
-    model = apps.get_model(reference.model_label)
-    row = model.objects.with_actor(actor).filter(pk=reference.object_id).first()
-    return str(row) if row is not None else ""
+_SUBJECT = "_projects_subject"
 
 
-def _prime_subject_labels(tasks: list[Any]) -> None:
-    """Batch task subject labels once per content type onto their pointer owners."""
+def _subject_targets(info: strawberry.Info) -> Prefetch:
+    """Read the listed tasks' subjects once per subject type, through the reader's own scope."""
 
-    references = [(task, task.record_ref) for task in tasks]
-    by_model: dict[str, set[Any]] = {}
-    for _task, reference in references:
-        if reference.public_id:
-            by_model.setdefault(reference.model_label, set()).add(reference.object_id)
-    labels: dict[tuple[str, Any], str] = {}
-    actor = current_actor()
-    if actor is None:
-        for task, _reference in references:
-            task._projects_subject_label = ""
-        return
-    for model_label, object_ids in by_model.items():
-        model = apps.get_model(model_label)
-        labels.update(
-            ((model_label, row.pk), str(row))
-            for row in model.objects.with_actor(actor).filter(pk__in=object_ids)
-        )
-    for task, reference in references:
-        task._projects_subject_label = labels.get((reference.model_label, reference.object_id), "")
+    del info
+    return Task.record_targets_prefetch(current_actor(), to_attr=_SUBJECT)
 
 def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
     """The row's verb annotations: optimized on reads, read once for a mutation payload."""
 
-    return row_annotations(row, {name: make(info) for name, make in annotations.items()}, Task._base_manager.all())
+    return row_annotations(row, {name: make(info) for name, make in annotations.items()}, Task.system_queryset())
 
 
 @strawberry.type
@@ -417,18 +382,22 @@ class TaskProjectionMixin:
 
         return cast(Any, self).activity_type_id
 
-    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
+    @strawberry_django.field(
+        only=["subject_content_type_id", "subject_object_id"], prefetch_related=[_subject_targets],
+    )
     def subject(self, info: strawberry.Info) -> RecordPointerType | None:
-        """Project the task's direct subject, labelled as its reader sees it."""
+        """Project the task's direct subject, labelled as its reader sees it.
 
-        reference = cast(Any, self).record_ref
+        A subject the reader cannot read keeps its public id as its label. A row
+        loaded outside an optimized list reads its own subject the same way.
+        """
+
+        row = cast(Any, self)
+        reference = row.record_ref
         if not reference.public_id:
             return None
-        label = cast(Any, self).__dict__.get("_projects_subject_label")
-        return RecordPointerType.from_reference(
-            reference,
-            label=label if label is not None else _subject_label(reference),
-        )
+        target = prefetched(row, _SUBJECT, lambda: _subject_targets(info))
+        return RecordPointerType.from_reference(reference, label=str(target) if target is not None else "")
 
     @strawberry_django.field(only=Task.visibility_audience_fields())
     def audience_label(self) -> str:
@@ -449,11 +418,7 @@ class TaskProjectionMixin:
     def task_actions(self, info: strawberry.Info) -> list[str]:
         """Hand verbs the viewer may run on this row, from the verbs' own permission and blockers."""
         allowed = _task_annotations(self, info, _TASK_ACTION_ANNOTATIONS)
-        return [
-            action for action in Task.hand_actions()
-            if allowed.get(f"_task_permission_{Task.action_permission(action)}")
-            and not allowed.get(f"_task_blocked_{action}")
-        ]
+        return [action for action in Task.hand_actions() if allowed.get(f"_task_action_{action}")]
 
     @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.priority_rank_expression()})
     def priority_rank(self) -> int:
@@ -469,9 +434,14 @@ class TaskProjectionMixin:
 
 
 @strawberry_django.type(Task)
-class TaskType(TaskProjectionMixin, AuthoredRefMixin, ProtectedNode):
+class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
     """GraphQL projection of one human action."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["title"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
     title: auto
     note: auto
     status: auto
@@ -508,9 +478,14 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, ProtectedNode):
 
 
 @strawberry_django.type(Task)
-class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, ProtectedNode):
+class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNode):
     """Console task projection with label-bearing user relations."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["title"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
     title: auto
     note: auto
     status: auto
@@ -537,7 +512,7 @@ class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, Protect
 
 
 @strawberry_django.type(TaskRelation)
-class TaskRelationType(AuthoredRefMixin, ProtectedNode):
+class TaskRelationType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a canonical directed task relation."""
 
     kind: auto
@@ -555,7 +530,7 @@ class TaskRelationType(AuthoredRefMixin, ProtectedNode):
 
 
 @strawberry_django.type(Participant)
-class ProjectParticipantType(AuthoredRefMixin, ProtectedNode):
+class ProjectParticipantType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of project involvement, not access."""
 
     kind: auto
@@ -567,7 +542,7 @@ class ProjectParticipantType(AuthoredRefMixin, ProtectedNode):
 
 
 @strawberry_django.type(Link)
-class ProjectLinkType(AuthoredRefMixin, ProtectedNode):
+class ProjectLinkType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a project/task external URL."""
 
     url: auto
@@ -590,7 +565,7 @@ class ProjectLinkType(AuthoredRefMixin, ProtectedNode):
 
 
 @strawberry_django.type(ProjectBinding)
-class ProjectBindingType(AuthoredRefMixin, ProtectedNode):
+class ProjectBindingType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of one explicit project container binding."""
 
     created_at: auto
@@ -601,7 +576,7 @@ class ProjectBindingType(AuthoredRefMixin, ProtectedNode):
     def target_type(self) -> str:
         """Return the bound target's REBAC resource type."""
 
-        return cast(Any, self).record_resource_type
+        return cast(Any, self).record_ref.resource_type
 
     @strawberry.field
     def target_id(self) -> strawberry.ID:
@@ -611,7 +586,7 @@ class ProjectBindingType(AuthoredRefMixin, ProtectedNode):
 
 
 @strawberry_django.type(ActivityType)
-class ActivityTypeType(ProtectedNode):
+class ActivityTypeType(AngeeNode):
     """The installed, resource-declared kinds of record task."""
 
     key: auto
@@ -660,9 +635,7 @@ def _record_tasks(info: strawberry.Info, model_label: str, record_id: strawberry
     record = instance_for_id(model, str(record_id), queryset=model._default_manager.all())
     if record is None:
         return []
-    tasks = list(optimize(Task.objects.for_record(record, include_done=include_done), info))
-    _prime_subject_labels(tasks)
-    return tasks
+    return list(optimize(Task.objects.for_record(record, include_done=include_done), info))
 
 
 @strawberry.type
@@ -1024,7 +997,7 @@ def _project_resource(node_type: type) -> Any:
             "folder",
             *_PROJECT_EXTENSION_UPDATE_FIELDS,
         ],
-        write_backend=ProtectedHasuraWriteBackend(
+        write_backend=AngeeHasuraWriteBackend(
             Project,
             public_id_fields=("lead", "folder", *_PROJECT_EXTENSION_PUBLIC_ID_FIELDS),
         ),
@@ -1081,7 +1054,7 @@ _MILESTONE_RESOURCE = hasura_model_resource(
         "sort_order",
         *_MILESTONE_EXTENSION_UPDATE_FIELDS,
     ],
-    write_backend=ProtectedHasuraWriteBackend(
+    write_backend=AngeeHasuraWriteBackend(
         Milestone,
         public_id_fields=("project", *_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS),
     ),
@@ -1227,7 +1200,7 @@ _TASK_RELATION_RESOURCE = hasura_model_resource(
         "task": public_pk_decoder(Task),
         "related_task": public_pk_decoder(Task),
     },
-    write_backend=ProtectedHasuraWriteBackend(TaskRelation, public_id_fields=("task", "related_task")),
+    write_backend=AngeeHasuraWriteBackend(TaskRelation, public_id_fields=("task", "related_task")),
 )
 
 _PARTICIPANT_RESOURCE = hasura_model_resource(
@@ -1244,7 +1217,7 @@ _PARTICIPANT_RESOURCE = hasura_model_resource(
         "project": public_pk_decoder(Project),
         "party": public_pk_decoder(Party),
     },
-    write_backend=ProtectedHasuraWriteBackend(Participant, public_id_fields=("project", "party")),
+    write_backend=AngeeHasuraWriteBackend(Participant, public_id_fields=("project", "party")),
 )
 
 _LINK_RESOURCE = hasura_model_resource(
@@ -1257,7 +1230,7 @@ _LINK_RESOURCE = hasura_model_resource(
     groupable=["url"],
     insert=False,
     updatable=["title", "metadata"],
-    write_backend=ProtectedHasuraWriteBackend(Link),
+    write_backend=AngeeHasuraWriteBackend(Link),
 )
 
 _BINDING_RESOURCE = hasura_model_resource(
@@ -1282,7 +1255,7 @@ _ACTIVITY_TYPE_RESOURCE = hasura_model_resource(
     aggregatable=["id"],
     insertable=["key", "name", "glyph"],
     updatable=["name", "glyph"],
-    write_backend=ProtectedHasuraWriteBackend(ActivityType),
+    write_backend=AngeeHasuraWriteBackend(ActivityType),
 )
 
 _COMMON_RESOURCE_TYPES = [

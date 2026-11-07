@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 
 import {
   createAngeeAuthProviderFromRequest,
@@ -26,13 +26,13 @@ const currentUser = {
 };
 
 describe("Angee app auth provider", () => {
-  test("route checks reuse the resolved session while its query is invalidated", async () => {
+  test("route checks reuse the resolved session while an invalidated observer refreshes it", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const request = vi.fn(async () => ({ current_user: currentUser }));
     const identityRequest = vi.fn(async () => ({ current_user: currentUser, real_user: currentUser }));
     const provider = createAngeeAuthProviderFromRequest(request as never, { queryClient, identityRequest: identityRequest as never });
 
-    await queryClient.ensureQueryData(identityQueryOptions(provider, queryClient));
+    await queryClient.ensureQueryData(identityQueryOptions(provider));
     await queryClient.invalidateQueries({ queryKey: identityQueryOptions(provider).queryKey, refetchType: "none" });
     await provider.check();
     await provider.getPermissions?.();
@@ -40,17 +40,57 @@ describe("Angee app auth provider", () => {
     expect(request).toHaveBeenCalledOnce();
     expect(identityRequest).toHaveBeenCalledOnce();
   });
-  test("console IAM supplies the viewed and real identity without enumerating preview candidates", async () => {
+
+  test("an explicit invalidation re-reads the session once through the mounted observer and route checks follow it", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let session: typeof currentUser | null = currentUser;
+    const request = vi.fn(async () => ({ current_user: session }));
+    const provider = createAngeeAuthProviderFromRequest(request as never, { queryClient });
+    const query = identityQueryOptions(provider);
+    // The app shell's `useGetIdentity` keeps one observer on the entry for the whole session.
+    const unsubscribe = new QueryObserver(queryClient, query).subscribe(() => undefined);
+    try {
+      await expect(provider.check()).resolves.toEqual({ authenticated: true });
+      session = null;
+      await queryClient.invalidateQueries({ queryKey: query.queryKey });
+      await expect(provider.check()).resolves.toEqual({ authenticated: false, redirectTo: "/login" });
+      await expect(provider.getPermissions?.()).resolves.toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  test("a logout leaves no cached session for the next route check to reuse", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let session: typeof currentUser | null = currentUser;
+    const request = vi.fn(async (document: unknown) => {
+      if (document !== AngeeLogoutDocument) return { current_user: session };
+      session = null;
+      return { logout: true };
+    });
+    const provider = createAngeeAuthProviderFromRequest(request as never, {
+      queryClient,
+      // `createApp` resets the session queries on every auth change; a reset entry holds no answer to reuse.
+      onAuthChange: () => { void queryClient.resetQueries(); },
+    });
+
+    await expect(provider.check()).resolves.toEqual({ authenticated: true });
+    await expect(provider.logout({})).resolves.toEqual({ success: true });
+    await expect(provider.check()).resolves.toEqual({ authenticated: false, redirectTo: "/login" });
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  test("console IAM supplies the viewed identity, real identity and permitted people", async () => {
     const viewed = { ...currentUser, id: "person-2", username: "grace", firstName: "Grace", lastName: "Hopper", roleRefs: [] };
     const identityRequest = vi.fn(async (document) => {
       expect(document).toBe(AngeeViewAsIdentityDocument);
-      expect(JSON.stringify(document)).not.toContain("viewable_people");
-      return { current_user: viewed, real_user: currentUser } as never;
+      return { current_user: viewed, real_user: currentUser, viewable_people: [{ id: viewed.id, name: "Grace Hopper" }] } as never;
     });
     const provider = createAngeeAuthProviderFromRequest(async () => ({ current_user: viewed }) as never, { identityRequest });
     await expect(provider.getIdentity?.()).resolves.toMatchObject({
       id: viewed.id, name: "Grace Hopper", roles: [],
-      realUser: { id: currentUser.id },
+      realUser: { id: currentUser.id }, viewablePeople: [{ id: viewed.id, name: "Grace Hopper" }],
     });
     const anonymous = createAngeeAuthProviderFromRequest(async () => ({ current_user: null }) as never, { identityRequest });
     await expect(anonymous.getIdentity?.()).resolves.toBeNull();
@@ -288,7 +328,7 @@ describe("Angee app auth provider", () => {
     expect(request).toHaveBeenLastCalledWith(AngeeCurrentUserDocument, { refs });
 
     // When the console read follows, it asks and the public read asks about nothing.
-    const identityRequest = vi.fn(async () => ({ current_user: { ...currentUser, permitted: refs }, real_user: null }));
+    const identityRequest = vi.fn(async () => ({ current_user: { ...currentUser, permitted: refs }, real_user: null, viewable_people: [] }));
     const withConsole = createAngeeAuthProviderFromRequest(request as never, { requires: refs, identityRequest: identityRequest as never });
     await expect(withConsole.getIdentity?.()).resolves.toMatchObject({ permitted: refs, realUser: null });
     expect(request).toHaveBeenLastCalledWith(AngeeCurrentUserDocument, { refs: [] });

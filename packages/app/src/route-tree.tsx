@@ -191,12 +191,12 @@ function RefineLayoutRoute({
   );
   return (
     <ActiveDataProviderNameProvider name={schemaName}>
-        <ModelMetadataProvider metadata={metadata}>
-          {providers.reduceRight<ReactNode>(
-            (children, provider) => createElement(provider.component, { key: provider.id, children }),
-            body,
-          )}
-        </ModelMetadataProvider>
+      <ModelMetadataProvider metadata={metadata}>
+        {providers.reduceRight<ReactNode>(
+          (children, provider) => createElement(provider.component, { key: provider.id, children }),
+          body,
+        )}
+      </ModelMetadataProvider>
     </ActiveDataProviderNameProvider>
   );
 }

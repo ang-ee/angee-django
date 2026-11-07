@@ -14,15 +14,14 @@ from strawberry.permission import PermissionExtension
 from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
 
-from angee.graphql.actions import ActionResult
-from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.graphql.actions import ActionResult, action_target
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
+from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.graphql.actions import action_target
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
+from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.schema import (
     BridgeSyncStatusMixin,
     CredentialType,
@@ -45,7 +44,7 @@ Template = apps.get_model("integrate_vcs", "Template")
 
 
 @strawberry_django.type(VcsBridge)
-class VcsBridgeType(IntegrationLabelMixin, BridgeSyncStatusMixin, ProtectedNode):
+class VcsBridgeType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     """Admin projection of a VCS bridge child model."""
 
     vendor: VendorType
@@ -65,7 +64,7 @@ class VcsBridgeType(IntegrationLabelMixin, BridgeSyncStatusMixin, ProtectedNode)
 
 
 @strawberry_django.type(Repository)
-class RepositoryType(ProtectedNode):
+class RepositoryType(AngeeNode):
     """Admin projection of one inventoried repository."""
 
     vcs_bridge: VcsBridgeType
@@ -83,7 +82,7 @@ class RepositoryType(ProtectedNode):
 
 
 @strawberry_django.type(Source)
-class SourceType(ProtectedNode):
+class SourceType(AngeeNode):
     """Admin projection of one source (a ref+path pointer into a repository)."""
 
     repository: RepositoryType
@@ -96,7 +95,7 @@ class SourceType(ProtectedNode):
 
 
 @strawberry_django.type(Template)
-class TemplateType(ProtectedNode):
+class TemplateType(AngeeNode):
     """Admin projection of one discovered template."""
 
     source: SourceType
@@ -177,6 +176,7 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "lifecycle",
         "config",
         "display_name",
+        "webhook_secret",
     ],
     updatable=[
         "vendor",
@@ -186,6 +186,7 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "lifecycle",
         "config",
         "display_name",
+        "webhook_secret",
     ],
     write_backend=IntegrationWriteBackend(
         VcsBridge,
@@ -226,14 +227,14 @@ _SOURCE_RESOURCE = hasura_model_resource(
     SourceType,
     model=Source,
     name="sources",
-    filterable=["id", "repository", "kind", "ref", "updated_at"],
+    filterable=["id", "repository", "kind", "ref", "last_synced_at", "updated_at"],
     sortable=["repository", "kind", "ref", "path", "last_synced_at", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["repository", "repository__name", "kind", "last_synced_at"],
     insertable=["repository", "kind", "ref", "path"],
     updatable=["kind", "ref", "path"],
     field_id_decode={"repository": public_pk_decoder(Repository)},
-    write_backend=ProtectedHasuraWriteBackend(Source, public_id_fields=("repository",)),
+    write_backend=AngeeHasuraWriteBackend(Source, public_id_fields=("repository",)),
 )
 _TEMPLATE_RESOURCE = hasura_model_resource(
     TemplateType,
@@ -290,7 +291,7 @@ class VCSActionMutation:
         """Queue a refresh of every repository's sources for one VCS bridge."""
 
         with action_target(VcsBridge, id, reason="integrate.graphql.sync_vcs_bridge") as vcs:
-            vcs.request_sync(now=timezone.now())
+            queue_bridge_sync(vcs, now=timezone.now())
         return ActionResult(ok=True, message="Queued bridge sync.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)

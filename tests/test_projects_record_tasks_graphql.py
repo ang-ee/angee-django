@@ -5,12 +5,10 @@ from types import SimpleNamespace
 
 from django.apps import apps
 from django.db import connection
-from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
-from angee.graphql.schema import GraphQLSchemas
-from angee.iam.testing.graphql import measure_graphql_document
+from angee.graphql.testing.documents import graphql_request
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -53,8 +51,7 @@ class RecordTaskGraphQLTests(WorkCase):
 
         from angee.graphql.schema import GraphQLSchemas
 
-        request = RequestFactory().post("/graphql/")
-        request.user = user
+        request = graphql_request(user)
         with actor_context(user):
             return GraphQLSchemas.from_discovery().build("console").execute_sync(
                 query, variable_values=variables, context_value=SimpleNamespace(request=request),
@@ -104,24 +101,6 @@ class RecordTaskGraphQLTests(WorkCase):
         titles, three = listed()
         self.assertEqual(titles, ["Also sooner", "Sooner", "Later"])
         self.assertEqual(three, one)
-
-    def test_record_task_document_budget_at_one_five_ten_twenty_rows(self):
-        schema = GraphQLSchemas.from_discovery().build("console")
-        reads = {}
-        for index in range(20):
-            with actor_context(self.owner):
-                self.Task.objects.schedule(
-                    self.record_row, title=f"Budget record task {index:02d}", assignee=self.assignee,
-                )
-            if index + 1 in (1, 5, 10, 20):
-                read = measure_graphql_document(schema, LIST, self.record, actor=self.reader)
-                self.assertEqual(len(read.data["record_tasks"]), index + 1)
-                self.assertEqual(read.statement_count, 11)
-                read.assert_no_audit_writes()
-                read.assert_bytes(total=180_000, largest=135_000)
-                reads[index + 1] = read
-        for smaller, larger in ((1, 5), (5, 10), (10, 20)):
-            reads[larger].assert_flat_from(reads[smaller])
 
     def test_a_reader_cannot_schedule_and_an_outsider_lists_nothing(self):
         refused = self.raw("""

@@ -9,16 +9,16 @@ from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.db import transaction
-
-from angee.messaging.events import historical_import
+from rebac import system_context
 
 if TYPE_CHECKING:
     from angee.posts.backends import ParsedPost
 
+PROVIDER_TRASH_REASON = "Hidden by the source."
+
 
 def land_posts(
-    channel: Any, posts: list[ParsedPost], *, owner_id: Any, relations: bool = True,
-    historical: bool = False,
+    channel: Any, posts: list[ParsedPost], *, owner_id: Any, historical: bool = False, relations: bool = True,
 ) -> list[Any]:
     """Land public posts through messaging, then apply the posts-owned overlay.
 
@@ -26,12 +26,8 @@ def land_posts(
     owner supplies the public structural facts that make ingest derive COMMENT,
     disables email quotation edges, then writes payload, metrics, reactions, and
     cross-post relations exactly once through their existing owners.
-    ``historical=True`` enters messaging's historical import context for legacy callers.
     """
 
-    if historical:
-        with historical_import():
-            return land_posts(channel, posts, owner_id=owner_id, relations=relations)
     message_model = apps.get_model("messaging", "Message")
     thread_model = apps.get_model("messaging", "Thread")
     messages = []
@@ -41,16 +37,27 @@ def land_posts(
 
         def overlay(message: Any) -> None:
             post = by_id[message.external_id]
-            message.apply_provider_visibility(hidden=post.hidden)
-
-        def overlay_batch(landed: Sequence[Any]) -> None:
-            _overlay_engagement(list(chunk), list(landed), owner_id=owner_id)
+            _overlay_engagement([post], [message], owner_id=owner_id)
+            with system_context(reason="posts.ingest.moderation"):
+                local = message.local_metadata
+                if post.hidden and not message.is_trashed:
+                    message.trash(reason=PROVIDER_TRASH_REASON)
+                    local = message.local_metadata
+                    local["provider_hidden"] = message.trashed_at.isoformat()
+                elif not post.hidden and message.provider_hidden:
+                    message.restore()
+                    local = message.local_metadata
+                if not post.hidden:
+                    local.pop("provider_hidden", None)
+                if local != message.local_metadata:
+                    message.metadata = {**(message.metadata or {}), "local": local}
+                    message.save(update_fields=("metadata", "updated_at"))
         with transaction.atomic():
             messages.extend(message_model.objects.ingest(
                 [replace(post.message, metadata={**post.message.metadata, "tags": list(post.tags)}) for post in chunk],
                 channel=channel, created_by_id=owner_id, modality=thread_model.Modality.PUBLIC_THREAD,
-                visibility=thread_model.Visibility.PUBLIC, quote_edges=False,
-                after_landing=overlay, after_batch_landing=overlay_batch,
+                visibility=thread_model.Visibility.PUBLIC, quote_edges=False, historical=historical,
+                after_landing=overlay,
             ))
     if relations:
         land_post_relations(channel, posts, messages, owner_id=owner_id)
@@ -68,7 +75,7 @@ def _overlay_engagement(posts: list[ParsedPost], messages: list[Any], *, owner_i
     landed, _ = _pair_landed(posts, messages)
 
     for message, post in landed:
-        message.apply_public_post(post)
+        _write_public_payload(message, post)
         if post.metrics is not None:
             metrics_model.objects.upsert(message=message, metrics=post.metrics, created_by_id=owner_id)
 
@@ -146,3 +153,18 @@ def _resolve_relation_targets(landed: list[Any], by_key: dict, *, channel_id: An
         for row in sorted(rows, key=lambda row: row.channel_id == channel_id):
             targets[(platform, row.external_id)] = row
     return targets
+
+
+def _write_public_payload(message: Any, post: ParsedPost) -> None:
+    """Fold parsed public-post fields onto the shared message/thread rows."""
+
+    if message.is_original_post != post.is_original_post:
+        message.is_original_post = post.is_original_post
+        message.save(update_fields=("is_original_post", "updated_at"))
+    thread = message.thread
+    if thread is None or not post.is_original_post or not post.subject_url:
+        return
+    subject_url = post.subject_url
+    if thread.subject_url != subject_url:
+        thread.subject_url = subject_url
+        thread.save(update_fields=("subject_url", "updated_at"))

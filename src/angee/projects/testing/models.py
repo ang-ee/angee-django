@@ -11,7 +11,6 @@ from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
 from angee.projects.models import Task as AbstractTask
 from angee.projects.models import TaskRelation as AbstractTaskRelation
-from angee.projects_knowledge.models import ProjectKnowledge
 from angee.proposals.models import ProjectProposalAccess, TaskProposalAccess
 from angee.sequence.testing import (
     models as sequence_models,  # noqa: F401 -- register the queue's native sequence targets
@@ -25,9 +24,6 @@ from angee.work.models import Stage as AbstractWorkStage
 
 class Queue(AbstractQueue, Group):
     """Native work queue shared by task access and lifecycle fixtures."""
-
-    created_at = Group.created_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
-    updated_at = Group.updated_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
 
     class Meta(AbstractQueue.Meta):
         abstract = False
@@ -84,7 +80,7 @@ class Link(AbstractLink):
         rebac_resource_type = "projects/link"
 
 
-class Project(ProjectPortfolio, ProjectWork, ProjectProposalAccess, ProjectKnowledge, AbstractProject):
+class Project(ProjectPortfolio, ProjectWork, ProjectProposalAccess, AbstractProject):
     """Concrete project carrying the production owners and the work team donor."""
 
     rebac_grantable = {

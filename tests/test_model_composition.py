@@ -295,7 +295,6 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         title="parent",
         extra=2,
         history_user_id=None,
-        history_changeset_id=None,
     )
     assert snapshot.instance.pk == 7
     assert snapshot.instance.extra == 2
@@ -306,7 +305,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         state = ModelState.from_model(model)
         if state.name == "HistoricalChild":
             state.fields.pop("history_user")
-            state.fields.pop("history_changeset")
+            state.fields.pop("changeset")
         target.add_model(state)
     changes = MigrationAutodetector(ProjectState(), target)._detect_changes()
     operations = changes[config.label][0].operations
@@ -337,7 +336,7 @@ def test_native_history_refuses_an_explicit_uncaptured_base_manager(modules):
         module, "Uncaptured", config.label, bases=(HistoryMixin, Composable), concrete=True,
         objects=models.Manager(), meta={"base_manager_name": "objects"},
     )
-    with pytest.raises(ImproperlyConfigured, match="HistoryQuerySet base manager"):
+    with pytest.raises(ImproperlyConfigured, match="history-capable base manager"):
         emit(ModelComposition.discover((config,)))
 
 
@@ -351,5 +350,5 @@ def test_native_history_refuses_an_uncaptured_default_manager_with_a_captured_ba
         objects=models.Manager(), _angee_base=AngeeHistoryUnscopedManager(),
         meta={"base_manager_name": "_angee_base", "default_manager_name": "objects"},
     )
-    with pytest.raises(ImproperlyConfigured, match="HistoryQuerySet default manager"):
+    with pytest.raises(ImproperlyConfigured, match="history-capable default manager"):
         emit(ModelComposition.discover((config,)))

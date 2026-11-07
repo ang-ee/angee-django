@@ -145,3 +145,23 @@ def test_io_context_rejects_locked_record_lookups():
         ctx.subject_for_update()
     with pytest.raises(ValidationError, match="requires DATABASE mode"):
         ctx.load(Workflow, "absent", lock=True)
+
+
+@pytest.mark.parametrize("retries, is_last", [(0, False), (1, False), (2, True)])
+def test_context_retry_allowance_counts_failures_on_the_current_page(retries, is_last):
+    """The lifetime attempt counter does not consume a page's retry allowance."""
+
+    ctx = context(IOContractStep)
+    ctx.step_run.attempt = 100
+    ctx.step_run.retries = retries
+    assert ctx.is_last_attempt is is_last
+
+
+def test_context_acknowledgement_belongs_to_its_claimed_attempt():
+    """Pending consent for another claim must not authorize this attempt's effects."""
+
+    ctx = context(IOContractStep)
+    ctx.step_run.retry_acknowledged_by_id = 5
+    assert not ctx.retry_acknowledged
+    ctx.attempt.acknowledged_by_id = 5
+    assert ctx.retry_acknowledged

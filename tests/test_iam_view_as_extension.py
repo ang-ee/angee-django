@@ -1,29 +1,71 @@
-"""IAM reserves account preview during additive permission composition."""
+"""IAM keeps account preview a platform-admin action in the composed schema."""
 
 from pathlib import Path
 
 import pytest
-from django.apps import apps
+from django.core.checks.registry import registry
 
-from angee.iam.build import SchemaExtensionError, extension_source_map
-from tests.conftest import make_addon
+from angee.base.build import extension_source_map
+from angee.iam.checks import check_view_as_admin_only
+from tests.test_zed_extensions import _addon, _apply_emitted_schema_paths, _contrib_addon
 
-
-def test_fragment_cannot_extend_platform_admin_view_as(tmp_path: Path) -> None:
-    fragment = make_addon(
-        name="tests.preview_contrib",
-        label="preview_contrib",
-        path=tmp_path / "preview_contrib",
-    )
-    (Path(fragment.path) / "permissions.extends.zed").write_text("""
-definition auth/user {
-    relation previewer: auth/user
-    permission view_as = previewer
+_IAM = """
+definition angee/role {
+    relation member: auth/user
 }
-""")
-    with pytest.raises(
-        SchemaExtensionError,
-        match=r"tests\.preview_contrib: permissions\.extends\.zed cannot extend auth/user#view_as; "
-        r"account preview is granted to platform admins only",
-    ):
-        extension_source_map([apps.get_app_config("iam"), fragment])
+
+definition auth/user {
+    relation admin: angee/role // rebac:const=admin
+    relation directory_reader: auth/user
+
+    permission view_as = admin->member
+    permission list = directory_reader + admin->member
+}
+"""
+
+_FRAGMENTS = {
+    "unrelated": "definition auth/user {\n    relation helper: auth/user\n    permission list = helper\n}\n",
+    "relation": "definition auth/user {\n    relation previewer: auth/user\n    permission view_as = previewer\n}\n",
+    "permission": "definition auth/user {\n    permission view_as = list\n}\n",
+}
+
+
+@pytest.mark.parametrize("fragment", sorted(_FRAGMENTS))
+def test_check_rejects_any_fragment_arm_on_view_as(tmp_path: Path, fragment: str) -> None:
+    iam = _addon(tmp_path, "iam", "permissions.zed", _IAM)
+    contrib = _contrib_addon(tmp_path, _FRAGMENTS[fragment], name="preview_contrib")
+    assert check_view_as_admin_only([iam]) == []
+    sources = extension_source_map([iam, contrib])
+    runtime = tmp_path / "runtime"
+    for relative, text in sources.items():
+        output = runtime / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text)
+    _apply_emitted_schema_paths([iam, contrib], runtime, sources=sources)
+
+    errors = check_view_as_admin_only([iam, contrib])
+    if fragment == "unrelated":
+        assert errors == []
+    else:
+        [error] = errors
+        assert error.id == "angee.iam.E001"
+        assert "auth/user#view_as differ from angee.iam's declaration" in error.msg
+        assert "preview_contrib" in error.msg
+
+
+def test_a_missing_iam_declaration_is_a_check_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IAM's own arm is never flagged against an empty allowed set; the check reports, never raises."""
+
+    monkeypatch.setattr("angee.base.checks.declared_schema_path", lambda config: None)
+    [error] = check_view_as_admin_only()
+    assert error.id == "angee.iam.E001"
+    assert "iam declares no permissions schema" in error.msg
+    assert "auth/user#view_as" in error.msg
+
+
+def test_installed_composition_grants_preview_to_platform_admins_only() -> None:
+    assert check_view_as_admin_only() == []
+
+
+def test_view_as_check_is_registered_once_by_iam() -> None:
+    assert sum(candidate is check_view_as_admin_only for candidate in registry.registered_checks) == 1

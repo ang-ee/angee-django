@@ -30,7 +30,7 @@ from angee.workflows.testing.models import Workflow, WorkflowRun, WorkflowVersio
 
 
 def test_shared_fixture_plugin_imports_before_django_setup(tmp_path: Path) -> None:
-    """Native pytest workers import explicit plugins before populating Django apps."""
+    """Native pytest workers import explicit plugins and the GraphQL guard before populating Django apps."""
 
     environment = dict(os.environ)
     environment.pop("DJANGO_SETTINGS_MODULE", None)
@@ -40,7 +40,8 @@ def test_shared_fixture_plugin_imports_before_django_setup(tmp_path: Path) -> No
 import sys
 from django.apps import apps
 from django.conf import settings
-import angee.iam.testing.fixtures
+import angee.base.testing.fixtures
+import angee.graphql.testing.documents
 assert not any(name == "angee.provenance" or name.startswith("angee.provenance.") for name in sys.modules)
 assert not apps.ready
 assert not settings.configured

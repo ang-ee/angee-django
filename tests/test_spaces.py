@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -17,15 +20,16 @@ from rebac import PermissionDenied, actor_context, system_context, to_object_ref
 from rebac.backends import backend
 from rebac.models import SchemaRelation, active_relationship_model
 
-from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.iam.build import (
+from angee.base.build import (
     extension_source_map,
     merged_schema_relpath,
     merged_schemas,
     render_zed,
 )
-from angee.iam.testing.permissions import installed_field_owners
-from angee.messaging.testing.models import Party, Person, Thread
+from angee.base.testing.permissions import emit_permissions, installed_field_owners
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
+from angee.messaging.testing.models import Fragment, Party, Person, Thread
 from angee.projects.testing.models import Queue
 from angee.spaces.testing.models import Group, Membership
 from tests import test_messaging_graphql
@@ -36,8 +40,6 @@ from tests.conftest import (
     Vault,
     assert_private_hasura_insert_access,
     create_user,
-    execute_schema,
-    result_data,
     vault_for,
 )
 
@@ -49,10 +51,26 @@ spaces_schema = importlib.import_module("angee.spaces.schema")
 
 
 @pytest.fixture()
-def spaces_tables(transactional_db: Any, composed_permissions: None) -> None:
-    """Use the shared composed schema with committed rows for roster tests."""
+def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
+    """Load the composed spaces/messaging REBAC schema for native test tables."""
 
-    del transactional_db, composed_permissions
+    del transactional_db
+    app_configs = list(apps.get_app_configs())
+    runtime_dir = tmp_path / "runtime"
+    source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
+    originals = {config: getattr(config, "rebac_schema", None) for config in app_configs}
+    emit_permissions(app_configs, runtime_dir, sources=source_map)
+
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        yield
+    finally:
+        for config, original in originals.items():
+            if original is None:
+                if hasattr(config, "rebac_schema"):
+                    delattr(config, "rebac_schema")
+            else:
+                config.rebac_schema = original
 
 
 def _role_relations(group: Group, user: Any) -> set[str]:
@@ -106,8 +124,7 @@ def _schema() -> Any:
         )
         for module in modules
     ]
-    # An addon-only build: donor addons are left out, so it declares itself partial.
-    return GraphQLSchemas(addons, partial_schema=True).build("console")
+    return GraphQLSchemas(addons).build("console")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -625,6 +642,44 @@ def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
             denied.save(update_fields=["visibility", "updated_at"])
 
 
+def test_narrow_space_thread_labels_have_constant_queries(spaces_tables: None) -> None:
+    """A narrow space-thread page loads its label fields with the page, never per row."""
+
+    del spaces_tables
+    member, person = _person_for("spaces-label-member")
+    at = datetime(2026, 9, 1, tzinfo=UTC)
+    with system_context(reason="spaces thread label seed"):
+        group = Group.objects.create(name="Labels", slug="labels")
+        Membership.objects.create(group=group, party=person).confirm()
+        rows = []
+        for index in range(25):
+            thread = Thread.objects.create(
+                modality=Thread.Modality.GROUP,
+                last_message_at=at - timedelta(minutes=index),
+                title=None if index == 1 else Fragment.objects.upsert(text=f"Group thread {index:02}"),
+            )
+            thread.groups.add(group)
+            rows.append(thread)
+        expected = [{"id": str(row.sqid), "display_name": str(row)} for row in rows]
+        assert expected[1]["display_name"] == f"thread:{rows[1].sqid}"
+
+    schema = _schema()
+    query = """
+        query Labels($limit: Int!) {
+          space_threads(limit: $limit, order_by: [{last_message_at: desc}]) { id display_name }
+        }
+    """
+    # Measured warm: the first read resolves the policy's content types once per process.
+    result_data(execute_schema(schema, query, {"limit": 1}, user=member))
+    counts = []
+    for size in (1, 25):
+        with CaptureQueriesContext(connection) as captured:
+            payload = result_data(execute_schema(schema, query, {"limit": size}, user=member))
+        assert payload["space_threads"] == expected[:size]
+        counts.append(len(captured))
+    assert counts[0] == counts[1], f"Narrow space-thread labels must not refetch deferred fields per row: {counts}"
+
+
 def _vault_scope_pks(actor: Any, action: str) -> tuple[set[Any], list[str]]:
     """Return scoped rows and every executed policy/application statement."""
 
@@ -665,14 +720,14 @@ def test_team_vault_follows_the_roster_and_compiles_to_sql(spaces_tables: None, 
     assert _group_relationship_count(group) == 0
 
     for actor, readable in ((owner, True), (moderator, True), (member, True), (viewer, False), (outsider, False)):
-        assert Vault.objects.with_actor(actor).filter(pk=vault.pk).exists() is readable
-        assert Page.objects.with_actor(actor).filter(pk=page.pk).exists() is readable
-        assert not Vault.objects.with_actor(actor).filter(pk=private.pk).exists()
-    assert not Vault.objects.with_actor(alice).filter(pk=vault.pk).exists()
+        assert Vault.objects.as_user(actor).filter(pk=vault.pk).exists() is readable
+        assert Page.objects.as_user(actor).filter(pk=page.pk).exists() is readable
+        assert not Vault.objects.as_user(actor).filter(pk=private.pk).exists()
+    assert not Vault.objects.as_user(alice).filter(pk=vault.pk).exists()
 
     for actor in (owner, moderator):
         with actor_context(actor):
-            writable = Vault.objects.with_actor(actor).get(pk=vault.pk)
+            writable = Vault.objects.as_user(actor).get(pk=vault.pk)
             writable.description = f"edited by {actor.username}"
             writable.save(update_fields=("description",))
     for actor in (member, viewer, outsider):
@@ -710,8 +765,8 @@ def test_team_vault_follows_the_roster_and_compiles_to_sql(spaces_tables: None, 
     with system_context(reason="spaces team vault unbinding"):
         Vault._base_manager.filter(pk=vault.pk).update(team=None)
     for actor in (owner, moderator, member):
-        assert not Vault.objects.with_actor(actor).filter(pk=vault.pk).exists()
-        assert not Page.objects.with_actor(actor).filter(pk=page.pk).exists()
+        assert not Vault.objects.as_user(actor).filter(pk=vault.pk).exists()
+        assert not Page.objects.as_user(actor).filter(pk=page.pk).exists()
     assert _group_relationship_count(group) == 0
 
 
@@ -731,7 +786,7 @@ def test_team_member_clones_an_ownerless_template_vault(spaces_tables: None) -> 
     with actor_context(member):
         clone = Vault.objects.create_from(template, name="Intake 12")
     assert (clone.owner_id, clone.team_id) == (member.pk, None)
-    assert [row.title for row in Page.objects.with_actor(member).filter(vault=clone)] == ["Checklist"]
+    assert [row.title for row in Page.objects.as_user(member).filter(vault=clone)] == ["Checklist"]
     with actor_context(outsider), pytest.raises(Vault.DoesNotExist):
         Vault.objects.create_from(template, name="Taken")
 

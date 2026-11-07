@@ -6,11 +6,12 @@ from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relati
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun
-from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import addon_schema, create_user, vault_for
 from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
@@ -428,7 +429,7 @@ def test_published_labels_describe_node_and_run_outcomes(schema, execution):
     run = start_run(workflow, actor=actor)
     run_until(run)
     assert run.outcome == "accepted"
-    assert run.get_workflow_label().startswith("Labeled flow")
+    assert str(run).startswith("Labeled flow")
     data = result_data(
         execute_schema(
             schema,

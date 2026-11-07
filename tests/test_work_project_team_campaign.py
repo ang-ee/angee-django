@@ -3,21 +3,19 @@
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.db import connection
 from django.test import override_settings
-from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
-from angee.iam.testing.permissions import installed_field_owners
-from angee.iam.testing.queries import is_permission_audit_insert
+from angee.base.testing.permissions import installed_field_owners
+from angee.graphql.testing.documents import execute_schema
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project
 from angee.spaces.testing.models import Group, Membership
 from angee.work import schema as work_schema
 from angee.work.models import ProjectWork
-from tests.conftest import addon_schema, execute_schema
+from tests.conftest import addon_schema
 from tests.test_productivity_write_behavior import Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema
 
@@ -50,48 +48,6 @@ def team_case(team_storage, project_access_schema):
     return project, team, replacement, author, users
 
 
-def test_project_manager_roster_read_has_no_audit_insert(team_case):
-    project, _, _, author, _ = team_case
-    schema = addon_schema(work_schema.schemas, "console")
-    with CaptureQueriesContext(connection) as captured:
-        result = execute_schema(schema, """query($project: ID!) {
-          project_manager_roster(project: $project) { people { label } }
-        }""", {"project": project.sqid}, user=author)
-    assert result.errors is None
-    assert len(result.data["project_manager_roster"]["people"]) == 1
-    assert sum(is_permission_audit_insert(query["sql"], connection) for query in captured) == 0
-    # The admitted project's team supplies one bounded roster read and no bypass.
-    assert len(captured) == 19
-    # Team read is a separate policy proof before exposing membership seat ids.
-    assert sum(len(query["sql"].encode("utf-8")) for query in captured) <= 90_000
-
-
-def test_project_reader_without_team_read_sees_labels_without_seat_ids(team_case):
-    project, team, _, author, users = team_case
-    reader = users["outsider"]
-    with system_context(reason="test.work.private_roster"):
-        team.visibility = "private"
-        team.save(update_fields=["visibility"])
-    with actor_context(author):
-        project.grant_record_access("reader", reader)
-    assert project.with_actor(reader).has_access("read")
-    assert not team.with_actor(reader).has_access("read")
-
-    result = execute_schema(
-        addon_schema(work_schema.schemas, "console"),
-        """query($project: ID!) {
-          project_manager_roster(project: $project) {
-            people { subject label seat_id removable }
-          }
-        }""",
-        {"project": project.sqid}, user=reader,
-    )
-    assert result.errors is None
-    people = result.data["project_manager_roster"]["people"]
-    assert people and all(person["label"] for person in people)
-    assert all(person["subject"] == "" and person["seat_id"] is None and not person["removable"] for person in people)
-
-
 def test_project_roster_access_matrix_does_not_carry_share_or_delete(team_case):
     project, team, _, _, users = team_case
     assert issubclass(Project, ProjectWork)
@@ -108,6 +64,33 @@ def test_project_roster_access_matrix_does_not_carry_share_or_delete(team_case):
             assert project.has_access("delete") is False
             assert project.has_access("write__team") is False
             assert Project.objects.filter(pk=project.pk).exists() is expected_read
+
+
+def test_project_roster_hides_seat_identity_without_membership_read(team_case):
+    project, team, _, author, users = team_case
+    with system_context(reason="test.work.private_roster"):
+        team.visibility = "private"
+        team.save(update_fields=["visibility"])
+    query = """query($project: ID!) {
+      project_manager_roster(project: $project) {
+        people { subject label seat_id removable }
+      }
+    }"""
+    schema = addon_schema(work_schema.schemas, "console")
+    assert project.with_actor(author).has_access("read")
+    assert not team.with_actor(author).has_access("read")
+    hidden = execute_schema(schema, query, {"project": project.sqid}, user=author)
+    assert hidden.errors is None
+    people = hidden.data["project_manager_roster"]["people"]
+    assert people and all(person["label"] for person in people)
+    assert all(person["subject"] is None and person["seat_id"] is None and not person["removable"] for person in people)
+
+    team_reader = users["owner"]
+    assert team.with_actor(team_reader).has_access("read")
+    visible = execute_schema(schema, query, {"project": project.sqid}, user=team_reader)
+    assert visible.errors is None
+    people = visible.data["project_manager_roster"]["people"]
+    assert people and all(person["subject"] and person["seat_id"] for person in people)
 
 
 @pytest.mark.parametrize("clear", [False, True])

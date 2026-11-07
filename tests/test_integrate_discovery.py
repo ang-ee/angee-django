@@ -20,9 +20,9 @@ from rebac.testing import install_schema
 from angee.base.models.identity import public_id_of
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID
+from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.graphql.capabilities import held_permissions
-from angee.iam.graphql.node import ProtectedNode
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate import scheduler, tasks
 from angee.integrate.connect import complete_account_connect, complete_external_account_link
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK
@@ -40,18 +40,10 @@ from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.signals import discovery_finished
 from angee.integrate.streams import BridgeSyncError
 from angee.jobs.celery import app as celery_app
-from tests.conftest import (
-    Credential,
-    Integration,
-    create_platform_admin,
-    execute_schema,
-    make_addon,
-    make_integration,
-    result_data,
-)
+from tests.conftest import Credential, create_platform_admin, make_addon, make_integration
 from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionBridge, LiveConnectionAdapter
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
+pytestmark = pytest.mark.usefixtures("composed_tables")
 
 
 @pytest.fixture(autouse=True)
@@ -80,7 +72,7 @@ def settle(bridge):
 
 def connection_info(bridge):
     @strawberry_django.type(ConnectionBridge)
-    class CapabilityType(ProtectedNode):
+    class CapabilityType(AngeeNode):
         pass
 
     resource = hasura_model_resource(
@@ -105,7 +97,6 @@ def test_attachment_defers_one_captured_task_until_commit_and_rolls_back(bridge,
         assert [name for name, _ in sent_tasks] == [DISCOVERY_TASK]
         assert sent_tasks[0][1]["kwargs"] == {
             "integration_pk": bridge.pk, "credential_pk": bridge.credential_id, "generation": captured,
-            "using": "default",
         }
         sent_tasks.clear()
         with pytest.raises(RuntimeError), transaction.atomic():
@@ -303,7 +294,7 @@ def test_retry_discovery_refuses_states_outside_its_admission(bridge, state):
         elif state == "disconnected":
             bridge.disconnect()
         generation = bridge.discovery_generation
-        assert not bridge.get_can_retry_discovery()
+        assert not bridge.can_retry_discovery()
         with pytest.raises(ValidationError, match="cannot retry discovery"):
             bridge.retry_discovery()
         bridge.refresh_from_db()
@@ -311,26 +302,26 @@ def test_retry_discovery_refuses_states_outside_its_admission(bridge, state):
 
 
 def test_oauth_connect_admission_requires_the_owner_and_does_not_compete_with_retry(bridge, monkeypatch):
-    monkeypatch.setattr(type(bridge), "is_oauth_connectable", lambda row, **kwargs: True)
+    monkeypatch.setattr(type(bridge), "is_oauth_connectable", lambda row: True)
     with system_context(reason="test connect admission"):
         # A healthy attached grant uses discovery recovery, never new consent.
         bridge.config = {"discovery": "refusal"}
         bridge.save(update_fields=["config"])
         settle(bridge)
         bridge.refresh_from_db()
-        assert not bridge.get_can_connect(bridge.owner)
+        assert not bridge.can_connect(bridge.owner)
     with actor_context(bridge.owner):
-        assert bridge.get_can_retry_discovery()
+        assert bridge.can_retry_discovery()
     with system_context(reason="test connect admission without credential"):
         bridge.credential = None
         bridge.save(update_fields=["credential"])
     with actor_context(bridge.owner):
-        assert bridge.get_can_connect()
+        assert bridge.can_connect()
         bridge.require_connect(bridge.owner)
     visitor = create_platform_admin("connect-visitor")
     with actor_context(visitor):
         assert bridge.has_access("write")
-    assert not bridge.get_can_connect(visitor)
+    assert not bridge.can_connect(visitor)
     with pytest.raises(PermissionDenied):
         bridge.require_connect(visitor)
 
@@ -354,19 +345,19 @@ def test_retryable_discovery_is_durable_and_bounded_and_operator_retry_resets_it
         assert not bridge.discovery_pending and not bridge.discovery_ready
         assert bridge.runtime_status == "error" and bridge.next_sync_at is None
         generation = bridge.discovery_generation
-        assert not bridge.get_can_retry_discovery()
+        assert not bridge.can_retry_discovery()
         with pytest.raises(ValidationError, match="cannot retry discovery"):
             bridge.retry_discovery()
         bridge.refresh_from_db()
         assert bridge.discovery_generation == generation
     actor = bridge.owner if actor_kind == "owner" else create_platform_admin("discovery-operator")
     with actor_context(actor):
-        assert bridge.get_can_retry_discovery()
+        assert bridge.can_retry_discovery()
         bridge.retry_discovery()
         assert bridge.discovery_attempts == 0 and bridge.discovery_pending
         assert bridge.discovery_generation == generation + 1
         assert bridge.lifecycle == "connected" and bridge.runtime_status == "pending"
-        assert not bridge.get_can_retry_discovery()
+        assert not bridge.can_retry_discovery()
 
 
 def test_terminal_refusal_is_safe_and_resume_reruns_discovery(bridge):
@@ -529,23 +520,6 @@ def test_credential_only_live_attachment_keeps_the_session_desire(sent_tasks, mo
         assert sent_tasks == []
 
 
-def test_resume_permission_uses_pinned_actor_inside_system_scope(bridge):
-    admin = create_platform_admin("resume-permission-scope")
-    with system_context(reason="test resume permission scope"):
-        assert held_permissions(bridge, ("resume",), model=Integration) == frozenset()
-        with actor_context(admin):
-            assert held_permissions(bridge, ("resume",), model=Integration) == {"resume"}
-            pinned = Integration.objects.with_actor(admin).get(pk=bridge.pk)
-        with actor_context(bridge.owner):
-            assert held_permissions(bridge, ("resume",), model=Integration) == frozenset()
-            assert held_permissions(pinned, ("resume",), model=Integration) == {"resume"}
-        owner_pinned = Integration.objects.with_actor(bridge.owner).get(pk=bridge.pk)
-        with actor_context(admin):
-            assert held_permissions(owner_pinned, ("resume",), model=Integration) == frozenset()
-    with actor_context(admin):
-        assert held_permissions(owner_pinned, ("resume",), model=Integration) == frozenset()
-
-
 def test_non_admin_owner_can_retry_discovery_but_cannot_resume(bridge):
     with system_context(reason="test failed discovery for owner retry"):
         bridge.config = {"discovery": "refusal"}
@@ -553,8 +527,8 @@ def test_non_admin_owner_can_retry_discovery_but_cannot_resume(bridge):
         assert settle(bridge)["reason"] == "discovery-failed"
         bridge.pause()
     with actor_context(bridge.owner):
-        assert bridge.get_can_retry_discovery()
-        assert not bridge.get_can_resume()
+        assert bridge.can_retry_discovery()
+        assert not bridge.can_resume()
         with pytest.raises(ValidationError, match="cannot resume"):
             bridge.resume()
     info = connection_info(bridge)
@@ -593,7 +567,7 @@ def test_retry_discovery_authorizes_its_declared_permission(bridge):
     try:
         with actor_context(bridge.owner):
             assert not bridge.has_access("write")
-            assert bridge.get_can_retry_discovery()
+            assert bridge.can_retry_discovery()
         result = result_data(execute_schema(info.schema, f'''mutation {{
           retry_discovery(id: "{bridge.sqid}") {{ ok }}
         }}''', request=info.context.request))["retry_discovery"]

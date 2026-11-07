@@ -4,7 +4,7 @@ The single owner of "make one outbound HTTP request." The transport is httpx2 ov
 a custom httpcore2 network backend (:class:`_PinnedBackend`) that resolves the host
 once and dials a validated IP — closing the resolve-then-connect (DNS-rebind) gap
 — while httpcore2's ``start_tls(server_hostname=…)`` keeps TLS verification on the
-original hostname. The address judgement is owned by ``validators.is_unsafe_address``;
+original hostname. The address judgement is owned by ``net.is_unsafe_address``;
 this module only pins and dials.
 
 One outbound-network policy lives here and everything composes it: integration
@@ -40,7 +40,7 @@ import httpx2
 from django.core.exceptions import ValidationError
 
 from .errors import RequestNotSentError
-from .validators import (
+from .net import (
     AddressNotAllowedError,
     canonical_address,
     is_unsafe_address,
@@ -115,7 +115,7 @@ class OutboundBudgetState:
 class _PinnedBackend(httpcore2.SyncBackend):
     """httpcore2 backend that resolves once, rejects SSRF-unsafe addresses, and dials
     a validated IP — so a DNS rebind between check and connect cannot move the
-    request. ``validators.is_unsafe_address`` owns the judgement; this only pins and dials.
+    request. ``net.is_unsafe_address`` owns the judgement; this only pins and dials.
     """
 
     def __init__(self, *, allow_private: bool) -> None:
@@ -299,8 +299,7 @@ class HttpClient:
                     try:
                         if response.is_redirect:
                             if (
-                                response.next_request is None
-                                or response_redirects >= redirect_limit
+                                response.next_request is None or response_redirects >= redirect_limit
                                 or state.redirects >= budget.redirects
                             ):
                                 return None
@@ -373,15 +372,11 @@ class HttpClient:
 
         parse_http_url(url)
         with httpx2.Client(
-            transport=self.transport_factory(allow_private=allow_private),
-            timeout=timeout,
+            transport=self.transport_factory(allow_private=allow_private), timeout=timeout,
         ) as client:
             with client.stream(
-                method,
-                url,
-                headers=_request_headers(headers, capped=False),
-                content=body,
-                follow_redirects=False,
+                method, url, headers=_request_headers(headers, capped=False),
+                content=body, follow_redirects=False,
             ) as response:
                 yield response
 
@@ -445,11 +440,9 @@ class HttpClient:
                 parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
                 try:
                     response = client.request(
-                        method,
-                        url,
+                        method, url,
                         headers=_request_headers(headers, capped=max_bytes is not None),
-                        content=body,
-                        follow_redirects=follow_redirects,
+                        content=body, follow_redirects=follow_redirects,
                     )
                 except RequestNotSentError as error:
                     if response_seen:
@@ -478,7 +471,9 @@ def _read_capped(
     """Read decoded bytes within the cap and optional operation budget; refuse overflow."""
 
     has_body = (
-        response.request.method != "HEAD" and response.status_code not in {204, 304} and not response.is_informational
+        response.request.method != "HEAD"
+        and response.status_code not in {204, 304}
+        and not response.is_informational
     )
     declared_length = response.headers.get("content-length") if has_body else None
     if declared_length is not None:

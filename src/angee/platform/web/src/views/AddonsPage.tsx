@@ -1,6 +1,6 @@
 import { type ReactElement } from "react";
 
-import { Chip, ListView, ContainerOutlet, StatusBadge, useRouteHref, useContainer, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+import { Chip, ListView, ContainerOutlet, StatusBadge, useRouteHref, useContainer, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { addonEnumLabel, usePlatformT } from "../i18n";
 import {
@@ -84,8 +84,8 @@ export function AddonsPage(): ReactElement {
       rowHref={(row) => routeHref("platform.addons.record", { id: row.id })}
       toolbarActions={<ContainerOutlet entries={toolbarEntries} />}
       renderCard={(row) => <AddonCard row={row} />}
-      cardActions={(row: AddonResourceRow) => (
-        <AddonCardActions row={row} />
+      cardActions={(row: AddonResourceRow, context: CardActionContext) => (
+        <AddonCardActions row={row} context={context} />
       )}
       emptyContent={t("empty.addons")}
     />

@@ -28,7 +28,7 @@ export const RecordReadersDocument = graphql(`
 
 export const IamOverview = graphql(`
   query IamOverview($peekLimit: Int = 6) {
-    iam_roles(limit: 1000, order_by: [{ namespace: asc }, { role_id: asc }]) {
+    iam_roles(where: { grantable: { _eq: true } }, limit: 100, order_by: [{ namespace: asc }, { role_id: asc }]) {
       id
       role_id
       namespace

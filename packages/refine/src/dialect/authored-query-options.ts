@@ -43,7 +43,7 @@ export async function requestAuthoredData<TData>(
   dataProviderName: string,
   document: AuthoredDocument,
   variables: Record<string, unknown>,
-  context: Pick<QueryFunctionContext, "queryKey"> & { signal?: AbortSignal },
+  context: QueryFunctionContext,
 ): Promise<TData> {
   const custom = dataProvider(dataProviderName).custom;
   if (!custom) {

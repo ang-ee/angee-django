@@ -17,7 +17,7 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.base.signals import mute_changes
+from angee.graphql.publishing import mute_changes
 from angee.messaging.testing.models import Message, ThreadAttachment, ThreadNotification
 from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import grant
@@ -55,20 +55,22 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     with system_context(reason="tests.t3.gate_under_system"), CaptureQueriesContext(connection) as gate_queries:
         assert record.thread_reader_ids([*accounts, accounts[0], to_subject_ref(accounts[0])]) == expected
     chunks = [q for q in gate_queries if q["sql"].startswith("SELECT") and "EXISTS(" in q["sql"]]
-    # The composed record-read policy now splits each 50-recipient REBAC batch
-    # into three statements under check_many's 64,000-character SQL limit.
-    # Memberships are inside those columns; this read needs no upper bound.
+    # Native check_many checks a lower bound for every
+    # batch and an upper bound for its recursive denials. Here exactly half
+    # are denied in every batch; this is two statements per 50, not per user.
     batches = size // 50
-    checks_per_batch = 3
-    assert len(chunks) == checks_per_batch * batches
+    assert len(chunks) == 2 * batches
+    # The compiled backend also decides actor memberships together, once per
+    # batch. This exact guard catches its cache evicting part of a live batch
+    # and rebuilding those recipients' memberships individually.
     tuple_table = connection.ops.quote_name(active_relationship_model()._meta.db_table)
     memberships = [
         q for q in gate_queries if q["sql"].startswith("SELECT DISTINCT") and f"FROM {tuple_table}" in q["sql"]
     ]
-    assert not memberships
+    assert len(memberships) == batches
     witnesses = sum(is_rebac_revision_read(query["sql"]) for query in gate_queries)
     assert witnesses == 1
-    assert len(gate_queries) == len(chunks) + witnesses
+    assert len(gate_queries) == 3 * batches + witnesses
     with (
         system_context(reason="tests.t3.fanout_under_system"),
         patch.object(ChatterDoc, "thread_reader_allowed", side_effect=AssertionError("Per-account read gate")),
@@ -85,8 +87,7 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     # Django owns the INSERT chunk size; the native write gate adds one revision
     # read. The remaining overhead is four row reads and BEGIN/COMMIT.
     fields = [
-        field
-        for field in ThreadNotification._meta.concrete_fields
+        field for field in ThreadNotification._meta.concrete_fields
         if not field.generated and not isinstance(field, models.AutoField)
     ]
     insert_size = connection.ops.bulk_batch_size(fields, [None] * count)

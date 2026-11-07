@@ -25,12 +25,13 @@ from django.contrib.sessions.backends.signed_cookies import SessionStore
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
 from django.db import connection
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.iam import schema as iam_schema
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
@@ -58,14 +59,7 @@ from angee.integrate.oauth.errors import (
 )
 from angee.integrate.oauth.providers import GenericOAuth2
 from angee.messaging.testing.models import Handle as PartiesHandle
-from tests.conftest import (
-    Credential,
-    ExternalAccount,
-    OAuthClient,
-    SchemaAddon,
-    execute_schema,
-    result_data,
-)
+from tests.conftest import Credential, ExternalAccount, OAuthClient, SchemaAddon
 from tests.test_parties_graphql import Person as PartiesPerson
 
 # OIDC first login uses the same concrete Person and handle models as parties tests.
@@ -751,7 +745,8 @@ def test_resolver_existing_external_account_returns_owner(
         identity_claims={"sub": "sub-existing"},
     )
 
-    resolved = identity.OidcIdentityResolver(oauth_client).resolve(
+    resolved = identity.resolve(
+        oauth_client,
         sub="sub-existing",
         email="owner@example.com",
         claims={"sub": "sub-existing"},
@@ -776,9 +771,7 @@ def test_resolver_blocks_non_active_account(composed_tables: None) -> None:
     )
 
     with pytest.raises(OAuthFlowError):
-        identity.OidcIdentityResolver(oauth_client).resolve(
-            sub="sub-revoked", email="rev@example.com", claims={"sub": "sub-revoked"},
-        )
+        identity.resolve(oauth_client, sub="sub-revoked", email="rev@example.com", claims={"sub": "sub-revoked"})
 
 
 @pytest.mark.django_db(transaction=True)
@@ -810,9 +803,7 @@ def test_resolver_blocks_inactive_user(composed_tables: None) -> None:
     ExternalAccount.objects.link(oauth_client, "sub-inactive", owner=user, email="ina@example.com")
 
     with pytest.raises(OAuthFlowError):
-        identity.OidcIdentityResolver(oauth_client).resolve(
-            sub="sub-inactive", email="ina@example.com", claims={"sub": "sub-inactive"},
-        )
+        identity.resolve(oauth_client, sub="sub-inactive", email="ina@example.com", claims={"sub": "sub-inactive"})
 
 
 @pytest.mark.django_db(transaction=True)
@@ -828,7 +819,8 @@ def test_resolver_blocks_existing_external_account_with_service_owner(composed_t
     ExternalAccount.objects.link(oauth_client, "sub-service-owner", owner=user, email="svc-owner@example.com")
 
     with pytest.raises(OAuthFlowError):
-        identity.OidcIdentityResolver(oauth_client).resolve(
+        identity.resolve(
+            oauth_client,
             sub="sub-service-owner",
             email="svc-owner@example.com",
             claims={"sub": "sub-service-owner"},
@@ -845,7 +837,8 @@ def test_resolver_link_on_email_match_requires_verified_email(
     oauth_client = _oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
 
     with pytest.raises(OAuthFlowError):
-        identity.OidcIdentityResolver(oauth_client).resolve(
+        identity.resolve(
+            oauth_client,
             sub="sub-unverified",
             email="vm@example.com",
             claims={"sub": "sub-unverified", "email": "vm@example.com"},
@@ -864,7 +857,8 @@ def test_resolver_create_on_login_requires_verified_email(
     oauth_client = _oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
 
     with pytest.raises(OAuthFlowError):
-        identity.OidcIdentityResolver(oauth_client).resolve(
+        identity.resolve(
+            oauth_client,
             sub="sub-unverified-new",
             email="new@example.com",
             claims={"sub": "sub-unverified-new", "email": "new@example.com"},
@@ -883,7 +877,8 @@ def test_resolver_link_on_email_match_creates_external_account(
     user = get_user_model().objects.create_user(username="email-match", email="match@example.com")
     oauth_client = _oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
 
-    resolved = identity.OidcIdentityResolver(oauth_client).resolve(
+    resolved = identity.resolve(
+        oauth_client,
         sub="sub-email",
         email="match@example.com",
         claims={"sub": "sub-email", "email": "match@example.com", "email_verified": True},
@@ -909,7 +904,8 @@ def test_resolver_link_on_email_match_skips_service_accounts(
     oauth_client = _oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
 
     with pytest.raises(OAuthFlowError):
-        identity.OidcIdentityResolver(oauth_client).resolve(
+        identity.resolve(
+            oauth_client,
             sub="sub-service-email",
             email="match-service@example.com",
             claims={"sub": "sub-service-email", "email": "match-service@example.com", "email_verified": True},
@@ -953,7 +949,8 @@ def test_resolver_link_on_email_match_rejects_ambiguous_email(
         account_count = user_model._base_manager.count()
 
         with pytest.raises(IdentityFlowError) as caught:
-            identity.OidcIdentityResolver(oauth_client).resolve(
+            identity.resolve(
+                oauth_client,
                 sub="sub-dupe-email",
                 email="dupe@example.com",
                 claims={"sub": "sub-dupe-email", "email": "dupe@example.com", "email_verified": True},
@@ -977,7 +974,8 @@ def test_resolver_create_on_login_provisions_user_and_external_account(
 
     oauth_client = _oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
 
-    user = identity.OidcIdentityResolver(oauth_client).resolve(
+    user = identity.resolve(
+        oauth_client,
         sub="sub-new",
         email="new@example.com",
         claims={"sub": "sub-new", "email": "new@example.com", "name": "New User", "email_verified": True},
@@ -999,7 +997,8 @@ def test_resolver_create_on_login_sets_user_names_from_claims(
 
     oauth_client = _oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
 
-    user = identity.OidcIdentityResolver(oauth_client).resolve(
+    user = identity.resolve(
+        oauth_client,
         sub="sub-named",
         email="named@example.com",
         claims={
@@ -1025,7 +1024,8 @@ def test_async_resolver_create_on_login_provisions_user_and_external_account(
 
     # The login flow is sync; this exercises resolve() through the thread-sensitive
     # ASGI wrapping a host would apply, without a dead async wrapper in production.
-    user = async_to_sync(sync_to_async(identity.OidcIdentityResolver(oauth_client).resolve, thread_sensitive=True))(
+    user = async_to_sync(sync_to_async(identity.resolve, thread_sensitive=True))(
+        oauth_client,
         sub="sub-async",
         email="async@example.com",
         claims={"sub": "sub-async", "email": "async@example.com", "name": "Async User", "email_verified": True},
@@ -1052,7 +1052,8 @@ def test_resolver_disallowed_domain_raises_403(
     )
 
     with pytest.raises(OAuthFlowError) as exc_info:
-        identity.OidcIdentityResolver(oauth_client).resolve(
+        identity.resolve(
+            oauth_client,
             sub="sub-blocked",
             email="blocked@example.com",
             claims={"sub": "sub-blocked", "email": "blocked@example.com"},
@@ -1093,7 +1094,8 @@ def test_complete_link_populates_credential_token_fields(
     monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     before = timezone.now()
-    result = identity.OidcLoginCompletion(oauth_client).complete_link(
+    result = identity.complete_link(
+        oauth_client,
         code="code",
         state_token=state_token,
         redirect_uri="https://app.example/callback",
@@ -1482,13 +1484,13 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     captured: dict[str, Any] = {}
 
     def resolve_user(
-        resolver: identity.OidcIdentityResolver,
+        oauth_client_arg: Any,
         *,
         sub: str,
         email: str | None,
         claims: dict[str, Any],
     ) -> Any:
-        captured["oauth_client"] = resolver.oauth_client
+        captured["oauth_client"] = oauth_client_arg
         captured["sub"] = sub
         captured["email"] = email
         captured["claims"] = claims
@@ -1504,14 +1506,15 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
 
     monkeypatch.setattr(type(oauth_client), "userinfo_params", lambda self, protocol, token: {"proof": token})
     monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", fetch_userinfo)
-    monkeypatch.setattr(identity.OidcIdentityResolver, "resolve", resolve_user)
+    monkeypatch.setattr(identity, "resolve", resolve_user)
 
     login_state, _login_record = oauth_state.issue(
         oauth_client,
         "https://app.example/callback",
         next_path="/login-next",
     )
-    login_result = identity.OidcLoginCompletion(oauth_client).complete_login(
+    login_result = identity.complete_login(
+        oauth_client,
         code="code",
         state_token=login_state,
         redirect_uri="https://app.example/callback",
@@ -1540,7 +1543,8 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
         next_path="/link-next",
         flow="link",
     )
-    link_result = identity.OidcLoginCompletion(oauth_client).complete_link(
+    link_result = identity.complete_link(
+        oauth_client,
         code="code",
         state_token=link_state,
         redirect_uri="https://app.example/callback",
@@ -1579,10 +1583,11 @@ def test_complete_login_does_not_claim_an_unverified_email(
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
     monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
-    monkeypatch.setattr(identity.OidcIdentityResolver, "resolve", lambda *args, **kwargs: user)
+    monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
     monkeypatch.setattr(identity, "_claim_login_handle", lambda user_arg, email, claims_arg: claimed.append(email))
 
-    completion = identity.OidcLoginCompletion(oauth_client).complete_login(
+    completion = identity.complete_login(
+        oauth_client,
         code="code",
         state_token=state_token,
         redirect_uri="https://app.example/callback",
@@ -1616,7 +1621,7 @@ def test_complete_login_contains_parties_bookkeeping_failure(
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
     monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
-    monkeypatch.setattr(identity.OidcIdentityResolver, "resolve", lambda *args, **kwargs: user)
+    monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
 
     def fail_bookkeeping(user_arg: Any, email: str, claims_arg: dict[str, Any]) -> None:
         del user_arg, email, claims_arg
@@ -1624,7 +1629,8 @@ def test_complete_login_contains_parties_bookkeeping_failure(
 
     monkeypatch.setattr(identity, "_claim_login_handle", fail_bookkeeping)
 
-    completion = identity.OidcLoginCompletion(oauth_client).complete_login(
+    completion = identity.complete_login(
+        oauth_client,
         code="code",
         state_token=state_token,
         redirect_uri="https://app.example/callback",
@@ -1670,7 +1676,8 @@ def test_complete_link_rejects_account_owned_by_another_user(
     monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     with pytest.raises(OAuthFlowError) as exc_info:
-        identity.OidcLoginCompletion(oauth_client).complete_link(
+        identity.complete_link(
+            oauth_client,
             code="code",
             state_token=state_token,
             redirect_uri="https://app.example/callback",
@@ -1708,7 +1715,8 @@ def test_complete_link_binds_to_state_user_after_session_swap(
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
-    result = identity.OidcLoginCompletion(oauth_client).complete_link(
+    result = identity.complete_link(
+        oauth_client,
         code="code",
         state_token=state_token,
         redirect_uri="https://app.example/callback",
@@ -1786,7 +1794,8 @@ def test_state_flow_binding_rejects_cross_flow_completion() -> None:
 
     login_token, _login = oauth_state.issue(oauth_client, "https://app.example/callback", flow="login")
     with pytest.raises(OAuthFlowError) as link_exc:
-        identity.OidcLoginCompletion(oauth_client).complete_link(
+        identity.complete_link(
+            oauth_client,
             code="code",
             state_token=login_token,
             redirect_uri="https://app.example/callback",
@@ -1795,7 +1804,8 @@ def test_state_flow_binding_rejects_cross_flow_completion() -> None:
 
     link_token, _link = oauth_state.issue(oauth_client, "https://app.example/callback", user_id="1", flow="link")
     with pytest.raises(OAuthFlowError) as login_exc:
-        identity.OidcLoginCompletion(oauth_client).complete_login(
+        identity.complete_login(
+            oauth_client,
             code="code",
             state_token=link_token,
             redirect_uri="https://app.example/callback",
@@ -1991,8 +2001,8 @@ def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
 
         monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
         monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
-        result = identity.OidcLoginCompletion(client).complete_link(
-            code="code", state_token=state_token, redirect_uri="https://app.example/callback",
+        result = identity.complete_link(
+            client, code="code", state_token=state_token, redirect_uri="https://app.example/callback",
         )
         assert grants == ["authorization_code", "resource_grant"]
         assert result.account.external_id == "linked-subject"
@@ -2067,8 +2077,7 @@ def test_oauth_completion_returns_typed_outage_for_refused_endpoint(
         mutation = {
             "login": "login_complete", "link": "link_account_complete", "connect": "connect_account_complete",
         }[flow_name]
-        request = RequestFactory().post("/graphql/console/")
-        request.user = AnonymousUser() if flow_name == "login" else user
+        request = graphql_request(AnonymousUser() if flow_name == "login" else user)
         result = result_data(execute_schema(schema, f'''mutation {{
           {mutation}(code: "code", state: "{token}", redirect_uri: "{redirect}") {{
             error error_code
@@ -2116,8 +2125,8 @@ def test_oidc_login_verifies_code_exchange_when_refinement_omits_id_token(
 
         monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
         monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
-        completed = identity.OidcLoginCompletion(client).complete_login(
-            code="code", state_token=token, redirect_uri="https://app.example/callback",
+        completed = identity.complete_login(
+            client, code="code", state_token=token, redirect_uri="https://app.example/callback",
         )
         assert completed.user.pk == user.pk
         assert grants == ["authorization_code", "resource_grant"]
@@ -2139,7 +2148,6 @@ def test_oauth_helpers_map_refused_endpoint_to_transient_flow_error(operation: s
 
 @pytest.mark.usefixtures("composed_tables")
 @pytest.mark.parametrize("request_format", ["form", "json"])
-@pytest.mark.django_db(transaction=True)
 def test_blank_secret_public_client_refreshes_credential(monkeypatch: pytest.MonkeyPatch, request_format: str) -> None:
     with system_context(reason="test public refresh"):
         user = get_user_model().objects.create_user(username="public-refresh")
@@ -2208,8 +2216,7 @@ def test_oidc_login_with_blank_secret_public_client(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
     monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
-    request = RequestFactory().post("/graphql/console/")
-    request.user = AnonymousUser()
+    request = graphql_request(AnonymousUser())
     request.session = SessionStore()
     result = result_data(execute_schema(schema, f'''mutation {{
       login_complete(code: "code", state: "{token}", redirect_uri: "{redirect}") {{ ok error error_code }}
@@ -2235,10 +2242,9 @@ def test_oidc_completion_returns_typed_integration_error(
         raise IntegrationError("Connection was refused.", transient=transient)
 
     monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
-    monkeypatch.setattr(identity.OidcLoginCompletion, f"complete_{flow_name}", refuse)
+    monkeypatch.setattr(identity, f"complete_{flow_name}", refuse)
     mutation = "login_complete" if flow_name == "login" else "link_account_complete"
-    request = RequestFactory().post("/graphql/console/")
-    request.user = user if flow_name == "link" else AnonymousUser()
+    request = graphql_request(user if flow_name == "link" else AnonymousUser())
     result = result_data(execute_schema(schema, f'''mutation {{
       {mutation}(code: "code", state: "state", redirect_uri: "https://app.example/callback") {{ error error_code }}
     }}''', request=request))[mutation]
@@ -2270,16 +2276,12 @@ def test_oidc_userinfo_email_link_requires_matching_subject(
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, *args, **kwargs: userinfo)
     if userinfo_sub == "verified-subject":
-        completion = identity.OidcLoginCompletion(client).complete_login(
-            code="code", state_token=token, redirect_uri=redirect,
-        )
+        completion = identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
         assert completion.user.pk == user.pk
         assert completion.claims["email"] == "target@example.com"
     else:
         with pytest.raises(IdentityFlowError):
-            identity.OidcLoginCompletion(client).complete_login(
-                code="code", state_token=token, redirect_uri=redirect,
-            )
+            identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
         with system_context(reason="test untrusted userinfo never linked"):
             assert not ExternalAccount.objects.filter(oauth_client=client).exists()
 
@@ -2291,15 +2293,11 @@ def test_signup_without_email_respects_provider_domain_policy(
 ) -> None:
     client = _oauth_client(create_on_login=True, allowed_email_domains=domains)
     if allowed:
-        user = identity.OidcIdentityResolver(client).resolve(
-            sub="without-email", email=None, claims={"sub": "without-email"},
-        )
+        user = identity.resolve(client, sub="without-email", email=None, claims={"sub": "without-email"})
         assert user.email == ""
     else:
         with pytest.raises(OAuthFlowError) as caught:
-            identity.OidcIdentityResolver(client).resolve(
-                sub="without-email", email=None, claims={"sub": "without-email"},
-            )
+            identity.resolve(client, sub="without-email", email=None, claims={"sub": "without-email"})
         assert caught.value.code == IDENTITY_RESOLUTION_FAILED
         assert not ExternalAccount.system_queryset().filter(external_id="without-email").exists()
 

@@ -1,7 +1,7 @@
 // Authorization schema for the tags addon.
 // @rebac_package: tags
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 8
+// @rebac_schema_revision: 6
 
 // Named roles grant membership directly; platform admins reach every role.
 definition tags/role {
@@ -31,10 +31,8 @@ definition tags/tag {
 // permissions.extends.zed, backed by the edge's GenericForeignKey
 // (`relation party: parties/party // rebac:field=target`), and unions the type's
 // read and write into `target_read` and `target_write`. Adding or removing a tag
-// needs write on the record; the standalone query checks the edge while a
-// proved parent projects its own edges through a structural prefetch bounded
-// by that parent and still checks tag read.
-// A type no relation names cannot be tagged under an actor.
+// needs write on the record; an edge is visible to whoever reads both the tag and
+// the record. A type no relation names cannot be tagged under an actor.
 definition tags/tag_assignment {
     relation tag:   tags/tag // rebac:field=tag
     relation admin: angee/role // rebac:const=admin

@@ -20,7 +20,7 @@ export function useAnswerActions(): readonly ActionDescriptor[] {
       if (typeof context.record?.id !== "string") return;
       return extractActionOutcome(await share({
         answer: context.record.id, revision: recordRevision(context.record), shared,
-      }, { reconciliation: context.reconciliation }), "set_proposal_answer_responder_share");
+      }), "set_proposal_answer_responder_share");
     },
     visibleWhen: (record) => holdsPermission(record, shared ? "manage" : "narrow") && record.shared_with_responders !== shared,
   }));

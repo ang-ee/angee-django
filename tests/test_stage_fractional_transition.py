@@ -63,7 +63,6 @@ def test_work_stage_transition_preserves_legacy_rows_and_orders_ties():
             editor.delete_model(queue)
 
 
-@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL defers foreign-key trigger checks")
 @pytest.mark.django_db(transaction=True)
 def test_work_stage_transition_flushes_referencing_rows_before_constraint():

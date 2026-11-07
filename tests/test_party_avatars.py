@@ -15,11 +15,12 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.base.models.identity import public_id_of
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging import session as messaging_session
 from angee.messaging.session import LiveChannelSession
 from angee.messaging.testing.models import Handle, Party, Person
 from angee.parties.backends import AvatarReport, ParsedPhoto
-from tests.conftest import File, SchemaAddon, execute_schema, result_data
+from tests.conftest import File, SchemaAddon
 from tests.test_storage import (  # noqa: F401 -- the image drive avatars land on
     PNG_BYTES,
     SVG_BYTES,
@@ -115,8 +116,8 @@ def test_a_party_shows_its_own_avatar_else_its_strongest_readable_handles() -> N
         Party.objects.assert_handle(party, weaker, asserted_by=owner, confidence=0.6)
         party.with_actor(owner).confirm(aspect="handle", handle=stronger, values={})
     weaker_avatar, stronger_avatar, own_avatar = _avatar(PNG_BYTES), _avatar(GIF_BYTES), _avatar(PNG_BYTES + b"\x00")
-    weaker.set_avatar(weaker_avatar)
-    stronger.set_avatar(stronger_avatar)
+    Handle.objects.set_avatar(weaker, weaker_avatar)
+    Handle.objects.set_avatar(stronger, stronger_avatar)
     # Sharing a party and a handle is enough: links are not shareable, and ranking reads none.
     for readable in (party, weaker):
         _grant_reader(readable, reader)
@@ -155,7 +156,7 @@ def test_the_display_avatar_never_reaches_the_address_book() -> None:
         person = Person._base_manager.create(display_name="Ada", created_by=owner)
         handle = Handle.objects.upsert(platform="whatsapp", value=_PHONE, created_by_id=owner.pk)
         Party.objects.assert_handle(person, handle, asserted_by=owner)
-    handle.set_avatar(_avatar(PNG_BYTES))
+    Handle.objects.set_avatar(handle, _avatar(PNG_BYTES))
 
     with system_context(reason="test avatar projection read"):
         person = Person._base_manager.get(pk=person.pk)
@@ -190,7 +191,7 @@ def test_the_people_list_shows_avatars_with_nested_fields_in_a_bounded_number_of
                 )
                 Party.objects.assert_handle(person, handle, asserted_by=owner)
                 handle_avatar = _avatar(PNG_BYTES + bytes([index]))
-                handle.set_avatar(handle_avatar)
+                Handle.objects.set_avatar(handle, handle_avatar)
                 shown[public_id_of(person)] = public_id_of(own or handle_avatar)
         with CaptureQueriesContext(connection) as queries:
             rows = result_data(execute_schema(schema, query, user=owner))["people"]
@@ -255,14 +256,14 @@ def test_a_handle_merge_gives_the_kept_handle_the_alias_avatar_only_when_it_has_
         alias = Handle.objects.upsert(platform="whatsapp", value="113352894324899@lid", created_by_id=owner.pk)
         phone = Handle.objects.upsert(platform="whatsapp", value=_PHONE, created_by_id=owner.pk)
     alias_avatar, own_avatar = _avatar(PNG_BYTES), _avatar(GIF_BYTES)
-    alias.set_avatar(alias_avatar)
+    Handle.objects.set_avatar(alias, alias_avatar)
     with system_context(reason="test handle merge avatar fill"):
         kept = phone.fold([alias])
     assert kept.pk == phone.pk and kept.avatar_id == alias_avatar.pk
 
     with system_context(reason="test handle merge avatar keep"):
         second_alias = Handle.objects.upsert(platform="whatsapp", value="113352894324898@lid", created_by_id=owner.pk)
-    second_alias.set_avatar(own_avatar)
+    Handle.objects.set_avatar(second_alias, own_avatar)
     with system_context(reason="test handle merge avatar keep merge"):
         kept = phone.fold([second_alias])
     assert kept.avatar_id == alias_avatar.pk

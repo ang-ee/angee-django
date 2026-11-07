@@ -10,7 +10,7 @@ from django.core.management.base import CommandError
 from rebac import ObjectRef
 from rebac.memberships import members_of
 
-from angee.iam import managers
+from angee.iam import models
 from angee.iam.autoconfig import bootstrap_admin_settings
 from angee.iam.management.commands import bootstrap_admin
 
@@ -39,7 +39,7 @@ def test_bootstrap_admin_promotes_existing_user_without_resetting_password(compo
     original_hash = existing.password
     output = StringIO()
     command = bootstrap_admin.Command(stdout=output)
-    command.handle(database="default", username="admin", email="admin@example.com", password="generated-secret")
+    command.handle(username="admin", email="admin@example.com", password="generated-secret")
 
     stored = User._base_manager.get(pk=existing.pk)
     assert stored.email == "admin@example.com"
@@ -62,7 +62,7 @@ def test_bootstrap_admin_membership_failure_rolls_back_account_changes(composed_
     def fail(**kwargs):
         raise RuntimeError("membership failed")
 
-    monkeypatch.setattr(managers, "grant_membership", fail)
+    monkeypatch.setattr(models, "grant_membership", fail)
     with pytest.raises(RuntimeError, match="membership failed"):
         User.objects.ensure_bootstrap_admin("rollback", email="rollback@example.com", password="secret")
     if existing:
@@ -80,7 +80,7 @@ def test_bootstrap_admin_requires_password_for_new_user(composed_tables, monkeyp
         bootstrap_admin, "bootstrap_admin_settings", lambda: dict.fromkeys(("username", "email", "password")),
     )
     with pytest.raises(CommandError, match="needs ANGEE_BOOTSTRAP_ADMIN_PASSWORD"):
-        bootstrap_admin.Command().handle(database="default", username="missing", email=None, password=None)
+        bootstrap_admin.Command().handle(username="missing", email=None, password=None)
     assert not get_user_model()._base_manager.filter(username="missing").exists()
 
 

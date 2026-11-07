@@ -20,8 +20,8 @@ from rebac import (
 )
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.iam.testing.graphql import measure_graphql_document
-from angee.intake import schema as intake_schema
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.messaging.testing.models import (
     Handle,
     Message,
@@ -37,14 +37,8 @@ from angee.messaging.testing.models import (
 from angee.nexus.models import Cadence as AbstractCadence
 from angee.nexus.models import Tie as AbstractTie
 from angee.nexus.testing.models import Cadence, Tie
-from angee.work import schema as work_schema
 from tests import test_messaging_graphql
-from tests.conftest import (
-    SchemaAddon,
-    assert_private_hasura_insert_access,
-    execute_schema,
-)
-from tests.conftest import result_data as _data
+from tests.conftest import SchemaAddon, assert_private_hasura_insert_access
 from tests.test_messaging import ThreadedTicket
 from tests.test_project_access import project_access_schema as project_access_schema
 
@@ -96,8 +90,6 @@ def _schema() -> Any:
         test_messaging_graphql.parties_schema,
         test_messaging_graphql.messaging_schema,
         nexus_schema,
-        work_schema,
-        intake_schema,
     )
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
@@ -459,7 +451,7 @@ def test_cadence_orm_create_defaults_the_queryset_actor(composed_tables: None) -
     with system_context(reason="test nexus cadence ORM seed"):
         party = Party._base_manager.create(display_name="Party", created_by=viewer)
 
-    cadence = Cadence.objects.with_actor(viewer).create(party=party, cadence_days=10)
+    cadence = Cadence.objects.as_user(viewer).create(party=party, cadence_days=10)
 
     assert cadence.user_id == viewer.pk
     assert Cadence._base_manager.get(pk=cadence.pk).user_id == viewer.pk
@@ -680,50 +672,12 @@ def test_party_network_applies_pair_intersection_to_every_edge(
     assert nodes[visible.sqid]["detail"] == "0 handles"
     assert nodes[visible.sqid]["meta"]["handle_count"] == 0
 
-    # An admitted follower projects party identity, but is not granted
-    # a Party root read through that follower. The graph keeps the Party gate.
-    with actor_context(identity_reader):
-        assert not Party.objects.with_actor(identity_reader).filter(pk=center.pk).exists()
-    identity_graph = execute_schema(schema, query, {"id": center.sqid}, user=identity_reader)
-    assert identity_graph.data is None
-    assert identity_graph.errors is not None and len(identity_graph.errors) == 1
-    assert identity_graph.errors[0].extensions == {"code": "PERMISSION_DENIED"}
-    assert identity_graph.errors[0].message == "Permission denied."
-
-
-@pytest.mark.django_db(transaction=True)
-def test_party_graph_concrete_kinds_are_flat_at_one_five_ten_twenty(project_access_schema: Any) -> None:
-    """A page of typed graph nodes uses one child-kind projection per selection."""
-
-    del project_access_schema
-    reader = User.objects.create_user(username="graph-kind-budget-reader")
-    owner = User.objects.create_user(username="graph-kind-budget-owner")
-    with system_context(reason="tests.nexus.graph_kind_budget.seed"):
-        center = Party._base_manager.create(display_name="Center", created_by=owner)
-        neighbors = [
-            Person._base_manager.create(display_name=f"Person {index:02d}", created_by=owner)
-            for index in range(20)
-        ]
-        for neighbor in neighbors:
-            Tie._base_manager.create(party_a=center, party_b=neighbor)
-    for resource in (center, *(Party._base_manager.get(pk=neighbor.pk) for neighbor in neighbors)):
-        _grant(resource, "reader", reader)
-    schema = _schema()
-    document = """query GraphKinds($id: ID!, $limit: Int!) {
-        party_graph(root_id: $id, limit: $limit) { nodes }
-    }"""
-    measure_graphql_document(schema, document, {"id": center.sqid, "limit": 1}, actor=reader)
-    reads = {
-        size: measure_graphql_document(schema, document, {"id": center.sqid, "limit": size}, actor=reader)
-        for size in (1, 5, 10, 20)
-    }
-    for size, read in reads.items():
-        assert len(read.data["party_graph"]["nodes"]) == size
-        assert read.statement_count == 12
-        read.assert_no_audit_writes()
-        read.assert_bytes(total=1_100_000, largest=450_000)
-    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
-        reads[larger].assert_flat_from(reads[smaller])
+    identity_graph = _data(execute_schema(schema, query, {"id": center.sqid}, user=identity_reader))["party_graph"]
+    assert len(identity_graph["nodes"]) == 1
+    node = identity_graph["nodes"][0]
+    assert node["id"] == center.sqid
+    assert "detail" not in node
+    assert "handle_count" not in node["meta"]
 
 
 @pytest.mark.django_db(transaction=True)

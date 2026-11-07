@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 from django.core.management.commands.runserver import Command as RunserverCommand
-from django.db import connections
 from django.utils import autoreload
 from django.utils.module_loading import import_string
 
@@ -58,13 +57,10 @@ class Command(RunserverCommand):
 
         del args
         autoreload.raise_last_exception()
-        try:
-            if not options.get("skip_checks"):
-                self.stdout.write("Performing system checks...\n\n")
-                self.check(display_num_errors=True)
-            self.check_migrations()
-        finally:
-            connections.close_all()
+        if not options.get("skip_checks"):
+            self.stdout.write("Performing system checks...\n\n")
+            self.check(display_num_errors=True)
+        self.check_migrations()
         application = import_string(settings.ASGI_APPLICATION)
         self._server = uvicorn.Server(
             uvicorn.Config(

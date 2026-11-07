@@ -45,26 +45,24 @@ from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
+from angee.base.identity import public_subject_ref
+from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
-from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.access import ActorSelfChangeReadGate
+from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
+from angee.graphql.capabilities import permission_expression
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
+from angee.graphql.node import AngeeNode
+from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
-from angee.iam.choices import UserAccountAction
-from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.graphql.access import ActorSelfChangeReadGate
-from angee.iam.graphql.actions import authorized_permission_target, session_user
-from angee.iam.graphql.capabilities import permission_expression
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.records import schemas as record_schemas
-from angee.iam.graphql.sharing import authorized_record_access
-from angee.iam.graphql.view_as import ViewAs
-from angee.iam.identity import public_subject_ref, user_display_label, user_label
-from angee.iam.managers import VISIBLE_PEOPLE_DEFAULT_LIMIT
+from angee.graphql.view_as import ViewAs
+from angee.iam.identity import user_display_label, user_label
+from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.models import Group as GroupModel
-from angee.iam.models.base import ProtectedModel
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin
 from angee.iam.roles import (
     IAM_OVERVIEW_DEFAULT_PEEK_LIMIT as _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT,
@@ -72,7 +70,6 @@ from angee.iam.roles import (
 from angee.iam.roles import (
     IAMGrantRow,
     IAMRoleRow,
-    OverviewInfo,
     validate_subject,
 )
 from angee.iam.roles import assignment_subject_labels as _assignment_subject_labels_owner
@@ -84,6 +81,9 @@ from angee.iam.roles import (
 )
 from angee.iam.roles import (
     group_members as _group_members_owner,
+)
+from angee.iam.roles import (
+    iam_overview as _iam_overview_owner,
 )
 from angee.iam.roles import (
     permission_conditions as _permission_conditions_owner,
@@ -147,7 +147,7 @@ def _display_label(user: Any, info: strawberry.Info) -> str:
 
 
 @strawberry_django.type(User)
-class UserType(ProtectedNode):
+class UserType(AngeeNode):
     """GraphQL projection of an Angee user: a name for everyone signed in, the rest for people managers."""
 
     first_name: auto
@@ -201,7 +201,7 @@ class UserType(ProtectedNode):
 
 
 @strawberry_django.type(User)
-class CurrentUserType(ProtectedNode):
+class CurrentUserType(AngeeNode):
     """GraphQL identity projection, including the identity's private role refs and permitted refs."""
 
     username: auto
@@ -254,7 +254,7 @@ class CurrentUserType(ProtectedNode):
 
 
 @strawberry_django.type(Group)
-class GroupType(ProtectedNode):
+class GroupType(AngeeNode):
     """GraphQL projection of IAM-owned principal groups."""
 
     name: auto
@@ -270,13 +270,15 @@ class GroupType(ProtectedNode):
     def members(self) -> list[IAMGroupMemberType]:
         """Return direct group memberships, without effective-permission expansion."""
 
-        return cast(list[IAMGroupMemberType], _group_members_owner(self))
+        with system_context(reason="iam.graphql.group.members"):
+            return cast(list[IAMGroupMemberType], _group_members_owner(self))
 
     @strawberry_django.field
     def bindings(self) -> list[IAMGroupBindingType]:
         """Return tuples bound directly to this group's member subject set."""
 
-        return cast(list[IAMGroupBindingType], _group_bindings_owner(self))
+        with system_context(reason="iam.graphql.group.bindings"):
+            return cast(list[IAMGroupBindingType], _group_bindings_owner(self))
 
 
 @strawberry.type
@@ -579,7 +581,7 @@ def _principal_access(subject: str) -> IAMPrincipalAccessType:
 def _iam_overview(peek_limit: int) -> IAMOverviewType:
     """Return IAM dashboard facts independent of paginated list rows."""
 
-    return cast(IAMOverviewType, OverviewInfo.build(peek_limit))
+    return cast(IAMOverviewType, _iam_overview_owner(peek_limit))
 
 
 def _admin_relationship_queryset(info: strawberry.Info) -> QuerySet[Any]:
@@ -858,7 +860,7 @@ class IAMConsoleQuery:
         """
 
         model = model_for_resource_type(target_type)
-        if model is None or not issubclass(model, ProtectedModel):
+        if model is None or not issubclass(model, AngeeModel):
             raise ValueError("Unknown record target type.")
         target = (
             authorized_record_access(info, model, target_id)[0]
@@ -1154,7 +1156,7 @@ class IAMGroupMembershipMutation:
             return group.remove_member(subject, caveat_name=caveat_name)
 
 
-schemas: dict[str, dict[str, list[object]]] = {
+schemas = {
     "public": {
         "query": [IAMQuery],
         "mutation": [IAMMutation],
@@ -1163,7 +1165,6 @@ schemas: dict[str, dict[str, list[object]]] = {
                 User,
                 field="userChanged",
                 read_gate=ActorSelfChangeReadGate,
-                replay=False,
             )
         ],
         "types": [
@@ -1219,8 +1220,3 @@ schemas: dict[str, dict[str, list[object]]] = {
     },
 }
 """GraphQL contributions installed by the IAM addon."""
-
-
-for _name, _parts in record_schemas.items():
-    for _bucket, _values in _parts.items():
-        schemas[_name].setdefault(_bucket, []).extend(_values)

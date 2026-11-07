@@ -29,14 +29,8 @@ from rebac import (
 from rebac.backends.local import mark_relationships_changed
 from rebac.models import active_relationship_model
 
-from tests.conftest import (
-    Page,
-    addon_schema,
-    create_platform_admin,
-    execute_schema,
-    result_data,
-    vault_for,
-)
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import Page, addon_schema, create_platform_admin, vault_for
 from tests.test_iam_account_actions import _manager
 from tests.test_iam_graphql import _schema
 from tests.test_messaging import ThreadedTicket
@@ -279,17 +273,3 @@ def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_
     assert disclosed(admin, "active_account") == set(pks)
     assert disclosed(admin, "nonstaff_account") == {viewer.pk, stranger.pk}
     assert protected(admin) == {staff.pk}
-
-
-@pytest.mark.parametrize("scope", ["directory", "colleagues", "view_as_queryset"])
-def test_user_scopes_preserve_the_selected_queryset(composed_tables: None, scope: str) -> None:
-    """Admission composes with caller selection instead of restarting at the manager."""
-
-    viewer = create_platform_admin(f"scoped-{scope}")
-    selected = _person(f"selected-{scope}")
-    _person(f"excluded-{scope}")
-    rows = User.objects.filter(pk=selected.pk).using("default")
-    admitted = getattr(rows, scope)(viewer)
-    assert list(admitted.values_list("pk", flat=True)) == [selected.pk]
-    assert not getattr(rows.none(), scope)(viewer).exists()
-    assert admitted._db == rows._db

@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 24
+// @rebac_schema_revision: 23
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -36,8 +36,18 @@ definition messaging/thread {
     // The identity rule asserts same_as statements, which need read and write on both copies.
     relation identity_role: provenance/role // rebac:const=messaging_identity_source
     permission identity_source = identity_role->effective_member
+    // Ordinary conversation access. Fragments union grants that hold for any
+    // conversation here (a bound project, a selected group).
     permission read_granted = channel->read + owner + editor + reader + identity_source + admin->member
-    permission read = read_granted
+    // What a record lends its own chatter thread. A record type whose readers read
+    // that thread directly unions its read here, through a relation filtered to the
+    // thread's chatter attachments. A composition term: check `read`, never this.
+    permission chatter_read = nil
+    // The inbox lists no record chatter, where `chatter_read` holds for nobody,
+    // so its read leaves the chatter arms out of the statement. Overrides that must
+    // govern both reads target `read_granted`.
+    permission read_inbox = read_granted
+    permission read = read_granted + chatter_read
     permission write  = channel->write + owner + editor + identity_source + admin->member
     permission share  = owner + editor + admin->member
     permission delete = owner + channel->delete + admin->member
@@ -45,16 +55,9 @@ definition messaging/thread {
     permission write__owner = transfer
 }
 
-// Record-gated chatter admits each message before hydration. Its visible `from`
-// implies the sender handle's label and confirmed party display name for that
-// message; the timeline reads those display facts structurally. Standalone
-// message lists still apply the handle and party read gates.
 // A trashed message is withheld from every reader but its channel's managers
 // and admins. Record chatter moderators reach trashed comments through the
 // record-gated removed list instead, so its parts, files and reactions follow.
-// Reading an admitted record implies only its own chatter messages, including
-// their count and the moderator's removed count. Other attachment roles require
-// the attached thread's read. A selected message implies its parts.
 definition messaging/message {
     relation thread: messaging/thread // rebac:field=thread
     relation channel: messaging/channel // rebac:field=channel
@@ -71,8 +74,15 @@ definition messaging/message {
     relation identity_role: provenance/role // rebac:const=messaging_identity_source
     permission identity_source = identity_role->effective_member
     permission create = authenticated
-    permission read_granted = thread->read + channel->read + editor + reader
-    permission read = (read_granted - withheld) + channel->write + identity_source + admin->member
+    // Ordinary message grants; fragments union theirs here. The thread arm follows
+    // the read purpose: generic reads take the thread's `read`, inbox reads its
+    // `read_inbox`. Both withhold a trashed message alike.
+    permission read_granted = channel->read + editor + reader
+    // Who keeps reading a withheld message: its channel's managers, the identity
+    // rule and admins.
+    permission withheld_keeper = channel->write + identity_source + admin->member
+    permission read = ((thread->read + read_granted) - withheld) + withheld_keeper
+    permission read_inbox = ((thread->read_inbox + read_granted) - withheld) + withheld_keeper
     permission send_held = channel->write + admin->member
     permission write  = thread->write + channel->write + editor + identity_source + admin->member
     permission delete = thread->delete + channel->write + editor + admin->member
@@ -114,11 +124,6 @@ definition messaging/thread_attachment {
 }
 
 definition messaging/thread_follower {
-    // An admitted record's chatter may show its followers and suppress them
-    // from suggestions. The current user's identity implies their Person link
-    // and effective follow across the admitted thread's merged members.
-    // An admitted thread's read implies its explicit follower rows. The record
-    // GraphQL projection may carry party display facts and the public account.
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
     relation user: auth/user // rebac:field=party__person__user
@@ -131,9 +136,6 @@ definition messaging/thread_follower {
 }
 
 definition messaging/thread_notification {
-    // Chatter for an admitted record may show the current user's delivery
-    // facts and an error count that includes authored messages' recipients,
-    // bounded by its thread attachment.
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
     relation message: messaging/message // rebac:field=message
@@ -148,15 +150,16 @@ definition messaging/thread_notification {
 }
 
 definition messaging/part {
-    // A readable message implies its part rows; the part's file display facts
-    // are projected through this admitted row, while file download keeps its
-    // own record arm and a token bound to the part.
     relation message: messaging/message // rebac:field=message
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
+    // A part listed within inbox messages is read through the message action the
+    // inbox reads, so the listing authorizes each message once. Direct part grants
+    // stay on `read`: they never admit a part of an unreadable message here.
+    permission read_inbox = message->read_inbox
     permission read   = message->read + editor + reader + admin->member
     permission write  = message->write + editor + admin->member
     permission delete = message->delete + admin->member

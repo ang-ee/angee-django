@@ -45,9 +45,11 @@ from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.relationships import write_relationships
 
+from angee.agents import grants as grants_module
 from angee.agents import provisioning
 from angee.agents.grants import (
     TOOL_GRANT_RESOURCE_TYPE,
+    sync_builtin_tool_catalogue,
     tool_grant_ref,
 )
 from angee.agents.models import ToolRole
@@ -66,17 +68,17 @@ from angee.agents_runtime_pydantic.toolsets import (
     AngeeToolset,
     ToolGrantAccess,
     _accessible_tool_grant_ids,
+    _assert_in_process_compatible,
 )
 from angee.base.models.audit import AuditMixin
-from angee.iam.models.base import ProtectedModel
-from angee.mcp.graphql import _CompiledTool, actor_tool_read_only
+from angee.mcp.graphql import _CompiledTool
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 
 User = get_user_model()
 
 
-class AgentToolWriteProbe(AuditMixin, ProtectedModel):
-    """Protected audit row proving which user an in-process write attributes."""
+class AgentToolWriteProbe(AuditMixin, models.Model):
+    """A neutral audit row proving which user an in-process write attributes."""
 
     label = models.CharField(max_length=100)
 
@@ -94,7 +96,6 @@ def _registered_server(*functions: tuple[Any, bool]) -> FastMCP:
             Tool.from_function(
                 function,
                 annotations=ToolAnnotations(readOnlyHint=read_only),
-                meta={"angee": {"execution_context": "actor"}},
             )
         )
     return server
@@ -111,8 +112,7 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
 
     calls: list[SubjectRef] = []
 
-    def accessible(agent: SubjectRef, *, using: str | None = None) -> frozenset[str]:
-        assert using is None
+    def accessible(agent: SubjectRef) -> frozenset[str]:
         calls.append(agent)
         return frozenset({"mcp_one.read_sessions"})
 
@@ -152,7 +152,6 @@ def test_native_tool_grants_run_as_agent_service_user_and_regate(
         return await sync_to_async(visible, thread_sensitive=True)()
 
     async def write_probe(label: str) -> dict[str, int | None]:
-        # c7732c91a gives IAM's protected base responsibility for audit attribution.
         probe = await sync_to_async(AgentToolWriteProbe.objects.create, thread_sensitive=True)(label=label)
         return {"created_by_id": probe.created_by_id}
 
@@ -426,18 +425,16 @@ def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
         Tool.from_function(
             query_records,
             annotations=ToolAnnotations(readOnlyHint=True),
-            meta={"angee": {"execution_context": "actor"}},
             tags={RESOURCE_READER_TOOL_TAG},
         )
     )
     registry.add_tool(
-        Tool.from_function(write_records, annotations=ToolAnnotations(readOnlyHint=False),
-                           meta={"angee": {"execution_context": "actor"}})
+        Tool.from_function(write_records, annotations=ToolAnnotations(readOnlyHint=False))
     )
-    monkeypatch.setattr("angee.agents.managers.mcp_server", lambda: registry)
+    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
 
-    assert MCPTool.objects.sync_builtin() == 2
-    assert MCPTool.objects.sync_builtin() == 2
+    assert sync_builtin_tool_catalogue() == 2
+    assert sync_builtin_tool_catalogue() == 2
     with system_context(reason="test builtin catalogue verify"):
         rows = list(MCPTool.objects.filter(server=server).order_by("name"))
     assert [row.name for row in rows] == ["query_records", "write_records"]
@@ -496,11 +493,10 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
     from tests.test_mcp_resource_tools import _FakeSchemas, _resource
 
     schemas = _FakeSchemas((_resource("probes"),))
-    monkeypatch.setattr("angee.mcp.resource_tools.gated_read_fields", lambda model: frozenset())
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     registry = FastMCP(name="production-reader-path")
     register_resource_tools(registry)
-    monkeypatch.setattr("angee.agents.managers.mcp_server", lambda: registry)
+    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
     monkeypatch.setattr(toolsets_module, "mcp_server", lambda: registry)
 
     async def execute_probe(
@@ -523,7 +519,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
 
     monkeypatch.setattr(mcp_graphql, "execute_under_actor", execute_probe)
 
-    MCPTool.objects.sync_builtin()
+    sync_builtin_tool_catalogue()
     assert "query_probes" not in async_to_sync(
         AngeeToolset(
             session,
@@ -532,7 +528,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
         ).get_tools
     )(_native_context())
 
-    result = provisioning.provision_agent(agent)
+    result = provisioning.provision_agent(agent.sqid)
     assert result.ok is True
     native = AngeeToolset(
         session,
@@ -625,10 +621,9 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
     request_tool = Tool.from_function(
         request_bound,
         annotations=ToolAnnotations(readOnlyHint=True),
-        meta={"angee": {"execution_context": "request"}},
     )
     with pytest.raises(Exception, match="request-scoped FastMCP Context"):
-        actor_tool_read_only(request_tool)
+        _assert_in_process_compatible(request_tool)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -662,7 +657,6 @@ def test_graphql_read_hint_cannot_override_structural_mutation_posture(
         description="A mutation carrying an untrusted read hint.",
         parameters={"type": "object", "properties": {}},
         annotations=ToolAnnotations(readOnlyHint=True),
-            meta={"angee": {"execution_context": "actor"}},
         schema_name="console",
         op_type="mutation",
         document="mutation { ignored }",
@@ -683,9 +677,7 @@ def test_graphql_read_hint_cannot_override_structural_mutation_posture(
     with pytest.raises(ImproperlyConfigured, match="disagrees with its mutation"):
         async_to_sync(native.get_tools)(_native_context())
     assert attempted == []
-    # c7732c91a requires an explicit scope to inspect every protected probe row.
-    with system_context(reason="test structural posture inspection"):
-        assert not AgentToolWriteProbe.objects.filter(label="must never run").exists()
+    assert not AgentToolWriteProbe.objects.filter(label="must never run").exists()
 
 
 def test_tool_search_activation_replays_from_persisted_history() -> None:

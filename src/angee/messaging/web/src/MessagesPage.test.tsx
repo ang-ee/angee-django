@@ -3,7 +3,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { createRefineTestProviders } from "@angee/refine/testing";
 
 const pageMocks = vi.hoisted(() => ({
   resourceProps: null as Record<string, unknown> | null,
@@ -22,8 +21,8 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   Alert: ({ children }: { children?: React.ReactNode }) => <div role="alert">{children}</div>,
   Avatar: () => null,
   avatarInitials: (name: string) => name.slice(0, 1),
-  Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { size?: string; variant?: string; pressed?: boolean }) => {
-    const { size: _size, variant: _variant, pressed: _pressed, ...button } = props;
+  Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { size?: string; variant?: string }) => {
+    const { size: _size, variant: _variant, ...button } = props;
     return <button type="button" {...button}>{children}</button>;
   },
   cn: (...classes: unknown[]) => classes.filter(Boolean).join(" "),
@@ -48,7 +47,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     return <div>{props.children as React.ReactNode}</div>;
   },
   ErrorBanner: ({ description }: { description: React.ReactNode }) => <div>{description}</div>,
-  LoadingPanel: ({ message }: { message: React.ReactNode }) => <div>{message}</div>,
+  LoadingPanel: ({ loadingLabel }: { loadingLabel: React.ReactNode }) => <div>{loadingLabel}</div>,
   MessagePartsView: ({ parts, onPreviewFile }: {
     parts: Array<{ id: string; fragment?: { text?: string }; file?: { filename?: string } }>;
     onPreviewFile?: (part: unknown) => void;
@@ -116,10 +115,6 @@ import { MessagesPage } from "./MessagesPage";
 import { MESSAGE_SUMMARY_FIELDS } from "./MessageSummary";
 import { ThreadsPage } from "./ThreadsPage";
 
-// The mocked authored read still renders a real cache-acceptance hook in the
-// reader. Give that hook its native QueryClient and Refine context.
-const { Provider, clearClients } = createRefineTestProviders();
-
 describe("MessagesPage", () => {
   beforeEach(() => {
     pageMocks.resourceProps = null;
@@ -130,7 +125,7 @@ describe("MessagesPage", () => {
     pageMocks.formProps = null;
     pageMocks.setStarred.mockClear();
   });
-  afterEach(() => { cleanup(); clearClients(); });
+  afterEach(cleanup);
 
   test("lists each message as an email-style row, grouped by channel", () => {
     render(<MessagesPage />);
@@ -172,7 +167,7 @@ describe("MessagesPage", () => {
   });
 
   test("a Message record reads like an email above its Content and Envelope tabs", () => {
-    render(<Provider><messageForm.Component resource="messaging.Message" id="msg-1" readOnly /></Provider>);
+    render(<messageForm.Component resource="messaging.Message" id="msg-1" readOnly />);
 
     expect(pageMocks.fields).toEqual(expect.arrayContaining([
       "title", "status", "platform", "direction",
@@ -186,7 +181,7 @@ describe("MessagesPage", () => {
       expect.objectContaining({ id: "content", label: "messages.tabContent" }),
     ]));
     const formExtras = pageMocks.formProps?.formExtras as ((context: { recordId: string }) => React.ReactNode);
-    render(<Provider>{formExtras({ recordId: "msg-1" })}</Provider>);
+    render(<>{formExtras({ recordId: "msg-1" })}</>);
     expect(screen.getByText("Billing Desk")).toBeTruthy();
     expect(screen.getByText("billing@example.test")).toBeTruthy();
     expect(screen.getByText("message.to Accounts")).toBeTruthy();
@@ -200,9 +195,9 @@ describe("MessagesPage", () => {
   });
 
   test("the reader stars the message for its reader", () => {
-    render(<Provider><messageForm.Component resource="messaging.Message" id="msg-1" readOnly /></Provider>);
+    render(<messageForm.Component resource="messaging.Message" id="msg-1" readOnly />);
     const formExtras = pageMocks.formProps?.formExtras as ((context: { recordId: string }) => React.ReactNode);
-    render(<Provider>{formExtras({ recordId: "msg-1" })}</Provider>);
+    render(<>{formExtras({ recordId: "msg-1" })}</>);
 
     fireEvent.click(screen.getByRole("button", { name: "message.star" }));
     expect(pageMocks.setStarred).toHaveBeenCalledWith({ id: "msg-1", starred: true });

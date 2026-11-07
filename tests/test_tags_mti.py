@@ -15,16 +15,17 @@ from rebac import actor_context, system_context
 
 from angee.base.refs import canonical_link_path
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
+from angee.graphql.node import AngeeNode
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.tags.schema import TaggedNode
 from angee.tags.testing.models import Tag, TagAssignment
-from tests.conftest import MarkdownPage, Page, addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import MarkdownPage, Page, addon_schema, create_user, vault_for
 
 pytestmark = pytest.mark.usefixtures("composed_permissions")
 
 
 @strawberry_django.type(MarkdownPage)
-class MarkdownPageTagsType(TaggedNode, ProtectedNode):
+class MarkdownPageTagsType(TaggedNode, AngeeNode):
     """A console node over the child, composing ``TaggedNode`` as an owner would."""
 
     title: str

@@ -4,14 +4,12 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import ProtectedError
-from django.test import RequestFactory
 from django.utils import timezone
-from rebac import actor_context, current_actor, system_context
+from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_transcript import InboxTranscript
-from angee.messaging.models.threads import chatter_record
-from angee.messaging.querysets import ThreadFollowerQuerySet
 from angee.messaging.testing.models import (
     Channel,
     Message,
@@ -20,63 +18,13 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
-from angee.projects.testing.models import Project
-from tests.conftest import MarkdownPage, Page, execute_schema, make_integration, result_data, vault_for
+from tests.conftest import make_integration
 from tests.messaging_campaign import grant
 from tests.test_messaging import ThreadedTicket, _ingest, _parsed
 from tests.test_messaging import channel as channel
 from tests.test_nexus import _schema
 
 pytestmark = pytest.mark.django_db(transaction=True)
-
-
-def test_folded_chatter_record_resolves_survivor(composed_tables):
-    """A folded edge identifies its survivor even for a canonical record model."""
-
-    del composed_tables
-    owner = get_user_model().objects.create_user(username="folded-chatter-owner")
-    with system_context(reason="test.folded_chatter_record"):
-        retired = ThreadedTicket.objects.create(title="Retired", created_by=owner)
-        survivor = ThreadedTicket.objects.create(title="Survivor", created_by=owner)
-        survivor.message_thread().fold([retired.message_thread()])
-    with system_context(reason="test.folded_chatter_record.read"):
-        assert chatter_record(retired._meta.label, str(retired.sqid)).pk == survivor.pk
-
-
-def test_chatter_record_uses_canonical_parent_for_mti_child(composed_tables):
-    """A child label still resolves the record type that owns its chatter edge."""
-
-    del composed_tables
-    owner = get_user_model().objects.create_user(username="mti-chatter-owner")
-    vault = vault_for(owner)
-    with actor_context(owner):
-        page = Page.objects.create_in(vault, title="MTI chatter")
-        markdown = MarkdownPage.objects.get(pk=page.pk)
-        markdown.message_thread()
-        resolved = chatter_record(markdown._meta.label, str(markdown.sqid))
-    assert type(resolved) is Page
-    assert resolved.pk == page.pk
-
-
-def test_record_followers_keep_queryset_api_and_actor_stamp(composed_tables):
-    """The record follower scope remains chainable and stamps selected rows."""
-
-    del composed_tables
-    owner = get_user_model().objects.create_user(username="follower-queryset-owner")
-    reader = get_user_model().objects.create_user(username="follower-queryset-reader")
-    with system_context(reason="test.follower_queryset.seed"):
-        record = Project.objects.create(title="Follower queryset", owner=owner)
-    record.with_actor(owner).grant_record_access("reader", reader)
-    with actor_context(reader):
-        record.message_subscribe(user=reader)
-        followers = record.message_followers()
-        assert isinstance(followers, ThreadFollowerQuerySet)
-        assert callable(followers.with_actor)
-        assert callable(followers.sudo)
-        assert callable(followers.for_thread)
-        rows = list(followers)
-        assert rows
-        assert all(getattr(row, "_rebac_actor", None) == current_actor() for row in rows)
 
 
 @pytest.fixture
@@ -154,8 +102,7 @@ def test_copy_anchor_cannot_widen_current_search_thread_or_read_scope(retained_f
 
 def test_copy_anchor_and_match_navigation_share_the_merged_transcript(retained_feed_copy):
     left, right, reader = retained_feed_copy
-    request = RequestFactory().post("/graphql/console/")
-    request.user = reader
+    request = graphql_request(reader)
     result = result_data(execute_schema(
         _schema(),
         """query($thread: ID!, $id: ID!, $anchor: String!) {

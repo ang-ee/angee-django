@@ -25,7 +25,6 @@ import { columnsWithMetadataDefaults, relationFieldInfo } from "../model-metadat
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { declaredGroupDefaults, validateDeclaredGroupDefaults } from "../search/group-defaults";
-import { FacetReadActivationContext } from "../search/SearchBox";
 import { initialResourceSorting } from "../resource-view-codecs";
 import { useRowActionsSurface } from "../RowActions";
 import { isBoardFoldField, isBoardRankField, ListViewContent } from "./content";
@@ -52,7 +51,6 @@ function ListViewFrame<TRow extends Row = Row>(
   const resourceView = useResourceViewMaybe();
   const metadata = useModelMetadata(props.source ? "" : props.resource);
   const modelMetadata = props.source ? null : metadata;
-  const [facetsEnabled, setFacetsEnabled] = React.useState(false);
   const initial = React.useMemo(() => {
     try {
       return {
@@ -82,15 +80,13 @@ function ListViewFrame<TRow extends Row = Row>(
     presentation: props.presentation,
     initialState: initial.state,
     children: (scopedResourceView) => (
-      <FacetReadActivationContext.Provider value={setFacetsEnabled}>
-        <ValidatedListViewBody {...props} resourceView={scopedResourceView} facetsEnabled={facetsEnabled} />
-      </FacetReadActivationContext.Provider>
+      <ValidatedListViewBody {...props} resourceView={scopedResourceView} />
     ),
   });
 }
 
 function ValidatedListViewBody<TRow extends Row>(
-  props: ListViewProps<TRow> & { resourceView: ResourceViewContextValue; facetsEnabled: boolean },
+  props: ListViewProps<TRow> & { resourceView: ResourceViewContextValue },
 ): React.ReactElement {
   const t = useUiT();
   const metadata = useModelMetadata(props.source ? "" : props.resource);
@@ -182,8 +178,6 @@ function useResourceModels(resource: string, canonical: string | null | undefine
 function ListViewBody<TRow extends Row = Row>({
   resource,
   source,
-  records,
-  relatedModels,
   availableViews: declaredViews,
   textFilterField: declaredTextField,
   maxGroupDepth,
@@ -227,10 +221,8 @@ function ListViewBody<TRow extends Row = Row>({
   presentation = "page",
   chrome,
   resourceView,
-  facetsEnabled,
 }: ListViewProps<TRow> & {
   resourceView: ResourceViewContextValue;
-  facetsEnabled: boolean;
 }): React.ReactElement {
   const t = useUiT();
   const rowActionSurface = useRowActionsSurface(rowActions);
@@ -256,8 +248,7 @@ function ListViewBody<TRow extends Row = Row>({
   );
   const queryFields = useValueStable([
     ...(fields ?? []), ...filterOptionFields, ...recordMatchFields,
-    ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])].flatMap((field) =>
-      modelMetadata ? ResourceQuery.from(modelMetadata).fields[field]?.row?.paths ?? [field] : [field]) : []),
+    ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : []),
   ]);
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list + board always).
@@ -343,16 +334,12 @@ function ListViewBody<TRow extends Row = Row>({
     source ? "" : resource,
     facets,
     mergedFilter,
-    { records, relatedModels },
-    facetsEnabled,
   );
   const scalarFacets = useScalarFacets(
     resource,
     resolvedColumns,
     modelMetadata,
     mergedFilter,
-    { records, relatedModels },
-    facetsEnabled,
   );
   const laneSourceGroup = React.useMemo(
     () =>
@@ -377,8 +364,6 @@ function ListViewBody<TRow extends Row = Row>({
     effectiveGroupStack.length > 0 &&
     !clientRowModel;
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
-    records,
-    relatedModels,
     resource,
     source,
     columns: resolvedColumns,

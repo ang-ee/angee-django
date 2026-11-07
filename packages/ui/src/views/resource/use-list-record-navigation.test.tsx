@@ -53,60 +53,6 @@ test("record navigation selects and reads the declared custom identity across pa
   await waitFor(() => expect(f.result.current.id).toBe("c"));
   expect(f.result.current.navigation?.current).toBe(3);
   expect(f.getList.mock.calls[1]?.[0].meta?.fields).toEqual(["public_key"]);
-  expect(f.getList).toHaveBeenCalledTimes(2);
-});
-
-test("opening a record reuses the list's native cached page and count", async () => {
-  const f = fixture({ initialId: null });
-  const fields = ["id", "title"];
-  const list = renderHook(() => useResourceListQuery({ resource, scope, fields }), { wrapper: f.wrapper });
-  await waitFor(() => expect(list.result.current.result.data).toHaveLength(2));
-  act(() => f.result.current.onListStateChange({
-    rows: list.result.current.result.data,
-    total: list.result.current.result.total,
-    page: 1, pageSize: 2, pageCount: 2, hasNext: true, hasPrev: false, fetching: false,
-    navigationScope: scope, queryFields: fields,
-  }));
-  act(() => f.result.current.setId("b"));
-  await waitFor(() => expect(f.result.current.navigation?.current).toBe(2));
-  expect(f.getList).toHaveBeenCalledTimes(1);
-  expect(f.getList.mock.calls[0]?.[0].meta?.fields).toEqual(fields);
-});
-
-test("crossing a cached list page edge reads the next page only once with identity fields", async () => {
-  const f = fixture({ initialId: null });
-  const fields = ["id", "title"];
-  const list = renderHook(() => useResourceListQuery({ resource, scope, fields }), { wrapper: f.wrapper });
-  await waitFor(() => expect(list.result.current.result.data).toHaveLength(2));
-  act(() => f.result.current.onListStateChange({
-    rows: list.result.current.result.data,
-    total: list.result.current.result.total,
-    page: 1, pageSize: 2, pageCount: 2, hasNext: true, hasPrev: false, fetching: false,
-    navigationScope: scope, queryFields: fields,
-  }));
-  act(() => f.result.current.setId("b"));
-  await waitFor(() => expect(f.result.current.navigation?.current).toBe(2));
-  act(() => f.result.current.navigation?.onNext?.());
-  await waitFor(() => expect(f.result.current.id).toBe("c"));
-  expect(f.getList.mock.calls.map(([params]) => [params.pagination?.currentPage, params.meta?.fields]))
-    .toEqual([[1, fields], [2, ["id"]]]);
-});
-
-test("a grouped snapshot clears a prior flat page projection", async () => {
-  const f = fixture({ initialId: null });
-  const fields = ["id", "title"];
-  const list = renderHook(() => useResourceListQuery({ resource, scope, fields }), { wrapper: f.wrapper });
-  await waitFor(() => expect(list.result.current.result.data).toHaveLength(2));
-  const snapshot = {
-    rows: list.result.current.result.data, total: 4,
-    page: 1, pageSize: 2, pageCount: 2, hasNext: true, hasPrev: false, fetching: false,
-    navigationScope: scope,
-  };
-  act(() => f.result.current.onListStateChange({ ...snapshot, queryFields: fields }));
-  act(() => f.result.current.onListStateChange(snapshot));
-  act(() => f.result.current.setId("b"));
-  await waitFor(() => expect(f.result.current.navigation?.current).toBe(2));
-  expect(f.getList.mock.calls.map(([params]) => params.meta?.fields)).toEqual([fields, ["id"]]);
 });
 
 test("native Refine pages the clicked leaf without changing its filter/order or selecting early", async () => {

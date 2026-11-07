@@ -4,7 +4,7 @@ import type {
 } from "@angee/metadata";
 import { useOne, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  ServiceLogs, ServiceRow, WorkspaceSources, WorkspaceRow, useWorkspaceStatus, type WorkspaceStatusResult, } from "@angee/operator/runtime";
+  OperatorTransportProvider, ServiceLogs, ServiceRow, WorkspaceSources, WorkspaceRow, useWorkspaceStatus, type WorkspaceStatusResult, } from "@angee/operator/runtime";
 import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
@@ -96,7 +96,7 @@ export function AgentProvisioning({
     <div className="flex flex-col gap-5">
       {!agent ? (
         fetching ? (
-          <LoadingPanel message={t("provisioning.loading")} density="inline" />
+          <LoadingPanel loadingLabel={t("provisioning.loading")} density="inline" />
         ) : (
           <p className={textRoleVariants({ role: "meta" })}>
             {t("provisioning.saveFirst")}
@@ -106,16 +106,20 @@ export function AgentProvisioning({
         <>
           {agent.last_error ? <ErrorBanner description={String(agent.last_error)} /> : null}
           {conflictName && conflictKind ? (
-            <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
+            <OperatorTransportProvider>
+              <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
+            </OperatorTransportProvider>
           ) : null}
           {showRuntime ? (
-            <AgentOperatorRuntime
-              expectsService={expectsService}
-              pane={pane}
-              service={service}
-              lifecycle={lifecycle}
-              workspace={workspace}
-            />
+            <OperatorTransportProvider>
+              <AgentOperatorRuntime
+                expectsService={expectsService}
+                pane={pane}
+                service={service}
+                lifecycle={lifecycle}
+                workspace={workspace}
+              />
+            </OperatorTransportProvider>
           ) : conflictName ? null : (
             <div className="flex flex-col items-start gap-2">
               <p className={textRoleVariants({ role: "meta" })}>

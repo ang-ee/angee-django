@@ -264,11 +264,8 @@ const METADATA = {
                 "status": testQueryField("status", { scalar: "String", filter: null }) }, axes: { "status": testQueryAxis("status", { kind: "column", identityPath: "status", paths: ["status"], server: { input: "status", key: "status" }, extractions: [], drill: null }) }, sort: { default: [] } }),
 
         roots: {
-          // This authored SDL exercises only the two group roots.
-          aggregate: null,
           groups: "notes_groups",
           groupsCount: "notes_groups_count",
-          groupedRows: null,
         },
         typeNames: {
           filter: "notes_bool_exp",
@@ -290,7 +287,7 @@ const SAVE_METADATA = {
         query: testResourceQuery({ identity: { field: "id" }, fields: { "owner": testQueryField("owner", { scalar: "ID", kind: "relation", filter: null, relation: { model: "accounts.User", identityPath: "owner" }, row: { path: "owner", paths: ["owner"] } }),
                 "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
 
-        roots: { aggregate: null, groups: null, groupsCount: null, groupedRows: null, save: "document_save" },
+        roots: { save: "document_save" },
         saveArguments: [{ name: "expected_revision", type: "Int" }],
         fields: [
           resourceField({
@@ -319,14 +316,14 @@ const SAVE_METADATA = {
       }),
       testDataResource("example.Item", {
         recordRepresentation: "name",
-        roots: { aggregate: null, groups: null, groupsCount: null, groupedRows: null },
+        roots: {},
         fields: [
           resourceField({ name: "name", kind: "scalar", scalar: "String", readable: true }),
         ],
       }),
       testDataResource("accounts.User", {
         recordRepresentation: "username",
-        roots: { aggregate: null, groups: null, groupsCount: null, groupedRows: null },
+        roots: {},
         fields: [
           resourceField({
             name: "username",

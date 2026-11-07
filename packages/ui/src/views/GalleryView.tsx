@@ -117,7 +117,7 @@ function GallerySkeleton({
 }): ReactElement {
   return (
     <SkeletonStatus
-      label={loadingLabel}
+      loadingLabel={loadingLabel}
       className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4"
     >
       {Array.from({ length: 8 }, (_, index) => (

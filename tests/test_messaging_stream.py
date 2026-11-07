@@ -4,10 +4,9 @@ from datetime import datetime
 
 from rebac import actor_context, system_context
 
-from angee.messaging.testing.models import Message
+from angee.graphql.testing.documents import execute_schema, result_data
 from tests import test_messaging as messaging_models
-from tests.conftest import execute_schema, result_data
-from tests.test_messaging_graphql import _platform_admin, _request, _schema
+from tests.test_messaging_graphql import _platform_admin, _schema
 
 
 def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tables):
@@ -19,10 +18,6 @@ def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tab
         first = ticket.message_post("First entry")
         reply = ticket.message_post("First reply", parent=first)
         ticket.message_update_content(reply, body="Edited reply")
-        assert list(Message.objects.filter(pk=first.pk).record_scope(ticket).values_list("pk", flat=True)) == [first.pk]
-        assert set(Message.objects.filter(created_by__username="stream-reader").record_scope(ticket).values_list(
-            "pk", flat=True,
-        )) == {first.pk, reply.pk}
 
     payload = result_data(
         execute_schema(
@@ -36,7 +31,7 @@ def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tab
         }
         """,
             {"id": ticket.sqid},
-            request=_request(reader),
+            user=reader,
         )
     )["record_thread"]
 
@@ -63,7 +58,7 @@ def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tab
                 }
                 """,
                 {"id": ticket.sqid, "search": search, "kinds": [kinds]},
-                request=_request(reader),
+                user=reader,
             )
         )["record_thread"]["reply_count"]
 
@@ -82,7 +77,7 @@ def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tab
             }
             """,
             {"id": ticket.sqid},
-            request=_request(reader),
+            user=reader,
         )
     )["record_thread"]
     assert other_role == {"reply_count": 0, "message_result_count": 0}

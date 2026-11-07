@@ -18,7 +18,6 @@ from tests.test_agent_sessions import session as session
 from tests.test_decisions_concurrency import submit, wait_for_lock
 
 pytestmark = [
-    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
@@ -83,7 +82,7 @@ def test_claim_prevents_a_user_delete_that_collected_a_pending_turn(session: Age
             wait_for_lock(pid, contender)
             claimed = session.claim_turn()
             assert claimed is not None and claimed.pk == queued.pk
-        with pytest.raises(ValidationError, match="An agent turn is still running; stop it first"):
+        with pytest.raises(ValidationError, match="An agent turn is still running or awaiting approval; stop it first"):
             contender.result(timeout=10)
     queued.refresh_from_db()
     session.refresh_from_db()
@@ -99,7 +98,7 @@ def test_start_races_with_in_process_deprovision(session: AgentSession, winner: 
 
     def deprovision() -> Any:
         with actor_context(user):
-            return provisioning.deprovision_agent(agent)
+            return provisioning.deprovision_agent(agent.sqid)
 
     def start() -> Any:
         return AgentSession.objects.start(agent, user=user, context={}, actor=user)

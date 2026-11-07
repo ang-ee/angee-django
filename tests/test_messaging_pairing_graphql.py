@@ -9,18 +9,18 @@ from django.contrib.auth import get_user_model
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.integrate import live as live_module
 from angee.integrate import tasks as tasks_module
 from angee.integrate.constants import RUN_SESSION_TASK
 from angee.integrate.live import session_store_path
 from angee.integrate.models import IntegrationRuntimeStatus
-from tests.conftest import SchemaAddon, execute_schema, make_integration
-from tests.conftest import result_data as _data
+from tests.conftest import SchemaAddon, make_integration
 from tests.pairing_backend import FakePairingBackend
 from tests.test_messaging_graphql import (
     Channel,
     _platform_admin,
-    _request,
     iam_schema,
     integrate_schema,
     messaging_schema,
@@ -47,7 +47,7 @@ def pairing_graphql(
     }
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "angee.integrate.backends.base.enqueue_task",
+        "angee.integrate.impl.enqueue_task",
         lambda name, *, kwargs, queue=None, expires=None, **_: sent.append(
             {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
         ),
@@ -75,7 +75,7 @@ def test_channel_pairing_projects_neutral_identity(pairing_graphql: list[dict[st
             _schema(),
             _PAIRING_QUERY,
             {"id": channel.sqid},
-            request=_request(admin),
+            user=admin,
         )
     )["channel_pairing"]
 
@@ -102,8 +102,8 @@ def test_channel_pairing_bounds_arbitrary_backend_value_error(
     channel = _live_channel("msg-pairing-error")
     secret = "provider-secret-value"
     monkeypatch.setattr(
-        type(channel),
-        "pairing",
+        messaging_schema.connect,
+        "channel_pairing",
         lambda _channel: (_ for _ in ()).throw(ValueError(secret)),
     )
 
@@ -111,7 +111,7 @@ def test_channel_pairing_bounds_arbitrary_backend_value_error(
         _schema(),
         _PAIRING_QUERY,
         {"id": channel.sqid},
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors is not None
@@ -194,7 +194,7 @@ def test_reset_channel_pairing_wipes_store_and_restarts(
 ) -> None:
     """Reset stops, proves exit, clears identity/store, and resumes the channel."""
 
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: True)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: True)
     admin = _platform_admin("msg-pairing-reset-admin")
     channel = _live_channel("msg-pairing-reset")
     with system_context(reason="test.messaging.pairing.reset.seed"):
@@ -226,7 +226,7 @@ def test_reset_channel_pairing_refuses_without_a_cross_process_lock(
     """Destructive reset never trusts a process-local view of session liveness."""
 
     del pairing_graphql
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: False)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: False)
     admin = _platform_admin("msg-pairing-reset-blind-admin")
     channel = _live_channel("msg-pairing-reset-blind")
     store = session_store_path(channel)
@@ -237,7 +237,7 @@ def test_reset_channel_pairing_refuses_without_a_cross_process_lock(
         _schema(),
         _RESET_MUTATION,
         {"id": channel.sqid},
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors is not None
@@ -252,7 +252,7 @@ def test_reset_channel_pairing_wipes_backend_declared_transients_only(
     """Reset preserves durable login material outside the backend's transient keys."""
 
     del pairing_graphql
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: True)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: True)
     monkeypatch.setattr(
         FakePairingBackend,
         "transient_material_keys",
@@ -397,7 +397,7 @@ def test_submit_channel_password_refuses_channel_without_credential(
         _schema(),
         _SUBMIT_PASSWORD_MUTATION,
         {"id": channel.sqid, "password": "must-not-escape"},
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors is not None
@@ -475,7 +475,7 @@ def test_skip_channel_password_marks_only_an_optional_armed_round(
         _schema(),
         _SKIP_PASSWORD_MUTATION,
         {"id": required.sqid},
-        request=_request(admin),
+        user=admin,
     )
     assert result.errors is not None
     assert result.errors[0].message == "This channel password cannot be skipped."
@@ -495,7 +495,7 @@ def test_submit_channel_password_refuses_an_unarmed_channel(
         _schema(),
         _SUBMIT_PASSWORD_MUTATION,
         {"id": channel.sqid, "password": password},
-        request=_request(admin),
+        user=admin,
     )
 
     assert result.errors is not None
@@ -534,7 +534,7 @@ def test_pairing_verbs_reject_poll_only_channels(pairing_graphql: list[dict[str,
                 "id": channel.sqid,
                 **({"password": "not-stored"} if operation == _SUBMIT_PASSWORD_MUTATION else {}),
             },
-            request=_request(admin),
+            user=admin,
         )
         assert result.errors
         assert "live channel" in str(result.errors[0])
@@ -588,7 +588,7 @@ def test_pairing_verbs_deny_non_admin_before_elevated_lookup(
             "id": channel.sqid,
             **({"password": "not-stored"} if operation_name == "submit_channel_password" else {}),
         },
-        request=_request(reader),
+        user=reader,
     )
 
     assert result.errors is not None
@@ -629,14 +629,13 @@ def _schema() -> Any:
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
         for module in (iam_schema, integrate_schema, parties_schema, messaging_schema)
     ]
-    # An addon-only build: donor addons are left out, so it declares itself partial.
-    return GraphQLSchemas(addons, partial_schema=True).build("console")
+    return GraphQLSchemas(addons).build("console")
 
 
 def _execute(admin: Any, operation: str, variables: dict[str, Any]) -> dict[str, Any]:
     """Execute one pairing operation and return its successful payload."""
 
-    return _data(execute_schema(_schema(), operation, variables, request=_request(admin)))
+    return _data(execute_schema(_schema(), operation, variables, user=admin))
 
 
 def _live_channel(slug: str, *, display_name: str = "") -> Any:

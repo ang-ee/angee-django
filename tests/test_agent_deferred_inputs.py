@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from rebac import system_context
 
 from angee.agents.testing.models import Agent
+from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from tests.test_agents import InferenceModel, _provider
 
 
@@ -19,6 +20,25 @@ def test_deployment_identity_refreshes_deferred_handle(composed_tables: None, mo
         identity = model.deployment_identity()
     assert identity["native_model"] == "native"
     assert identity["endpoint"] == "http://localhost:11434/v1"
+
+
+@pytest.mark.parametrize("has_model", [False, True])
+def test_agent_error_classifier_loads_nullable_deferred_model(composed_tables: None, monkeypatch, has_model):
+    """Agent error classifier loads nullable deferred model."""
+    provider = _provider("deferred-error", backend_class="anthropic")
+    with system_context(reason="test.agents.error.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="claude") if has_model else None
+        agent = Agent.objects.create(name="Error classifier", owner=provider.owner, model=model)
+        agent = Agent.objects.only("pk").get(pk=agent.pk)
+    seen: list[str] = []
+
+    def classify(backend, error):
+        seen.append(backend.provider._state.db)
+        return isinstance(error, TimeoutError)
+
+    monkeypatch.setattr(AnthropicInferenceBackend, "is_transient_error", classify)
+    assert agent.is_transient_inference_error(TimeoutError()) is has_model
+    assert seen == (["default"] if has_model else [])
 
 
 @pytest.mark.parametrize("error,transient", [(TimeoutError(), True), (ValueError("timeout"), False)])

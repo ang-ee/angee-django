@@ -28,7 +28,7 @@ export function RunsList({ baseFilter, embedded = false }: {
   return <ResourceList<StringIdRow> resource={RUN_MODEL} hideCreate baseFilter={baseFilter}
     placement="inline" routed={!embedded} scope={embedded ? "local" : undefined}
     rowHref={embedded ? (row) => href("workflows.runs.record", { id: row.id }) : undefined}
-    fields={["subject_model", "subject_label"]} defaultRecordTab={embedded ? undefined : "graph"} recordTabs={[
+    fields={["subject_model"]} defaultRecordTab={embedded ? undefined : "graph"} recordTabs={[
       { id: "graph", label: t("run.graph"), presentation: "full-bleed", keepMounted: true,
         render: ({ recordId, active }) => <RunGraph runId={recordId} active={active} /> },
       { id: "steps", label: t("run.steps"), render: ({ recordId }) => <StepRuns runId={recordId} /> },
@@ -36,12 +36,10 @@ export function RunsList({ baseFilter, embedded = false }: {
         <RunsList embedded baseFilter={{ "parent_step.run": { exact: recordId } }} /> },
       { id: "evidence", label: t("run.evidence"), render: ({ recordId }) =>
         <List resource="workflows.StepRecord" scope="local" presentation="embedded"
-          baseFilter={{ run: { exact: recordId } }} fields={["record_model", "record_label"]} emptyContent={t("run.noEvidence")}>
+          baseFilter={{ run: { exact: recordId } }} fields={["record_model"]} emptyContent={t("run.noEvidence")}>
           <Column field="record_id" header={t("run.evidence")} render={(row) =>
             typeof row.record_model === "string" && typeof row.record_id === "string"
-              ? <RecordReference model={row.record_model} id={row.record_id}
-                label={typeof row.label === "string" && row.label ? row.label
-                  : typeof row.record_label === "string" && row.record_label ? row.record_label : row.record_id} /> : t("run.redactedEvidence")} selectionPaths={["record_id", "label"]} />
+              ? <RecordReference model={row.record_model} id={row.record_id} /> : t("run.redactedEvidence")} />
         </List> },
     ]}>
     <List order={{ created_at: "DESC" }} defaultGroups={{ list: { field: "status" }, board: { field: "status" } }}
@@ -53,8 +51,7 @@ export function RunsList({ baseFilter, embedded = false }: {
         render={(row) => typeof row.display_name === "string" ? row.display_name : null} />
       <Column field="status" header={t("run.status")} widget="statusBadge" />
       <Column field="subject_id" header={t("run.subject")} render={(row) => typeof row.subject_id === "string" && typeof row.subject_model === "string"
-        ? <RecordReference model={row.subject_model} id={row.subject_id}
-          label={typeof row.subject_label === "string" && row.subject_label ? row.subject_label : row.subject_id} /> : null} />
+        ? <RecordReference model={row.subject_model} id={row.subject_id} /> : null} />
       <Column field="origin" header={t("run.origin")} widget="statusBadge" />
       <Column field="created_at" header={t("run.started")} />
       <Column field="finished_at" header={t("run.finished")} />

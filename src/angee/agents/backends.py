@@ -91,8 +91,10 @@ class InferenceBackend(ImplBase):
     Paths, like ``client_class_path``, so cataloguing a backend loads no vendor
     SDK; they resolve when a failure is classified, after the SDK has run.
     """
-
-    defaults = {"status": "draft"}
+    defaults = {
+        "name": "Manual",
+        "status": "draft",
+    }
 
     def __init__(self, provider: Any) -> None:
         """Bind this backend to its provider row."""
@@ -221,7 +223,6 @@ class ManualInferenceBackend(InferenceBackend):
     backend addon supplies the live-listing alternative.
     """
 
-    defaults = {"name": "Manual"}
     key = "manual"
     label = "Manual inference"
 

@@ -1,4 +1,4 @@
-"""Signed timestamp/primary-key cuts for Django querysets."""
+"""The page bound and signed timestamp/primary-key cuts for Django querysets."""
 
 from __future__ import annotations
 
@@ -10,9 +10,36 @@ from datetime import datetime
 from typing import Any
 
 from django.core import signing
-from django.core.exceptions import ValidationError
+from django.core.exceptions import BadRequest, ValidationError
 from django.db import models
 from django.utils import timezone
+
+MAX_PAGE_SIZE = 100
+"""Largest page one read returns, records or group headers alike; refine's ``MAX_PAGE_SIZE`` mirrors it.
+
+A read that returns its first rows clamps the size it is asked for through
+:func:`clamp_page_size`. A read whose client pages by an explicit size (offset
+pages, a group's declared page) refuses a size outside ``1..MAX_PAGE_SIZE`` through
+:func:`valid_page_size`, since clamping would move every later page.
+"""
+
+
+def clamp_page_size(size: int) -> int:
+    """Return ``size`` clamped into ``1..MAX_PAGE_SIZE`` for a read that returns its first page."""
+
+    return max(1, min(int(size), MAX_PAGE_SIZE))
+
+
+def valid_page_size(size: int) -> int:
+    """Return ``size`` when one page admits it, else refuse it as the client's error.
+
+    Django's ``BadRequest`` reaches clients as ``BAD_USER_INPUT`` with this message
+    (``angee.base.exceptions.classify_error``).
+    """
+
+    if not 1 <= size <= MAX_PAGE_SIZE:
+        raise BadRequest(f"Page size must be between 1 and {MAX_PAGE_SIZE}.")
+    return size
 
 
 class InvalidKeysetCursor(ValueError):
@@ -43,7 +70,7 @@ class KeysetPage[Row]:
 
 @dataclass(frozen=True, slots=True)
 class KeysetOrder:
-    """A non-null timestamp followed by the native key or its normalized projection.
+    """A non-null timestamp expression followed by a native key, newest first.
 
     The caller owns the timestamp annotation and readable queryset. These native
     Q expressions also work with Django querysets that do not inherit Angee.
@@ -51,21 +78,26 @@ class KeysetOrder:
 
     field: str
     tie_breakers: tuple[str, ...] = ()
-    """Native Django ordering terms between timestamp-desc and primary-key-desc."""
+    """Native Django ordering terms between timestamp-desc and key-desc."""
     key_field: str = "pk"
-    """The final native key or its normalized column in a composed relation."""
+    """The final key: the model's primary key, or a composed relation's key column."""
 
-    @property
-    def ordering(self) -> tuple[str, ...]:
-        """Return the native Django ordering used by both selection and cuts."""
+    def _columns(self, prefix: str) -> tuple[tuple[str, bool], ...]:
+        """Each ordering column named under ``prefix``, and whether it sorts descending."""
 
-        return (f"-{self.field}", *self.tie_breakers, f"-{self.key_field}")
+        return (
+            (f"{prefix}{self.field}", True),
+            *((f"{prefix}{term.removeprefix('-')}", term.startswith("-")) for term in self.tie_breakers),
+            (f"{prefix}{self.key_field}", True),
+        )
 
-    def _cut(self, position: tuple[Any, ...], *, older: bool, inclusive: bool = False) -> models.Q:
-        columns = tuple((term.removeprefix("-"), term.startswith("-")) for term in self.ordering)
+    def _cut(
+        self, position: tuple[Any, ...], *, older: bool, inclusive: bool = False, prefix: str = "",
+    ) -> models.Q:
+        columns = self._columns(prefix)
         if len(position) != len(columns):
             raise ValueError("Cursor does not match its declared keyset ordering.")
-        predicate = models.Q(**{f"{self.key_field}__in": []})
+        predicate = models.Q(**{f"{prefix}{self.key_field}__in": []})
         equal: dict[str, Any] = {}
         for (name, descending), value in zip(columns, position, strict=True):
             comparison = "lt" if descending == older else "gt"
@@ -73,15 +105,26 @@ class KeysetOrder:
             equal[name] = value
         return predicate | models.Q(**equal) if inclusive else predicate
 
-    def before(self, position: tuple[Any, ...], *, inclusive: bool = False) -> models.Q:
+    def before(self, position: tuple[Any, ...], *, inclusive: bool = False, prefix: str = "") -> models.Q:
         """Select the older side, respecting each native tie-break direction."""
 
-        return self._cut(position, older=True, inclusive=inclusive)
+        return self._cut(position, older=True, inclusive=inclusive, prefix=prefix)
 
-    def after(self, position: tuple[Any, ...]) -> models.Q:
+    def after(self, position: tuple[Any, ...], *, prefix: str = "") -> models.Q:
         """Select the newer side of this same total ordering."""
 
-        return self._cut(position, older=False)
+        return self._cut(position, older=False, prefix=prefix)
+
+    def ordering(self, prefix: str = "", *, oldest_first: bool = False) -> tuple[str, ...]:
+        """The native ``order_by`` terms of this total ordering, newest first unless ``oldest_first``.
+
+        ``prefix`` names the columns as a projection that prefixes them does (a
+        union's result columns), so one declaration orders and cuts every stage.
+        """
+
+        return tuple(
+            f"-{name}" if descending != oldest_first else name for name, descending in self._columns(prefix)
+        )
 
     def position(self, row: models.Model) -> tuple[Any, ...]:
         """Read the exact tuple declared by the caller's SQL ordering."""

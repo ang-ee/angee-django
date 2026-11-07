@@ -9,14 +9,10 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from rebac import system_context
 
-from angee.decisions import schema as decision_schema
-from angee.decisions.testing.models import DecisionRecord
-from angee.graphql.schema import GraphQLSchemas
-from angee.intake import schema as intake_schema
 from angee.intake.choices import NeedAccessAction
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.testing.models import Resource
-from tests.conftest import SchemaAddon, create_platform_admin, execute_schema, make_addon, result_data
+from tests.conftest import make_addon
 
 User = get_user_model()
 USERS = f"010_{User._meta.label_lower}.yaml"
@@ -58,26 +54,6 @@ NEEDS = (
 
 
 @pytest.mark.django_db(transaction=True)
-def test_need_root_prefetches_access_decision_records(composed_tables: None, tmp_path: Path) -> None:
-    """Intake Need.access_decision supplies DecisionType.records to its page."""
-    del composed_tables
-    _load(_addon(tmp_path, NEEDS))
-    need = apps.get_model("intake", "Need")
-    with system_context(reason="test intake decision records"):
-        row = need.objects.get(body="Still waiting.")
-        link = DecisionRecord.system_queryset().get(decision_id=row.access_decision_id)
-    schema = GraphQLSchemas([
-        SchemaAddon(intake_schema.schemas), SchemaAddon(decision_schema.schemas),
-    ]).build("console")
-    admin = create_platform_admin("intake-record-reader")
-    data = result_data(execute_schema(
-        schema, "{ intake_needs { id access_decision { id records { id } } } }", user=admin,
-    ))
-    selected = next(item for item in data["intake_needs"] if item["id"] == row.sqid)
-    assert selected["access_decision"]["records"] == [{"id": link.sqid}]
-
-
-@pytest.mark.django_db(transaction=True)
 def test_rows_answer_open_access_questions_as_the_named_decider(composed_tables: None, tmp_path: Path) -> None:
     del composed_tables
     addon = _addon(tmp_path, NEEDS)
@@ -91,7 +67,7 @@ def test_rows_answer_open_access_questions_as_the_named_decider(composed_tables:
         denied = need.objects.get(body="Me too.")
         pending = need.objects.get(body="Still waiting.")
         assert approved.access_verdict == [NeedAccessAction.INTAKE_APPROVE]
-        assert approved.access_decision.answered_by_id == decider.pk
+        assert approved.access_answered_by_id == decider.pk
         assert approved.requester_access_granted
         assert approved.admitted_user.username == "request-requester"
         assert denied.access_verdict == [NeedAccessAction.INTAKE_DENY]

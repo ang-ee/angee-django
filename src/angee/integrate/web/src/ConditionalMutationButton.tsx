@@ -96,8 +96,8 @@ export function ConditionalMutationButton<
     primary: variant === "primary",
     ...(confirm ? { confirm } : {}),
     ...(args
-      ? { args, submit: (values, context) => mutateOutcome(recordId, values, { reconciliation: context.reconciliation }) }
-      : { run: async (context) => { await mutate(recordId, undefined, { reconciliation: context.reconciliation }); } }),
+      ? { args, submit: (values) => mutateOutcome(recordId, values) }
+      : { run: async () => { await mutate(recordId); } }),
   };
   return <RecordVerb action={action} />;
 }

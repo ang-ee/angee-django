@@ -19,10 +19,13 @@ class ResourcesConfig(AppConfig):
     name = "angee.resources"
 
     def compose_provision(self, context: ProvisionContext) -> None:
-        """Reload selected tiers idempotently; explicit project settings opt into demo."""
+        """Reload selected tiers idempotently; explicit project settings opt into demo.
 
-        context.call('resources', 'load', database=context.database,
-                     include_demo=conf.settings.ANGEE_RESOURCE_INCLUDE_DEMO)
+        The load writes through the resource managers, so the database router
+        places every row; provisioning passes no database.
+        """
+
+        context.call('resources', 'load', include_demo=conf.settings.ANGEE_RESOURCE_INCLUDE_DEMO)
 
     def ready(self) -> None:
         super().ready()

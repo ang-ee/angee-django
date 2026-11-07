@@ -2,12 +2,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ActionDescriptor } from "@angee/ui";
-import { createUiTestProviders } from "@angee/ui/testing";
 import { holdsPermission, type Row } from "@angee/metadata";
 
 import { ProjectRoundRecord } from "./round-record";
 
-const { Provider, clearClients } = createUiTestProviders();
 const mocks = vi.hoisted(() => ({ mutate: vi.fn(), round: {
   id: "round-1", name: "Review", status: "COLLECTING", opening_policy: "ANSWERS",
   permissions: ["write"], can_open: true, can_admit: true, revision: 4, roster: [],
@@ -23,20 +21,17 @@ vi.mock("@angee/ui", async (original) => ({ ...await original<object>(),
       </button>)}
   </>,
 }));
-afterEach(() => { cleanup(); clearClients(); vi.clearAllMocks(); mocks.round.can_open = true; });
+afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.round.can_open = true; });
 
 test("project record verbs target the returned round and its revision", async () => {
-  render(<Provider><ProjectRoundRecord surface="primary" /></Provider>);
+  render(<ProjectRoundRecord surface="primary" />);
   fireEvent.click(screen.getByRole("button", { name: "Open round" }));
-  await waitFor(() => expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith(
-    { round: "round-1", revision: 4 },
-    { reconciliation: undefined },
-  ));
+  await waitFor(() => expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith({ round: "round-1", revision: 4 }));
 });
 
 test("open remains hidden when the server predicate fails", () => {
   mocks.round.can_open = false;
-  render(<Provider><ProjectRoundRecord surface="primary" /></Provider>);
+  render(<ProjectRoundRecord surface="primary" />);
   expect(screen.queryByRole("button")).toBeNull();
   expect(holdsPermission({ permissions: ["write"] }, "write")).toBe(true);
   expect(holdsPermission({ permissions: [] }, "write")).toBe(false);

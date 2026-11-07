@@ -141,10 +141,8 @@ test.each(["error", "unknown"] as const)("the %s run has its own explicit status
 });
 
 test("selection groups open questions and held runs by record or question", async () => {
-  const requests: TimelineRequest[] = [];
-  render(<TimelineStory state="set" onRequest={(request) => requests.push(request)} />);
+  render(<TimelineStory state="set" />);
   await screen.findByText("2 records · 1 open decision · 1 run waiting or stopped");
-  expect(requests.find(({ query }) => query.includes("query RecordTimeline("))?.variables.drillIn).toBe(false);
   expect(screen.getAllByRole("region", { name: "Confirm the name" })).toHaveLength(2);
   fireEvent.click(screen.getByRole("button", { name: "By question" }));
   expect(screen.getAllByRole("region", { name: "Confirm the name" })).toHaveLength(1);
@@ -163,24 +161,8 @@ test("question grouping distinguishes kinds that share a label", async () => {
 
 test("an unknown note tone renders with the information treatment", async () => {
   const data = timelineFixture();
-  data.records[0]!.runs[0]!.graph.nodes[7]!.step_run!.notes.push({ message: "A new note tone", tone: "future_tone" });
+  data.records[0]!.runs[0]!.graph_step_runs.find((step) => step.id === "wsr_review")!.notes.push({ message: "A new note tone", tone: "future_tone" });
   render(<TimelineStory data={data} />);
   const note = await screen.findByText("A new note tone");
   expect(note.closest('[role="status"]')?.classList.contains("bg-info-soft")).toBe(true);
-});
-
-test("a selected run answers its graph decision without record-level questions or count", async () => {
-  const requests: TimelineRequest[] = [];
-  render(<TimelineStory runId="wfr_review" onRequest={(request) => requests.push(request)} />);
-  const card = await screen.findByRole("region", { name: "Confirm the name" });
-  expect(requests.find(({ query }) => query.includes("query RecordTimeline("))?.variables.drillIn).toBe(true);
-  expect(screen.getAllByRole("region", { name: "Confirm the name" })).toHaveLength(1);
-  expect(screen.queryByText("1 open decision")).toBeNull();
-  fireEvent.click(within(card).getByRole("radio", { name: /Use proposed name/ }));
-  fireEvent.click(within(card).getByRole("button", { name: "Confirm" }));
-  await screen.findByText("Chose: Use proposed name");
-  expect(requests.find(({ query }) => query.includes("decide("))?.variables).toMatchObject({
-    id: "dcn_review", revision: 3, chosen: ["accept"],
-  });
-  expect(screen.queryByRole("radio")).toBeNull();
 });

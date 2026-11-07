@@ -135,6 +135,34 @@ def test_server_launcher_unwinds_after_failure_and_logs_once(tmp_path: Path) -> 
     ]
 
 
+def test_server_launcher_runs_serving_checks_only_for_serving_commands(tmp_path: Path) -> None:
+    _project(tmp_path)
+    (tmp_path / "plain" / "apps.py").write_text('''from django.apps import AppConfig
+from django.core import checks
+from angee.server.checks import SERVING_TAG
+def refuse(app_configs=None, **kwargs):
+    return [checks.Error("serving refused", id="plain.E001")]
+class PlainConfig(AppConfig):
+    name = "plain"
+    def ready(self): checks.register(refuse, SERVING_TAG, deploy=True)
+''')
+    build = tmp_path / "plain" / "management" / "commands" / "build.py"
+    build.write_text('''from django.core.management.base import BaseCommand
+class Command(BaseCommand):
+    def handle(self, *args, **options): print("built")
+''')
+    settings_file = tmp_path / "alternate.py"
+    settings_file.write_text(settings_file.read_text().replace('"plain"]', '"plain.apps.PlainConfig"]'))
+    arguments = ("--settings=alternate", f"--pythonpath={tmp_path}")
+    built = _invoke(tmp_path, "build", *arguments)
+    assert built.returncode == 0, built.stderr
+    assert "built" in built.stdout
+    checked = _invoke(tmp_path, "check", *arguments)
+    assert checked.returncode != 0
+    assert "plain.E001" in checked.stderr
+    assert "first-enter" not in checked.stdout
+
+
 def test_native_launcher_extension_receives_server_utility(monkeypatch):
     seen = []
 
@@ -152,7 +180,6 @@ def native_context(monkeypatch):
     ready = Event()
     ready.set()
     monkeypatch.setattr(management, "apps", SimpleNamespace(ready_event=ready))
-    monkeypatch.setattr(management, "settings", SimpleNamespace(ANGEE_SERVER_COMMAND_CONTEXT=("context.factory",)))
     return ready
 
 
@@ -200,7 +227,7 @@ def test_native_parser_custom_action_and_dispatch_run_once(native_context, monke
         finally:
             events.append("context-exit")
 
-    monkeypatch.setattr(management, "import_string", lambda path: factory)
+    monkeypatch.setattr(management, "resolve_hooks", lambda setting: (factory,))
     monkeypatch.setattr(connections, "close_all", lambda: events.append("connections-close"))
     command = Command()
     arguments = ["manage.py", "probe", *(["--database", selected] if selected else [])]
@@ -228,10 +255,10 @@ def test_native_early_exit_never_enters_context_and_restores_execute(
     class Command(BaseCommand):
         requires_system_checks = []
 
-    def forbidden(path):
+    def forbidden(setting):
         raise AssertionError("parser exit entered contexts")
 
-    monkeypatch.setattr(management, "import_string", forbidden)
+    monkeypatch.setattr(management, "resolve_hooks", forbidden)
     command = Command()
     original = command.execute
     if preexisting:
@@ -261,7 +288,7 @@ def test_context_command_error_uses_native_formatting_and_connection_cleanup(nat
 
     stderr = StringIO()
     command = Command(stderr=stderr)
-    monkeypatch.setattr(management, "import_string", lambda path: factory)
+    monkeypatch.setattr(management, "resolve_hooks", lambda setting: (factory,))
     monkeypatch.setattr(connections, "close_all", lambda: events.append("connections-close"))
     with pytest.raises(SystemExit) as error:
         management._Dispatch(command).run_from_argv(["manage.py", "probe"])
@@ -292,7 +319,7 @@ def test_existing_instance_execute_restored_after_failure(native_context, monkey
         raise failure
 
     command.execute = original
-    monkeypatch.setattr(management, "import_string", lambda path: factory)
+    monkeypatch.setattr(management, "resolve_hooks", lambda setting: (factory,))
     monkeypatch.setattr(connections, "close_all", lambda: events.append("connections-close"))
     with pytest.raises(type(failure)):
         management._Dispatch(command).run_from_argv(["manage.py", "probe"])
@@ -305,10 +332,10 @@ def test_custom_run_from_argv_bypassing_execute_has_no_context(native_context, m
         def run_from_argv(self, argv):
             return "custom-dispatch"
 
-    def forbidden(path):
+    def forbidden(setting):
         raise AssertionError("context injected without native execution boundary")
 
-    monkeypatch.setattr(management, "import_string", forbidden)
+    monkeypatch.setattr(management, "resolve_hooks", forbidden)
     command = Command()
     assert management._Dispatch(command).run_from_argv(["manage.py", "probe"]) == "custom-dispatch"
     assert "execute" not in vars(command)

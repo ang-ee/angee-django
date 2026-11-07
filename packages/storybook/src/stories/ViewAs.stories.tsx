@@ -2,14 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { AppRuntimeProvider, ViewAsBanner, ViewAsPicker } from "@angee/ui";
 
-const meta = {
-  title: "Chrome/ViewAs",
-  component: ViewAsBanner,
-  parameters: { angeeFixture: { activeSchema: "console", schemas: { console: {
-    url: "/graphql/console/",
-    fetch: async () => Response.json({ data: { viewable_people: people } }),
-  } } } },
-} satisfies Meta<typeof ViewAsBanner>;
+const meta = { title: "Chrome/ViewAs", component: ViewAsBanner } satisfies Meta<typeof ViewAsBanner>;
 export default meta;
 
 const realUser = { id: "manager-1", name: "Alex" };
@@ -26,6 +19,7 @@ function Preview() {
     viewAs: userId ? { userId } : null,
     realUser,
     currentUser,
+    viewablePeople: people,
     enter: setUserId,
     exit: () => setUserId(null),
   } } }}>

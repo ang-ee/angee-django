@@ -185,8 +185,8 @@ class IAMGraphQLTests(TransactionTestCase):
         planning = next(node for node in page if node["title"] == "Quarterly planning")
         self.assertEqual(planning["status"], "IN_REVIEW")
 
-    def test_messaging_recipient_picker_respects_colleague_scope(self) -> None:
-        """Members see themselves; the demo admin grant reaches the directory."""
+    def test_messaging_recipient_picker_gets_seeded_people_directory(self) -> None:
+        """The example composition seeds IAM directory grants for the picker."""
 
         alice = Client()
         self.login(alice, "alice")
@@ -199,15 +199,7 @@ class IAMGraphQLTests(TransactionTestCase):
             """,
         )["data"]["colleagues"]
 
-        self.assertEqual({row["username"] for row in rows}, {"alice"})
-
-        admin = Client()
-        self.login(admin, "admin")
-        admin_rows = self.post_console(
-            admin,
-            "query { colleagues(limit: 20) { username } }",
-        )["data"]["colleagues"]
-        self.assertGreaterEqual({row["username"] for row in admin_rows}, {"admin", "alice", "bob"})
+        self.assertGreaterEqual({row["username"] for row in rows}, {"admin", "alice", "bob"})
 
     def test_note_exposes_scalar_audit_ids_and_stamps_updates(self) -> None:
         alice = Client()
@@ -267,7 +259,7 @@ class IAMGraphQLTests(TransactionTestCase):
             )
             sqid = note.sqid
 
-        self.assertIsNone(Note.objects.with_actor(self.admin).get(sqid=sqid).is_starred)
+        self.assertIsNone(Note.objects.as_user(self.admin).get(sqid=sqid).is_starred)
         self.login(self.client, "admin")
         notes = self.graphql(
             """
@@ -414,7 +406,7 @@ class IAMGraphQLTests(TransactionTestCase):
         )["data"]
         expected_status_counts = {
             str(row["status"]).upper(): row["count"]
-            for row in Note.objects.with_actor(self.alice).values("status").annotate(count=Count("pk"))
+            for row in Note.objects.as_user(self.alice).values("status").annotate(count=Count("pk"))
         }
         expected_total = sum(expected_status_counts.values())
 
@@ -459,7 +451,7 @@ class IAMGraphQLTests(TransactionTestCase):
             """
         )["data"]
         expected_total = (
-            Note.objects.with_actor(self.alice)
+            Note.objects.as_user(self.alice)
             .filter(status=Note.Status.DRAFT)
             .count()
         )
@@ -508,7 +500,7 @@ class IAMGraphQLTests(TransactionTestCase):
 
         # One status group per offset page; the distinct status count is owned
         # by the aggregate queryset and the groups root pages over that list.
-        groups = Note.objects.with_actor(self.alice).values("status").distinct().count()
+        groups = Note.objects.as_user(self.alice).values("status").distinct().count()
         self.assertGreaterEqual(groups, 2)
         self.assertEqual(len(page0["notes_groups"]), 1)
         self.assertEqual(len(page1["notes_groups"]), 1)

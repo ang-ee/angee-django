@@ -11,20 +11,18 @@ from django.test import override_settings
 from django.test.utils import isolate_apps
 
 from angee.base.apps import BaseConfig
+from angee.base.checks import check_ownership, check_sealed_permissions
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.hooks import check_hook, check_hooks
 from angee.base.implementations import check_impl_registry
+from angee.base.managers import AngeeManager
+from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
 from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
-from angee.base.models.trash import TrashQuerySet
-from angee.iam.checks import check_ownership
-from angee.iam.managers import ProtectedManager
-from angee.iam.models.append_only import ProtectedAppendOnlyModel, ProtectedAppendOnlyQuerySet
-from angee.iam.models.base import ProtectedModel
-from angee.iam.models.ownership import OwnerMixin
-from angee.iam.models.trash import ProtectedTrashMixin
-from angee.iam.querysets import ProtectedQuerySet
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.trash import TrashMixin, TrashQuerySet
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 
@@ -34,10 +32,10 @@ def test_append_only_default_manager_check(guarded: bool) -> None:
     """Django's model checks catch a concrete retained row with an ordinary manager."""
 
     with isolate_apps("django.contrib.contenttypes") as isolated:
-        class Retained(ProtectedAppendOnlyModel):
-            objects = ProtectedManager.from_queryset(ProtectedAppendOnlyQuerySet)() if guarded else ProtectedManager()
+        class Retained(AppendOnlyModel):
+            objects = AngeeManager.from_queryset(AppendOnlyQuerySet)() if guarded else AngeeManager()
 
-            class Meta(ProtectedAppendOnlyModel.Meta):
+            class Meta(AppendOnlyModel.Meta):
                 app_label = "contenttypes"
                 abstract = False
 
@@ -53,11 +51,8 @@ def test_trash_default_manager_check(guarded: bool) -> None:
     """A model storing the trash flag must offer the trash row scopes."""
 
     with isolate_apps("django.contrib.contenttypes") as isolated:
-        class ProtectedTrashQuerySet(TrashQuerySet, ProtectedQuerySet):
-            pass
-
-        class Removable(ProtectedTrashMixin):
-            objects = ProtectedManager.from_queryset(ProtectedTrashQuerySet)() if guarded else models.Manager()
+        class Removable(TrashMixin):
+            objects = TrashQuerySet.as_manager() if guarded else models.Manager()
 
             class Meta:
                 app_label = "contenttypes"
@@ -70,13 +65,13 @@ def test_trash_default_manager_check(guarded: bool) -> None:
 
 
 def test_installed_trash_models_compose_the_trash_scopes() -> None:
-    models_ = [model for model in apps.get_models() if issubclass(model, ProtectedTrashMixin)]
+    models_ = [model for model in apps.get_models() if issubclass(model, TrashMixin)]
     assert models_
     assert all(not [error for error in model.check() if error.id == "angee.E036"] for model in models_)
 
 
 def test_installed_append_only_default_managers_compose_guard() -> None:
-    models = [model for model in apps.get_models() if issubclass(model, ProtectedAppendOnlyModel)]
+    models = [model for model in apps.get_models() if issubclass(model, AppendOnlyModel)]
     assert models
     assert all(not [error for error in model.check() if error.id == "angee.E034"] for model in models)
 
@@ -257,7 +252,7 @@ def test_hierarchy_queryset_order_checks_every_declared_manager(ordering: str) -
 @pytest.mark.parametrize("mutation", ["valid", "missing", "wrong", "widened", "stored-parent", "wrong-parent"])
 def test_inherited_owner_gate_uses_the_concrete_parents_transfer_permission(tmp_path, monkeypatch, mutation):
     with isolate_apps("django.contrib.contenttypes") as isolated:
-        class OwnedParent(OwnerMixin, ProtectedModel):
+        class OwnedParent(OwnerMixin, AngeeModel):
             owner_transfer_permission = "reassign"
 
             class Meta:
@@ -311,7 +306,7 @@ definition tests/owned_child {
 
 def test_a_child_sharing_its_owners_definition_takes_its_transfer_gate(tmp_path, monkeypatch):
     with isolate_apps("django.contrib.contenttypes") as isolated:
-        class SharedParent(OwnerMixin, ProtectedModel):
+        class SharedParent(OwnerMixin, AngeeModel):
             class Meta:
                 app_label = "contenttypes"
                 rebac_resource_type = "tests/shared_parent"
@@ -346,7 +341,7 @@ def test_owner_names_only_the_owner_mixin_column(tmp_path, monkeypatch, owned, r
     with isolate_apps("django.contrib.contenttypes") as isolated:
         if owned:
 
-            class OwnedRow(OwnerMixin, ProtectedModel):
+            class OwnedRow(OwnerMixin, AngeeModel):
                 class Meta:
                     app_label = "contenttypes"
                     rebac_resource_type = "tests/row"
@@ -354,7 +349,7 @@ def test_owner_names_only_the_owner_mixin_column(tmp_path, monkeypatch, owned, r
             row = OwnedRow
         else:
 
-            class AttributedRow(AuditMixin, ProtectedModel):
+            class AttributedRow(AuditMixin, AngeeModel):
                 class Meta:
                     app_label = "contenttypes"
                     rebac_resource_type = "tests/row"
@@ -386,3 +381,16 @@ def test_installed_models_spell_ownership_one_way() -> None:
     """
 
     assert [error.msg for error in check_ownership() if error.id == "angee.E045"] == []
+
+
+def test_a_seal_names_an_installed_owner_and_its_declared_permissions() -> None:
+    """A seal without its owner or on an undeclared permission is reported, never raised."""
+
+    [missing_owner] = check_sealed_permissions("absent", {"absent/thing": ("read",)}, "tests.E001")
+    assert missing_owner.id == "tests.E001"
+    assert "absent declares no permissions schema" in missing_owner.msg
+    [undeclared] = check_sealed_permissions("iam", {"auth/user": ("view_as", "impersonate")}, "tests.E001")
+    assert undeclared.id == "tests.E001"
+    assert "auth/user#impersonate" in undeclared.msg
+    assert "auth/user#view_as" not in undeclared.msg
+    assert check_sealed_permissions("iam", {"auth/user": ("view_as",)}, "tests.E001") == []

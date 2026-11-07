@@ -62,7 +62,9 @@ function Groups({ groups, current = context }: {
 }
 
 beforeEach(() => {
-  sdk.query.mockReset().mockImplementation((document) => document === KnowledgePageRecordBindings
+  sdk.query.mockReset().mockImplementation((document, variables) => variables?.groups
+    ? { data: { related_counts: variables.groups.map((group: string) => ({ group, count: 1 })) }, isPending: false }
+    : document === KnowledgePageRecordBindings
     ? { data: { page_record_bindings: [{ id: "krb_1", model_label: "example.Record", record_id: "rec_1", role: "contract" }] }, isPending: false }
     : document === KnowledgePages
     ? { data: { pages: [{ id: "pg_2", title: "Another", vault_label: "Reference", permissions: ["write"] }] }, isPending: false }
@@ -89,32 +91,40 @@ test("role configuration filters one shared query and each row links to the page
   expect(screen.getByText("Related 1")).toBeTruthy();
   expect(sdk.query).toHaveBeenCalledWith(KnowledgeRecordPages, {
     modelLabel: "example.Record", recordId: "rec_1", role: null,
-  }, {
-    enabled: true,
-    models: ["knowledge.RecordBinding", "knowledge.Page", "knowledge.MarkdownPage", "example.Record"],
-    records: [{ model: "example.Record", id: "rec_1" }],
-    relatedModels: ["knowledge.RecordBinding"],
-  });
+  }, { enabled: true, models: ["knowledge.RecordBinding"] });
   const row = screen.getByRole("link", { name: "Guide" });
   expect(row.getAttribute("href")).toBe("/knowledge/page/pg_1");
   fireEvent.click(row);
   expect(sdk.navigate).toHaveBeenCalledWith("/knowledge/page/pg_1");
 });
 
-test("a Pages badge alone does not request binding rows", () => {
+test("a Pages badge counts its declared related count without binding rows", () => {
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { pages: recordPagesGroup() },
+    "related#groups": { "knowledge.pages": recordPagesGroup() },
   }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
+  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), { model: "example.Record", id: "rec_1", groups: ["knowledge.pages"] }, expect.anything());
   expect(sdk.query).not.toHaveBeenCalledWith(KnowledgeRecordPages, expect.anything(), expect.anything());
 });
 
-test("a page's Backlinks and Bound to badges defer their row documents", () => {
-  const page = { ...context, route: { ...context.route!, modelLabel: "knowledge.Page" } };
+test("a role group leaves the Pages badge to Links", () => {
   render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
-    "knowledge.Page#groups": { backlinks: pageBacklinksGroup, bound: pageBoundToGroup },
-  }) }}><RelatedCountProbe id="related" context={page} onCount={vi.fn()} /></AppRuntimeProvider>);
+    "related#groups": { "knowledge.pages": recordPagesGroup(), contract: recordPagesGroup({ label: "Contract", role: "contract" }) },
+  }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
+  expect(sdk.query).not.toHaveBeenCalled();
+});
+
+test("a page's Backlinks and Bound to badges count their declared edges without row documents", () => {
+  const page = { ...context, route: { ...context.route!, modelLabel: "knowledge.Page" } };
+  const onCount = vi.fn();
+  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
+    "knowledge.Page#groups": { "knowledge.backlinks": pageBacklinksGroup, "knowledge.bound-to": pageBoundToGroup },
+  }) }}><RelatedCountProbe id="related" context={page} onCount={onCount} /></AppRuntimeProvider>);
+  expect(sdk.query).toHaveBeenCalledWith(expect.anything(), {
+    model: "knowledge.Page", id: "rec_1", groups: ["knowledge.backlinks", "knowledge.bound-to"],
+  }, expect.anything());
   expect(sdk.query).not.toHaveBeenCalledWith(KnowledgePage, expect.anything(), expect.anything());
   expect(sdk.query).not.toHaveBeenCalledWith(KnowledgePageRecordBindings, expect.anything(), expect.anything());
+  expect(onCount).toHaveBeenLastCalledWith("related", 2);
 });
 
 test("writer controls use the role-keyed bind and unbind mutations", async () => {
@@ -172,11 +182,13 @@ test("Bound-to rows use the shared reference label and route lookup", async () =
   expect(sdk.navigate).toHaveBeenCalledWith("/records/rec_1");
 });
 
-test.each([pageBacklinksGroup, pageBoundToGroup])("reverse groups load before counting and disappear when empty ($content.label)", (group) => {
+test.each([pageBacklinksGroup, pageBoundToGroup])("reverse groups load their rows and disappear when their related count is zero ($content.label)", (group) => {
   sdk.query.mockReturnValue({ data: undefined, isPending: true });
   const view = render(<Groups groups={{ reverse: group }} />);
   expect(screen.getByRole("status").textContent).toContain("Loading page");
-  sdk.query.mockReturnValue({ data: { pages_by_pk: { backlinks: [] }, page_record_bindings: [] }, isPending: false });
+  sdk.query.mockImplementation((_document, variables) => variables?.groups
+    ? { data: { related_counts: variables.groups.map((group: string) => ({ group, count: 0 })) }, isPending: false }
+    : { data: { pages_by_pk: { backlinks: [] }, page_record_bindings: [] }, isPending: false });
   view.rerender(<Groups groups={{ reverse: group }} />);
   expect(screen.queryByText(String(group.content.label))).toBeNull();
 });

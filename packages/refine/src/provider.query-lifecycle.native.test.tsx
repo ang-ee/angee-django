@@ -3,6 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { useCustom, useInfiniteList, useList, useMany, useOne, type MetaQuery } from "@refinedev/core";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
+import { createAngeeHasuraDataProvider } from "./provider";
 import { createRefineTestProviders } from "./testing";
 
 const { Provider, createClient, clearClients } = createRefineTestProviders();
@@ -21,10 +22,12 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test.each(readers)("%s shares a non-consuming transport across StrictMode and remount", async (_name, useRead) => {
-  const pending = deferred<{ data: { id: string }[]; total: number }>();
+test.each(readers)("%s shares pending Hasura transport across StrictMode and remount", async (_name, useRead) => {
+  const pending = deferred<Response>();
   const request = vi.fn(() => pending.promise);
-  const dataProvider = { custom: request, getList: request, getOne: request, getMany: request };
+  const dataProvider = createAngeeHasuraDataProvider({
+    url: "https://example.invalid/graphql", auth: (fetch) => fetch, fetch: request,
+  });
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const wrapper = ({ children }: { children: ReactNode }) => <StrictMode><Provider dataProvider={dataProvider} queryClient={client}>{children}</Provider></StrictMode>;
   const first = renderHook(() => useRead().isSuccess, { wrapper });
@@ -32,7 +35,10 @@ test.each(readers)("%s shares a non-consuming transport across StrictMode and re
   first.unmount();
   const second = renderHook(() => useRead().isSuccess, { wrapper });
   expect(request).toHaveBeenCalledTimes(1);
-  await act(async () => { pending.resolve({ data: [{ id: "one" }], total: 1 }); });
+  await act(async () => { pending.resolve(new Response(JSON.stringify({ data: {
+    notes: [{ id: "one" }], notes_by_pk: { id: "one" },
+    notes_aggregate: { aggregate: { count: 1 } },
+  } }), { headers: { "Content-Type": "application/json" } })); });
   await waitFor(() => expect(second.result.current).toBe(true));
   expect(request).toHaveBeenCalledTimes(1);
 });

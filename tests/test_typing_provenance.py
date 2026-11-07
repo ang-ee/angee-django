@@ -64,34 +64,16 @@ def test_provenance_plugin_types_concrete_storage_without_angee_host(tmp_path: P
         "changeset_model().objects.missing_method()\n"
     )
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="storage_settings")
-    env["PYTHONPATH"] = os.pathsep.join(
-        filter(
-            None,
-            (
-                str(tmp_path),
-                str(root),
-                str(root / "src"),
-                env.get("PYTHONPATH"),
-            ),
-        )
-    )
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (
+        str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH"),
+    )))
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
     positive = subprocess.run(
-        [*command, str(valid)],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=COMPOSED_TEST_TIMEOUT,
+        [*command, str(valid)], cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
     negative = subprocess.run(
-        [*command, str(invalid)],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=COMPOSED_TEST_TIMEOUT,
+        [*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert negative.returncode == 1, negative.stdout + negative.stderr
     assert negative.stdout.count(": error:") == 2, negative.stdout
@@ -99,12 +81,9 @@ def test_provenance_plugin_types_concrete_storage_without_angee_host(tmp_path: P
     # Source files and config stay unchanged: the native cache hook must notice
     # that this host selected another concrete storage model through its input.
     switched = subprocess.run(
-        [*command, str(valid)],
-        cwd=root,
+        [*command, str(valid)], cwd=root,
         env={**env, "PROVENANCE_TYPING_STORAGE": "storage_probe.OtherChangeset"},
-        capture_output=True,
-        text=True,
-        timeout=COMPOSED_TEST_TIMEOUT,
+        capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert switched.returncode == 1, switched.stdout + switched.stderr
     assert "OtherChangeset" in switched.stdout, switched.stdout
@@ -134,34 +113,18 @@ def test_provenance_plugin_keeps_protocol_without_an_installed_storage_app(tmp_p
         "assert_type(require_changeset(), ChangesetLike)\n",
     )
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="absent_storage_settings")
-    env["PYTHONPATH"] = os.pathsep.join(
-        filter(
-            None,
-            (
-                str(tmp_path),
-                str(root),
-                str(root / "src"),
-                env.get("PYTHONPATH"),
-            ),
-        )
-    )
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (
+        str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH"),
+    )))
     result = subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(config), str(source)],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=COMPOSED_TEST_TIMEOUT,
+        cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     source.write_text("from django.conf import settings\nsettings.ANGEE_CHANGESET_MODEL\n")
     absent_setting = subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(config), str(source)],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=COMPOSED_TEST_TIMEOUT,
+        cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert absent_setting.returncode == 1, absent_setting.stdout + absent_setting.stderr
     assert "has no attribute 'ANGEE_CHANGESET_MODEL'" in absent_setting.stdout
@@ -179,38 +142,21 @@ def test_installed_provenance_settings_keep_their_declared_types(tmp_path: Path)
         "assert_type(settings.SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD, bool)\n",
     )
     env = dict(
-        os.environ,
-        DJANGO_SETTINGS_MODULE="tests.typing_settings",
+        os.environ, DJANGO_SETTINGS_MODULE="tests.typing_settings",
         PYTHONPATH=os.pathsep.join((str(root), str(root / "src"))),
     )
     env.pop("ANGEE_PROJECT_DIR", None)
     command = [
-        sys.executable,
-        "-m",
-        "mypy",
-        "--config-file",
-        str(root / "pyproject.toml"),
-        "--cache-dir",
-        str(tmp_path / "cache"),
-        str(source),
+        sys.executable, "-m", "mypy", "--config-file", str(root / "pyproject.toml"),
+        "--cache-dir", str(tmp_path / "cache"), str(source),
     ]
     positive = subprocess.run(
-        command,
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=COMPOSED_TEST_TIMEOUT,
+        command, cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
     source.write_text("from django.conf import settings\nwrong: int = settings.ANGEE_CHANGESET_MODEL\n")
     negative = subprocess.run(
-        command,
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=COMPOSED_TEST_TIMEOUT,
+        command, cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert negative.returncode == 1, negative.stdout + negative.stderr
     assert negative.stdout.count(": error:") == 1, negative.stdout

@@ -5,12 +5,13 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
-from tests.conftest import addon_schema, create_user, execute_schema, result_data
+from tests.conftest import addon_schema, create_user
 from tests.workflow_steps import Value
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
@@ -70,12 +71,12 @@ def test_map_progress_and_item_identity_follow_retained_execution(schema, map_wo
     parent = StepRun.system_queryset().get(run=run, node_key="items")
     runner.execute(parent.pk)
     parent.refresh_from_db()
-    assert (parent.get_map_total(), parent.get_map_settled()) == (2, 0)
+    assert (parent.map_total, parent.map_settled) == (2, 0)
     first = StepRun.system_queryset().get(run=run, node_key="items.body", map_index=0)
-    assert (first.rank, first.is_mapped, first.get_map_total(), first.get_map_settled()) == (parent.rank, True, 0, 0)
+    assert (first.rank, first.is_mapped, first.map_total, first.map_settled) == (parent.rank, True, 0, 0)
     runner.execute(first.pk)
     parent.refresh_from_db()
-    assert (parent.get_map_total(), parent.get_map_settled()) == (2, 1)
+    assert (parent.map_total, parent.map_settled) == (2, 1)
     query = """query($id: String!) {
       steprun(where: {run: {_eq: $id}}, order_by: [{rank: asc}, {map_index: asc}]) {
         node_key rank map_index is_mapped map_total map_settled
@@ -103,7 +104,7 @@ def test_map_progress_and_item_identity_follow_retained_execution(schema, map_wo
     run_until(run)
     parent.refresh_from_db()
     assert run.status == "succeeded"
-    assert (parent.get_map_total(), parent.get_map_settled()) == (2, 2)
+    assert (parent.map_total, parent.map_settled) == (2, 2)
 
 
 def test_map_progress_projection_query_cost_does_not_grow_with_item_count(schema, map_workflow, execution):

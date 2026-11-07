@@ -488,6 +488,7 @@ describe("createApp presence", () => {
           roleRefs: [], permitted, preferences: {},
         },
         real_user: null,
+        viewable_people: [],
       } });
     };
     history.replaceState(null, "", path);
@@ -1799,7 +1800,7 @@ describe("createApp route tree", () => {
     }
     const identityFetch: typeof fetch = async () => Response.json({ data: {
       current_user: { id: "user-1", username: "user", firstName: "", lastName: "", roleRefs: [], preferences },
-      real_user: null,
+      real_user: null, viewable_people: [],
     } });
     const app = createApp({
       ...testAppInput([{
@@ -1849,7 +1850,7 @@ describe("createApp route tree", () => {
     history.replaceState(null, "", "/");
     const identityFetch: typeof fetch = async () => Response.json({ data: {
       current_user: { id: "user-1", username: "user", firstName: "", lastName: "", roleRefs: [], preferences },
-      real_user: null,
+      real_user: null, viewable_people: [],
     } });
     const page = (name: string, path: string) => ({ name, path, component: () => createElement("p", null, `${name} page`) });
     const app = createApp({
@@ -1893,7 +1894,7 @@ describe("createApp route tree", () => {
       return Response.json({ data: {
         current_user: { id: "user-1", username: "user", firstName: "", lastName: "", roleRefs: [],
           preferences: { [HOME_PATH_PREFERENCE_KEY]: "/preferred?tab=activity#details" } },
-        real_user: null,
+        real_user: null, viewable_people: [],
       } });
     };
     const app = createApp({

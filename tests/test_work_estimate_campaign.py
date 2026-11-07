@@ -4,7 +4,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 
-from tests.work_campaign import Queue, Task, hand_context, make_task, rule_context
+from tests.work_campaign import CreateTask, Queue, hand_context, make_task, rule_context
 from tests.work_campaign import productivity_create_case as productivity_create_case
 from tests.work_campaign import work_case as work_case
 
@@ -15,8 +15,8 @@ def test_creation_default_obeys_scale_and_preserves_explicit_fraction(work_case,
     with actor_context(actor):
         queue.estimate_scale, queue.default_estimate = scale, 1.25
         queue.save(update_fields=["estimate_scale", "default_estimate"])
-        defaulted = Task.objects.create(title="Default", queue=queue)
-        explicit = Task.objects.create(title="Fraction", queue=queue, estimate=0.75)
+        defaulted = CreateTask.objects.create(title="Default", queue=queue)
+        explicit = CreateTask.objects.create(title="Fraction", queue=queue, estimate=0.75)
         assert defaulted.estimate == (None if scale == "none" else 1.25)
         assert explicit.estimate == 0.75
         defaulted.estimate = None
@@ -45,12 +45,12 @@ def test_zero_insert_uses_current_policy_even_with_cached_queue(work_case, allow
         changed.save(update_fields=["estimate_allow_zero"])
     with actor_context(actor):
         if allowed:
-            task = Task.objects.create(title="Zero", queue=queue, estimate=0)
+            task = CreateTask.objects.create(title="Zero", queue=queue, estimate=0)
             assert task.estimate == 0
         else:
             with pytest.raises(ValidationError, match="zero estimate"):
-                Task.objects.create(title="Zero", queue=queue, estimate=0)
-            assert not Task._base_manager.exists()
+                CreateTask.objects.create(title="Zero", queue=queue, estimate=0)
+            assert not CreateTask._base_manager.exists()
 
 
 @pytest.mark.parametrize("mode", ["full", "partial", "deferred"])
@@ -62,7 +62,7 @@ def test_changed_estimate_reads_tightened_or_relaxed_cached_policy(work_case, mo
         queue.save(update_fields=["estimate_allow_zero"])
     task = make_task(queue, estimate=2)
     if mode == "deferred":
-        task = Task._base_manager.only("pk", "title").get(pk=task.pk)
+        task = CreateTask._base_manager.only("pk", "title").get(pk=task.pk)
     assert task.queue.estimate_allow_zero is not allowed
     with system_context(reason="test.work.estimate.changed"):
         Queue._base_manager.filter(pk=queue.pk).update(estimate_allow_zero=allowed)
@@ -73,7 +73,7 @@ def test_changed_estimate_reads_tightened_or_relaxed_cached_policy(work_case, mo
         else:
             with pytest.raises(ValidationError, match="zero estimate"):
                 task.save(**({"update_fields": ["estimate"]} if mode == "partial" else {}))
-    assert Task._base_manager.get(pk=task.pk).estimate == (0 if allowed else 2)
+    assert CreateTask._base_manager.get(pk=task.pk).estimate == (0 if allowed else 2)
 
 
 @pytest.mark.parametrize("mode", ["full", "partial", "deferred", "clean", "rule", "sudo"])
@@ -83,7 +83,7 @@ def test_existing_zero_survives_unrelated_writes_after_policy_tightens(work_case
     with system_context(reason="test.work.estimate.tighten"):
         Queue._base_manager.filter(pk=queue.pk).update(estimate_allow_zero=False)
     if mode == "deferred":
-        task = Task._base_manager.only("pk", "title").get(pk=task.pk)
+        task = CreateTask._base_manager.only("pk", "title").get(pk=task.pk)
     with hand_context(actor, mode == "sudo"), rule_context(task, mode == "rule"):
         task.title = "Still writable"
         if mode == "clean":
@@ -115,7 +115,7 @@ def test_partial_save_does_not_consume_an_unsaved_estimate_edit(work_case):
     with actor_context(actor):
         task.estimate, task.title = 0, "Title only"
         task.save(update_fields=["title"])
-        assert Task._base_manager.get(pk=task.pk).estimate == 1
+        assert CreateTask._base_manager.get(pk=task.pk).estimate == 1
         with pytest.raises(ValidationError, match="zero estimate"):
             task.save(update_fields=["estimate"])
 
@@ -128,5 +128,5 @@ def test_creation_refreshes_both_cached_scale_and_default(work_case, scale):
         queue.save(update_fields=["estimate_scale", "default_estimate"])
         Queue._base_manager.filter(pk=queue.pk).update(estimate_scale=scale, default_estimate=0.5)
     with actor_context(actor):
-        task = Task.objects.create(title="Current default", queue=queue)
+        task = CreateTask.objects.create(title="Current default", queue=queue)
     assert task.estimate == (None if scale == "none" else 0.5)

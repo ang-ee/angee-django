@@ -9,7 +9,6 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.test import override_settings
 from rebac import (
     MissingActorError,
     PermissionDenied,
@@ -25,12 +24,12 @@ from rebac.roles import grant
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.knowledge import schema as knowledge_schema
-from angee.knowledge.exceptions import (
+from angee.knowledge.models import (
     SectionNotFoundError,
     StaleBodyError,
     UnsupportedPageKindError,
+    parse_wikilinks,
 )
-from angee.knowledge.models.pages import parse_wikilinks
 from angee.mcp.graphql import execute_under_actor
 from tests.conftest import Link, MarkdownPage, Page, SchemaAddon, Vault, create_user, vault_for
 
@@ -58,7 +57,7 @@ def test_factory_rows_stay_gated_after_creation(composed_tables: None) -> None:
 
     assert getattr(vault, "_rebac_sudo_reason", None) is None
     with actor_context(bob), pytest.raises(PermissionDenied):
-        vault.with_actor(bob).save(update_fields=("name",))
+        vault.as_user(bob).save(update_fields=("name",))
 
 
 def test_create_for_refuses_foreign_owner(composed_tables: None) -> None:
@@ -89,8 +88,8 @@ def test_vault_scope_hides_other_owners(composed_tables: None) -> None:
     bob = create_user("bob")
     vault_for(alice, name="Research")
 
-    assert [vault.name for vault in Vault.objects.with_actor(alice)] == ["Research"]
-    assert list(Vault.objects.with_actor(bob)) == []
+    assert [vault.name for vault in Vault.objects.as_user(alice)] == ["Research"]
+    assert list(Vault.objects.as_user(bob)) == []
 
 
 def test_create_in_requires_vault_write(composed_tables: None) -> None:
@@ -108,8 +107,8 @@ def test_create_in_requires_vault_write(composed_tables: None) -> None:
 
     assert page.kind == Page.PageKind.NOTE
     assert page.created_by == alice
-    assert [row.title for row in Page.objects.with_actor(alice)] == ["Reading list"]
-    assert list(Page.objects.with_actor(bob)) == []
+    assert [row.title for row in Page.objects.as_user(alice)] == ["Reading list"]
+    assert list(Page.objects.as_user(bob)) == []
 
 
 def test_create_in_refuses_cross_vault_parent(composed_tables: None) -> None:
@@ -145,8 +144,8 @@ def test_page_inherits_vault_read(composed_tables: None) -> None:
 
     _grant(vault, "viewer", bob)
 
-    assert [row.title for row in Page.objects.with_actor(bob)] == ["Shared notes"]
-    assert [row.name for row in Vault.objects.with_actor(bob)] == ["Research"]
+    assert [row.title for row in Page.objects.as_user(bob)] == ["Shared notes"]
+    assert [row.name for row in Vault.objects.as_user(bob)] == ["Research"]
 
 
 def test_vault_viewer_share_is_managed_by_share_holders(composed_tables: None) -> None:
@@ -160,13 +159,13 @@ def test_vault_viewer_share_is_managed_by_share_holders(composed_tables: None) -
 
     with actor_context(editor), pytest.raises(PermissionDenied):
         vault.with_actor(editor).grant_record_access("viewer", bob)
-    assert list(Vault.objects.with_actor(bob)) == []
+    assert list(Vault.objects.as_user(bob)) == []
 
     with actor_context(alice):
         vault.with_actor(alice).grant_record_access("viewer", bob)
-        assert [row.name for row in Vault.objects.with_actor(bob)] == ["Research"]
+        assert [row.name for row in Vault.objects.as_user(bob)] == ["Research"]
         vault.revoke_record_access("viewer", bob)
-        assert list(Vault.objects.with_actor(bob)) == []
+        assert list(Vault.objects.as_user(bob)) == []
         with pytest.raises(ValueError):
             vault.grant_record_access("editor", bob)
 
@@ -184,7 +183,7 @@ def test_page_inherits_parent_read(composed_tables: None) -> None:
 
     _grant(folder, "viewer", bob)
 
-    assert {row.title for row in Page.objects.with_actor(bob)} == {"Projects", "Roadmap"}
+    assert {row.title for row in Page.objects.as_user(bob)} == {"Projects", "Roadmap"}
 
 
 def test_folder_delete_cascades_past_foreign_children(composed_tables: None) -> None:
@@ -200,10 +199,10 @@ def test_folder_delete_cascades_past_foreign_children(composed_tables: None) -> 
         Page.objects.create_in(vault, parent=folder, title="Editor child")
 
     with actor_context(alice):
-        Page.objects.with_actor(alice).get(title="Projects").delete()
+        Page.objects.as_user(alice).get(title="Projects").delete()
 
     with actor_context(alice):
-        assert not Page.objects.with_actor(alice).exists()
+        assert not Page.objects.as_user(alice).exists()
 
 
 def test_roles_grant_cross_vault_reach(composed_tables: None) -> None:
@@ -223,21 +222,21 @@ def test_roles_grant_cross_vault_reach(composed_tables: None) -> None:
     grant(actor=vault_admin, role="knowledge/role:vault_admin")
     grant(actor=knowledge_admin, role="knowledge/role:knowledge_admin")
 
-    assert [row.name for row in Vault.objects.with_actor(viewer)] == ["Research"]
-    assert [row.title for row in Page.objects.with_actor(viewer)] == ["Handbook"]
+    assert [row.name for row in Vault.objects.as_user(viewer)] == ["Research"]
+    assert [row.title for row in Page.objects.as_user(viewer)] == ["Handbook"]
     with actor_context(viewer), pytest.raises(PermissionDenied):
-        _rename(Vault.objects.with_actor(viewer).get(), "Viewer rename")
+        _rename(Vault.objects.as_user(viewer).get(), "Viewer rename")
 
     with actor_context(editor):
-        _rename(Vault.objects.with_actor(editor).get(), "Editor rename")
+        _rename(Vault.objects.as_user(editor).get(), "Editor rename")
     with actor_context(editor), pytest.raises(PermissionDenied):
-        Vault.objects.with_actor(editor).get().delete()
+        Vault.objects.as_user(editor).get().delete()
 
-    assert [row.name for row in Vault.objects.with_actor(knowledge_admin)] == ["Editor rename"]
+    assert [row.name for row in Vault.objects.as_user(knowledge_admin)] == ["Editor rename"]
 
     with actor_context(vault_admin):
-        Vault.objects.with_actor(vault_admin).get().delete()
-    assert list(Vault.objects.with_actor(alice)) == []
+        Vault.objects.as_user(vault_admin).get().delete()
+    assert list(Vault.objects.as_user(alice)) == []
 
 
 @pytest.mark.parametrize("worker", [False, True])
@@ -402,10 +401,10 @@ def test_backlinks_respect_source_page_read(composed_tables: None) -> None:
         linker = Page.objects.create_in(vault, title="Linker")
         MarkdownPage.objects.write_body(linker, "ref [[Target]]")
 
-    assert Link.objects.with_actor(alice).filter(target_page=target).count() == 1
+    assert Link.objects.as_user(alice).filter(target_page=target).count() == 1
 
     _grant(target, "viewer", bob)  # bob reads the target, not the linking source
-    assert list(Link.objects.with_actor(bob).filter(target_page=target)) == []
+    assert list(Link.objects.as_user(bob).filter(target_page=target)) == []
 
 
 def test_patch_section_splices_guards_and_reindexes(composed_tables: None) -> None:
@@ -476,7 +475,6 @@ def test_append_and_prepend_grow_body(composed_tables: None) -> None:
     assert prepended.body == "header\n\nfirst line\n\nsecond line"
 
 
-@pytest.mark.django_db(transaction=True)
 def test_mcp_body_write_updates_section(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A section patch driven through the MCP engine updates the body."""
 
@@ -567,19 +565,9 @@ def test_markdown_save_rejects_a_concurrent_title_edit_with_native_page_revision
             )
         stored = MarkdownPage.objects.get(pk=page.pk)
         assert (stored.title, stored.body) == ("Concurrent title", "Original body")
-        class WriteRouter:
-            def db_for_read(self, model, **hints):
-                if model is MarkdownPage:
-                    raise AssertionError("A body write must select its write database before opening a transaction.")
-                return None
-
-            def db_for_write(self, model, **hints):
-                return "default"
-
-        with override_settings(DATABASE_ROUTERS=[WriteRouter()]):
-            saved = MarkdownPage.objects.write_body(
-                stored, "Accepted body", title="Accepted title", expected_hash=stored.body_hash,
-                expected_revision=stored.revision,
-            )
+        saved = MarkdownPage.objects.write_body(
+            stored, "Accepted body", title="Accepted title", expected_hash=stored.body_hash,
+            expected_revision=stored.revision,
+        )
         assert saved.revision == stored.revision + 1
         assert (saved.title, saved.body) == ("Accepted title", "Accepted body")

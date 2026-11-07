@@ -8,34 +8,27 @@ import { RecordTimelineDocument, RUN_MODEL, RUN_MODELS } from "./documents.conso
 import { useWorkflowsT } from "./i18n";
 import { useStepRetryActions } from "./step-retry";
 import { useRunCancelActions } from "./run-cancel";
+import { joinStepRuns } from "./run-graph";
 
 export interface TimelineRecord { model: string; id: string }
 export interface RecordTimelineProps { record: TimelineRecord | readonly TimelineRecord[]; /** Show this run alone (the drill-in's target). */ runId?: string }
-type TimelineRead = DocumentType<typeof RecordTimelineDocument>["record_timeline"];
-type TimelineRecordRead = TimelineRead["records"][number];
-export type TimelineDecision = NonNullable<TimelineRecordRead["decisions"]>[number];
-export type TimelineData = (Omit<TimelineRecordRead, "decisions"> & { decisions: TimelineDecision[] })[];
-export type TimelineSelection = Omit<TimelineRead, "records" | "open_decision_count"> & {
-  records: TimelineData; open_decision_count: number;
-};
+export type TimelineSelection = DocumentType<typeof RecordTimelineDocument>["record_timeline"];
+export type TimelineData = TimelineSelection["records"];
+export type TimelineDecision = TimelineData[number]["decisions"][number];
 type TimelineRun = TimelineData[number]["runs"][number];
-type TimelineStep = NonNullable<TimelineRun["graph"]["nodes"][number]["step_run"]>;
+type TimelineStep = TimelineRun["graph_step_runs"][number];
 type MappedStep = TimelineStep["map_steps"][number];
 export interface TimelineNote { tone: string; message: string }
 const EMPTY_TIMELINE: TimelineData = [];
-const runSteps = (run: TimelineRun) => run.graph.nodes.flatMap(({ step_run }) => step_run ? [step_run, ...step_run.map_steps] : []);
+const runSteps = (run: TimelineRun) => run.graph_step_runs.flatMap((step) => [step, ...step.map_steps]);
 
 /** One input: a record or a selection. The contributing surface chooses placement. */
 export function RecordTimeline({ record, runId }: RecordTimelineProps): ReactElement {
   const t = useWorkflowsT();
-  const query = useRecordTimelineQuery(record, undefined, undefined, Boolean(runId));
+  const query = useRecordTimelineQuery(record);
   const records = query.data?.record_timeline?.records ?? EMPTY_TIMELINE;
   const data = useMemo(
-    () => records.map((entry) => ({
-      ...entry,
-      runs: runId ? entry.runs.filter((run) => run.id === runId) : entry.runs,
-      decisions: runId ? [] : entry.decisions ?? [],
-    })),
+    () => runId ? records.map((entry) => ({ ...entry, runs: entry.runs.filter((run) => run.id === runId), decisions: [] })) : records,
     [records, runId],
   );
   if (query.isLoading) return <LoadingPanel />;
@@ -43,9 +36,9 @@ export function RecordTimeline({ record, runId }: RecordTimelineProps): ReactEle
   return <RecordTimelineView data={data} openCount={query.data?.record_timeline?.open_decision_count ?? 0} set={Array.isArray(record)} drillIn={Boolean(runId)} />;
 }
 
-export function useRecordTimelineQuery(record: RecordTimelineProps["record"], enabled = true, runLimit = 20, drillIn = false) {
+export function useRecordTimelineQuery(record: RecordTimelineProps["record"], enabled = true, runLimit = 20) {
   const records = useMemo(() => Array.isArray(record) ? record : [record as TimelineRecord], [record]);
-  return useAuthoredQuery(RecordTimelineDocument, { records, runLimit, drillIn }, {
+  return useAuthoredQuery(RecordTimelineDocument, { records, runLimit }, {
     models: [...RUN_MODELS, "decisions.Decision", "decisions.DecisionRecord"],
     records, relatedModels: [...RUN_MODELS, "decisions.Decision"], enabled: enabled && records.length > 0 && records.every((item) => Boolean(item.id)),
   });
@@ -218,7 +211,8 @@ function RunSteps({ run, recordId, card, link, retry }: {
   const resolveTone = useStatusTone();
   const originOptions = useEnumOptions(RUN_MODEL, "origin");
   const [expanded, setExpanded] = useState(false);
-  const ordered = [...run.graph.nodes].filter((node) => !node.key.endsWith(".body")).sort((a, b) => a.rank - b.rank);
+  const ordered = joinStepRuns(run.graph?.nodes ?? [], run.graph_step_runs)
+    .filter((node) => !node.key.endsWith(".body")).sort((a, b) => a.rank - b.rank);
   const done = ordered.filter((node) => node.plan === "done");
   const current = ordered.filter((node) => node.plan === "current");
   const routine = (node: typeof ordered[number]) => !node.step_run?.decision && !node.step_run?.notes.length

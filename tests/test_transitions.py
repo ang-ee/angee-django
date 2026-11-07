@@ -4,28 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from copy import copy
-from pathlib import Path
 from typing import Any
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, connections, models, router, transaction
+from django.db import models, transaction
 from django.test import override_settings
-from django.test.utils import CaptureQueriesContext, isolate_apps
+from django.test.utils import isolate_apps
 from rebac import system_context
 
 from angee.agents.models import AgentLifecycle, SessionStatus, TurnStatus
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceProvider
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField
-from angee.base.models.transitions import (
-    StateTransitions,
-    StateTransitionsMixin,
-    get_transition_save_field,
-    save_state,
-    transition,
-)
-from angee.iam.models.base import ProtectedModel
+from angee.base.models.base import AngeeModel
+from angee.base.models.transitions import StateTransitions, get_transition_save_field, save_state, transition
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.testing.integration import Integration
 from tests.conftest import make_integration
@@ -71,7 +64,7 @@ def persist_after_review(instance: Any, source: Any, target: Any) -> None:
     save_state(instance, source, target)
 
 
-class TransitionTask(ProtectedModel):
+class TransitionTask(AngeeModel):
     """Concrete throwaway model used for guarded-transition tests."""
 
     class State(models.TextChoices):
@@ -187,7 +180,7 @@ def test_transition_host_requires_state_transitions_mixin() -> None:
 def test_composition_missing_declared_state_field_names_host_and_declaration() -> None:
     """Removing an abstract field cannot leave its inherited declaration dangling."""
 
-    class StateSource(ProtectedModel):
+    class StateSource(AngeeModel):
         state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
         state_transitions = StateTransitions(state, {})
 
@@ -720,7 +713,7 @@ def test_not_allowed_public_helper_raises_the_transition_error(transition_task_t
     assert "state transition from draft to archived" in str(error.value)
 
 
-class PolicyTask(ProtectedModel):
+class PolicyTask(AngeeModel):
     """Throwaway model exercising the settings-backed transition policy overlay."""
 
     class State(models.TextChoices):
@@ -847,7 +840,7 @@ def test_policy_marker_requires_a_policy_setting() -> None:
 
     with pytest.raises(ImproperlyConfigured):
 
-        class Unresolvable(ProtectedModel):
+        class Unresolvable(AngeeModel):
             """Model whose policy edge has no settings key to resolve it."""
 
             class State(models.TextChoices):
@@ -899,75 +892,3 @@ def test_transition_eligibility_uses_execution_guards_without_side_effects():
     task.ready = True
     done = TransitionTask(state=TransitionTask.State.DONE)
     assert not done.state_transitions.can_run(done, "mark_running")
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("fail_hook", [False, True])
-@isolate_apps()
-def test_transition_uses_row_database_for_reads_writes_and_rollback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, django_db_blocker: Any, fail_hook: bool,
-) -> None:
-    """A default-seeking router cannot move a loaded row's transition to another database."""
-
-    def persist_or_fail(instance: Any, source: Any, target: Any) -> None:
-        save_state(instance, source, target)
-        if fail_hook:
-            raise ValueError("transition hook failed")
-
-    class RoutedTask(StateTransitionsMixin):
-        state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
-        note = models.CharField(max_length=32, blank=True)
-        state_transitions = StateTransitions(state, {TransitionTask.State.RUNNING: [TransitionTask.State.DONE]})
-
-        class Meta:
-            app_label = "tests"
-
-        @transition(
-            state, source=TransitionTask.State.RUNNING, target=TransitionTask.State.DONE, on_success=persist_or_fail,
-        )
-        def finish(self) -> None:
-            type(self).objects.using(self._state.db).filter(pk=self.pk).update(note="body written")
-
-    class DefaultRouter:
-        def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
-            return "default"
-
-        db_for_write = db_for_read
-
-    alias = "transition_row_probe"
-    connections.databases[alias] = {
-        **connections.databases["default"],
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": str(tmp_path / "transition-row.sqlite3"),
-        "OPTIONS": {},
-        "CONN_MAX_AGE": 0,
-    }
-    database = connections[alias]
-    monkeypatch.setattr(router, "routers", [DefaultRouter()])
-    try:
-        with django_db_blocker.unblock(), model_tables((RoutedTask,)):
-            with database.schema_editor() as editor:
-                editor.create_model(RoutedTask)
-            original = RoutedTask.objects.create(pk=1, state=TransitionTask.State.DRAFT, note="default row")
-            row = RoutedTask.objects.using(alias).create(pk=1, state=TransitionTask.State.RUNNING)
-            with CaptureQueriesContext(connection) as default_queries:
-                if fail_hook:
-                    with pytest.raises(ValueError, match="transition hook failed"):
-                        row.finish()
-                else:
-                    row.finish()
-            assert not any(RoutedTask._meta.db_table in query["sql"] for query in default_queries)
-            row.refresh_from_db(using=alias)
-            assert row.state == (TransitionTask.State.RUNNING if fail_hook else TransitionTask.State.DONE)
-            assert row.note == ("" if fail_hook else "body written")
-            if not fail_hook:
-                row.state_transitions.force_state(row, TransitionTask.State.ARCHIVED, reason="routed recovery")
-                row.refresh_from_db(using=alias)
-                assert row.state == TransitionTask.State.ARCHIVED
-            original.refresh_from_db()
-            assert original.state == TransitionTask.State.DRAFT
-            assert original.note == "default row"
-    finally:
-        database.close()
-        del connections[alias]
-        connections.databases.pop(alias)

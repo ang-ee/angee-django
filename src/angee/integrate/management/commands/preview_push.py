@@ -9,7 +9,7 @@ from django.apps import apps
 from django.core.management.base import BaseCommand, CommandError
 from rebac import system_context
 
-from angee.integrate.streams import PushPreview
+from angee.integrate.streams import PushPreview, preview_push
 
 
 class Command(BaseCommand):
@@ -38,13 +38,18 @@ class Command(BaseCommand):
 
         del args
         integration_model = apps.get_model("integrate", "Integration")
+        stream_model = apps.get_model("integrate", "SyncStream")
         with system_context(reason="integrate.preview_push"):
             for sqid in options["integrations"]:
                 integration = integration_model.objects.filter(sqid=sqid).first()
                 if integration is None:
                     raise CommandError(f"There is no integration {sqid}.")
-                for stream, preview in integration.preview_push():
-                    self._report(sqid, stream, preview, keys=options["keys"])
+                adapter = integration.concrete_capability().capability_impl
+                try:
+                    for stream in stream_model.objects.current_for_bridge(integration):
+                        self._report(sqid, stream, preview_push(stream, adapter), keys=options["keys"])
+                finally:
+                    adapter.close()
 
     def _report(self, sqid: str, stream: Any, preview: PushPreview, *, keys: bool) -> None:
         """Write one stream's counts, and its keys when asked."""

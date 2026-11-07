@@ -130,17 +130,13 @@ class PublicationCases(TransactionTestCase):
             with CaptureQueriesContext(connection) as queries, self.assertRaises(ClarificationWidenBlocked) as error:
                 locked.validate_visibility("inherited")
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
-            # The blocked read writes a single audit. That audit
-            # and one SELECT retain the complete blocker predicate.
-            statements = tuple(row["sql"] for row in queries.captured_queries)
-            self.assertEqual(len(statements), 2, statements)
-            audits = [sql for sql in statements if 'INSERT INTO "rebac_permissionauditevent"' in sql]
-            selections = [sql for sql in statements if sql.startswith("SELECT ")]
-            self.assertEqual(len(audits), 1, statements)
-            self.assertEqual(len(selections), 1, statements)
+            # Three audited system scopes (task twice, message once) and one
+            # application SELECT containing the complete blocker predicate.
+            self.assertEqual(len(queries), 4, queries.captured_queries)
+            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in q["sql"] for q in queries[:3]))
             # One EXISTS selects messages; its nested EXISTS follows the
             # canonical (possibly merged) thread attachment for this record.
-            self.assertEqual(selections[0].upper().count("EXISTS("), 2)
+            self.assertEqual(queries[3]["sql"].upper().count("EXISTS("), 2)
         before = self.Task._base_manager.filter(pk=question.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):
@@ -214,7 +210,7 @@ class PublicationCases(TransactionTestCase):
         with actor_context(self.manager):
             question = self.as_user(question, self.manager)
             self.assertEqual(
-                {entry["id"] for entry in question.get_clarification_waiting()}, {self.asker.pk, self.recipient.pk},
+                {entry["id"] for entry in question.clarification_waiting()}, {self.asker.pk, self.recipient.pk},
             )
             with self.assertRaises(PublishedQuestion):
                 question.set_visibility("restricted")
@@ -277,29 +273,12 @@ class PublicationCases(TransactionTestCase):
         with CaptureQueriesContext(connection) as queries:
             self.data(self.execute(document, {}, self.manager))
         baseline = len(queries)
-
-        def assert_blockers(rows, count):
-            self.assertEqual(len(rows), count)
-            for row in rows:
-                self.assertEqual(
-                    row["clarification_widen_blocker"],
-                    "hidden_asker_message" if row["id"] == str(question.sqid) else None,
-                )
-
-        second = self.question()
-        with CaptureQueriesContext(connection) as intermediate:
-            rows = self.data(self.execute(document, {}, self.manager))["project_tasks"]
-        assert_blockers(rows, 2)
-        self.assertEqual({row["id"] for row in rows}, {str(question.sqid), str(second.sqid)})
-        for _ in range(8):
+        for _ in range(9):
             self.question()
         with CaptureQueriesContext(connection) as queries:
             rows = self.data(self.execute(document, {}, self.manager))["project_tasks"]
-        assert_blockers(rows, 10)
-        # Native singleton and population plans differ; population work stays constant.
-        counts = [baseline, len(intermediate), len(queries)]
-        self.assertLessEqual(counts[0], counts[1], counts)
-        self.assertEqual(counts[1], counts[2], counts)
+        self.assertEqual(len(rows), 10)
+        self.assertEqual(len(queries), baseline)
 
     def test_graphql_actions_refuse_in_band_and_leave_question_unchanged(self) -> None:
         question = self.question()

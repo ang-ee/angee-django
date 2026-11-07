@@ -18,15 +18,17 @@ from django.db.models import DO_NOTHING, Exists, OuterRef, Q
 from django.db.models.deletion import get_candidate_relations_to_delete
 from django.db.models.functions import Cast
 from django.utils import timezone
+from rebac import model_identities
+from rebac.actors import model_can_resolve_subject
+from rebac.models import active_relationship_model
+from rebac.resources import model_resource_type
 
 from angee.base.lineage import concrete_lineage
 from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.audit import AuditMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import auto_now_stamps
-from angee.base.querysets import query_batch_size
 from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.base.signals import bulk_updated
 
 
 class MergePolicy(StrEnum):
@@ -246,32 +248,7 @@ class Reference:
             with transaction.atomic(using=using):
                 # A hierarchy's ``parent`` is re-pointed by its model's ``merge_contract``
                 # above (the path and cycle owner), never by this bulk update.
-                values = {**target, **auto_now_stamps(self.model, timezone.now())}
-                observed = bulk_updated.has_listeners(self.model) and callable(
-                    getattr(self.model, "change_batch_targets", None)
-                )
-                pending = rows.order_by("pk")
-                while True:
-                    previous: tuple[models.Model, ...] = ()
-                    if observed:
-                        # Reserve the native update's shared assignment parameters.
-                        size = query_batch_size(pending) - len(values)
-                        if size < 1:
-                            raise ValueError("The reference move query leaves no room for its update.")
-                        previous = tuple(pending.only("pk", *self.columns)[:size])
-                    if observed and not previous:
-                        break
-                    keys = [row.pk for row in previous]
-                    batch = rows.filter(pk__in=keys) if observed else rows
-                    batch.update(**values)
-                    if not observed:
-                        break
-                    current = tuple(self.model._base_manager.using(using).filter(pk__in=keys).order_by("pk"))
-                    bulk_updated.send_robust(
-                        sender=self.model, instances=current, previous_instances=previous,
-                        update_fields=frozenset(values), using=using,
-                    )
-                    pending = rows.filter(pk__gt=previous[-1].pk).order_by("pk")
+                rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
         except IntegrityError as error:
             # A rule the field sets above cannot express (an expression constraint)
             # still refuses the merge instead of failing it.
@@ -432,6 +409,26 @@ def references(model: type[models.Model]) -> tuple[Reference, ...]:
 
     return tuple(_references(model))
 
+
+def named_in_relationships(record: models.Model) -> bool:
+    """Return whether stored REBAC relationships name any row retiring ``record`` deletes.
+
+    The delete takes the record's multi-table parents and children with it, and
+    REBAC cleans every identity those rows carry, as a resource or as a subject.
+    Relations backed by fields follow a moved key; stored rows (a direct share,
+    a membership) would go with the retired record.
+    """
+
+    model = type(record)
+    rows = active_relationship_model().objects.db_manager(hints={"instance": record})
+    identities = set()
+    for owner in concrete_lineage(model):
+        if not model_resource_type(owner) and not model_can_resolve_subject(owner):
+            continue
+        row = owner._base_manager.db_manager(hints={"instance": record}).filter(pk=record.pk).first()
+        if row is not None:
+            identities.update(model_identities(owner, row))
+    return rows.referencing(identities).exists()
 
 
 def _state(row: models.Model, identity: tuple[str, ...]) -> dict[str, Any]:

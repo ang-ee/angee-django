@@ -1,7 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { useAuthoredQuery, type MutationExecutionOptions } from "@angee/refine";
+import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata } from "@angee/metadata";
-import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, ResourcePaneFooter, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionToken, useActionResultMutation, useChatter, useContainer, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone } from "@angee/ui";
+import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, PaneRow, PaneRows, PaneRowsSkeleton, PaneToolbar, RecordActionBar, RecordReference, ResourcePaneFooter, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionToken, useActionResultMutation, useChatter, useContainer, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone } from "@angee/ui";
 import { useEffect, useMemo, useRef, useState, createElement, type ComponentType, type ReactElement, type ReactNode } from "react";
 
 import {
@@ -100,7 +100,7 @@ export function RecordHistoryTimeline({
   }
   if (history === null) {
     return query.isLoading
-      ? <LoadingPanel message={t("history.loading")} density="inline" />
+      ? <PaneRowsSkeleton className="px-2 py-1" loadingLabel={t("history.loading")} />
       : <ErrorBanner title={t("history.unavailable")} description={null} />;
   }
   if (history.total === 0) {
@@ -124,7 +124,7 @@ export function RecordHistoryTimeline({
         setPage({ model, id, selected: clearSelection ? undefined : selected, offset });
         if (clearSelection) setActiveTab("provenance.history");
       }}
-      onRevert={compact ? undefined : (entry, execution) => revert(id, { model, changeset: entry.id }, execution)}
+      onRevert={compact ? undefined : (entry) => revert(id, { model, changeset: entry.id })}
       reverting={revertState.fetching}
     />
   );
@@ -137,7 +137,7 @@ export interface HistoryTimelineProps {
   fetching?: boolean;
   offset?: number;
   onPage?: (offset: number) => void;
-  onRevert?: (entry: HistoryEntry, execution?: MutationExecutionOptions) => Promise<void> | void;
+  onRevert?: (entry: HistoryEntry) => Promise<void> | void;
   reverting?: boolean;
 }
 
@@ -205,8 +205,8 @@ function HistoryRow({ entry, record, open, focused, onToggle, onRevert, revertin
     if (focused) ref.current?.scrollIntoView({ block: "center" });
   }, [focused]);
   const counts = [
-    entry.changes?.length ? t("history.changes", { count: entry.changes.length }) : null,
-    entry.statements?.length ? t("history.statements", { count: entry.statements.length }) : null,
+    entry.changes.length ? t("history.changes", { count: entry.changes.length }) : null,
+    entry.statements.length ? t("history.statements", { count: entry.statements.length }) : null,
   ].filter((part): part is string => part !== null);
   const failed = optionToken(entry.outcome) === "failure";
   return (
@@ -248,7 +248,7 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
   reverting: boolean;
   t: ProvenanceT;
 }): ReactElement | null {
-  const rows: ComparisonRow[] = entry.changes?.map((change) => ({
+  const rows: ComparisonRow[] = entry.changes.map((change) => ({
     key: `${change.model}:${change.id}:${change.field}`,
     label: (
       <span className="grid gap-0.5">
@@ -262,23 +262,21 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
       after: <HistoryValueCell value={change.new} t={t} />,
     },
     changed: true,
-  })) ?? [];
-  const unavailable = entry.changes === null || entry.statements === null;
+  }));
   const revertable = onRevert !== undefined && entry.can_revert;
-  if (!unavailable && !rows.length && !entry.statements?.length && !entry.merge && !revertable) return null;
+  if (!rows.length && !entry.statements.length && !entry.merge && !revertable) return null;
   const revertAction: ActionDescriptor = {
     id: "revert",
     label: t("history.revert"),
     placement: "toolbar",
     danger: true,
     confirm: { title: t("history.revertConfirm.title"), body: t("history.revertConfirm.body"), danger: true },
-    run: async (context) => {
-      await onRevert?.(entry, { reconciliation: context.reconciliation });
+    run: async () => {
+      await onRevert?.(entry);
     },
   };
   return (
     <div className="grid min-w-0 gap-3 pt-1">
-      {unavailable ? <ErrorBanner title={t("history.detailsUnavailable")} description={t("history.sourceNotRetained")} /> : null}
       {rows.length ? (
         <ComparisonRows
           rows={rows}
@@ -286,7 +284,7 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
           columns={[{ key: "before", label: t("history.before") }, { key: "after", label: t("history.after") }]}
         />
       ) : null}
-      {entry.statements?.length ? <StatementVersions statements={entry.statements} record={record} t={t} /> : null}
+      {entry.statements.length ? <StatementVersions statements={entry.statements} record={record} t={t} /> : null}
       {entry.merge ? <MergeFacts merge={entry.merge} t={t} /> : null}
       {revertable ? <RecordActionBar record={{ id: record.id }} actions={[revertAction]} blocked={reverting} /> : null}
     </div>

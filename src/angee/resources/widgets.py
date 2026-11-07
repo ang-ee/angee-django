@@ -13,8 +13,8 @@ from import_export import fields, widgets
 from rebac import GenericTarget, generic_target
 
 from angee.base.fields.text import ModelLabelField
+from angee.base.models.refs import RecordRefMixin
 from angee.base.serialization import canonical_json
-from angee.iam.models.refs import ProtectedRecordRefMixin
 
 if TYPE_CHECKING:
     from angee.resources.models import Resource
@@ -74,7 +74,7 @@ class RecordRefWidget(XrefWidgetMixin, widgets.Widget):
 class RecordRefField(fields.Field):
     """Assign a cleaned record reference to its model-owned backing columns."""
 
-    def __init__(self, model: type[ProtectedRecordRefMixin]) -> None:
+    def __init__(self, model: type[RecordRefMixin]) -> None:
         """Declare the model's import column and its xref widget."""
 
         super().__init__(
@@ -85,7 +85,7 @@ class RecordRefField(fields.Field):
 
     def save(
         self,
-        instance: ProtectedRecordRefMixin,
+        instance: RecordRefMixin,
         row: Mapping[str, Any],
         is_m2m: bool = False,
         **kwargs: Any,

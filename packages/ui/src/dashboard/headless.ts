@@ -28,20 +28,12 @@ export const DASHBOARD_LIMITS = {
 const PositiveInteger = v.pipe(v.number(), v.integer(), v.minValue(1));
 const NonNegativeInteger = v.pipe(v.number(), v.integer(), v.minValue(0));
 
-/**
- * @kind null
- * @reason Schema infrastructure: validates serialized runtime contracts.
- */
 const DashboardTargetSchema = v.variant("scope", [
   v.strictObject({ scope: v.literal("addon"), key: v.pipe(v.string(), v.minLength(1)) }),
   v.strictObject({ scope: v.literal("resource"), key: v.pipe(v.string(), v.minLength(1)) }),
   v.strictObject({ scope: v.literal("personal"), id: v.pipe(v.string(), v.minLength(1)) }),
 ]);
 
-/**
- * @kind null
- * @reason Schema infrastructure: validates serialized runtime contracts.
- */
 const DashboardRefreshSchema = v.variant("mode", [
   v.strictObject({ mode: v.literal("live") }),
   v.strictObject({
@@ -51,19 +43,11 @@ const DashboardRefreshSchema = v.variant("mode", [
   v.strictObject({ mode: v.literal("manual") }),
 ]);
 
-/**
- * @kind null
- * @reason Schema infrastructure: validates serialized runtime contracts.
- */
 const WidgetMeasureSchema = v.strictObject({
   op: v.picklist(["count", "sum", "avg", "min", "max"]),
   field: v.optional(v.pipe(v.string(), v.minLength(1))),
 });
 
-/**
- * @kind null
- * @reason Schema infrastructure: validates serialized runtime contracts.
- */
 const WidgetSourceSchema = v.strictObject({
   resource: v.pipe(v.string(), v.minLength(1)),
   filter: v.optional(v.record(v.string(), JsonValueSchema)),
@@ -81,10 +65,6 @@ const WidgetSourceSchema = v.strictObject({
   refresh: v.optional(DashboardRefreshSchema),
 });
 
-/**
- * @kind null
- * @reason Schema infrastructure: validates serialized runtime contracts.
- */
 const WidgetDataSpecSchema = v.variant("shape", [
   v.strictObject({ shape: v.literal("value"), source: WidgetSourceSchema }),
   v.strictObject({ shape: v.literal("series"), source: WidgetSourceSchema }),
@@ -417,10 +397,6 @@ export function parseDashboardSnapshot(value: unknown): DashboardSnapshot {
   return result.output;
 }
 
-/**
- * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
- */
 function validateDashboardLayout(snapshot: DashboardSnapshot): void {
   const ids = new Set<string>();
   const active = snapshot.widgets.filter((widget) => !widget.isArchived);

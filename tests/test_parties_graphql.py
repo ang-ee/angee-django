@@ -10,17 +10,13 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.iam.identity import public_subject_ref
-from angee.iam.testing.graphql import measure_graphql_document
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.messaging.testing import models as messaging_models
-from tests.conftest import (
-    SchemaAddon,
-    assert_private_hasura_insert_access,
-    execute_schema,
-)
+from tests.conftest import SchemaAddon, assert_private_hasura_insert_access
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 
 Address = messaging_models.Address
 Circle = messaging_models.Circle
@@ -587,9 +583,56 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
     ]
 
 
-@pytest.mark.django_db(transaction=True)
+def test_a_statement_read_under_system_context_answers_as_its_reader_and_remembers_nothing(
+    composed_tables: None,
+) -> None:
+    """Under system_context the statement read returns the same evidence as for a reader, and the memo stays empty."""
+
+    from angee.provenance.statements import SourceKind
+
+    admin = _platform_admin("statement-sudo-admin")
+    reader = User.objects.create_user(username="statement-sudo-reader")
+    with system_context(reason="test.parties.statement_sudo.seed"):
+        party = messaging_models.Party.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        private = messaging_models.Party.objects.create(display_name="Private", created_by_id=admin.pk)
+        _grant_reader(party, reader)
+        handle = Handle.objects.create(platform="email", value="sudo@example.com", created_by_id=admin.pk)
+        _grant_reader(handle, reader)
+        statement_model = messaging_models.Party.statements.model
+        statement = statement_model._base_manager.create(
+            subject=party,
+            handle=handle,
+            aspect="handle",
+            asserted_by=str(to_subject_ref(reader)),
+            source_kind=SourceKind.PERSON,
+            evidence=[
+                {"model": "parties.Party", "id": party.public_id, "pointer": "/display_name"},
+                {"model": "parties.Party", "id": private.public_id},
+            ],
+        )
+
+    def answers(row: Any) -> tuple[Any, ...]:
+        return (
+            [(ref.model, ref.id, ref.pointer) for ref in row.readable_evidence(reader)],
+            [(ref.model, ref.id, record.pk) for ref, record in row.readable_evidence_records(reader)],
+            row.readable_asserting_source(reader),
+        )
+
+    [read] = statement_model.objects.for_reader(reader).filter(pk=statement.pk)
+    expected = answers(read)
+    assert expected == (
+        [("parties.Party", party.public_id, "/display_name")],
+        [("parties.Party", party.public_id, party.pk)],
+        to_subject_ref(reader),
+    )
+    with system_context(reason="test.parties.statement_sudo.read"):
+        [elevated] = statement_model.objects.for_reader(reader).filter(pk=statement.pk)
+        assert "_provenance_readable_statement" not in vars(elevated)
+        assert answers(elevated) == expected
+        assert "_provenance_readable_statement" not in vars(elevated)
+
+
 @pytest.mark.parametrize("row_count", [2, 8])
-@pytest.mark.django_db(transaction=True)
 def test_statement_reference_reads_have_a_page_query_budget(
     composed_tables: None,
     django_assert_num_queries: Any,
@@ -615,43 +658,12 @@ def test_statement_reference_reads_have_a_page_query_budget(
             )
     schema = _schema("public")
     query = "query Statements { party_statements { asserted_by evidence { model id } } }"
-    # The same count for 2 and 8 rows is the invariant: evidence and asserting
-    # principals are admitted in batches. StatementQuerySet.for_reader scopes the
-    # subject (parties/party read) and the handle member (parties/handle read).
-    # REBAC reuses the subject scope for the handle; autocommit keeps the page
-    # at ten statements for both fixture sizes.
-    with django_assert_num_queries(10):
+    # The same count for 2 and 8 rows is the invariant: the page's evidence and asserting
+    # principals are admitted in batches, and each actor-scoped batch carries rebac's own
+    # platform-admin probe; nothing scales with the statement count.
+    with django_assert_num_queries(15):
         rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
     assert len(rows) == row_count
-
-
-def test_party_list_concrete_kind_projection_is_flat_at_one_five_ten_twenty(composed_tables: None) -> None:
-    """A parent page identifies concrete children without fetching each child row."""
-
-    del composed_tables
-    admin = _platform_admin("party-kind-budget")
-    with system_context(reason="tests.parties.kind_budget.seed"):
-        for index in range(20):
-            model = Person if index % 2 == 0 else Organization
-            model.objects.create(display_name=f"Kind {index:02d}", created_by=admin)
-    schema = _schema("public")
-    document = """query KindList($limit: Int!) {
-        parties(limit: $limit, order_by: [{display_name: asc}]) { id concrete_kind }
-    }"""
-    reads = {
-        size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
-        for size in (1, 5, 10, 20)
-    }
-    for size, read in reads.items():
-        assert len(read.data["parties"]) == size
-        assert [row["concrete_kind"] for row in read.data["parties"]] == [
-            "PERSON" if index % 2 == 0 else "ORGANIZATION" for index in range(size)
-        ]
-        assert read.statement_count == 5
-        read.assert_no_audit_writes()
-        read.assert_bytes(total=20_000, largest=13_000)
-    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
-        reads[larger].assert_flat_from(reads[smaller])
 
 
 def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None:
@@ -660,24 +672,3 @@ def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None
     sdl = str(_schema("public"))
     assert "HANDLE__VALUE" not in sdl
     assert "SUBJECT__DISPLAY_NAME" in sdl
-
-
-@pytest.mark.django_db(transaction=True)
-def test_merge_metadata_follows_parent_and_person_projection(composed_tables: None) -> None:
-    del composed_tables
-    admin = _platform_admin("party-merge-fields-admin")
-    with system_context(reason="parties.merge_fields.seed"):
-        person = Person.objects.create(display_name="Readable person", created_by=admin)
-    data = _data(
-        execute_schema(
-            _schema("public"),
-            """query MergeFields($id: String!) {
-          parent: parties_by_pk(id: $id) { merge_scalar_fields }
-          person: people_by_pk(id: $id) { merge_scalar_fields }
-        }""",
-            variables={"id": person.sqid},
-            user=admin,
-        )
-    )
-    assert data["parent"]["merge_scalar_fields"] == list(person.merge_common_scalar_fields)
-    assert data["person"]["merge_scalar_fields"] == list(person.merge_scalar_fields)

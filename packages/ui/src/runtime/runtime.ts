@@ -219,6 +219,7 @@ export interface RuntimeViewAs {
   viewAs: { userId: string } | null;
   currentUser: RuntimeAuthUser | null;
   realUser: RuntimeAuthUser | null;
+  viewablePeople: readonly RuntimeAuthUser[];
   enter: (userId: string) => void;
   exit: () => void;
   pending?: boolean;
@@ -229,6 +230,7 @@ const NO_VIEW_AS: RuntimeViewAs = {
   viewAs: null,
   currentUser: null,
   realUser: null,
+  viewablePeople: [],
   enter: () => undefined,
   exit: () => undefined,
 };

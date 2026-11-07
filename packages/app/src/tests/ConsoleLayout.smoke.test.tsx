@@ -9,7 +9,6 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   useCallback,
   useEffect,
@@ -180,7 +179,6 @@ function renderInRouter(
   initialPath = "/notes",
   runtime?: Partial<AppRuntime>,
 ) {
-  const queryClient = new QueryClient();
   const rootRoute = createRootRoute({
     component: () => <Outlet />,
   });
@@ -223,11 +221,9 @@ function renderInRouter(
   });
 
   return render(
-    <QueryClientProvider client={queryClient}>
-      <ConsoleTestRuntime runtime={runtime}>
-        <RouterProvider router={router} />
-      </ConsoleTestRuntime>
-    </QueryClientProvider>,
+    <ConsoleTestRuntime runtime={runtime}>
+      <RouterProvider router={router} />
+    </ConsoleTestRuntime>,
   );
 }
 
