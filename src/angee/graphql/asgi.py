@@ -18,6 +18,12 @@ from angee.graphql.middleware import WebsocketOriginValidator
 from angee.graphql.schema import GraphQLSchemas
 
 
+def protocols() -> dict[str, ASGI3Application]:
+    """Contribute the single Channels WebSocket owner to ``angee.server.asgi``."""
+
+    return {"websocket": websocket_application()}
+
+
 def websocket_urlpatterns() -> list[object]:
     """Return GraphQL WebSocket URL routes for installed schemas."""
 

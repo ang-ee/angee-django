@@ -13,7 +13,7 @@ import pytest
 import strawberry
 import strawberry_django
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import models
+from django.db import connection, models
 from rebac import system_context
 from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
@@ -1098,7 +1098,7 @@ def test_hasura_model_resource_groups_json_path_axes() -> None:
         HasuraJsonResourceThingType,
         model=HasuraJsonResourceThing,
         name="json_things",
-        filterable=["id", "name"],
+        filterable=["id", "name", "metadata"],
         sortable=["name"],
         aggregatable=["id"],
         groupable=["metadata.mailbox"],
@@ -1126,10 +1126,58 @@ def test_hasura_model_resource_groups_json_path_axes() -> None:
     axis = metadata.query.axes["metadata.mailbox"]
     assert axis.kind == "json"
     assert axis.server == DataQueryServerAxis(input="METADATA__MAILBOX", key="metadata__mailbox")
-    assert axis.drill is None  # The JSON root is not filterable on this surface.
-    assert axis.identity_path is None  # Nor is the JSON root selectable.
+    if connection.features.supports_json_field_contains:
+        assert axis.drill is not None
+        assert (axis.drill.kind, axis.drill.field, axis.drill.json_path) == ("json", "metadata", "mailbox")
+    else:
+        assert axis.drill is None  # This backend cannot execute JSON containment.
+    assert axis.identity_path is None  # The JSON root is not selectable.
     assert "METADATA__MAILBOX" in schema.as_str()
     assert "metadata__mailbox: String" in schema.as_str()
+
+
+@pytest.mark.parametrize(
+    ("groupable", "json_paths", "axis"),
+    [(["name"], None, "name"), (["metadata.mailbox"], {"metadata.mailbox": "str"}, "metadata.mailbox")],
+)
+def test_group_axis_without_its_filter_fails_the_schema_build(
+    groupable: list[str], json_paths: dict[str, str] | None, axis: str,
+) -> None:
+    """A declared group axis must drill into one bucket; a missing filter is a build error."""
+
+    @strawberry_django.type(HasuraJsonResourceThing)
+    class HasuraUndrillableThingType(AngeeNode):
+        name: auto
+
+    resource = hasura_model_resource(
+        HasuraUndrillableThingType,
+        model=HasuraJsonResourceThing,
+        name="undrillable_things",
+        filterable=["id"],
+        sortable=["name"],
+        aggregatable=["id"],
+        groupable=groupable,
+        json_paths=json_paths,
+        get_queryset=lambda info: HasuraJsonResourceThing.objects.all(),
+        insert=False,
+        update=False,
+        delete=False,
+    )
+    schemas = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": [resource.query],
+                        "types": [HasuraUndrillableThingType, *resource.types],
+                    }
+                }
+            )
+        ]
+    )
+
+    with pytest.raises(ImproperlyConfigured, match=rf"tests\.HasuraJsonResourceThing group axis '{axis}'"):
+        schemas.build("public")
 
 
 def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) -> None:
@@ -1154,7 +1202,7 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
         HasuraJsonValuesThingType,
         model=HasuraJsonResourceThing,
         name="json_value_things",
-        filterable=["id", "name"],
+        filterable=["id", "name", "metadata"],
         sortable=["name"],
         aggregatable=["id"],
         groupable=["metadata.mailbox"],

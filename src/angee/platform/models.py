@@ -28,7 +28,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import DatabaseError, models, transaction
 from django_compose.components import AppSelection, InstalledComponents, inspect_apps, installed_components
-from rebac import database_context, system_context
+from rebac import system_context
 
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
@@ -143,7 +143,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
     def _apply_change(self, name: str, action: str, revision: str | None) -> InstallResult:
         """Validate one plan, write its exact roots, then reconcile the committed intent."""
 
-        with database_context(self.db), system_context(reason=f"platform.addon.{action}"):
+        with system_context(reason=f"platform.addon.{action}"):
             installer = addon_installer()
             preview = self.change_preview(name, action, installer=installer)
             if not preview.can_apply or (revision is not None and preview.revision != revision):
@@ -381,7 +381,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         manifests = {name: manifest for name, (manifest, _origin) in available.items()}
         counts = composed.resource_counts()
         rows = self.all()
-        with database_context(self.db), transaction.atomic(using=self.db):
+        with transaction.atomic(using=self.db):
             package_identity_index((
                 *((row.distribution, row.name) for row in rows.select_for_update() if row.distribution),
                 *((package["distribution"], name) for name, package in manifests.items()),
@@ -444,7 +444,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         index = installed_components("angee.addons") if index is None else index
         closure = getattr(settings, "COMPOSE_CLOSURE", None)
         dependencies = {} if closure is None else closure.dependencies
-        with database_context(self.db), transaction.atomic(using=self.db):
+        with transaction.atomic(using=self.db):
             rows = list(self.select_for_update().order_by("name"))
             identities = package_identity_index((
                 *((entry.dist.metadata["Name"], name) for name, entry in installed_entry_points(index=index).items()

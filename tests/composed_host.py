@@ -26,7 +26,7 @@ COMPOSED_TEST_TIMEOUT = 1200
 
 Every caller that starts ``composed_host.py`` passes this one value. The rule: stay
 above the slowest real CI run times the run-to-run spread of CI runners, and well
-under a CI shard's own 40-minute limit, so a hang ends with the test named instead
+under a CI shard's own 60-minute limit, so a hang ends with the test named instead
 of the job ending with no verdict. Measured on 2026-10-14: the slowest is the
 workflows posts group on PostgreSQL, 187 s on an idle workstation; on CI it took
 467 s in one run and over 600 s in two others, where the bound was then 600 s and
@@ -135,6 +135,7 @@ def boot(
         "INSTALLED_APPS": installed_apps,
         "DATABASES": {"default": database},
         "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
+        "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER": True,
     }, sort_keys=True), encoding="utf-8")
     if os.environ.get("PYTHONPATH"):
         python_paths.append(os.environ["PYTHONPATH"])
@@ -513,7 +514,6 @@ def run(args: argparse.Namespace) -> None:
         if not args.test_postgresql:
             assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
             assert settings.DATABASES["default"]["NAME"] == ":memory:"
-        settings.ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
         # This disposable host has no migration history. Sync the whole current
         # model graph together, including contenttypes and REBAC's witness table;
         # mixed sync/migrate ordering leaves generated foreign keys dangling.

@@ -206,6 +206,9 @@ export function ListViewContent<TRow extends Row = Row>({
       }}
     />
   );
+  // Every grouped list pages its root groups: the server surface by its root read, a
+  // grouping client table by its top-level rows (its list then carries record facts).
+  const pagesGroups = serverGroupedMode || surface.list.records !== undefined;
   const toolbar: ResourceToolbarProps = {
     pane,
     sortOptions: resolvedColumns.flatMap((column) => column.field && column.sortable !== false
@@ -217,8 +220,8 @@ export function ListViewContent<TRow extends Row = Row>({
     createLabel: createLabel ?? createLabelForResource(resource, t, modelMetadata?.label),
     onCreate, onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
     onViewChange: availableViews.length > 1 ? resourceView.setView : undefined,
-    pagerSubject: serverGroupedMode ? t("pager.groups") : undefined,
-    pagerTotalUnit: serverGroupedMode ? "groups" : undefined,
+    pagerSubject: pagesGroups ? t("pager.groups") : undefined,
+    pagerTotalUnit: pagesGroups ? "groups" : undefined,
     pagerPageSizeOptions: clientRowModel ? undefined : PAGE_SIZE_OPTIONS,
     pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
   };

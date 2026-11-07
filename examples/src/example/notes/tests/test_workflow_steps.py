@@ -12,7 +12,14 @@ from rebac.roles import grant as grant_role
 
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
-from angee.workflows.testing.drivers import capture_tasks, load_workflow, register_steps, run_until, start_run
+from angee.workflows.testing.drivers import (
+    capture_tasks,
+    deliver_decision_wakes,
+    load_workflow,
+    register_steps,
+    run_until,
+    start_run,
+)
 from example.notes.steps import NotePublicationOutput, PublishNote, ReviewNotePublication, ValidateNotePublication
 
 Note = apps.get_model("notes", "Note")
@@ -168,12 +175,14 @@ class NoteWorkflowStepTests(TransactionTestCase):
             decision = Decision.objects.get(requesting_steps=step_run)
             self.assertEqual(decision.requester_id, self.owner.pk)
             self.assertEqual(list(decision.assignees.values_list("pk", flat=True)), [self.reviewer.pk])
-        return Decision.objects.decide(
+        answered = Decision.objects.decide(
             decision.pk,
             actor=self.reviewer,
             revision=decision.revision,
             chosen=[action],
         )
+        self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
+        return answered
 
     def start_parent(self, note):
         """Load the shipped parent and reach a real wait on its owned child."""
@@ -318,6 +327,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         Decision.objects.decide(
             decisions[0].pk, actor=self.reviewer, revision=decisions[0].revision, chosen=["approve"]
         )
+        self.assertEqual(deliver_decision_wakes(self.sent, decisions[0].pk), [1])
         run_until(run)
         with system_context(reason="mapped note review partial settlement assertions"):
             parent.refresh_from_db()
@@ -326,6 +336,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.assertTrue(decisions[1].is_open)
             self.assertFalse(StepRun.objects.filter(run=run, node_key="summarize").exists())
         Decision.objects.decide(decisions[1].pk, actor=self.reviewer, revision=decisions[1].revision, chosen=["reject"])
+        self.assertEqual(deliver_decision_wakes(self.sent, decisions[1].pk), [1])
         run_until(run)
         self.assertEqual(run.status, RunStatus.SUCCEEDED)
         self.assertEqual(run.output, {"approved": 1, "rejected": 1})

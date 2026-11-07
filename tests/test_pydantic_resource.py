@@ -226,3 +226,30 @@ def test_pydantic_resource_groups_filtered_rows_with_distinct_blank_and_null() -
         {"key": {"shelf": None}, "aggregate": {"count": 1}},
     ]
     assert result.data["catalogue_entries_groups_count"] == 3
+
+
+def test_pydantic_resource_groups_carry_each_groups_first_rows() -> None:
+    """A computed groups page carries every group's first page, blank and NULL buckets apart."""
+
+    result = _grouped_schema().execute_sync(
+        """
+        query {
+          by_category: catalogue_entries_groups(group_by: [{field: CATEGORY}]) {
+            key { category } rows(limit: 1, order_by: [{category: asc}]) { id }
+          }
+          by_shelf: catalogue_entries_groups(group_by: [{field: SHELF}]) {
+            key { shelf } rows(limit: 5) { id }
+          }
+        }
+        """
+    )
+    assert result.errors is None, result.errors
+    assert result.data["by_category"] == [
+        {"key": {"category": "books"}, "rows": [{"id": "atlas"}]},
+        {"key": {"category": "tools"}, "rows": [{"id": "hammer"}]},
+    ]
+    assert result.data["by_shelf"] == [
+        {"key": {"shelf": ""}, "rows": [{"id": "saw"}]},
+        {"key": {"shelf": "A"}, "rows": [{"id": "hammer"}]},
+        {"key": {"shelf": None}, "rows": [{"id": "atlas"}]},
+    ]

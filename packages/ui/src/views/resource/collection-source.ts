@@ -30,6 +30,11 @@ export interface CollectionPageRequest {
 
 export interface CollectionGroupRequest extends CollectionPageRequest {
   group: ResourceViewGroup;
+  /**
+   * Present on the leaf group level: each returned group must carry its first
+   * page of this many rows in `bucket.rows`; later or resized pages use `rows`.
+   */
+  leafPageSize?: number;
 }
 
 export interface CollectionPage<TRow extends Row> {
@@ -75,12 +80,14 @@ export function collectionQuery<
 
 export interface CollectionSource<TRow extends Row> {
   query: ResourceQuery;
+  /** One page of rows: the flat list, or a later or resized page of one group. */
   rows: AnyCollectionQuery<CollectionPageRequest, CollectionPage<TRow>>;
+  /** Group headers; at the leaf level each bucket carries its first page in `rows`. */
   groups?: AnyCollectionQuery<
     CollectionGroupRequest,
     GroupByResult & { summary?: string }
   >;
-  /** Initial size of each independently paged expanded group. */
+  /** The declared size of each group's first page (the groups read carries it). */
   leafPageSize?: number;
 }
 

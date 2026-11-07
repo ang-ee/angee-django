@@ -357,4 +357,9 @@ class TaskProjectOrderingTests(WorkCase):
 
 
 def test_task_project_ordering(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_task_project_ordering.TaskProjectOrderingTests", app="angee.work")
+    run_composed_tests(
+        tmp_path,
+        "tests.test_task_project_ordering.TaskProjectOrderingTests",
+        app="angee.work",
+        test_postgresql=connection.vendor == "postgresql",
+    )

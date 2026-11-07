@@ -16,8 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.apps import apps
 from django.db import connections, models
-from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, When, Window
-from django.db.models.functions import RowNumber
+from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, When
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
@@ -384,14 +383,8 @@ class MessageInbox:
             groups.order_by("latest" if oldest else "-latest", "_conversation")[InboxPage.window(page, size)]
         )
         keys = [row["_conversation"] for row in selected]
-        ranked = (
-            matches.filter(_conversation__in=keys)
-            .annotate(
-                _preview_rank=Window(
-                    RowNumber(), partition_by=[F("_conversation")], order_by=[F("_order_at").desc(), F("pk").desc()]
-                )
-            )
-            .filter(_preview_rank__lte=3)
+        ranked = matches.filter(_conversation__in=keys).first_per_group(
+            "_conversation", order_by=[F("_order_at").desc(), F("pk").desc()], limit=3,
         )
         preview_ids: dict[int, list[int]] = defaultdict(list)
         public_ids: dict[int, str] = {}

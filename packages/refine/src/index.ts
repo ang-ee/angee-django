@@ -1,6 +1,8 @@
 export { refineFieldsFromPaths } from "./selections";
 export {
+  groupRowsDocument,
   listQueryMeta,
+  type GroupRowsTarget,
   type ListQueryFieldArgument,
   type ListQueryFieldBinding,
   type ListQueryTarget,
@@ -149,6 +151,7 @@ export {
   type DeletePreviewVariables,
   type FacetRequestSpec,
   type GroupByRequestOptions,
+  type GroupRowsRequest,
   type GroupByResult,
   type GroupDimension,
   type GroupNullsPosition,

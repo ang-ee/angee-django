@@ -26,7 +26,7 @@ through the same ambient actor.
 | `angee.mcp.server` | The one process-wide `FastMCP`, registrar discovery in install order, `MOUNT_PATH` | `src/angee/mcp/server.py:38,49,54,92` |
 | `angee.mcp.graphql` | `GraphQLTool` declaration, compiler, limits, actor-scoped execution | `src/angee/mcp/graphql.py:70,73,83,189,226,368,518` |
 | `angee.mcp.middleware`, `angee.mcp.verifier` | Actor bracketing per call; bearer→`SubjectRef` through `ANGEE_MCP_ACTOR_VERIFIER` | `src/angee/mcp/middleware.py:20`, `src/angee/mcp/verifier.py:23,27` |
-| `angee.mcp.apps.MCPConfig.compose_asgi` | Native `AsgiContribution` mount and lifespan factories, entered per serving process | `src/angee/mcp/apps.py`, `django_compose.asgi` |
+| `angee.mcp.asgi` | `http_mounts()` and fresh `lifespans()` factories read by `angee.server.asgi`, entered per serving process | `src/angee/mcp/asgi.py:20,30`, `angee.server.asgi` |
 | `angee.mcp.resource_tools`, `angee.mcp.apps` | Generated console readers, `RESOURCE_READER_TOOL_TAG`, check `angee.mcp.E001` | `src/angee/mcp/resource_tools.py:35,49,136`, `src/angee/mcp/apps.py:16` |
 | `angee.base.addons` | Optional addon-module discovery; MCP owns registrar validation | [Base adapter](../../../base/addons.py), [MCP server](../../server.py) |
 | `tests/test_<addon>_mcp.py`, `<consumer>/tests/test_mcp.py` | Compile-and-register tests; StreamableHTTP round trip | `tests/test_knowledge_mcp.py:56,197`, `examples/src/example/notes/tests/test_mcp.py:67,148` |
@@ -104,8 +104,8 @@ through the same ambient actor.
 
 5. **Mount and lifespan are inherited.** `angee.mcp.asgi.http_mounts()` mounts the StreamableHTTP app at
    `/mcp` and `lifespans()` contributes FastMCP's `app.lifespan` only when any addon registers tools
-   (`src/angee/mcp/asgi.py:19-35`); `MCPConfig.compose_asgi()` returns them through native `AsgiContribution`
-   factories; `django_compose.asgi` enters them per serving process.
+   (`src/angee/mcp/asgi.py:20-36`); `angee.server.asgi` reads both from the addon `asgi` module
+   and enters the lifespans per serving process.
    An addon contributes no `asgi.py` for MCP. **Owner rule:** [Serving](../../../../../docs/composer.md#serving)
    owns mounts; the stack row owns the serve mode ([stack](../../../../../docs/stack.md#backend), the channels and FastMCP rows).
 

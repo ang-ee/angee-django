@@ -8,7 +8,7 @@ from typing import Any, Self, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, ValidationError
 from django.db import connections, models
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, RowNumber
 from rebac import current_actor
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.watch import KEY_CHUNK
@@ -179,6 +179,27 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
         """Return one row under a database row lock when the backend supports it."""
 
         return cast(models.QuerySet[_ModelT], self.lock_if_supported()).get(*args, **kwargs)
+
+    def first_per_group(
+        self,
+        *partition_by: str | models.Expression,
+        order_by: Sequence[str | models.Expression],
+        limit: int,
+    ) -> Self:
+        """Keep the first ``limit`` rows of each group, ranked by one SQL window.
+
+        A group is one distinct value of ``partition_by`` (field paths, annotations
+        or expressions). ``order_by`` ranks the rows inside each group and should end
+        in a unique column so the kept rows are deterministic. The result keeps this
+        queryset's scope, annotations and selection; callers order the kept rows.
+        """
+
+        if not partition_by:
+            raise ValueError("first_per_group needs at least one partition.")
+        if limit < 1:
+            raise ValueError("first_per_group keeps at least one row per group.")
+        rank = models.Window(RowNumber(), partition_by=list(partition_by), order_by=list(order_by))
+        return cast(Self, self.alias(_group_rank=rank).filter(_group_rank__lte=limit))
 
 
 class AngeeQuerySet(

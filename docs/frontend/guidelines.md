@@ -734,7 +734,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `where`/`order_by`/`limit` + the `_groups` aggregate). Grouping is a
   client-side row model by default (it needs the whole set); the server
   `_groups` surface is the escalation only when the data is too large to hold in
-  memory. A computed/non-model source is exposed **once** as a Hasura resource
+  memory. Either way a grouped list pages its **root groups**: the server surface
+  by its root `_groups` read, the client row model by TanStack's top-level rows
+  (`paginateExpandedRows: false`), so the pager counts groups and a page holds its
+  open groups' records; an ungrouped list pages records. A surface clamps its page
+  only once its read settles (`useSettledPageClamp`). A computed/non-model source is exposed **once** as a Hasura resource
   (`hasura_pydantic_resource`) for the uniform fetch + metadata + MCP surface.
   A small one processes client-side over the fetched set; a large one keeps the
   server row model and declares `groupable` columns for the same `_groups`
@@ -753,6 +757,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   contract when the server projects rows from a changing record scope. The
   authored document owns variables, results and count units; the shared list
   owns filtering, grouping, virtualized rendering and independent group pages.
+  A grouped page is one request: at the leaf level the `groups` document
+  receives `leafPageSize` and returns each group's first page in `bucket.rows`;
+  `rows` serves only a later or resized page of one group. A server-grouped
+  first page the groups read did not carry is an error, never a per-group fetch.
   `CollectionTreeView` composes the same transport with native tree expansion
   and child paging. Do not register a fictional model, infer available choices
   from one server page, or filter/group that page in the browser. Bounded
@@ -768,7 +776,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   See the [manifest contract](../../packages/app/README.md#app-vocabulary-and-shipped-views).
 - **Card presentation does not change the query boundary.** An ordinary grouped
   board over a server resource uses the same server groups, exact counts and
-  per-group record pages as the grouped list. Deriving its lanes from a flat
+  per-group record pages as the grouped list: the leaf `_groups` read carries each
+  group's first page (`<res>_group.rows(limit, order_by)`, sized by the declared
+  `leafPageSize`), and only later or resized pages are separate reads. Deriving its lanes from a flat
   record page hides groups that have no records on that page. The shared grouped
   surface owns discovery and paging; board components render its results.
   Explicit `laneSource` boards retain their relation-catalogue contract for empty

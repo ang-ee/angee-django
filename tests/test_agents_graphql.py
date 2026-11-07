@@ -3405,6 +3405,34 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     assert viewer_session is None
 
 
+def test_chat_surfaces_hide_a_model_handle_the_actor_cannot_read(composed_tables: None, settings: Any) -> None:
+    """Agent ownership selects chat; the model's own read decides whether its handle is shown."""
+
+    settings.ALLOWED_HOSTS = ["localhost"]
+    owner = User.objects.create_user(username="agt-private-model-owner")
+    provider = _provider("agt-private-model-provider")
+    with system_context(reason="test.agents.private_model.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="private-runtime-model")
+        agent = Agent.objects.create(
+            name="Private model", owner=owner, model=model, runtime_class="pydantic", runtime_status="running",
+        )
+    assert Agent.objects.with_actor(owner).filter(pk=agent.pk).exists()
+    assert not InferenceModel.objects.with_actor(owner).filter(pk=model.pk).exists()
+
+    console = _schema()
+    selected = _data(_execute(console, "{ resolve_session_for_view(view: {}) { agent_id model_handle } }", user=owner))
+    assert selected["resolve_session_for_view"] == {"agent_id": str(agent.sqid), "model_handle": ""}
+    request = RequestFactory().post("/graphql/console/", HTTP_HOST="localhost:5173")
+    request.user = owner
+    endpoint = _data(execute_schema(
+        console, "mutation($id: ID!) { agent_chat_endpoint(id: $id) { model_handle } }",
+        {"id": str(agent.sqid)}, request=request,
+    ))["agent_chat_endpoint"]
+    assert endpoint == {"model_handle": ""}
+    assert agent.readable_model_handle(owner) == ""
+    assert agent.readable_model_handle(_platform_admin("agt-private-model-admin")) == "private-runtime-model"
+
+
 def test_chat_selection_breaks_timestamp_ties_and_keeps_actor_sessions(composed_tables: None) -> None:
     """Equal update times select one stable agent and the actor's latest open session."""
 

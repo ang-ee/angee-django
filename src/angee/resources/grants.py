@@ -31,7 +31,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from contextlib import nullcontext
 from itertools import batched
 from typing import TYPE_CHECKING
 
@@ -42,7 +41,6 @@ from rebac import (
     SubjectRef,
     anonymous_actor,
     backend,
-    database_context,
     to_subject_ref,
     write_relationships,
 )
@@ -73,26 +71,25 @@ def materialize_grant_groups(
     within one load — or a re-load of an unchanged fixture — is a no-op.
     """
 
-    with database_context(using) if using is not None else nullcontext():
-        resolved: dict[tuple[str, ...], RelationshipTuple] = {}
-        for group in groups:
-            for row in group.rows:
-                for grant in _grant_tuples(row, ledger_model, addon_aliases, using=using):
-                    resolved.setdefault(grant.canonical_key(), grant)
-        if not resolved:
-            return 0, 0
+    resolved: dict[tuple[str, ...], RelationshipTuple] = {}
+    for group in groups:
+        for row in group.rows:
+            for grant in _grant_tuples(row, ledger_model, addon_aliases, using=using):
+                resolved.setdefault(grant.canonical_key(), grant)
+    if not resolved:
+        return 0, 0
 
-        existing = _existing_grant_keys(resolved.values(), using=using)
-        new_grants = [grant for key, grant in resolved.items() if key not in existing]
-        skipped = len(resolved) - len(new_grants)
-        # Drive the write off the existence check so an unchanged re-load is a true
-        # no-op: only tuples that are actually missing are written, so a repeat load
-        # touches no rows (no audit entry, no zookie bump) instead of re-upserting
-        # every grant. ``write_relationships`` still upserts, so a concurrent insert
-        # between the check and the write stays idempotent.
-        if new_grants:
-            write_relationships(new_grants)
-        return len(new_grants), skipped
+    existing = _existing_grant_keys(resolved.values(), using=using)
+    new_grants = [grant for key, grant in resolved.items() if key not in existing]
+    skipped = len(resolved) - len(new_grants)
+    # Drive the write off the existence check so an unchanged re-load is a true
+    # no-op: only tuples that are actually missing are written, so a repeat load
+    # touches no rows (no audit entry, no zookie bump) instead of re-upserting
+    # every grant. ``write_relationships`` still upserts, so a concurrent insert
+    # between the check and the write stays idempotent.
+    if new_grants:
+        write_relationships(new_grants)
+    return len(new_grants), skipped
 
 
 def _grant_tuples(
