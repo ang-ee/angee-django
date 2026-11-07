@@ -89,6 +89,69 @@ def test_file_backlinks_allow_empty_files_and_deduplicate_authorized_messages(tm
             InboxRelated(Message.objects.all().explorer(), target).page()
 
 
+def test_attachment_page_cost_does_not_grow_with_its_rows(tmp_path):
+    reader = User.objects.create_user(username="explorer-attachment-cost")
+    stranger = User.objects.create_user(username="explorer-attachment-cost-hidden")
+    account = make_integration(reader.username, model=Channel, owner=reader)
+    hidden_account = make_integration(stranger.username, model=Channel, owner=stranger)
+    File = apps.get_model("storage", "File")
+    with system_context(reason="seed readable and hidden files used in two inboxes"):
+        drive = _storage_drive(tmp_path, owner=reader)
+        hidden_drive = apps.get_model("storage", "Drive")._base_manager.create(
+            backend=drive.backend, slug="hidden", name="Hidden", prefix="hidden", created_by=stranger,
+        )
+        own = range(0, 30, 2)  # files in the reader's drive; a stranger owns the rest
+        files = [
+            File.objects.create(
+                drive=drive if index in own else hidden_drive, created_by=reader if index in own else stranger,
+                filename=f"f{index}.pdf", content_hash=f"{index:064x}",
+            )
+            for index in range(40)
+        ]
+        messages = []
+        for index, file in enumerate(files):
+            hidden = index >= 30
+            messages.append(Message._base_manager.create(
+                created_by=stranger if hidden else reader, channel=hidden_account if hidden else account,
+                status="synced", sent_at=T0 + timedelta(minutes=index),
+            ))
+            Part._base_manager.create(
+                created_by=messages[-1].created_by, message=messages[-1], file=file,
+                name=f"a{index}.pdf", disposition="attachment", position=1,
+            )
+        reused = [
+            Part._base_manager.create(
+                created_by=reader, message=messages[29], file=files[0], name="again.pdf",
+                disposition="attachment", position=position,
+            )
+            for position in (2, 3)
+        ]
+    with actor_context(reader):
+        inbox = Message.objects.all().explorer()
+        readable = set(inbox.collection("storage", "File").values_list("pk", flat=True))
+        results = InboxResults(inbox, inbox.messages, InboxResultOptions(lens="attachments"))
+
+        def cost(size: int) -> tuple[int, int]:
+            with CaptureQueriesContext(connection) as captured:
+                results.page(size=size)
+            return len(captured), max(len(query["sql"]) for query in captured.captured_queries)
+
+        cost(10)  # warm per-process schema and policy caches
+        (narrow_statements, narrow_largest), (wide_statements, wide_largest) = cost(10), cost(25)
+        page = results.page(size=25)
+    # The reader reads only part of the files; an unreadable file's use stays a part row.
+    assert files[0].pk in readable and not readable >= {file.pk for file in files}
+    assert (len(page.rows), page.count) == (25, 30)
+    assert all((row.file is not None) == (row.part.file_id in readable) for row in page.rows)
+    # A file's source is its newest use; the higher part breaks a tie in one message.
+    source = next(row for row in page.rows if row.id == f"file:{files[0].sqid}")
+    assert (source.count, source.part_count, source.part.pk) == (2, 3, reused[-1].pk)
+    # The 15 extra rows add only their keys and times to the source read; a file
+    # permission compiled once per selected row added tens of kilobytes each.
+    assert wide_statements == narrow_statements
+    assert wide_largest - narrow_largest < 15 * 100
+
+
 def test_circle_groups_deduplicate_confirmed_subtrees_and_keep_empty_circles():
     owner = User.objects.create_user(username="explorer-circles")
     Circle = apps.get_model("parties", "Circle")
