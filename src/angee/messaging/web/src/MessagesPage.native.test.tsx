@@ -76,10 +76,15 @@ function dataProvider({ count = 2, fail = false, transportFailure = false, limit
       }
       return { data: { send_held_drafts: results, discard_held_drafts: results } };
     }
-    return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, aggregate: { count } }], totalCount: 1 } };
+    // The leaf groups read carries the group's first page.
+    const variables = meta?.gqlVariables as { with_rows?: boolean; rows_limit?: number } | undefined;
+    return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, aggregate: { count },
+      ...(variables?.with_rows ? { rows: rows.slice(0, variables.rows_limit ?? 0) } : {}) }], totalCount: 1 } };
   });
   const getList = vi.fn(async () => ({ data: [...rows], total: count }));
-  return { rows, custom, getList, mutations: () => custom.mock.calls.filter(([request]) => request.meta?.gqlMutation) };
+  const groupReads = () => custom.mock.calls.filter(([request]) =>
+    !request.meta?.gqlMutation && request.meta?.gqlQuery !== ActionSelectionLimit).length;
+  return { rows, custom, getList, groupReads, mutations: () => custom.mock.calls.filter(([request]) => request.meta?.gqlMutation) };
 }
 
 /** Mount a component as the /messages route renders it: no ambient view above it. */
@@ -159,6 +164,7 @@ test.each([false, true])("a grouped held action discarding=%s sends selected rev
   fireEvent.click(action);
   const dialog = await screen.findByRole("alertdialog");
   expect(f.mutations()).toHaveLength(0);
+  const readsBefore = f.groupReads();
   fireEvent.click(within(dialog).getByRole("button", { name: discarding ? "Discard" : "Send now" }));
   await waitFor(() => expect(f.mutations()).toHaveLength(1));
   expect(f.mutations()[0]![0].meta?.gqlVariables).toEqual({ selection: [
@@ -166,8 +172,8 @@ test.each([false, true])("a grouped held action discarding=%s sends selected rev
   ] });
   await waitFor(() => expect(checked(rowCheckbox("Message 1")) || checked(rowCheckbox("Message 2"))).toBe(false));
   expect(await screen.findByText(`${discarding ? "Discarded one held draft." : "Queued one held draft."}; Revision changed`, { selector: "h2" })).toBeTruthy();
-  // Publishing invalidates the loaded rows. Reselecting captures the on-screen revision.
-  await waitFor(() => expect(f.getList.mock.calls.length).toBeGreaterThan(1));
+  // Publishing invalidates the loaded rows (carried by the groups read). Reselecting captures the on-screen revision.
+  await waitFor(() => expect(f.groupReads()).toBeGreaterThan(readsBefore));
   fireEvent.click(rowCheckbox("Message 2"));
   const retry = await screen.findByRole("button", { name: discarding ? "Discard" : "Send now" });
   await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));

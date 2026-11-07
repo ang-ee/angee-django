@@ -58,7 +58,9 @@ type Where = {
   title?: { _ilike: string };
   status?: { _eq: string };
 };
-type GroupVariables = { where?: Where; group_by: { field: string }[]; limit: number; offset: number };
+type GroupVariables = {
+  where?: Where; group_by: { field: string }[]; limit: number; offset: number; with_rows?: boolean; rows_limit?: number;
+};
 const terms = (where: Where = {}): Where[] => [where, ...(where._and ?? []).flatMap(terms)];
 const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://grouped-board",
@@ -83,35 +85,45 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
   } : resource;
   const activeRows: MessageRow[] = customIdentity ? rows.map(({ id, ...row }) => ({ ...row, public_key: id })) : rows;
   let refreshedTitle: string | undefined;
+  // One record page for a set of where terms: a carried first page or a requested later page.
+  const recordPage = (clauses: Where[], currentPage: number, size: number) => {
+    const identity = clauses.find((term) => term.channel)?.channel?.id;
+    const needle = clauses.find((term) => term.title)?.title?._ilike.replaceAll("%", "");
+    const status = clauses.find((term) => term.status)?.status?._eq;
+    const filtered = activeRows.filter((row) =>
+      (!identity || (identity._is_null ? row.channel === null : row.channel?.id === identity._eq))
+      && (!needle || row.title.includes(needle)) && (!status || row.status === status));
+    const offset = (currentPage - 1) * size;
+    return { data: filtered.slice(offset, offset + size).map((row) => refreshedTitle && row.id === "mail-1"
+      ? { ...row, title: refreshedTitle } : row), total: filtered.length };
+  };
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     if (error === "root") throw new Error("Channel groups unavailable");
     const variables = meta!.gqlVariables as GroupVariables;
+    // The leaf groups read carries each group's first page.
+    const carry = (bucket: Where) => variables.with_rows
+      ? { rows: recordPage([...terms(variables.where), bucket], 1, variables.rows_limit ?? 0).data } : {};
     if (variables.group_by[0]?.field === "STATUS") {
       const channelId = terms(variables.where).find((term) => term.channel)?.channel?.id;
       const channel = channels.find((channel) => channel.id === (channelId?._is_null ? null : channelId?._eq));
-      return { data: { messages_groups: [{ key: { status: "active" }, aggregate: { count: channel!.count } }], totalCount: 1 } };
+      return { data: { messages_groups: [{ key: { status: "active" }, aggregate: { count: channel!.count },
+        ...carry({ status: { _eq: "active" } }) }], totalCount: 1 } };
     }
     const filtered = terms(variables.where).some((term) => term.title)
       ? channels.filter((channel) => channel.id === "signal") : channels;
     return { data: {
       messages_groups: filtered.slice(variables.offset, variables.offset + variables.limit).map((channel) => ({
         key: { channel_id: channel.id, channel_name: channel.label }, aggregate: { count: channel.count },
+        ...carry({ channel: { id: channel.id === null ? { _is_null: true } : { _eq: channel.id } } }),
       })), totalCount: filtered.length,
     } };
   });
   const getList = vi.fn(async ({ pagination, meta }: GetListParams) => {
     const clauses = terms(meta?.gqlVariables?.where as Where | undefined);
-    const identity = clauses.find((term) => term.channel)?.channel?.id;
-    if (error === "leaf" && identity?._eq === "mail") throw new Error("Mail records unavailable");
-    const needle = clauses.find((term) => term.title)?.title?._ilike.replaceAll("%", "");
-    const status = clauses.find((term) => term.status)?.status?._eq;
-    const filtered = activeRows.filter((row) =>
-      (!identity || (identity._is_null ? row.channel === null : row.channel?.id === identity._eq))
-      && (!needle || row.title.includes(needle)) && (!status || row.status === status));
-    const size = pagination?.pageSize ?? 50;
-    const offset = ((pagination?.currentPage ?? 1) - 1) * size;
-    return { data: filtered.slice(offset, offset + size).map((row) => refreshedTitle && row.id === "mail-1"
-      ? { ...row, title: refreshedTitle } : row), total: filtered.length };
+    if (error === "leaf" && clauses.find((term) => term.channel)?.channel?.id?._eq === "mail") {
+      throw new Error("Mail records unavailable");
+    }
+    return recordPage(clauses, pagination?.currentPage ?? 1, pagination?.pageSize ?? 50);
   });
   let view!: ResourceViewContextValue;
   const rowHref = vi.fn((row: MessageRow, _scope?: ListViewNavigationScope) => `/?record=${row.public_key ?? row.id}`);
@@ -212,11 +224,9 @@ test("base and toolbar filters constrain both channel discovery and every channe
   expect(rootTerms).toEqual(expect.arrayContaining([
     expect.objectContaining({ status: { _eq: "active" } }), expect.objectContaining({ title: { _ilike: "%needle%" } }),
   ]));
-  const leafTerms = terms(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where);
-  expect(leafTerms).toEqual(expect.arrayContaining([
-    expect.objectContaining({ status: { _eq: "active" } }), expect.objectContaining({ title: { _ilike: "%needle%" } }),
-    expect.objectContaining({ channel: { id: { _eq: "signal" } } }),
-  ]));
+  // Each channel's first page rides on that filtered groups read; no per-channel request.
+  expect(f.custom.mock.calls.at(-1)?.[0].meta?.gqlVariables).toMatchObject({ with_rows: true, rows_limit: 20 });
+  expect(f.getList).not.toHaveBeenCalled();
 });
 
 test.each(["board", "list"] as const)("a grouped %s card or row publishes navigation using the declared public identity", async (viewKind) => {
@@ -229,7 +239,7 @@ test.each(["board", "list"] as const)("a grouped %s card or row publishes naviga
     navigationScope: { filter: { channel: { exact: "mail" } }, order: { title: "DESC" }, page: 1, pageSize: 20 },
     rows: expect.arrayContaining([expect.objectContaining({ public_key: "mail-1" })]),
   });
-  expect(f.getList.mock.calls.every(([request]) => request.meta?.fields?.includes("public_key"))).toBe(true);
+  expect(JSON.stringify(f.custom.mock.calls.at(-1)?.[0].meta?.gqlQuery)).toContain('"value":"public_key"');
 });
 
 test("nested board groups remain reachable and page records within both parent scopes", async () => {
@@ -265,6 +275,11 @@ test("a card action refreshes loaded records even when the server's channel buck
 
 test.each(["root", "leaf"] as const)("a failed %s request is visible instead of presenting missing channels as an empty board", async (error) => {
   const f = fixture({ error });
+  if (error === "leaf") {
+    // Page 1 rides on the groups read; a later page is the leaf's own request.
+    const mail = await screen.findByRole("region", { name: "Mail" });
+    fireEvent.click(await within(mail).findByRole("button", { name: "Next Mail records" }));
+  }
   expect(await screen.findByText(error === "root" ? "Channel groups unavailable" : "Mail records unavailable")).toBeTruthy();
   expect(screen.queryByText("No messages")).toBeNull();
   if (error === "root") expect(f.getList).not.toHaveBeenCalled();

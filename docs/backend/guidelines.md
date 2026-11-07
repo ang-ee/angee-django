@@ -93,8 +93,9 @@ separate core wheel or namespace initializer.
 - `angee.base` owns reusable models, fields, managers, settings/deployment glue,
   package-data projection and small shared primitives. It consumes declared
   native Django, compiler and permission-library contracts.
-- `angee.server` owns optional HTTP defaults, Uvicorn commands and connection
-  policy. Web, GraphQL and MCP require it through native package requirements;
+- `angee.server` owns optional HTTP defaults, URL and ASGI composition, the
+  project launcher's command contexts, Uvicorn commands and connection policy.
+  Web, GraphQL and MCP require it through native package requirements;
   model-only projects do not activate a serving stack.
 - Capability addons own their own policy and package facts. Cross-addon imports
   follow declared native requirements toward stable owners.
@@ -113,7 +114,7 @@ Use these owners instead of maintaining another contract in an addon:
 |---|---|
 | Addon discovery and declarations | The native `django_compose.components` index owns identity/closure. [`angee.base.addons`](../../src/angee/base/addons.py) reads packaged `[tool.angee.*]` tables and discovers optional addon modules. Addon requirements stay in `[project].dependencies`; foreign app edges use django-compose's `AppConfig.requires_apps` extension. |
 | Settings and app ordering | [Settings bootstrap and app graph](../composer.md#settings-bootstrap) compose one app set. Keep source-model imports out of settings loading; do not create separate build/run registries. |
-| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Resources owns resource semantics; GraphQL [schema discovery](../../src/angee/graphql/schema.py) resolves and validates its schema references. Generic lifecycle and optional hook dispatch belong to django-compose; native `django_compose.urls` owns explicit HTTP URL contributions. |
+| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Resources owns resource semantics; GraphQL [schema discovery](../../src/angee/graphql/schema.py) resolves and validates its schema references. Generic lifecycle and optional hook dispatch belong to django-compose; [serving](../composer.md#serving) composes addon `urls` and `asgi` modules. |
 | Models and runtime import | [Runtime build and import](../composer.md#runtime-build-and-import) describes source selection and Django phase 2. Use narrow abstract contributors; let Django own inheritance, field cloning, managers, and registration. |
 | Migration history and cleanup | [Project migration history](../composer.md#project-migration-history) and [migration policy](#migration-history) distinguish replaceable generated models from version-controlled native Django history. |
 | Resource load hooks | [`ResourceLoadMixin`](../../src/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. A row whose state only an owner verb may write declares a `resource_class` adapter that persists through that verb as the row's named actor and records the result in the ledger ([workflow definitions](../../src/angee/workflows/resources.py), [chatter](../../src/angee/messaging/resources.py)). |
@@ -161,20 +162,34 @@ Use these owners instead of maintaining another contract in an addon:
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
   promote it to a model or manager method.
-- **Database routing:** a persisted row's database is `row._state.db`; bind a
-  manager for an unsaved or row-relative operation with
+- **Database routing:** one deployment router in `DATABASE_ROUTERS` owns which
+  database each model lives on (static placement). Angee adds no
+  operation-scoped database selection: side effects follow Django routing, not
+  the database of the row that produced them, and tests run on one database. A
+  persisted row's database is `row._state.db`; bind a manager for an unsaved or
+  row-relative operation with
   `Model._base_manager.db_manager(hints={"instance": row})` and use that
-  manager's `db`. Do not thread database aliases through Angee instance methods
-  or hooks. Use native relation access, `refresh_from_db` when deferred or stale
-  fields need reloading, and ordinary `atomic` and `on_commit` boundaries while
-  preserving locks and batching. A declared
-  read-only external import source may select its database explicitly.
-  Multi-database support extends Django with a router for static model placement;
-  add operation scoping only for a concrete need. REBAC-managed models and their
-  relationship store must share a database alias. The upstream
-  `rebac.checks.check_policy_models` check owns that routing rule; run native
-  checks for the aliases selected by the deployment rather than imposing a
-  second framework rule that requires the literal `default` alias.
+  manager's `db`. Django does not route transactions, commit hooks or raw
+  connections, so the owner that opens one names the routed alias: the row's
+  database, the manager's or queryset's `db`, or `router.db_for_write` for a
+  class-level owner, with `connections[alias]` for raw SQL on that alias. Pass
+  Django- and library-supplied aliases (signal `using`, `Collector`,
+  `save(using=...)` in an override, a hook's `using` argument) through unchanged;
+  do not thread aliases through Angee helpers, managers, hooks or tasks. Use
+  native relation access, `refresh_from_db` when deferred or stale fields need
+  reloading, and preserve locks and batching. A declared read-only external
+  import source may select its database explicitly.
+  [`test_static_placement.py`](../../tests/test_static_placement.py) is the one
+  router test: it places every model on a second alias and asserts that no query
+  reaches `default`. REBAC-managed models and their relationship store must
+  share a database alias. The upstream `rebac.checks.check_policy_models` check
+  owns that routing rule; run native checks for the aliases selected by the
+  deployment rather than imposing a second framework rule that requires the
+  literal `default` alias. Read replicas for permission data are unsupported: a
+  lagging replica serves grants already revoked on the primary. Before a replica
+  router is introduced, every REBAC model, the `contenttypes` and `auth` rows it
+  joins, and reads inside `transaction.atomic` must use the primary (recorded
+  debt: work-state `notes/2026-11-06-debt-replica-stale-grants.md`).
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
@@ -224,7 +239,9 @@ Use these owners instead of maintaining another contract in an addon:
   from the final composed schema and active execution backend. Relation identity
   comes from the target resource's identity policy, never from a display label or
   a consumer's guessed field name. Keep output values distinct from comparison
-  input domains, and group summaries distinct from optional drill capability.
+  input domains. A server group axis declares the filter its drill uses, or the
+  schema build fails; only an extraction part (a weekday, a month number) is
+  summary-only.
   Extend native lookup seams for database operators; never advertise an operator
   that the exposed comparison input or executor cannot accept.
 - Vendor SDK clients are details. Keep SDK request/response quirks in the
@@ -1074,11 +1091,11 @@ strict mode refuses one without it. Entrypoints own boundaries, one per unit of
 work, and nothing else opens a `fresh` one except a deliberately separate logical
 write (merge, revert, seed): HTTP requests through `ChangesetMiddleware` on the
 stack's own sync or async path; WebSocket connections through
-`ChangesetScopeMiddleware`, composed in the native ASGI contribution seam; Celery
+`ChangesetScopeMiddleware`, composed by the GraphQL Channels WebSocket owner; Celery
 tasks through [`angee.provenance.tasks.Task`](../../src/angee/provenance/tasks.py); management
-commands through the native launcher's `COMPOSE_COMMAND_CONTEXT` hooks, contributed by
+commands through `angee.server.management`'s `ANGEE_SERVER_COMMAND_CONTEXT` hooks, contributed by
 [`provenance`](../../src/angee/provenance/contrib/angee/context.py). The
-[native launcher](../composer.md#flow) supplies the winning command's parsed,
+[server launcher](../composer.md#flow) supplies the winning command's parsed,
 read-only options at its `execute` boundary; use those options for `--database`
 selection rather than parsing argv. (`serve`, `runserver` and `test` are
 excluded because their requests, connections, tasks and tests own boundaries;
@@ -1391,7 +1408,7 @@ retains its native routing contract.
 ### Development server
 
 - **The native launcher owns the Django reloader parent.** Rendered `manage.py`
-  calls `django_compose.management.execute`, which composes in a fresh process
+  calls `angee.server.management.execute`; django-compose's launcher composes in a fresh process
   before a reloader child. Django owns imported/input-file watching and reload
   decisions. [`angee.server`'s runserver override](../../src/angee/server/management/commands/runserver.py)
   serves the child with Uvicorn and closes its ASGI lifecycle on shutdown. Do not
@@ -1407,7 +1424,7 @@ retains its native routing contract.
 
 ### Addon WebSocket endpoints
 
-Contribute socket protocols through `AppConfig.compose_asgi()` and compose
+Contribute WebSocket routes through an addon's `asgi.py` (see [Serving](../composer.md#serving)) and compose
 `RebacChannelsConsumerMixin` to pin the cookie actor before creating tasks.
 The [GraphQL Channels owner](../../src/angee/graphql/asgi.py) discovers and validates
 addon `asgi.py` WebSocket routes and middleware, and owns Origin trust and Django
@@ -1568,6 +1585,13 @@ open fresh evaluator scopes for authorization and change-feed reads.
   in ordinary `manage.py check` and commands requesting the default system checks.
   ASGI WebSocket routing at application boot and the `schema` command also demand
   schema construction; MCP's resource-tool check validates its console contract.
+  The same addon's `angee.graphql.E003` check refuses a process-local Channels layer
+  when a Celery broker is configured: `enqueue_task` sends through `send_task`,
+  which Celery never runs eagerly, so a broker means a worker's broadcasts need
+  Redis to reach web subscribers even with `DEBUG=True`. A host without a Celery
+  broker may use the in-memory layer in DEBUG. Set `CHANNEL_REDIS_URL` in project
+  settings, or use the stack's `REDIS_URL` or Redis broker URL. The
+  `ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER` escape is for isolated tests.
   Bare app population and `manage.py --help` stay build-free. Writer-only processes that call `django.setup()` without running
   checks deliberately retain lazy construction: their first observable partial
   update builds the required schemas synchronously, including inside an open
@@ -2053,7 +2077,8 @@ bridge advisory lock as polling and delivery settlement.
 - **Reviews retain one current decision per step.**
   [`DecisionStep`](../../src/angee/workflows/decision_steps.py) asks through
   `ctx.ask(request, state=...)`; `StepRun.decision` retains the question.
-  The answer wakes the step after commit, with a tick sweep for missed delivery.
+  The answer enqueues `workflows.wake_decisions` after commit; the worker wakes the
+  step, and the tick recovers failed or skipped wakes.
   A continuation may ask again after an answer when its reviewed facts changed;
   the previous question remains a native execution record associated with its run.
   Open questions cannot be replaced. Check the owning record's revision before

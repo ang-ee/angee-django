@@ -44,7 +44,7 @@ export function CatalogueStory({ appearance, list = false, unavailable = false, 
     const fixture = storySchema(async (_input, init) => {
       const request = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       onRequest?.(request);
-      const { query } = request;
+      const { query, variables } = request;
       if (query.includes("workflow_step_outcomes")) return jsonResponse({ data: { workflow_step_outcomes: [{ node: "entry", outcomes: { done: "Done", error: "Error" }, issues: [] }] } });
       if (query.includes("workflow_step_choices")) return jsonResponse({ data: {
         workflow_by_pk: { ...workflowFixture, permissions: ["monitor", "write"], draft_revision: 1, layout: { entry: [80, 60] },
@@ -58,8 +58,10 @@ export function CatalogueStory({ appearance, list = false, unavailable = false, 
         workflowversion: [{ id: "wfv_review", number: 2, created_at: "2026-09-29T09:00:00Z", published_by: "usr_operator", content_hash: "retained_hash" }],
         workflowversion_aggregate: { aggregate: { count: 1 } },
       } });
+      // The leaf groups read carries each group's first page.
       if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: [
-        { key: { status: "FAILED", workflow_id: "wfl_review", workflow__name: "Record review" }, aggregate: { count: 1 } },
+        { key: { status: "FAILED", workflow_id: "wfl_review", workflow__name: "Record review" }, aggregate: { count: 1 },
+          ...(variables.with_rows ? { rows: [runFixture()] } : {}) },
       ], totalCount: 1 } });
       if (query.includes("workflowrun")) return jsonResponse({ data: { workflowrun: [runFixture()], workflowrun_aggregate: { aggregate: { count: 1 } } } });
       if (query.includes("trigger")) return jsonResponse({ data: { trigger: [triggerFixture], trigger_aggregate: { aggregate: { count: 1 } } } });

@@ -40,7 +40,7 @@ afterEach(() => { cleanup(); clearClients(); });
 test("a base-filtered list scopes its group counts and every facet count to the base filter", async () => {
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     const key = (meta!.gqlVariables as GroupVariables).group_by[0]!.field.toLowerCase();
-    return { data: { parts_groups: [{ key: { [key]: "BODY" }, aggregate: { count: 2 } }], totalCount: 1 } };
+    return { data: { parts_groups: [{ key: { [key]: "BODY" }, aggregate: { count: 2 }, rows: [] }], totalCount: 1 } };
   });
   const getList = vi.fn(async () => ({ data: [], total: 0 }));
   render(

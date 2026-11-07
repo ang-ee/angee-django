@@ -1333,7 +1333,7 @@ _VENDOR_RESOURCE = hasura_model_resource(
     VendorType,
     model=Vendor,
     name="vendors",
-    filterable=["id", "slug", "display_name", "updated_at"],
+    filterable=["id", "slug", "display_name", "created_at", "updated_at"],
     sortable=["slug", "display_name", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["created_at"],

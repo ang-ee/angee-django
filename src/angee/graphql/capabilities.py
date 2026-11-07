@@ -46,9 +46,9 @@ def held_permissions(
     """Return declared permission names held by the ambient actor on this row.
 
     List projections reuse SQL annotations; single records use the same
-    annotations on a one-row queryset. Neither instance-local nor ambient
-    elevation grants a capability: the permission scopes pin the concrete
-    ambient actor. Without an actor no capabilities are granted.
+    annotations on a one-row queryset read through the actor's own scope, so a
+    row the actor cannot read holds nothing. Neither instance-local nor ambient
+    elevation grants a capability. Without an actor no capabilities are granted.
     ``model`` may name an MTI ancestor owning the requested permission; its row
     shares the record's primary key.
     """
@@ -66,7 +66,7 @@ def held_permissions(
     ):
         annotations = permission_annotations(owner, names)
         values = (
-            require_rebac_queryset(owner).system_context(reason="graphql.permissions")
+            require_rebac_queryset(owner).with_actor(actor)
             .filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
             or {}
         )

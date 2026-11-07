@@ -904,7 +904,7 @@ class NeedAccessTests(IntakeAccessCase):
         self.assertEqual(need.access_verdict, ["intake.deny"])
         self.assertEqual(need.access_answered_by_id, self.owner.pk)
 
-    def test_requester_comment_filer_read_and_preview_derive_from_need(self):
+    def test_requester_comment_and_filer_read_derive_from_need_without_preview(self):
         party = self.party(self.reader)
         need = self.need(party=party)
         with system_context(reason="test restricted request"):
@@ -917,9 +917,13 @@ class NeedAccessTests(IntakeAccessCase):
         for permission in ("read", "comment"):
             self.assertTrue(requester_task.has_access(permission))
         for user in (self.owner, self.writer):
+            self.assertTrue(need.task.with_actor(to_subject_ref(user)).has_access("write"))
             self.assertTrue(self.Party.objects.as_user(user).filter(pk=party.pk).exists())
             self.assertTrue(apps.get_model("parties", "Person").objects.as_user(user).filter(pk=party.pk).exists())
-            self.assertTrue(self.reader.with_actor(to_subject_ref(user)).has_access("view_as"))
+            self.assertFalse(self.reader.with_actor(to_subject_ref(user)).has_access("view_as"))
+            self.assertIsNone(self.User.objects.admit_view_as(user, str(self.reader.sqid)))
+        self.assertTrue(self.reader.with_actor(to_subject_ref(self.admin)).has_access("view_as"))
+        self.assertEqual(self.User.objects.admit_view_as(self.admin, str(self.reader.sqid)), self.reader)
 
     def test_filer_name_sorts_readable_requesters_and_redacts_hidden_parties(self):
         with system_context(reason="test filer parties"):

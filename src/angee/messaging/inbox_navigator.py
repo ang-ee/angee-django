@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -25,7 +25,7 @@ from django.db.models import (
     When,
     Window,
 )
-from django.db.models.functions import Coalesce, RowNumber
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
@@ -271,6 +271,25 @@ class InboxNavigator(MessageInbox):
             )
         raise ValueError("Unknown navigator grouping.")
 
+    def group_page(self, axis: str, *, page: int = 1, size: int = 25, leaf_size: int = 0) -> InboxGroupPage:
+        """Page headers; with ``leaf_size`` each carries its first identity page.
+
+        Identity rows aggregate inside their bucket and circle/organisation buckets
+        overlap, so each header pages through :meth:`page` within the one request.
+        """
+
+        header = self.groups(axis).page(page=page, size=size)
+        if leaf_size < 1:
+            return header
+        InboxPage.window(1, leaf_size)
+        return replace(
+            header,
+            rows=[
+                replace(row, rows=self.page(scope=InboxGroupScope(axis=axis, value=row.value), size=leaf_size).rows)
+                for row in header.rows
+            ],
+        )
+
     def page(
         self, *, scope: InboxGroupScope | None = None, parent: str | None = None, page: int = 1, size: int = 25
     ) -> InboxPage:
@@ -314,14 +333,7 @@ class InboxNavigator(MessageInbox):
         keys = [row["_identity"] for row in selected]
         previews = (
             activity.filter(_identity__in=keys)
-            .annotate(
-                _rank=Window(
-                    RowNumber(),
-                    partition_by=[F("_identity")],
-                    order_by=[F("_order_at").desc(), F("pk").desc()],
-                )
-            )
-            .filter(_rank=1)
+            .first_per_group("_identity", order_by=[F("_order_at").desc(), F("pk").desc()], limit=1)
             .values_list("_identity", "preview")
         )
         preview_by_identity = dict(previews)

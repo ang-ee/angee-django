@@ -19,7 +19,7 @@ from angee.graphql.publishing import change_published
 from angee.provenance.context import changeset
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
-from angee.workflows.testing.drivers import decide, load_workflow, run_until
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
 from angee.workflows.timeline import RunKind
 from tests.conftest import create_user
@@ -81,7 +81,7 @@ def test_run_follows_execution_without_an_explicit_projection(execution) -> None
 
 
 def test_waiting_run_folds_readable_children_and_computes_attention(review) -> None:
-    actor, reviewers, _, question = review
+    actor, reviewers, sent, question = review
     batches = []
 
     def observed(sender, *, instances, **kwargs):
@@ -128,13 +128,14 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     assert hidden["timeline_attention"] == hidden["timeline"]["needs_me"] == 0
 
     decide(step.decision, actor=reviewer, chosen=["approve"])
+    assert deliver_decision_wakes(sent, step.decision_id) == [1]
     run_until(run)
     assert timeline_entries(subject, reviewer, kind="workflows.run")[0].detail == "Succeeded"
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
 
 
 def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(review) -> None:
-    _, reviewers, _, question = review
+    _, reviewers, sent, question = review
     run, step = start_review(review)
     subject, reviewer = question.review_subject, reviewers[0]
     with system_context(reason="test.timeline.hidden_run"), changeset(
@@ -151,6 +152,7 @@ def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(rev
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 1
     assert next(kind["count"] for kind in data["timeline"]["kinds"] if kind["id"] == "decisions.decision") == 1
     decide(step.decision, actor=reviewer, chosen=["reject"])
+    assert deliver_decision_wakes(sent, step.decision_id) == [1]
     run_until(run)
     data = read_timeline(subject, reviewer, kinds=["decisions.decision"])
     assert len(data["timeline"]["entries"]) == 1
@@ -203,7 +205,7 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
 ):
     """Like the AP page: a canonical record has only a child's public feed."""
 
-    actor, _sent = execution
+    actor, sent = execution
     with system_context(reason="test.timeline.inherited_subject"):
         subject = MtiChild.objects.create(title="Review twice")
         write_relationships([
@@ -258,6 +260,7 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
         assert line["detail"] == event.detail and line["needs_me"]
         assert {"kind": "decisions.decision", "count": 1 if node == "first" else 2} in line["children"]
         decide(step.decision, actor=actor, chosen=["done"])
+        assert deliver_decision_wakes(sent, step.decision_id) == [1]
     run_until(run)
     assert snapshots[-1]["timeline_attention"] == 0
     assert snapshots[-1]["timeline"]["entries"][0]["detail"] == "Succeeded"
