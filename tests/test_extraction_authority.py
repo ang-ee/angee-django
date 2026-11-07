@@ -10,7 +10,7 @@ from angee.extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
 from tests.extraction_models import Extraction
 
 
-def authority(*, result, claims, lines=(), corrections=()):
+def authority(*, result, claims, lines=()):
     """Construct immutable value state without persistence or provider calls."""
     return Extraction(
         result=result,
@@ -24,27 +24,20 @@ def authority(*, result, claims, lines=(), corrections=()):
                 ],
             }
         ],
-        outcome={"kind": "succeeded", "claims": claims, "corrections": list(corrections)},
+        outcome={"kind": "succeeded", "claims": claims},
     )
 
 
-def test_inference_preserves_claimed_and_corrected_values_without_mutating_inputs():
-    original = {"documents": [{"title": "Source", "note": "Corrected", "lines": [{"text": "A"}, {"text": "B"}]}]}
+def test_inference_preserves_claimed_values_without_mutating_inputs():
+    original = {"documents": [{"title": "Source", "note": "Claimed", "lines": [{"text": "A"}, {"text": "B"}]}]}
     retained = authority(
         result=original,
         lines=("first", "second"),
         claims={
             "/documents/0/title": [{"part_position": 0, "start": 0, "end": 6}],
-            "/documents/0/lines/0/text": [{"part_position": 0, "start": 7, "end": 8}],
+            "/documents/0/note": [{"part_position": 0, "start": 7, "end": 14}],
+            "/documents/0/lines/0/text": [{"part_position": 0, "start": 15, "end": 16}],
         },
-        corrections=[
-            {
-                "original_extraction_id": "earlier",
-                "original_extraction_revision": 1,
-                "decision_id": "review",
-                "corrected_paths": ["/documents/0/note", "/documents/0/lines/0/text"],
-            }
-        ],
     )
     candidate = Result(
         {"documents": [{"title": "Changed", "extra": "Inferred", "lines": [{"text": "B"}, {"text": "Changed A"}]}]},
@@ -57,22 +50,15 @@ def test_inference_preserves_claimed_and_corrected_values_without_mutating_input
     document = result.value["documents"][0]
     assert document == {
         "title": "Source",
-        "note": "Corrected",
+        "note": "Claimed",
         "extra": "Inferred",
         "lines": [{"text": "B"}, {"text": "A"}],
     }
     assert result.claims["/documents/0/title"] == retained.claims["/documents/0/title"]
+    assert result.claims["/documents/0/note"] == retained.claims["/documents/0/note"]
     assert result.claims["/documents/0/lines/1/text"] == retained.claims["/documents/0/lines/0/text"]
-    assert "/documents/0/note" not in result.claims
     assert result.provider_metadata["unresolved_reasons"] == [RETAINED_AUTHORITY_COMPLETION_REVIEW]
     assert candidate == before and retained.result == original
-    corrections = retained.retained_corrections(result.value, identity_mapping=mapping)
-    assert corrections[0]["corrected_paths"] == ["/documents/0/note", "/documents/0/lines/1/text"]
-    changed = deepcopy(result.value)
-    changed["documents"][0]["note"] = "Changed"
-    assert retained.retained_corrections(changed, identity_mapping=mapping)[0]["corrected_paths"] == [
-        "/documents/0/lines/1/text",
-    ]
 
 
 def test_missing_nested_authority_materializes_escaped_path_and_remaps_carrier():

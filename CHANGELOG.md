@@ -28,6 +28,55 @@ live in code docstrings.
   chatter-filtered thread arm from `read_granted` to `chatter_read`; grants for any
   conversation stay on `read_granted`.
 
+## Unreleased — dead subsystems removed with their schema
+
+Each removal below changes composed models. A project removes the storage in its
+own native migration history. No framework addon or consumer reads these facts.
+
+- **Extraction correction.** The decision-backed correction writer and
+  everything only it fed are removed: `ExtractionManager.prepare_correction_binding`,
+  `revise_from_decision` and `reviewed_correction_authority`, `CorrectionBinding`,
+  `CorrectionRef`, the outcome's `corrections` list with its readers
+  (`Extraction.corrections`, `fact_correction`, `retained_corrections`,
+  `reviewed_facts`), the helpers only the correction path read
+  (`Extraction.reference` with its `ExtractionRef` value, `failed_at_inference`
+  and `pointers.fact_pointers`), and the `Extraction.correction_decision`
+  foreign key.
+  Nothing called the writer, so no revision holds a correction; retained
+  outcomes may still carry an empty `corrections` list that nothing reads.
+  `Extraction.fact_authority` reports `source` or `unverified`. A project
+  composing `angee.extraction` removes the column with
+  `RemoveField(model_name="extraction", name="correction_decision")` in its
+  `extraction` history; the drop guard admits the autodetected removal while
+  the column is null on every row.
+- **Notification delivery states.** No worker ever advanced or failed a
+  notification, so its delivery lifecycle and diagnostics are removed:
+  `ThreadNotification.NotificationStatus`, `notification_status`,
+  `failure_type`, `failure_reason`, the `ix_thread_notification_pending` and
+  `ix_thread_notification_failed` partial indexes,
+  `ThreadNotificationManager.mark_failed`, `mark_failed_for_message` and
+  `error_count_for_record`, and the queryset's `delivery_errors`. GraphQL drops
+  the three fields from both notification types and the `thread_notifications`
+  filter, and the record chatter state drops `message_has_error` and
+  `message_has_error_counter`; clients stop selecting them. A project composing
+  `angee.messaging` removes the two indexes and three columns (`RemoveIndex` and
+  `RemoveField` on `messaging.threadnotification`); the drop guard admits the
+  autodetected removal while every row holds `ready` and empty failure text.
+- **Intake channel triggers.** Channel intake offered `reaction`, `mention`
+  and `command` beside `all_messages`; none of the three ever captured a
+  message. They go with `ChannelIntake.IntakeTrigger` and the `intake_trigger`
+  field, since its one remaining value carries no fact: a channel with an
+  `intake_queue` captures every ingested message. GraphQL drops
+  `ChannelType.intake_trigger` with its update input and its filter, sort and
+  group axes, and the demo channel row drops the key. A project composing
+  `angee.intake` first clears `intake_queue` on channels whose stored trigger
+  is `reaction`, `mention` or `command`, so they keep capturing nothing, and
+  flushes deferred foreign-key checks (`connection.check_constraints()`); then,
+  in the same `messaging` migration (the field folds into the channel table), it
+  removes the column with `RemoveField(model_name="channel", name="intake_trigger")`.
+  The drop guard refuses the autodetected removal while any row holds a retired
+  value.
+
 ## Unreleased — jj workspace slots in the templates
 
 - The `src` workspace template takes `slot_mode` (`worktree`, the default, or

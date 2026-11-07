@@ -754,10 +754,7 @@ class RecordThreadNotificationType(AngeeNode):
     follower: "RecordThreadFollowerType | None" = actor_scoped_to_one("follower")
     user: "UserType | None" = actor_scoped_to_one("user")
     notification_type: auto
-    notification_status: auto
     read_at: auto
-    failure_type: auto
-    failure_reason: auto
     metadata: strawberry.scalars.JSON
     created_at: auto
     updated_at: auto
@@ -837,10 +834,7 @@ class ThreadNotificationType(AngeeNode):
 
     user: "UserType | None" = actor_scoped_to_one("user")
     notification_type: auto
-    notification_status: auto
     read_at: auto
-    failure_type: auto
-    failure_reason: auto
     metadata: strawberry.scalars.JSON
     created_at: auto
     updated_at: auto
@@ -1032,8 +1026,6 @@ class RecordThreadStatePayload:
     notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
     unread_count: int = strawberry.field(name="unread_count", default=0)
     needaction_count: int = strawberry.field(name="needaction_count", default=0)
-    message_has_error: bool = strawberry.field(name="message_has_error", default=False)
-    message_has_error_counter: int = strawberry.field(name="message_has_error_counter", default=0)
     attachment_count: int = strawberry.field(name="attachment_count", default=0)
 
     @classmethod
@@ -2003,7 +1995,7 @@ _NOTIFICATION_INBOX_RESOURCE = hasura_model_resource(
     model=ThreadNotification,
     name="thread_notifications",
     get_queryset=_notification_inbox_queryset,
-    filterable=["id", "notification_type", "notification_status", "read_at", "created_at"],
+    filterable=["id", "notification_type", "read_at", "created_at"],
     sortable=["created_at", "read_at"],
     aggregatable=["id"],
     insert=False,
@@ -2367,11 +2359,6 @@ def _record_thread_payload(
         )
         for message in messages:
             setattr(message, "_current_user_needaction", message.pk in needaction_message_ids)
-    message_has_error_counter = (
-        ThreadNotification.objects.error_count_for_record(record, user=user, role=role)
-        if thread is not None and user is not None
-        else 0
-    )
     removed_message_count = None
     if record_access[1]:
         removed_message_count = (
@@ -2399,8 +2386,6 @@ def _record_thread_payload(
         notifications=notifications,
         unread_count=unread_count,
         needaction_count=unread_count,
-        message_has_error=message_has_error_counter > 0,
-        message_has_error_counter=message_has_error_counter,
         attachment_count=attachment_count,
         removed_message_count=removed_message_count,
     )

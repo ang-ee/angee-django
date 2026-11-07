@@ -8,6 +8,5 @@ rows:
       owner: iam.user_alice
       backend_class: manual
       intake_queue: work.eng
-      intake_trigger: all_messages
       created_by: iam.user_alice
       updated_by: iam.user_alice

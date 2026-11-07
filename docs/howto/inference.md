@@ -90,5 +90,5 @@ uses `InferenceModel.infer` for grounded recognition and mapping. Its
 [`workflows_extraction`](../../src/angee/workflows_extraction/README.md)
 adapter owns the workflow graph and steps: `infer_evidence` reads a pinned
 extraction revision, rechecks source access, and routes an unavailable model to
-the `inference_failed` outcome with a reader-facing reason. Provider selection,
-source retention and correction authority stay with extraction and agents.
+the `inference_failed` outcome with a reader-facing reason. Provider selection
+and source retention stay with extraction and agents.

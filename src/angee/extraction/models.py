@@ -19,11 +19,9 @@ from angee.base.models.derived import DerivedFrom
 from angee.base.refs import RecordRef
 from angee.base.serialization import canonical_json
 from angee.extraction.contracts import (
-    CorrectionRef,
     DocumentPart,
     DocumentRef,
     ExtractionPartKind,
-    ExtractionRef,
     LineRef,
     Result,
     Source,
@@ -35,7 +33,6 @@ from angee.extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
 from angee.extraction.managers import EvidenceManager, ExtractionManager
 from angee.extraction.pointers import (
     JSON_POINTER_MISSING,
-    fact_pointers,
     json_pointer_value,
     json_pointer_value_or_missing,
     materialize_missing_json_pointer_path,
@@ -100,14 +97,6 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
         related_name="recognition_extraction_evidence",
     )
     profile_config = models.JSONField(default=dict, editable=False)
-    correction_decision = models.ForeignKey(
-        "decisions.Decision",
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="extraction_corrections",
-        editable=False,
-    )
     result = models.JSONField(editable=False)
     document_map = models.JSONField(default=list, editable=False)
     retired_identities = models.JSONField(default=list, editable=False)
@@ -161,11 +150,6 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
         super().retain()
 
     @property
-    def reference(self) -> ExtractionRef:
-        """Return a stable reference to this exact evidence revision."""
-        return ExtractionRef(self.lineage_id, str(self.sqid), self.revision)
-
-    @property
     def document_refs(self) -> tuple[DocumentRef, ...]:
         """Expose document and line identity independently of printed values."""
         return tuple(
@@ -196,7 +180,7 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
         retired_identities: Mapping[str, str] | None = None,
         claim_part_positions: Mapping[int, int] | None = None,
     ) -> Result:
-        """Fill only facts without source or correction authority, using validated correspondence.
+        """Fill only facts without source authority, using validated correspondence.
 
         The caller validates carrier continuity. Unchanged ordered carriers need
         no ``claim_part_positions``; remapped carriers require an exact position map.
@@ -204,7 +188,6 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
         """
         value, claims = deepcopy(candidate.value), deepcopy(candidate.claims)
         protected = {pointer for pointer, entries in self.claims.items() if entries}
-        protected.update(path for correction in self.corrections for path in correction.corrected_paths)
         completed_missing = False
         for pointer in sorted(protected, key=lambda path: (len(path), path)):
             destination = self._authority_destination(pointer, identity_mapping, retired_identities or {})
@@ -281,37 +264,6 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
             raise ValidationError("Authoritative facts require explicit identity correspondence.")
         return destination + pointer[len(matched.selector) :]
 
-    def retained_corrections(
-        self,
-        candidate: Mapping[str, Any],
-        *,
-        identity_mapping: Mapping[str, str],
-        retired_identities: Mapping[str, str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Carry prior correction provenance only where logical identity and value agree."""
-        retained = []
-        for correction in self.outcome.get("corrections", ()):
-            paths = correction.get("corrected_paths")
-            if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
-                raise ValidationError("The retained correction provenance is invalid.")
-            retained_paths = []
-            for pointer in paths:
-                destination = self._authority_destination(pointer, identity_mapping, retired_identities or {})
-                before = json_pointer_value_or_missing(self.result, pointer)
-                after = (
-                    json_pointer_value_or_missing(candidate, destination)
-                    if destination is not None
-                    else JSON_POINTER_MISSING
-                )
-                if (
-                    before is not JSON_POINTER_MISSING
-                    and after is not JSON_POINTER_MISSING
-                    and canonical_json(before) == canonical_json(after)
-                ):
-                    retained_paths.append(destination)
-            retained.append({**deepcopy(correction), "corrected_paths": retained_paths})
-        return retained
-
     def selected_document(self, identity: str) -> tuple[Mapping[str, Any], DocumentRef]:
         """Resolve a document identity to its object and retained reference."""
         if self.awaiting_correspondence:
@@ -321,32 +273,6 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
         if not isinstance(value, Mapping):
             raise ValueError("The document selector does not point to an object.")
         return value, reference
-
-    def reviewed_facts(
-        self,
-        value: Mapping[str, Any],
-        *,
-        identity_mapping: Mapping[str, str],
-        retired_identities: Mapping[str, str],
-        confirmed_paths: tuple[str, ...],
-    ) -> tuple[dict[str, Any], list[str]]:
-        """Carry unchanged source claims and attribute changed or confirmed scalar facts."""
-        unchanged = {}
-        for pointer in fact_pointers(self.result):
-            destination = self._authority_destination(pointer, identity_mapping, retired_identities)
-            if destination is not None:
-                after = json_pointer_value_or_missing(value, destination)
-                if after is not JSON_POINTER_MISSING and canonical_json(self.fact(pointer)) == canonical_json(after):
-                    unchanged[destination] = pointer
-        paths = set(fact_pointers(value))
-        if not set(confirmed_paths) <= paths:
-            raise ValidationError("Confirmed paths must name retained scalar facts.")
-        claims = {
-            destination: deepcopy(self.claims[pointer])
-            for destination, pointer in unchanged.items()
-            if pointer in self.claims and destination not in confirmed_paths
-        }
-        return claims, sorted(paths - unchanged.keys() | set(confirmed_paths))
 
     def selected_line(self, document_identity: str, line_identity: str) -> tuple[Mapping[str, Any], LineRef]:
         """Resolve a line within its owning document without positional fallback."""
@@ -466,47 +392,10 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
             and self.outcome.get("code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
         )
 
-    @property
-    def failed_at_inference(self) -> bool:
-        """Whether the retained failure is explicitly attributed to inference."""
-        return (
-            self.outcome["kind"] == ExtractionStatus.FAILED
-            and self.outcome.get("stage") == "inference"
-        )
-
-    @property
-    def corrections(self) -> tuple[CorrectionRef, ...]:
-        """Read retained correction references without interpreting decision rows."""
-        return tuple(
-            CorrectionRef(
-                item["original_extraction_id"],
-                item["original_extraction_revision"],
-                item["decision_id"],
-                tuple(item.get("corrected_paths", ())),
-                item.get("revision_parent_extraction_id"),
-                item.get("revision_parent_extraction_revision"),
-            )
-            for item in self.outcome.get("corrections", ())
-        )
-
     def fact_authority(self, pointer: str) -> FactAuthority:
-        """Classify source grounding or retained correction authority for a fact."""
+        """Classify a retained fact as source-grounded or unverified."""
         self.fact(pointer)
-        if self.claims.get(pointer):
-            return FactAuthority.SOURCE
-        if self.fact_correction(pointer) is not None:
-            return FactAuthority.CORRECTION
-        return FactAuthority.UNVERIFIED
-
-    def fact_correction(self, pointer: str) -> CorrectionRef | None:
-        """Return the latest correction governing this fact, unless source grounding wins."""
-        self.fact(pointer)
-        if self.claims.get(pointer):
-            return None
-        for correction in reversed(self.corrections):
-            if any(pointer == path or pointer.startswith(f"{path}/") for path in correction.corrected_paths):
-                return correction
-        return None
+        return FactAuthority.SOURCE if self.claims.get(pointer) else FactAuthority.UNVERIFIED
 
 
 class ExtractionSource(DerivedFrom, concrete=True):

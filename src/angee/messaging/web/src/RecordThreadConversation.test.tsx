@@ -126,8 +126,6 @@ function threadPayload(
       subtypes: [],
       unread_count: 1,
       needaction_count: 0,
-      message_has_error: false,
-      message_has_error_counter: 0,
       attachment_count: 0,
       notifications: [],
       followers: [],

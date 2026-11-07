@@ -187,7 +187,6 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
         "display_name",
         "team",
         "intake_queue",
-        "intake_trigger",
         "intake_field_map",
         "intake_requester_domains",
     )
@@ -2147,7 +2146,6 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
                 needaction_count
                 notifications {
                   notification_type
-                  notification_status
                 }
               }
             }
@@ -2161,7 +2159,7 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
         "unread_count": 1,
         "needaction_count": 1,
         # Inbox rows record delivery independently of the follower cursor.
-        "notifications": [{"notification_type": "INBOX", "notification_status": "READY"}],
+        "notifications": [{"notification_type": "INBOX"}],
     }
 
     read = _data(
@@ -2495,58 +2493,6 @@ def test_suggested_recipients_withhold_restricted_fields_from_a_non_manager(comp
             "user": {"display_name": "Avery", "username": None, "email": None, "is_active": None},
         }
     ]
-
-
-def test_record_chatter_reports_author_delivery_errors(composed_tables: None) -> None:
-    """The record chatter query reports Odoo-style delivery-error counters."""
-
-    poster = _platform_admin("msg-error-poster")
-    recipient = _platform_admin("msg-error-recipient")
-    with system_context(reason="test.messaging.record_delivery_error.seed"):
-        ticket = messaging_models.ThreadedTicket.objects.create(title="Case 808")
-    with actor_context(poster):
-        message = ticket.message_post(
-            "This delivery will fail.",
-            recipient_user_ids=(recipient.pk,),
-        )
-    with system_context(reason="test.messaging.record_delivery_error.fail"):
-        messaging_models.ThreadNotification.objects.mark_failed_for_message(
-            message,
-            user=recipient,
-            status="bounce",
-            failure_type="mail_bounce",
-            failure_reason="Mailbox rejected the message.",
-        )
-    schema = _schema()
-
-    payload = _data(
-        execute_schema(
-            schema,
-            """
-            query RecordThreadErrors($model: String!, $id: ID!) {
-              record_thread(input: {model_label: $model, record_id: $id}) {
-                error_code
-                message_has_error
-                message_has_error_counter
-                notifications {
-                  notification_status
-                  failure_type
-                  failure_reason
-                }
-              }
-            }
-            """,
-            {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(poster),
-        )
-    )["record_thread"]
-
-    assert payload == {
-        "error_code": None,
-        "message_has_error": True,
-        "message_has_error_counter": 1,
-        "notifications": [],
-    }
 
 
 def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Path) -> None:

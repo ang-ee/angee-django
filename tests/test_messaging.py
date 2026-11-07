@@ -1256,7 +1256,6 @@ def test_threaded_model_post_notifies_matching_followers(composed_tables: None) 
     assert notification.attachment_id == ThreadAttachment._base_manager.get().pk
     assert notification.user_id == watcher.pk
     assert notification.notification_type == "email"
-    assert notification.notification_status == "ready"
     assert notification.follower_id == ThreadFollower._base_manager.get(party__person__user=watcher).pk
     assert ThreadNotification._base_manager.filter(user=muted).count() == 0
     assert ThreadNotification._base_manager.filter(user=activity_only).count() == 0
@@ -1415,7 +1414,6 @@ def test_threaded_model_post_notifies_direct_recipient_without_following(compose
     assert notification.message_id == message.pk
     assert notification.follower_id is None
     assert notification.notification_type == "inbox"
-    assert notification.notification_status == "ready"
     assert ThreadFollower._base_manager.filter(party__person__user=recipient).count() == 0
 
 
@@ -1476,43 +1474,6 @@ def test_threaded_model_post_can_autofollow_direct_recipient(composed_tables: No
     assert notification.follower_id is None
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("failure_reason", ["SMTP server refused the message.", "SMTP\x00" + "é" * 9000])
-def test_threaded_model_delivery_error_counts_for_author(composed_tables: None, failure_reason: str) -> None:
-    """Delivery failures roll up to the author-facing chatter error counter."""
-
-    del composed_tables
-    user_model = get_user_model()
-    with system_context(reason="test threaded model delivery-error setup"):
-        author = user_model.objects.create_user(username="error-author", email="error-author@example.com")
-        recipient = user_model.objects.create_user(username="error-recipient", email="error-recipient@example.com")
-        ticket = ThreadedTicket.objects.create(title="Delivery error")
-
-    with actor_context(author):
-        message = ticket.message_post("This might bounce.", recipient_user_ids=(recipient.pk,))
-
-    notification = ThreadNotification.objects.mark_failed_for_message(
-        message,
-        user=recipient,
-        status="exception",
-        failure_type="mail_smtp",
-        failure_reason=failure_reason,
-    )
-
-    returned_reason = notification.failure_reason
-    assert returned_reason.startswith("SMTP")
-    assert "\x00" not in returned_reason
-    assert len(returned_reason) <= ThreadNotification._meta.get_field("failure_reason").max_length
-    if failure_reason == "SMTP server refused the message.":
-        assert returned_reason == failure_reason
-    notification.refresh_from_db()
-    assert notification.notification_status == "exception"
-    assert notification.failure_type == "mail_smtp"
-    assert notification.failure_reason == returned_reason
-    assert ThreadNotification.objects.error_count_for_record(ticket, user=author) == 1
-    assert ThreadNotification.objects.error_count_for_record(ticket, user=recipient) == 0
-
-
 def _record_holders(doc: Any, **holders: Any) -> None:
     """Grant ``doc``'s relations to users, keyed by relation name."""
 
@@ -1542,7 +1503,6 @@ def test_record_task_completion_notifies_the_records_activity_followers() -> Non
 
     notification = ThreadNotification._base_manager.select_related("message", "message__subtype").get(user=watcher)
     assert notification.notification_type == "email"
-    assert notification.notification_status == "ready"
     assert notification.message.subtype is not None
     assert notification.message.subtype.key == "activity_done"
 

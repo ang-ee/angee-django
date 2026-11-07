@@ -14,17 +14,6 @@ JSON_POINTER_MISSING = object()
 """Sentinel distinguishing an absent path from a retained JSON null."""
 
 
-def fact_pointers(value: Any, path: tuple[str, ...] = ()) -> tuple[str, ...]:
-    """Enumerate scalar facts with RFC 6901 escaping and stable container ordering."""
-    if isinstance(value, dict):
-        return tuple(pointer for key in sorted(value) for pointer in fact_pointers(value[key], (*path, key)))
-    if isinstance(value, list):
-        return tuple(
-            pointer for index, item in enumerate(value) for pointer in fact_pointers(item, (*path, str(index)))
-        )
-    return (JsonPointer.from_parts(path).path,)
-
-
 def _resolve(value: Any, pointer: JsonPointer, baseline: Any = JSON_POINTER_MISSING) -> Any:
     """Constrain upstream traversal to JSON containers and stable array elements."""
     for token in pointer.parts:
