@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
@@ -17,7 +17,7 @@ from rebac import user_subject_type as _user_subject_type
 from rebac.backends import backend
 from rebac.managers import RebacQuerySet
 from rebac.resources import model_resource_type
-from rebac.schema import Definition, Schema, resolve_schema_path
+from rebac.schema import Definition, PermArrow, PermBinOp, PermExpr, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
 from rebac.schema.parser import parse_zed
 
@@ -141,6 +141,42 @@ def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
         return None
     schema = effective_rebac_schema(config)
     return schema.get_definition(resource_type) if schema is not None else None
+
+
+def contextual_action_holds(model: type[models.Model], action: str, *, generic: str = "read") -> bool:
+    """Whether a listing constrained to readable parents may scope ``model`` by ``action``.
+
+    A contextual child action is exactly one arrow, ``relation->parent_action``: the
+    child's own actor-scoped read checks its live parent, so the listing selects the
+    parent population with joins instead of a second, separately scoped parent
+    subquery. It holds while the effective policy (the synced schema with its
+    overrides) keeps that shape and ``generic`` stays a union with an arrow arm
+    through the same relation; the parent's policy owns ``parent_action`` implying
+    the parent permission that arm names. A missing permission, any extension of
+    ``action``, or an exclusion or intersection over ``generic`` (a tightening
+    override) leaves the implication unproved: the caller keeps ``generic`` inside an
+    independently scoped parent population. Field gates are unaffected; they keep
+    their own ``read__<field>`` checks under either action.
+    """
+
+    definition = effective_rebac_definition(model)
+    if definition is None:
+        return False
+    expressions = {permission.name: permission.expression for permission in definition.permissions}
+    contextual, general = expressions.get(action), expressions.get(generic)
+    if not isinstance(contextual, PermArrow) or general is None:
+        return False
+    return any(isinstance(arm, PermArrow) and arm.via == contextual.via for arm in _union_arms(general))
+
+
+def _union_arms(expression: PermExpr) -> Iterator[PermExpr]:
+    """Yield the operands of a top-level union; any other expression is one arm."""
+
+    if isinstance(expression, PermBinOp) and expression.op == "+":
+        yield from _union_arms(expression.left)
+        yield from _union_arms(expression.right)
+    else:
+        yield expression
 
 
 def instance_actor(instance: models.Model) -> SubjectRef | None:

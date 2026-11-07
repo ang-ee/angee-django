@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 22
+// @rebac_schema_revision: 23
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -139,6 +139,10 @@ definition messaging/part {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
+    // A part listed within inbox messages is read through the message action the
+    // inbox reads, so the listing authorizes each message once. Direct part grants
+    // stay on `read`: they never admit a part of an unreadable message here.
+    permission read_inbox = message->read
     permission read   = message->read + editor + reader + admin->member
     permission write  = message->write + editor + admin->member
     permission delete = message->delete + admin->member

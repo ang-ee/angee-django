@@ -83,12 +83,11 @@ class InboxResults:
             raise ValueError("Unknown shared-text part role.")
         # Eligibility needs a second distinct readable message, not the full use
         # count. EXISTS can stop at the first other use of a ubiquitous fragment.
-        # Check each candidate use's message through an indexed existence read.
-        # A broad message-ID subquery can be aggregated again for every fragment.
-        readable_message = self.inbox.messages.filter(pk=OuterRef("message_id"))
-        other_message = self.inbox.collection("messaging", "Part").filter(
-            Exists(readable_message), fragment_id=OuterRef("fragment_id"),
-        ).exclude(
+        # The inbox's parts check each candidate use's message through the part's
+        # own read and joined eligibility, not a broad message-ID subquery that is
+        # aggregated again for every fragment (MessageInbox.parts_for names the
+        # scoped fallback while the part's contextual read is unproved).
+        other_message = self.inbox.parts.filter(fragment_id=OuterRef("fragment_id")).exclude(
             message_id=OuterRef("message_id")
         )
         parts = parts.filter(fragment_id__isnull=False)

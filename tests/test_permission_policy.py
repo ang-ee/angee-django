@@ -14,6 +14,7 @@ from rebac.schema import parse_zed
 from angee.base import permissions
 from angee.base.permissions import (
     bind_rebac_schema,
+    contextual_action_holds,
     declared_rebac_definition,
     declared_schema_path,
     effective_rebac_definition,
@@ -44,6 +45,42 @@ def test_requests_use_synced_policy_without_reading_artifacts(monkeypatch):
     assert not is_gated_read_axis(
         Record, 'secret', definition_for=lambda model: declared.get_definition('probe/record'),
     )
+
+
+@pytest.mark.parametrize(
+    ("read", "read_inbox", "holds"),
+    [
+        ("parent->read + reader", "parent->read", True),
+        ("parent->read + (reader - blocked)", "parent->read", True),
+        # The parent owns its narrower action implying the read the arm names.
+        ("parent->read + reader", "parent->read_inbox", True),
+        # A tightening override, an exclusion, or a narrowed parent arm is unproved.
+        ("(parent->read + reader) & reader", "parent->read", False),
+        ("(parent->read + reader) - blocked", "parent->read", False),
+        ("(parent->read - blocked) + reader", "parent->read", False),
+        ("reader + blocked", "parent->read", False),
+        # An extended contextual action admits rows of unreadable parents.
+        ("parent->read + reader", "parent->read + reader", False),
+        ("parent->read + reader", None, False),
+    ],
+)
+@isolate_apps()
+def test_contextual_action_holds_only_while_the_effective_policy_proves_it(monkeypatch, read, read_inbox, holds):
+    class Record(models.Model, metaclass=RebacModelBase):
+        class Meta:
+            abstract = True
+            app_label = 'policy_probe'
+            rebac_resource_type = 'probe/record'
+
+    contextual = f"permission read_inbox = {read_inbox}" if read_inbox else ""
+    schema = parse_zed(
+        "definition probe/parent {\nrelation reader: auth/user\npermission read = reader\n"
+        "permission read_inbox = reader\n}\n"
+        "definition probe/record {\nrelation parent: probe/parent\nrelation reader: auth/user\n"
+        f"relation blocked: auth/user\npermission read = {read}\n{contextual}\n}}"
+    )
+    monkeypatch.setattr('angee.base.permissions.backend', lambda: SimpleNamespace(schema=lambda: schema))
+    assert contextual_action_holds(Record, "read_inbox") is holds
 
 
 def test_startup_snapshot_needs_no_policy_backend(tmp_path, monkeypatch):

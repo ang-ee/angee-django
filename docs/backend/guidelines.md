@@ -734,6 +734,16 @@ data through REBAC, never a queryset bypass.
   authorization up with a Python provider, `visible_to` projection, or queryset
   filter. Scope roles live on the scope definition, and scoped models derive
   arms from them (`scope->viewer` for read, `scope->editor` for write).
+- **A child listed within readable parents authorizes each parent once.** Declare
+  a contextual action that is exactly one arrow to the parent action the listing
+  reads (`messaging/part#read_inbox = message->read`), keep direct child grants on
+  `read`, and select the parent population with relation-path predicates from its
+  owner (`MessageInbox.eligible("message__")`), never a second, separately scoped
+  parent subquery. [`contextual_action_holds`](../../src/angee/base/permissions.py)
+  admits the action only while the effective policy proves it; otherwise the
+  caller keeps `read` inside the scoped parent population. A result population
+  whose own rules read the actor's rows (canonical copies, sender scope) stays a
+  scoped subquery.
 - A `read__<field>`-gated field is never filterable, sortable, groupable, or aggregatable.
   Filter or order on its gate's terms instead: a named filter expression or
   queryset alias built with REBAC's `queryset.readable(field)` is NULL wherever

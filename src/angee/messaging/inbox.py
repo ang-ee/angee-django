@@ -20,7 +20,7 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, contextual_action_holds
 
 
 class InboxCoverage(BaseModel):
@@ -137,33 +137,67 @@ class InboxSelection:
 
 
 class MessageInbox:
-    """Query owner for personal inbox reads, composed from a MessageQuerySet."""
+    """Query owner for personal inbox reads, composed from a MessageQuerySet.
+
+    The collection supplies the actor. :meth:`eligible` owns the base population,
+    for messages and for their parts; a result population narrows it
+    (:class:`~angee.messaging.inbox_results.InboxResults`) and stays distinct.
+    """
 
     def __init__(self, queryset: Any) -> None:
         self.actor = queryset.actor() or current_actor()
         self.user_id = actor_user_id(self.actor)
-        self.messages = (
-            queryset.inbox()
-            .published()
-            .exclude(thread__modality="public_thread")
-            .for_feed(all_copies=True)
-        )
+        self.messages = queryset.filter(self.eligible()).for_feed(all_copies=True)
         self.handles = self.collection("parties", "Handle").with_sender_name()
         self.parties = self.collection("parties", "Party")
         self.threads = self.collection("messaging", "Thread").inbox()
-        self.parts = self.parts_for(self.messages)
+        self.parts = self.parts_for()
         self.participants = self.collection("messaging", "Participant")
 
-    def collection(self, app: str, model: str) -> Any:
+    @staticmethod
+    def eligible(through: str = "") -> Q:
+        """Base inbox eligibility: published channel messages outside record chatter and public threads.
+
+        ``queryset.filter(MessageInbox.eligible())`` selects messages; ``through``
+        selects rows reaching such a message through that relation path, as
+        ``parts.filter(MessageInbox.eligible("message__"))`` does for parts whose own
+        read authorizes the message. The message queryset owns each predicate.
+        """
+
+        messages = apps.get_model("messaging", "Message").objects
+        return (
+            messages.inbox_q(through)
+            & messages.published_q(through)
+            & ~Q(**{f"{through}thread__modality": "public_thread"})
+        )
+
+    def collection(self, app: str, model: str, *, action: str | None = None) -> Any:
         """Propagate the message collection actor to every joined read owner."""
 
         rows = apps.get_model(app, model).objects.all()
+        if action is not None:
+            rows = rows.with_action(action)
         return rows.with_actor(self.actor).scoped_for_aggregate() if self.actor is not None else rows.none()
 
-    def parts_for(self, messages: Any) -> Any:
-        """Readable parts of an already authorized eligible message population."""
+    def parts_for(self, messages: Any = None) -> Any:
+        """Readable parts of eligible messages, or of a narrower authorized ``messages`` population.
 
-        return self.collection("messaging", "Part").filter(message_id__in=Subquery(messages.order_by().values("pk")))
+        ``Part.read_inbox`` derives from the message action the inbox reads, so the
+        part's own actor-scoped read authorizes its live message once and eligibility
+        joins the message without scoping it again. A narrower population (a result
+        set whose canonical-copy and sender rules read the actor's own messages)
+        still carries its own message scope. While the effective policy leaves that
+        implication unproved (an exclusion or override on the part's read), parts
+        keep their generic read inside the separately scoped eligible messages.
+        """
+
+        contextual = contextual_action_holds(apps.get_model("messaging", "Part"), "read_inbox")
+        parts = self.collection("messaging", "Part", action="read_inbox" if contextual else None)
+        if messages is None:
+            if contextual:
+                return parts.filter(self.eligible("message__"))
+            messages = self.messages
+        return parts.filter(message_id__in=Subquery(messages.order_by().values("pk")))
 
     def accounts(self) -> Any:
         """Readable accounts projected from eligible messages without full-row deduplication."""
