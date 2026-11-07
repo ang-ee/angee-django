@@ -251,23 +251,23 @@ class InboxResults:
             groups.order_by("latest" if self.options.oldest else "-latest", "_identity")[InboxPage.window(page, size)]
         )
         keys = [row["_identity"] for row in selected]
+        latest = {row["_identity"]: row["latest"] for row in selected}
         # The header page already knows each content identity's latest time.
         # Resolve the deterministic part tie-break only at those bounded points;
         # ranking every historical use repeats expensive content predicates.
-        source_ids = (
-            dict(
-                self.scoped(scope, require_shared=False)
-                .filter(
-                    Q(*(Q(_identity=row["_identity"], _order_at=row["latest"]) for row in selected), _connector=Q.OR)
-                )
-                .order_by()
-                .values("_identity")
-                .annotate(source_id=Max("pk"))
-                .values_list("_identity", "source_id")
-            )
+        # One identity term per row would repeat the identity's permission
+        # subquery: two key sets bound the read, then the exact pairs are kept.
+        bounded = (
+            self.scoped(scope, require_shared=False)
+            .filter(_identity__in=keys, _order_at__in=list(latest.values()))
+            .order_by()
+            .values("_identity", "_order_at")
+            .annotate(source_id=Max("pk"))
+            .values_list("_identity", "_order_at", "source_id")
             if selected
-            else {}
+            else []
         )
+        source_ids = {key: pk for key, order_at, pk in bounded if order_at == latest[key]}
         parts = {
             part.pk: part for part in self.inbox.parts.filter(pk__in=source_ids.values()).select_related("fragment")
         }
