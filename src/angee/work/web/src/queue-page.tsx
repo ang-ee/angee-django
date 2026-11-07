@@ -8,7 +8,7 @@ import * as React from "react";
  * framework's, including the header's pending and unavailable title.
  */
 export function QueueRecordPage({ eyebrow, description, verbs, gutter, scroll, children, ...header }: Pick<
-  RecordHeaderProps, "title" | "loading" | "loadingMessage" | "unavailable"
+  RecordHeaderProps, "title" | "loading" | "loadingLabel" | "unavailable"
 > & {
   eyebrow: React.ReactNode;
   description?: React.ReactNode;

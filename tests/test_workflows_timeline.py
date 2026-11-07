@@ -33,7 +33,7 @@ def timeline(schema, actor, records):
     return result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!) {
       record_timeline(records:$records) { open_decision_count records { record_id
         decisions { id } runs { id parent_step { id run { id } } graph { nodes { key plan step_run_id } }
-          graph_steps { id hold notes { tone message } records { operation record_id } child_runs { id } } } } }
+          graph_step_runs { id hold notes { tone message } records { operation record_id } child_runs { id } } } } }
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
         "record_timeline"
     ]
@@ -46,7 +46,7 @@ RUN_GRAPHS = """query($records:[TimelineRecordInput!]!, $limit:Int!) {
       edges { source outcome target taken }
       nodes { key plan item_counts { status count } item_attempts step_run_id }
     }
-    graph_steps {
+    graph_step_runs {
       id status hold outcome_label failure_reason wait_reason attempt page_index map_total map_settled
       can_retry requires_duplicate_acknowledgement
       awaited_run { id display_name status } child_runs { id display_name status }
@@ -253,7 +253,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
       record_timeline(records: $records) { records { decisions { id } runs {
         id subject_model subject_id trigger_event { record_model record_id trigger { display_name } }
         graph { nodes { key rank step_run_id } }
-        graph_steps { id hold records { record_model record_id }
+        graph_step_runs { id hold records { record_model record_id }
           decision { id is_open records { record_model record_id } } }
       } } }
     }"""

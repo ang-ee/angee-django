@@ -24,7 +24,7 @@ export const fileAttachedToGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: "Attached to",
-    count: { id: "storage.attached-to", models: [FILE_ATTACHMENT_MODEL] },
+    relatedCount: { models: [FILE_ATTACHMENT_MODEL] },
     render: (context, label) => <>{label()}<li><FileAttachedToPane context={context} /></li></>,
   },
 };
@@ -34,7 +34,7 @@ function FileAttachedToPane({ context }: { context: ChatterViewContext }): React
   const { query, attachments } = useFileAttachments(context);
   if (!attachments) {
     if (query.error) return <ErrorBanner description={query.error.message} />;
-    return <PaneRowsSkeleton label={t("attachedTo.loading")} rowCount={1} />;
+    return <PaneRowsSkeleton loadingLabel={t("attachedTo.loading")} rowCount={1} />;
   }
   return <PaneRows>{attachments.map((edge) => <li key={edge.key}>
     <RecordReferenceRow model={edge.model} id={edge.id} references={attachments} />

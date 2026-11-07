@@ -8,7 +8,7 @@ import { RecordTimelineDocument, RUN_MODEL, RUN_MODELS } from "./documents.conso
 import { useWorkflowsT } from "./i18n";
 import { useStepRetryActions } from "./step-retry";
 import { useRunCancelActions } from "./run-cancel";
-import { joinRunSteps } from "./run-graph";
+import { joinStepRuns } from "./run-graph";
 
 export interface TimelineRecord { model: string; id: string }
 export interface RecordTimelineProps { record: TimelineRecord | readonly TimelineRecord[]; /** Show this run alone (the drill-in's target). */ runId?: string }
@@ -16,11 +16,11 @@ export type TimelineSelection = DocumentType<typeof RecordTimelineDocument>["rec
 export type TimelineData = TimelineSelection["records"];
 export type TimelineDecision = TimelineData[number]["decisions"][number];
 type TimelineRun = TimelineData[number]["runs"][number];
-type TimelineStep = TimelineRun["graph_steps"][number];
+type TimelineStep = TimelineRun["graph_step_runs"][number];
 type MappedStep = TimelineStep["map_steps"][number];
 export interface TimelineNote { tone: string; message: string }
 const EMPTY_TIMELINE: TimelineData = [];
-const runSteps = (run: TimelineRun) => run.graph_steps.flatMap((step) => [step, ...step.map_steps]);
+const runSteps = (run: TimelineRun) => run.graph_step_runs.flatMap((step) => [step, ...step.map_steps]);
 
 /** One input: a record or a selection. The contributing surface chooses placement. */
 export function RecordTimeline({ record, runId }: RecordTimelineProps): ReactElement {
@@ -211,7 +211,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
   const resolveTone = useStatusTone();
   const originOptions = useEnumOptions(RUN_MODEL, "origin");
   const [expanded, setExpanded] = useState(false);
-  const ordered = joinRunSteps(run.graph?.nodes ?? [], run.graph_steps)
+  const ordered = joinStepRuns(run.graph?.nodes ?? [], run.graph_step_runs)
     .filter((node) => !node.key.endsWith(".body")).sort((a, b) => a.rank - b.rank);
   const done = ordered.filter((node) => node.plan === "done");
   const current = ordered.filter((node) => node.plan === "current");

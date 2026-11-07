@@ -195,7 +195,7 @@ export function FormViewRecordHeader({
   if (awaiting) {
     // The header owns the pending title; the statusbar and facts line keep their places as plain geometry.
     return (
-      <RecordHeader density={density} className="border-b-0 px-0" loading loadingMessage={t("form.loading")} title={null}
+      <RecordHeader density={density} className="border-b-0 px-0" loading loadingLabel={t("form.loading")} title={null}
         lead={statusField && !compact ? <Skeleton className="h-6 w-72" /> : undefined}
         meta={!compact ? <Skeleton shape="text" className="h-3 w-64" /> : undefined} />
     );
@@ -639,7 +639,7 @@ function RecordFactsLine({
       {loading ? (
         <>
           {parts.length > 0 ? <span aria-hidden="true">·</span> : null}
-          <SkeletonStatus label={loadingLabel} className="inline-flex min-w-20 items-center">
+          <SkeletonStatus loadingLabel={loadingLabel} className="inline-flex min-w-20 items-center">
             <Skeleton className="h-3 w-20" shape="text" />
           </SkeletonStatus>
         </>

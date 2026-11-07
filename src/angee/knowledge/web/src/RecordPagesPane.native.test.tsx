@@ -37,7 +37,7 @@ test("generic and role groups share one unfiltered request across counts, presen
   render(<Provider dataProvider={{ custom }}><AppRuntimeProvider runtime={{
     routeHref: createRouteHref([{ name: "knowledge.page", path: "/knowledge/$id" }]),
     containers: containersFromChildren(CHATTER_CONTAINERS, {
-      "related#groups": { pages: recordPagesGroup() },
+      "related#groups": { "knowledge.pages": recordPagesGroup() },
       "example.Record#groups": { contract: recordPagesGroup({ label: "Contract", role: "contract" }) },
     }),
   }}><Count /><RelatedPane context={context} /></AppRuntimeProvider></Provider>);

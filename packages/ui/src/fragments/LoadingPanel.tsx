@@ -36,7 +36,7 @@ export function LoadingPanel({
 
   if (shape === "page") {
     return (
-      <SkeletonStatus label={label} className="flex h-full min-h-0 flex-col">
+      <SkeletonStatus loadingLabel={label} className="flex h-full min-h-0 flex-col">
         <ControlBand>{null}</ControlBand>
         <Table aria-hidden="true">
           <TableBody>
@@ -54,7 +54,7 @@ export function LoadingPanel({
   }
 
   return (
-    <SkeletonStatus label={label} className={cn("w-full", inline ? "p-3" : "h-full min-h-32 p-8")}>
+    <SkeletonStatus loadingLabel={label} className={cn("w-full", inline ? "p-3" : "h-full min-h-32 p-8")}>
       {inline ? <SkeletonText lines={2} /> : <SkeletonText lines={3} size="md" className="max-w-2xl" />}
     </SkeletonStatus>
   );

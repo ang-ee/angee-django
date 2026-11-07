@@ -148,7 +148,7 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
     return <EmptyState icon="project-task" title={t("recordTasks.noRecord")} description={t("recordTasks.noRecordHint")} />;
   }
   if (tasksQuery.isFetching && tasksQuery.data === undefined) {
-    return <PaneRowsSkeleton className="px-2 py-1" label={t("recordTasks.loading")} />;
+    return <PaneRowsSkeleton className="px-2 py-1" loadingLabel={t("recordTasks.loading")} />;
   }
   if (tasksQuery.error) {
     return <ErrorBanner title={t("recordTasks.unavailable")} description={t("recordTasks.unavailableHint")} className="m-3" />;

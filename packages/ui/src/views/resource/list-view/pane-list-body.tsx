@@ -25,7 +25,7 @@ export function PaneListBody<TRow extends Row>({ surface, renderRow, renderGroup
   return (
     <>
     <div className="min-h-0 flex-1 overflow-auto px-2 py-1">
-      {empty ? surface.list.fetching ? <PaneRowsSkeleton label={t("list.loading")} /> : <ListEmpty className="p-4">{emptyContent}</ListEmpty> : (
+      {empty ? surface.list.fetching ? <PaneRowsSkeleton loadingLabel={t("list.loading")} /> : <ListEmpty className="p-4">{emptyContent}</ListEmpty> : (
       <PaneRows>
         {surface.kind === "flat" ? surface.rowModels.map((row) => {
           if (!row.getIsGrouped()) return <li key={row.id}>{renderRow(row.original)}</li>;
@@ -49,7 +49,7 @@ export function PaneListBody<TRow extends Row>({ surface, renderRow, renderGroup
                   onPageChange={surface.setScopePage} onPageSizeChange={surface.setScopePageSize} t={t} /></li> : null}
                 {!item.expandable ? <li className="px-1 text-12 text-fg-muted">{item.unavailableMessage}</li> : null}
               </React.Fragment>;
-              case "skeleton": return <li key={item.itemKey}><PaneRowsSkeleton label={t("list.loading")} rowCount={item.rowCount} /></li>;
+              case "skeleton": return <li key={item.itemKey}><PaneRowsSkeleton loadingLabel={t("list.loading")} rowCount={item.rowCount} /></li>;
               case "status": return <li key={item.itemKey}><ListStatusMessage tone={item.tone}>{item.message}</ListStatusMessage></li>;
               default: return assertNever(item);
             }

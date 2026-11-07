@@ -110,7 +110,7 @@ export function TimelineRail({
           <ErrorBanner className="m-1" description={error}
             actions={onRetry ? <Button size="sm" variant="secondary" onClick={onRetry}>{t("timeline.retry")}</Button> : undefined} />
         ) : null}
-        {pending && sorted.length === 0 && !error ? <PaneRowsSkeleton label={t("timeline.loading")} /> : null}
+        {pending && sorted.length === 0 && !error ? <PaneRowsSkeleton loadingLabel={t("timeline.loading")} /> : null}
         {!pending && !error && sorted.length === 0 ? (
           <EmptyState icon="activity" title={t("timeline.empty.title")} description={t("timeline.empty.description")} className="min-h-40 p-4" />
         ) : null}

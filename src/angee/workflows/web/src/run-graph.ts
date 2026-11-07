@@ -9,18 +9,18 @@ import { formatStepPage } from "./step-page";
 
 type RunGraphRead = NonNullable<DocumentType<typeof WorkflowRunGraphDocument>["workflowrun_by_pk"]>;
 type RunGraphTopology = NonNullable<RunGraphRead["graph"]>;
-export type RunGraphStep = RunGraphRead["graph_steps"][number];
+export type RunGraphStepRun = RunGraphRead["graph_step_runs"][number];
 /** A topology node joined with the step row it names, or null before the node ran. */
 export type JoinedRunNode<N, S> = N & { step_run: S | null };
-/** The run's pinned topology, each node joined with its step row from `graph_steps`. */
-export type RunGraphData = Omit<RunGraphTopology, "nodes"> & { nodes: JoinedRunNode<RunGraphTopology["nodes"][number], RunGraphStep>[] };
+/** The run's pinned topology, each node joined with its step row from `graph_step_runs`. */
+export type RunGraphData = Omit<RunGraphTopology, "nodes"> & { nodes: JoinedRunNode<RunGraphTopology["nodes"][number], RunGraphStepRun>[] };
 export type RunGraphNode = RunGraphData["nodes"][number];
 
 /** Join a run's topology nodes with the step rows they name by id. */
-export function joinRunSteps<N extends { step_run_id?: string | null }, S extends { id: string }>(
-  nodes: readonly N[], steps: readonly S[],
+export function joinStepRuns<N extends { step_run_id?: string | null }, S extends { id: string }>(
+  nodes: readonly N[], stepRuns: readonly S[],
 ): JoinedRunNode<N, S>[] {
-  const byId = new Map(steps.map((step) => [step.id, step]));
+  const byId = new Map(stepRuns.map((stepRun) => [stepRun.id, stepRun]));
   return nodes.map((node) => ({ ...node, step_run: (node.step_run_id ? byId.get(node.step_run_id) : undefined) ?? null }));
 }
 

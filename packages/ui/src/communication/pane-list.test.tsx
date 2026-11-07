@@ -61,7 +61,7 @@ test("outbound rows preserve native new-tab navigation", () => {
 });
 
 test("pending pane rows keep the row geometry under one status and render no visible copy", () => {
-  render(<PaneRowsSkeleton label="Loading results" rowCount={3} />);
+  render(<PaneRowsSkeleton loadingLabel="Loading results" rowCount={3} />);
   const status = screen.getByRole("status");
   expect(status.textContent).toBe("Loading results");
   const rows = [...status.children].filter((child) => child.getAttribute("aria-hidden") === "true");

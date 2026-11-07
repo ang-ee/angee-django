@@ -27,7 +27,7 @@ function DataState({ data, children, skeleton }: DashboardWidgetRenderProps & { 
   const t = useDashboardT();
   if (data.error) return <ErrorBanner description={data.error.message} />;
   if (data.fetching && data.value == null && data.series.length === 0 && data.rows.length === 0) {
-    return <SkeletonStatus label={t("widget.loading")} className="flex h-full flex-col gap-3 p-2">{skeleton}</SkeletonStatus>;
+    return <SkeletonStatus loadingLabel={t("widget.loading")} className="flex h-full flex-col gap-3 p-2">{skeleton}</SkeletonStatus>;
   }
   return <>{children}</>;
 }

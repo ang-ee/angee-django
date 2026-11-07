@@ -100,7 +100,7 @@ export function RecordHistoryTimeline({
   }
   if (history === null) {
     return query.isLoading
-      ? <PaneRowsSkeleton className="px-2 py-1" label={t("history.loading")} />
+      ? <PaneRowsSkeleton className="px-2 py-1" loadingLabel={t("history.loading")} />
       : <ErrorBanner title={t("history.unavailable")} description={null} />;
   }
   if (history.total === 0) {

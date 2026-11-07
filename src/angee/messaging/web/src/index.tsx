@@ -148,7 +148,7 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
       "messaging.conversations": { sequence: 40, content: {
         label: "Conversations",
         edge: { model: THREAD_ATTACHMENT_MODEL },
-        count: { id: "messaging.conversations", models: [THREAD_ATTACHMENT_MODEL, "messaging.Thread"] },
+        relatedCount: { models: [THREAD_ATTACHMENT_MODEL, "messaging.Thread"] },
         render: (context, label) => <>{label()}<li><RecordConversationsGroup context={context} /></li></>,
       } },
     },

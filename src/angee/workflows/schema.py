@@ -71,13 +71,13 @@ _STEP_POLICY_VERSION = WorkflowRun.policy_version_prefetch("run__")
 _RUN_LABEL = {"_workflow_name": F("version__workflow__name")}
 
 
-def _graph_steps(info: strawberry.Info) -> Prefetch:
+def _graph_step_runs(info: strawberry.Info) -> Prefetch:
     """Read the listed runs' declared node rows once, with what their selected step fields need."""
     actor = get_current_user(info)
     rows = StepRun.objects.none() if actor is None else StepRun.objects.with_actor(actor).nodes()
     return Prefetch(
         "step_runs", queryset=optimize(rows, info, store=OptimizerStore.with_hints(only=["run_id"])),
-        to_attr="_graph_steps",
+        to_attr="_graph_step_runs",
     )
 
 
@@ -177,7 +177,7 @@ class WorkflowRunType(RecordReferenceNode):
         only=["version_id", "status", "stopped_at"], prefetch_related=[_RUN_POLICY_VERSION, _run_graphs],
     )
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph | None:
-        """Read the run's bounded topology; its nodes name their step rows in ``graph_steps``.
+        """Read the run's bounded topology; its nodes name their step rows in ``graph_step_runs``.
 
         A run list reads every run's topology once. Null when the reader can no
         longer read the run, for example once it was unshared after the list was
@@ -185,17 +185,17 @@ class WorkflowRunType(RecordReferenceNode):
         """
         return cast("WorkflowRunGraph | None", cast(Any, self).graph(get_current_user(info)))
 
-    @strawberry_django.field(prefetch_related=[_graph_steps])
-    def graph_steps(self, info: strawberry.Info) -> list[StepRunType]:
+    @strawberry_django.field(prefetch_related=[_graph_step_runs])
+    def graph_step_runs(self, info: strawberry.Info) -> list[StepRunType]:
         """The run's declared node rows, which its graph's nodes name by ``step_run_id``.
 
         A run list reads every run's rows once, with what the selected step fields
         need; a run read another way reads its own rows the same way.
         """
         run = cast(Any, self)
-        if not hasattr(run, "_graph_steps"):
-            prefetch_related_objects([run], _graph_steps(info))
-        return cast(list[StepRunType], run._graph_steps)
+        if not hasattr(run, "_graph_step_runs"):
+            prefetch_related_objects([run], _graph_step_runs(info))
+        return cast(list[StepRunType], run._graph_step_runs)
 
     @strawberry_django.field(only=["status", "stopped_at"], prefetch_related=[_run_cancel])
     def can_cancel(self, info: strawberry.Info) -> bool:
@@ -348,7 +348,7 @@ class WorkflowRunGraphNode:
 
     @strawberry.field
     def step_run_id(self) -> PublicID | None:
-        """Name this node's step row among the run's ``graph_steps``; null before the node ran."""
+        """Name this node's step row among the run's ``graph_step_runs``; null before the node ran."""
         row = cast(RunGraphNode, self).step_run
         return optional_public_id(row.sqid if row is not None else None)
 
@@ -945,7 +945,7 @@ class RecordTimelineType:
         """The record's runs and their readable ancestors, oldest first.
 
         One read of the run model list, so the native optimizer loads the selected
-        run fields, including each run's ``graph_steps``, once for the whole list.
+        run fields, including each run's ``graph_step_runs``, once for the whole list.
         """
         if not self.run_ids:
             return []

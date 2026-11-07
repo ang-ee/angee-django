@@ -111,7 +111,7 @@ export function OAuthCallback({
   if (state.kind === "pending") {
     return (
       <CallbackFrame>
-        <SkeletonStatus label={`${copy.pendingTitle} ${copy.pendingBody}`} className="grid gap-3">
+        <SkeletonStatus loadingLabel={`${copy.pendingTitle} ${copy.pendingBody}`} className="grid gap-3">
           <Skeleton className="h-5 w-40" />
           <SkeletonText lines={2} />
         </SkeletonStatus>

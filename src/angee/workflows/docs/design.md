@@ -70,7 +70,7 @@ How the ontology maps to this addon.
   A selection is bounded to 100 input records and the 20 latest runs per record.
   Each record's runs are one model list read by the native optimizer. A run's `graph` is its
   topology, whose nodes name their step rows by `step_run_id`; the rows themselves are the run's
-  `graph_steps`. The topologies (`WorkflowRun.graphs_prefetch`), the step rows with what the
+  `graph_step_runs`. The topologies (`WorkflowRun.graphs_prefetch`), the step rows with what the
   selection needs, and the cancel facts (`WorkflowRun.cancel_prefetch`) are read once per list,
   never once per run or step.
   The eager probe excludes the native create route. With `include_runs: false`, the attention read supplies only run existence,

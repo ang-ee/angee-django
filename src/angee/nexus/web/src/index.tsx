@@ -42,7 +42,7 @@ const nexus = defineBaseAddon({
     "storage.File#groups": {
       "nexus.messages": { sequence: 40, content: {
         label: "Message backlinks",
-        count: { id: "nexus.messages", models: INBOX_MODELS },
+        relatedCount: { models: INBOX_MODELS },
         render: (context, label) => <>{label()}<li><FileMessages context={context} /></li></>,
       } },
     },

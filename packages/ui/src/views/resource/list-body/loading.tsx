@@ -17,7 +17,7 @@ import { ALIGN_CLASS } from "./types";
 export function ListLoadingFooter(): React.ReactElement {
   const t = useUiT();
   return (
-    <SkeletonStatus label={t("list.loading")} className="grid grid-cols-[minmax(4rem,2fr)_minmax(3rem,1fr)_minmax(2rem,.5fr)] gap-5 border-t border-border px-3 py-4">
+    <SkeletonStatus loadingLabel={t("list.loading")} className="grid grid-cols-[minmax(4rem,2fr)_minmax(3rem,1fr)_minmax(2rem,.5fr)] gap-5 border-t border-border px-3 py-4">
       <Skeleton className="h-3 w-full" shape="text" />
       <Skeleton className="h-3 w-4/5" shape="text" />
       <Skeleton className="ml-auto h-3 w-2/3" shape="text" />

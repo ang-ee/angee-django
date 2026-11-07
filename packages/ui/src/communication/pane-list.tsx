@@ -115,7 +115,7 @@ const SKELETON_TITLE_WIDTHS = ["w-2/3", "w-1/2", "w-3/4", "w-3/5"] as const;
 
 export interface PaneRowsSkeletonProps {
   /** Announced while the rows load; no loading copy is visible. */
-  label: React.ReactNode;
+  loadingLabel: React.ReactNode;
   rowCount?: number;
   className?: string;
 }
@@ -123,12 +123,12 @@ export interface PaneRowsSkeletonProps {
 /**
  * Rows of a pane list whose first page is loading: each keeps the row's box,
  * its leading glyph and its title and second lines, under one status that
- * announces `label`. A pane composes it instead of drawing its own row blocks.
+ * announces `loadingLabel`. A pane composes it instead of drawing its own row blocks.
  * @owner PaneRow
  */
-export function PaneRowsSkeleton({ label, rowCount = 4, className }: PaneRowsSkeletonProps): React.ReactElement {
+export function PaneRowsSkeleton({ loadingLabel, rowCount = 4, className }: PaneRowsSkeletonProps): React.ReactElement {
   return (
-    <SkeletonStatus label={label} className={cn("flex flex-col", className)}>
+    <SkeletonStatus loadingLabel={loadingLabel} className={cn("flex flex-col", className)}>
       {Array.from({ length: Math.max(1, rowCount) }, (_, index) => (
         <div key={index} aria-hidden="true" className={ROW_LAYOUT}>
           <Skeleton shape="avatar" className="mt-0.5 size-4 shrink-0" />

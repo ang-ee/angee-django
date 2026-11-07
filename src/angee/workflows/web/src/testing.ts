@@ -233,7 +233,7 @@ export function runGraphFixture(step: StepRun = stepRunFixture()): RunGraphData 
 export function runGraphReadFixture(graph: RunGraphData) {
   return {
     graph: { nodes: graph.nodes.map(({ step_run, ...node }) => ({ ...node, step_run_id: step_run?.id ?? null })), edges: graph.edges },
-    graph_steps: graph.nodes.flatMap(({ step_run }) => step_run ? [step_run] : []),
+    graph_step_runs: graph.nodes.flatMap(({ step_run }) => step_run ? [step_run] : []),
   };
 }
 

@@ -43,8 +43,8 @@ function Count() {
 test("one read counts every group declaring a related count and the badge sums them", () => {
   query.mockReturnValue(groupCounts({ "example.files": 2, "example.pages": 3 }));
   const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": {
-    files: { content: { label: "Files", count: { id: "example.files", models: ["example.File"] }, render: () => null } },
-    pages: { content: { label: "Pages", count: { id: "example.pages", models: ["example.Page"] }, render: () => null } },
+    "example.files": { content: { label: "Files", relatedCount: { models: ["example.File"] }, render: () => null } },
+    "example.pages": { content: { label: "Pages", relatedCount: { models: ["example.Page"] }, render: () => null } },
   } });
   const onCount = vi.fn();
   render(<AppRuntimeProvider runtime={{ containers }}>
@@ -96,7 +96,7 @@ test("row-derived counts stay dormant until the Links pane is active", () => {
 test("an incomplete badge requests no related counts beside a lazy group", () => {
   const rows = vi.fn(() => 3);
   const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": {
-    counted: { content: { label: "Counted", count: { id: "example.counted", models: [] }, render: () => null } },
+    counted: { content: { label: "Counted", relatedCount: { models: [] }, render: () => null } },
     lazy: { content: { label: "Lazy", usePaneCount: rows, render: () => null } },
   } });
   const onCount = vi.fn();
@@ -111,7 +111,7 @@ test("an incomplete badge requests no related counts beside a lazy group", () =>
 test("active Links reuses a partitioning group's row count instead of also requesting its related count", () => {
   const rows = vi.fn(() => 3);
   const containers = containersFromChildren(CHATTER_CONTAINERS, {
-    "related#groups": { example: { content: { label: "Example", count: { id: "example.group", models: [] },
+    "related#groups": { example: { content: { label: "Example", relatedCount: { models: [] },
       usePaneCount: rows, render: () => null } } },
   });
   render(<AppRuntimeProvider runtime={{ containers }}>
@@ -166,9 +166,9 @@ test("useVerb controls the label action and empty-group presence", () => {
 });
 
 test("count probes never mount the group's action or write state", () => {
-  query.mockReturnValue(groupCounts({ "example.files": 3 }));
+  query.mockReturnValue(groupCounts({ example: 3 }));
   const group = vi.fn(() => <li>Rows</li>);
-  render(<Example probe content={{ label: "Files", count: { id: "example.files", models: [] }, render: group }} />);
+  render(<Example probe content={{ label: "Files", relatedCount: { models: [] }, render: group }} />);
   expect(screen.getByText("Related 3")).toBeTruthy();
   expect(group).not.toHaveBeenCalled();
 });

@@ -63,7 +63,7 @@ export function recordPagesGroup(options: RecordPagesGroupOptions = {}): Contain
       when,
       // The generic group's related count counts every page binding. Role groups declare none, so
       // where one is eligible the badge waits for Links, whose rows partition roles.
-      ...(role === undefined ? { count: { id: "knowledge.pages", models: BINDING_MODELS } } : {}),
+      ...(role === undefined ? { relatedCount: { models: BINDING_MODELS } } : {}),
       usePaneCount: (context) => useRecordPagesRead(context, role).bindings?.length,
       useVerb: (context) => useRecordPagesRead(context, role).canBind,
       render: (context, label) => <RecordPagesGroup key={context.view.sqid} context={context} role={role} label={label} />,
@@ -114,7 +114,7 @@ function RecordPagesGroup({ context, role, label }: { context: ChatterViewContex
         onClick={() => void changeBinding(pageToBind, false)}>{t("record.bind")}</Button>
     </PaneLabelPopover>)}
     <li>
-      {query.isPending && !query.data ? <PaneRowsSkeleton label={t("record.loading")} rowCount={2} /> : query.error && !query.data ? <ErrorBanner description={errorMessage(query.error, t("record.loadError"))} /> :
+      {query.isPending && !query.data ? <PaneRowsSkeleton loadingLabel={t("record.loading")} rowCount={2} /> : query.error && !query.data ? <ErrorBanner description={errorMessage(query.error, t("record.loadError"))} /> :
         <div className="flex min-h-0 flex-col">
           {unbindState.error ? <ErrorBanner description={errorMessage(unbindState.error, t("record.writeError"))} /> : null}
           {bindings?.length ? <PaneRows>
@@ -137,7 +137,7 @@ export const pageBacklinksGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: "Backlinks",
-    count: { id: "knowledge.backlinks", models: PAGE_READ_MODELS },
+    relatedCount: { models: PAGE_READ_MODELS },
     render: (context, label) => <>{label()}<li><PageBacklinks context={context} /></li></>,
   },
 };
@@ -147,7 +147,7 @@ export const pageBoundToGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: "Bound to",
-    count: { id: "knowledge.bound-to", models: BINDING_MODELS },
+    relatedCount: { models: BINDING_MODELS },
     render: (context, label) => <>{label()}<li><PageBoundTo context={context} /></li></>,
   },
 };
@@ -171,7 +171,7 @@ function PageBacklinks({ context }: { context: ChatterViewContext }): ReactEleme
   const routeHref = useRouteHref();
   const query = usePageDetail(context);
   const backlinks = query.data?.pages_by_pk?.backlinks ?? [];
-  if (query.isPending && !query.data) return <PaneRowsSkeleton label={t("page.loading")} rowCount={1} />;
+  if (query.isPending && !query.data) return <PaneRowsSkeleton loadingLabel={t("page.loading")} rowCount={1} />;
   if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
   return <PaneRows>
     {backlinks.map((backlink) => {
@@ -189,7 +189,7 @@ function PageBoundTo({ context }: { context: ChatterViewContext }): ReactElement
   const bindings = query.data?.page_record_bindings.map((binding) => ({
     key: binding.id, model: binding.model_label, id: binding.record_id, role: binding.role,
   })) ?? [];
-  if (query.isPending && !query.data) return <PaneRowsSkeleton label={t("page.loading")} rowCount={1} />;
+  if (query.isPending && !query.data) return <PaneRowsSkeleton loadingLabel={t("page.loading")} rowCount={1} />;
   if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
   return <PaneRows>
     {bindings.map((binding) => <li key={binding.key}>

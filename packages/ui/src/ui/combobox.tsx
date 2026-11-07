@@ -306,7 +306,7 @@ export type ComboboxStatusProps = Omit<BaseComboboxStatusProps, "className"> & {
   /** The options are loading: skeleton option lines hold the list's place. */
   loading?: boolean;
   /** Screen-reader text while `loading`; no loading copy is visible. */
-  loadingMessage?: string;
+  loadingLabel?: string;
 };
 
 const OPTION_SKELETON_WIDTHS = ["w-3/4", "w-1/2", "w-2/3"] as const;
@@ -316,12 +316,12 @@ const OPTION_SKELETON_WIDTHS = ["w-3/4", "w-1/2", "w-2/3"] as const;
  * @owner Combobox
  */
 export const ComboboxStatus = React.forwardRef<HTMLDivElement, ComboboxStatusProps>(
-  function ComboboxStatus({ loading = false, loadingMessage, children, className, ...props }, ref) {
+  function ComboboxStatus({ loading = false, loadingLabel, children, className, ...props }, ref) {
     const t = useUiT();
     return (
       <BaseCombobox.Status ref={ref} className={cn(loading && "p-1", className)} {...props}>
         {loading ? <>
-          <span className="sr-only">{loadingMessage ?? t("loading.default")}</span>
+          <span className="sr-only">{loadingLabel ?? t("loading.default")}</span>
           {OPTION_SKELETON_WIDTHS.map((width) => (
             <div key={width} aria-hidden="true" className="flex h-8 items-center px-2">
               <Skeleton shape="text" size="sm" className={width} />

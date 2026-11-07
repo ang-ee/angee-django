@@ -840,7 +840,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   state. A renderer that knows its final geometry owns a shape-preserving
   skeleton built from `Skeleton` and one `SkeletonStatus`; retain settled content
   during background refresh. The renderer owns loading/error so callers describe
-  only the happy path (cf. `preview/builtins.tsx` `FileText`). `RecordHeader` owns a record's pending and unavailable title (`loading`, `loadingMessage`, `unavailable`): a page passes its read's state, never a title skeleton or a failed-read title of its own, and a failed read ends the skeleton beside the page's error surface. A control owns its pending state: `Select loading` and `Combobox.Status loading` while options load, `Button loading` for a pending verb; never loading copy in a placeholder or a reason. A pane list's pending rows are `PaneRowsSkeleton`, never hand-drawn row blocks.
+  only the happy path (cf. `preview/builtins.tsx` `FileText`). `RecordHeader` owns a record's pending and unavailable title (`loading`, `loadingLabel`, `unavailable`): a page passes its read's state, never a title skeleton or a failed-read title of its own, and a failed read ends the skeleton beside the page's error surface. A control owns its pending state: `Select loading` and `Combobox.Status loading` while options load, `Button loading` for a pending verb; never loading copy in a placeholder or a reason. A pane list's pending rows are `PaneRowsSkeleton`, never hand-drawn row blocks.
 - Forms are declarative even when they branch: a `<Field showWhen={(values) => …}>`
   predicate (mirroring `Action.visibleWhen`) drives a discriminated form — a `kind`
   select that swaps the body — and a hidden field is never submitted. Reach for a
@@ -1720,9 +1720,10 @@ Mount count hooks in independent keyed readers. Route and permission changes
 can change the eligible groups while the aside stays mounted; aggregating hooks
 in a loop changes their order. The [Related count owner](../../packages/ui/src/communication/RelatedPane.tsx)
 sums the results once every eligible group has published a count. A group
-counts through `count`: the group id its addon declares beside the row read it
-counts (a [`RelatedCount`](../../src/angee/graphql/related_counts.py) appended
-to `ANGEE_GRAPHQL_RELATED_COUNTS`), and the models whose changes recount it.
+counts through `relatedCount`: its container id names the server group its addon
+declares beside the row read it counts (a [`RelatedCount`](../../src/angee/graphql/related_counts.py)
+appended to `ANGEE_GRAPHQL_RELATED_COUNTS`), and `models` are the models whose
+changes recount it.
 One `related_counts` read counts every eligible group in one statement, for the
 badge and the pane labels alike; no rows load for a count. A group without a
 related count, or one whose rows partition another group's, counts its rows
@@ -1743,7 +1744,7 @@ interface RelatedGroupContent {
   when?: (context: ChatterViewContext) => boolean;
   edge?: { model: string };
   label: ReactNode;
-  count?: { id: string; models: readonly string[] };
+  relatedCount?: { models: readonly string[] };
   usePaneCount?: (context: ChatterViewContext) => number | undefined;
   useVerb?: (context: ChatterViewContext) => boolean;
   render: (context: ChatterViewContext, label: (action?: ReactNode) => ReactNode) => ReactNode;

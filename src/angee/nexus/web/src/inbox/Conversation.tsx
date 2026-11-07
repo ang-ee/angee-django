@@ -38,7 +38,7 @@ export function InboxConversation({
         title={matches?.thread.conversation_label || t("inbox.conversation")}
         meta={matches ? t(statusFeed ? "inbox.statusFeedCount" : matches.count === matches.total ? "inbox.conversationCount" : "inbox.transcriptCount",
           { count: matches.count, total: matches.total })
-          : error ? undefined : <SkeletonStatus label={t("inbox.loading")} className="w-full py-1"><SkeletonText lines={1} lineClassName="w-64 max-w-full" /></SkeletonStatus>}
+          : error ? undefined : <SkeletonStatus loadingLabel={t("inbox.loading")} className="w-full py-1"><SkeletonText lines={1} lineClassName="w-64 max-w-full" /></SkeletonStatus>}
       />
       <ErrorBanner description={error} />
       {/* The transcript's own controls publish into this pane's toolbar row. */}

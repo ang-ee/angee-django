@@ -39,7 +39,7 @@ export const RecordTimelineDocument = graphql(`
             item_counts { status count } item_attempts step_run_id
           }
         }
-        graph_steps {
+        graph_step_runs {
           id status hold outcome outcome_label failure_reason wait_reason notes { tone message }
           attempt page_index map_total map_settled created_at updated_at
           can_retry requires_duplicate_acknowledgement
@@ -86,7 +86,7 @@ export const WorkflowRunGraphDocument = graphql(`
   query WorkflowRunGraph($id: String!) {
     workflowrun_by_pk(id: $id) {
       id
-      graph_steps {
+      graph_step_runs {
         id status waiting_kind wait_reason outcome outcome_label failure_reason
         attempt page_index map_total map_settled created_at updated_at deadline_at wake_at
       }

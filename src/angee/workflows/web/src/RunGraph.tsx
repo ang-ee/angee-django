@@ -4,7 +4,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import { Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, RailPanel, StatusBadge, errorMessage, formatDateTime, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent, useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode } from "@angee/ui";
 import { RUN_MODEL, STEP_RUN_MODEL, WorkflowRunGraphDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
-import { joinRunSteps, projectRunGraph, RUN_GRAPH_EDGE_STYLES, type RunGraphNode } from "./run-graph";
+import { joinStepRuns, projectRunGraph, RUN_GRAPH_EDGE_STYLES, type RunGraphNode } from "./run-graph";
 import { StepRuns } from "./StepRuns";
 import { formatStepPage } from "./step-page";
 
@@ -29,7 +29,7 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
   });
   const run = read.data?.workflowrun_by_pk;
   const graph = useMemo(() => run?.id === runId && run.graph
-    ? { ...run.graph, nodes: joinRunSteps(run.graph.nodes, run.graph_steps) } : undefined, [run, runId]);
+    ? { ...run.graph, nodes: joinStepRuns(run.graph.nodes, run.graph_step_runs) } : undefined, [run, runId]);
   const projected = useMemo(() => graph ? projectRunGraph(graph, selectedKey, { t, statusOptions, waitOptions, resolveTone, locale }) : null,
     [graph, selectedKey, t, statusOptions, waitOptions, resolveTone, locale]);
   const selected = graph?.nodes.find((node) => node.key === selectedKey);

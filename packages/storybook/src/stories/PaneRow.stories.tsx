@@ -41,7 +41,7 @@ export const Default: Story = {
 export const Loading: Story = {
   render: () => (
     <div className="w-[26rem] rounded-6 border border-border-subtle bg-sheet">
-      <PaneRowsSkeleton className="px-2 py-1" label="Loading the timeline" rowCount={3} />
+      <PaneRowsSkeleton className="px-2 py-1" loadingLabel="Loading the timeline" rowCount={3} />
     </div>
   ),
 };

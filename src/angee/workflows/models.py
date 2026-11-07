@@ -429,7 +429,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
         A run the reader can no longer read gets no graph, so one lost run never
         fails the list. Node rows are read narrow, without payload; the step details
-        a reader selects load through the run's ``graph_steps``. Each run is seeded
+        a reader selects load through the run's ``graph_step_runs``. Each run is seeded
         with its graph, so its own :meth:`graph` answers it without another read.
         """
         if not runs:

@@ -13,7 +13,7 @@ describe("RecordHeader", () => {
     ["comfortable", "h-7", "w-2/3"],
   ] as const)("a pending %s title is one skeleton line that announces its label", (density, height, width) => {
     render(
-      <RecordHeader density={density} loading loadingMessage="Loading queue…" title="Engineering"
+      <RecordHeader density={density} loading loadingLabel="Loading queue…" title="Engineering"
         crumbs="Board" description="Plan the work" />,
     );
 
@@ -41,7 +41,7 @@ describe("RecordHeader", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Record unavailable" })).toBeTruthy();
     expect(screen.queryByRole("status")).toBeNull();
 
-    rerender(<RecordHeader loading unavailable loadingMessage="Loading queue…" title={undefined} />);
+    rerender(<RecordHeader loading unavailable loadingLabel="Loading queue…" title={undefined} />);
     expect(screen.getByRole("status").textContent).toBe("Loading queue…");
     expect(screen.queryByText("Record unavailable")).toBeNull();
   });

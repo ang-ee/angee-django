@@ -39,7 +39,7 @@ export function RelatedCountProbe({ id, context, onCount, includePaneCounts = fa
     [groups, includePaneCounts],
   );
   const countedGroups = React.useMemo(
-    () => groups.filter((group) => group.content.count && !paneGroups.includes(group)),
+    () => groups.filter((group) => group.content.relatedCount && !paneGroups.includes(group)),
     [groups, paneGroups],
   );
   const canCount = paneGroups.length + countedGroups.length === groups.length;
@@ -60,7 +60,7 @@ export function RelatedCountProbe({ id, context, onCount, includePaneCounts = fa
   </>;
 }
 
-/** One `related_counts` read for every given group's declared count, published by group id. */
+/** One `related_counts` read for every given group's related count, named and published by group id. */
 function GroupCountsProbe({ context, groups, onCount }: {
   context: ChatterViewContext;
   groups: readonly ComposedContainerChild<RelatedGroupContent>[];
@@ -68,14 +68,14 @@ function GroupCountsProbe({ context, groups, onCount }: {
 }): React.ReactElement {
   const model = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
   const record = context.view.kind === "record" ? context.view.sqid ?? "" : "";
-  const ids = [...new Set(groups.map((group) => group.content.count!.id))].sort();
-  const models = [...new Set(groups.flatMap((group) => group.content.count!.models))].sort();
+  const ids = groups.map((group) => group.id).sort();
+  const models = [...new Set(groups.flatMap((group) => group.content.relatedCount!.models))].sort();
   const { data } = useAuthoredQuery(RelatedCounts, { model, id: record, groups: ids }, {
     enabled: Boolean(model && record), models,
   });
   const counts = new Map(data?.related_counts.map(({ group, count }) => [group, count] as const));
   return <>{groups.map((group) => (
-    <PublishedCount key={group.id} id={group.id} count={counts.get(group.content.count!.id)} onCount={onCount} />
+    <PublishedCount key={group.id} id={group.id} count={counts.get(group.id)} onCount={onCount} />
   ))}</>;
 }
 
@@ -87,7 +87,7 @@ export function RelatedPane({ context }: { context: ChatterViewContext }): React
   const groups = useRelatedGroups(context);
   const [counts, publishCount] = useChatterCounts();
   const countedGroups = React.useMemo(
-    () => groups.filter((group) => group.content.count && !group.content.usePaneCount),
+    () => groups.filter((group) => group.content.relatedCount && !group.content.usePaneCount),
     [groups],
   );
   return (
