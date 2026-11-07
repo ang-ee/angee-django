@@ -13,6 +13,7 @@ import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from rebac import current_actor
+from rebac import permission_expression as native_permission_expression
 from rebac.relation_loading import relation_actor
 from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
@@ -123,10 +124,16 @@ def _permission_annotation(model: type[models.Model], name: str, info: Any = Non
     return permission_expression(model._default_manager.all(), name)
 
 
-def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.Exists:
-    """Project one permission using the target queryset's actor and native scope."""
-    scoped = require_rebac_queryset(queryset.model, actor=relation_actor(queryset))
-    return models.Exists(scoped.with_action(name).scoped_for_aggregate().filter(pk=models.OuterRef("pk")))
+def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.Expression:
+    """Project one permission per row for the target queryset's actor.
+
+    REBAC's native projection decides it inside the row query; a queryset
+    without an actor holds nothing.
+    """
+    actor = relation_actor(queryset)
+    if actor is None:
+        return models.Value(False)
+    return native_permission_expression(queryset.model, name, actor=actor)
 
 
 def permissions_field(names: Iterable[str]) -> Any:
