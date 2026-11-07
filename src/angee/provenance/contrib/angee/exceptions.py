@@ -18,7 +18,7 @@ class CreationKeyConflict(DomainError):
         Exception.__init__(self, *args or (self.code,))
 
 
-MANAGEMENT_ENTRYPOINT = "django_compose.management.execute"
+MANAGEMENT_ENTRYPOINT = "angee.server.management.execute"
 
 
 class ChangesetRequired(ContextRequired, MissingActorError):
