@@ -183,6 +183,7 @@ import asyncio
 import sys
 from contextlib import asynccontextmanager
 from importlib import import_module
+from importlib.machinery import ModuleSpec
 from types import ModuleType
 from django.conf import settings
 settings.configure(INSTALLED_APPS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0)
@@ -210,6 +211,8 @@ class MCP:
         finally: seen.append('stop mcp')
 mcp = MCP()
 graphql_asgi = ModuleType('angee.graphql.asgi')
+# A module in sys.modules carries a spec, so the addon owner finds the submodule natively.
+graphql_asgi.__spec__ = ModuleSpec(graphql_asgi.__name__, None)
 graphql_asgi.protocols = lambda: {'websocket': websocket}
 sys.modules[graphql_asgi.__name__] = graphql_asgi
 mcp_asgi.has_tools = lambda: True

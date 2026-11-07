@@ -99,7 +99,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         actor = actor if actor is not None else current_actor()
         withdrawing = _user(actor, active=False) if actor is not None else None
         pk = decision.pk if isinstance(decision, models.Model) else decision
-        with transaction.atomic(), system_context(reason="decisions.withdraw"):
+        with transaction.atomic(using=self.db), system_context(reason="decisions.withdraw"):
             row = self.filter(pk=pk).lock_if_supported().get()
             if row.is_open:
                 self.filter(pk=pk).open().owner_update(
@@ -151,7 +151,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         )
         readable_records(references, participants)
         targets = {generic_target(record) for record in request.records}
-        with transaction.atomic(), system_context(reason="decisions.ask"):
+        with transaction.atomic(using=self.db), system_context(reason="decisions.ask"):
             # Capture admission only after its immutable concern links exist.
             with mute_changes():
                 decision = self.create(
@@ -185,7 +185,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         """Record one final verdict. Proposal actions belong to the asker."""
         answering = _user(actor)
         pk = decision.pk if isinstance(decision, models.Model) else decision
-        with transaction.atomic():
+        with transaction.atomic(using=self.db):
             with system_context(reason="decisions.decide"):
                 row = self.filter(pk=pk).lock_if_supported().get()
                 row.require_access("act", answering)

@@ -191,7 +191,10 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
         A group is one distinct value of ``partition_by`` (field paths, annotations
         or expressions). ``order_by`` ranks the rows inside each group and should end
         in a unique column so the kept rows are deterministic. The result keeps this
-        queryset's scope, annotations and selection; callers order the kept rows.
+        queryset's scope, annotations and selection but not its ordering, so an
+        inherited ``Meta.ordering`` never joins a grouped selection's ``GROUP BY``;
+        callers order the kept rows. Filters chained afterwards apply before the
+        ranking, as Django wraps a window filter in an outer query.
         """
 
         if not partition_by:
@@ -199,7 +202,7 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
         if limit < 1:
             raise ValueError("first_per_group keeps at least one row per group.")
         rank = models.Window(RowNumber(), partition_by=list(partition_by), order_by=list(order_by))
-        return cast(Self, self.alias(_group_rank=rank).filter(_group_rank__lte=limit))
+        return cast(Self, self.order_by().alias(_group_rank=rank).filter(_group_rank__lte=limit))
 
 
 class AngeeQuerySet(

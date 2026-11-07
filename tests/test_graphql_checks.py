@@ -57,3 +57,21 @@ def test_graphql_channel_layer_check_matches_publishing_guard(
         assert errors[0].hint == (
             "Configure Redis-backed CHANNEL_LAYERS for worker broadcasts, or run DEBUG without a Celery broker."
         )
+
+
+@pytest.mark.parametrize("serving", [False, True])
+def test_the_delivery_check_registers_only_where_the_server_serves(monkeypatch, serving: bool) -> None:
+    """A model-only project's commands never meet angee.graphql.E003."""
+
+    from django.apps import apps
+    from django.core.checks.registry import registry
+
+    from angee.graphql.apps import GraphQLConfig
+
+    monkeypatch.setattr(registry, "registered_checks", {
+        check for check in registry.registered_checks if check is not check_graphql_channel_layer
+    })
+    installed = apps.is_installed
+    monkeypatch.setattr(apps, "is_installed", lambda name: serving if name == "angee.server" else installed(name))
+    GraphQLConfig("angee.graphql", apps.get_app_config("graphql").module).ready()
+    assert (check_graphql_channel_layer in registry.registered_checks) is serving

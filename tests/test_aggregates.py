@@ -1075,6 +1075,16 @@ def test_hasura_relation_axis_has_one_server_identity_and_drill() -> None:
     assert axis.drill == DataQueryDrill(kind="identity", field="parent", value_key="parent_id")
 
 
+def test_a_json_path_axis_drills_through_its_declared_path_filter() -> None:
+    """A declared exact path filter replaces containment over the whole JSON document."""
+
+    [axis] = hasura_query_axes(
+        HasuraJsonResourceThing, ("metadata.mailbox",), ("name", "metadata_mailbox"),
+        json_paths={"metadata.mailbox": "str"},
+    )
+    assert axis.drill == DataQueryDrill(kind="value", field="metadata_mailbox", value_key="metadata__mailbox")
+
+
 def test_hasura_model_resource_groups_json_path_axes() -> None:
     """Hasura resources can expose allowlisted JSON paths as group axes."""
 

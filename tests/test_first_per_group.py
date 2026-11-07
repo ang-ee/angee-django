@@ -1,10 +1,33 @@
 """``first_per_group`` keeps each group's first rows in one windowed statement."""
 
+from collections.abc import Iterator
+
 import pytest
-from django.db import connection
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 
+from angee.base.models.base import AngeeModel
+from tests.tables import model_tables
 from tests.test_system_queryset import SystemQueryThing, system_query_tables  # noqa: F401
+
+
+class OrderedGroupThing(AngeeModel):
+    """A row whose model ordering names a column outside any grouping."""
+
+    name = models.CharField(max_length=32)
+    rank = models.IntegerField(default=0)
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+        ordering = ("rank",)
+
+
+@pytest.fixture
+def ordered_group_tables() -> Iterator[None]:
+    with model_tables((OrderedGroupThing,)):
+        yield
 
 
 @pytest.mark.django_db(transaction=True)
@@ -34,6 +57,35 @@ def test_first_per_group_ranks_inside_the_callers_scope() -> None:
 
     assert list(kept) == [second]
     assert first not in kept
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("ordered_group_tables")
+def test_first_per_group_ranks_a_grouped_selection_without_the_models_ordering() -> None:
+    """``Meta.ordering`` never splits a grouped selection into one group per ordering value."""
+
+    rows = OrderedGroupThing.system_queryset()
+    for name, ranks in (("a", (3, 1, 2)), ("b", (5,))):
+        for rank in ranks:
+            rows.create(name=name, rank=rank)
+    grouped = rows.values("name").annotate(_top=models.Max("rank"))
+
+    kept = list(grouped.first_per_group("name", order_by=["-_top"], limit=1).order_by("name"))
+
+    assert kept == [{"name": "a", "_top": 3}, {"name": "b", "_top": 5}]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+def test_filters_chained_after_first_per_group_apply_before_the_ranking() -> None:
+    """A later filter narrows the rows before they rank, so the next row takes the excluded one's place."""
+
+    rows = SystemQueryThing.system_queryset()
+    first, second = rows.create(name="a"), rows.create(name="a")
+
+    kept = rows.first_per_group("name", order_by=["-pk"], limit=1).exclude(pk=second.pk)
+
+    assert list(kept) == [first]
 
 
 @pytest.mark.parametrize(("partition", "limit"), [((), 1), (("name",), 0)])

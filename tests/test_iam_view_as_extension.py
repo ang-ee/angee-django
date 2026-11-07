@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from django.core.checks.registry import registry
+from django.core.exceptions import ImproperlyConfigured
 
 from angee.base.build import extension_source_map
 from angee.iam.checks import check_view_as_admin_only
@@ -52,6 +53,14 @@ def test_check_rejects_any_fragment_arm_on_view_as(tmp_path: Path, fragment: str
         assert "auth/user#view_as reaches" in error.msg
         assert ("previewer" if fragment == "relation" else "list") in error.msg
         assert "preview_contrib" in error.msg
+
+
+def test_a_missing_iam_declaration_is_a_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IAM's own arm is never flagged against an empty allowed set."""
+
+    monkeypatch.setattr("angee.iam.checks.declared_schema_path", lambda config: None)
+    with pytest.raises(ImproperlyConfigured, match="angee.iam declares no permissions schema"):
+        check_view_as_admin_only()
 
 
 def test_installed_composition_grants_preview_to_platform_admins_only() -> None:

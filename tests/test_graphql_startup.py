@@ -138,7 +138,8 @@ def test_graphql_startup_defers_schema_checks(cold_graphql_addon: Path) -> None:
         config.ready()
         config.ready()
         assert sum(check is check_graphql_schemas for check in registry.registered_checks) == 1
-        assert sum(check is check_graphql_channel_layer for check in registry.registered_checks) == 1
+        # The host does not install the serving addon, so it registers no delivery check.
+        assert not any(check is check_graphql_channel_layer for check in registry.registered_checks)
         assert builds == [], f"check registration constructed Strawberry schemas: {builds}"
 
         schemas = GraphQLSchemas.from_discovery()

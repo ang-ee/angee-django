@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.core import checks
 from sentry_sdk.integrations.logging import ignore_logger
 
@@ -51,7 +51,10 @@ class GraphQLConfig(AppConfig):
         checks.register(check_settings, checks.Tags.models)
 
         checks.register(check_graphql_schemas)
-        checks.register(check_graphql_channel_layer)
+        # Cross-process change delivery matters only where the serving addon
+        # serves subscriptions; a model-only project's commands never deliver.
+        if apps.is_installed("angee.server"):
+            checks.register(check_graphql_channel_layer)
         if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None and mode() is None:
             connect_change_publishers()
         # Compose connects in SchemaIntegration after all ready callbacks. Bare

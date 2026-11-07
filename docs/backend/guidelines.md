@@ -175,10 +175,10 @@ Use these owners instead of maintaining another contract in an addon:
   `router.db_for_write` for a class-level owner, with `connections[alias]` for
   raw SQL on that alias. It is not implemented yet: owners that open
   `transaction.atomic()` or `transaction.on_commit` without an alias, or run raw
-  SQL on `django.db.connection`, are recorded debt and not placement-safe (274
+  SQL on `django.db.connection`, are recorded debt and not placement-safe (269
   bare `transaction.atomic()` sites in `src/`, for example
-  `src/angee/base/models/transitions.py:300,641`, `src/angee/jobs/enqueue.py:39`,
-  `src/angee/workflows/managers.py:1242-1255` and `src/angee/posts/models.py:450`). Pass
+  `src/angee/workflows/managers.py:95`; a bare commit hook at
+  `src/angee/jobs/enqueue.py:39`; raw SQL at `src/angee/posts/models.py:450`). Pass
   Django- and library-supplied aliases (signal `using`, `Collector`,
   `save(using=...)` in an override, a hook's `using` argument) through unchanged;
   do not thread aliases through Angee helpers, managers, hooks or tasks. Use
@@ -1598,8 +1598,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
   in ordinary `manage.py check` and commands requesting the default system checks.
   ASGI WebSocket routing at application boot and the `schema` command also demand
   schema construction; MCP's resource-tool check validates its console contract.
-  The same addon's `angee.graphql.E003` check refuses a process-local Channels layer
-  when a Celery broker is configured: `enqueue_task` sends through `send_task`,
+  The same addon's `angee.graphql.E003` check, registered where the serving addon
+  is installed, refuses a process-local Channels layer when a Celery broker is
+  configured: `enqueue_task` sends through `send_task`,
   which Celery never runs eagerly, so a broker means a worker's broadcasts need
   Redis to reach web subscribers even with `DEBUG=True`. A host without a Celery
   broker may use the in-memory layer in DEBUG. Set `CHANNEL_REDIS_URL` in project
