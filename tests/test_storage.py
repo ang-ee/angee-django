@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -366,7 +367,12 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
 
 @pytest.mark.django_db(transaction=True)
 def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> None:
-    """The generic target lock does not require an Angee queryset or model base."""
+    """The generic target lock does not require an Angee queryset or model base.
+
+    The probe joins the installed storage registry, where the lock resolves its
+    content type, and leaves it afterwards: a left-over ``storage/file`` model
+    without the owner column would fail every later all-models ownership check.
+    """
 
     del composed_tables
     class NativeTarget(RebacMixin):
@@ -375,10 +381,14 @@ def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> N
             db_table = "test_storage_native_attachment_target"
             rebac_resource_type = "storage/file"
 
-    with model_tables((NativeTarget,)), system_context(reason="test native attachment target"):
-        target = NativeTarget.objects.create()
-        with transaction.atomic():
-            FileAttachment.objects._lock_target(generic_target(target))
+    try:
+        with model_tables((NativeTarget,)), system_context(reason="test native attachment target"):
+            target = NativeTarget.objects.create()
+            with transaction.atomic():
+                FileAttachment.objects._lock_target(generic_target(target))
+    finally:
+        del apps.all_models["storage"][NativeTarget._meta.model_name]
+        apps.clear_cache()
 
 
 @pytest.mark.django_db(transaction=True)
