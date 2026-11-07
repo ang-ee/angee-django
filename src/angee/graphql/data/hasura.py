@@ -107,6 +107,7 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
+from graphql import GraphQLError
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
@@ -1389,17 +1390,23 @@ def group_rows_field(
     """Declare ``<res>_group.rows``: every group's first page from one read per groups page.
 
     ``limit`` is the client's declared per-group page size, required and bounded
-    by ``MAX_PAGE_SIZE``, as is the groups page that selects rows; ``order_by``
-    is the list root's own ordering.
+    by ``MAX_PAGE_SIZE``, as is the groups page that selects rows; either bound
+    refuses the client's request as ``BAD_USER_INPUT``. ``order_by`` is the list
+    root's own ordering.
     ``resolve(batch, limit)`` returns one page per group in ``batch.groups`` order.
     """
 
     def pages(batch: GroupFieldBatch) -> Sequence[Sequence[Any]]:
         limit = batch.arguments["limit"]
         if not 1 <= limit <= MAX_PAGE_SIZE:
-            raise ValueError(f"Group rows limit must be between 1 and {MAX_PAGE_SIZE}.")
+            raise GraphQLError(
+                f"Group rows limit must be between 1 and {MAX_PAGE_SIZE}.", extensions={"code": "BAD_USER_INPUT"},
+            )
         if len(batch.groups) > MAX_PAGE_SIZE:
-            raise ValueError(f"Group rows carry at most {MAX_PAGE_SIZE} groups; page the groups with a limit.")
+            raise GraphQLError(
+                f"Group rows carry at most {MAX_PAGE_SIZE} groups; page the groups with a limit.",
+                extensions={"code": "BAD_USER_INPUT"},
+            )
         return resolve(batch, limit) if batch.groups else []
 
     return GroupField(
