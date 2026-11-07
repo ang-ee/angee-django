@@ -31,6 +31,7 @@ from rebac import system_context
 from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.iam import schema as iam_schema
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
@@ -58,14 +59,7 @@ from angee.integrate.oauth.errors import (
 )
 from angee.integrate.oauth.providers import GenericOAuth2
 from angee.messaging.testing.models import Handle as PartiesHandle
-from tests.conftest import (
-    Credential,
-    ExternalAccount,
-    OAuthClient,
-    SchemaAddon,
-    execute_schema,
-    result_data,
-)
+from tests.conftest import Credential, ExternalAccount, OAuthClient, SchemaAddon
 from tests.test_parties_graphql import Person as PartiesPerson
 
 # OIDC first login uses the same concrete Person and handle models as parties tests.

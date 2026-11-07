@@ -17,6 +17,7 @@ from django.db import DataError
 from django.utils import timezone
 from rebac import system_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.storage_integrate.connect import create_local_folder_mount
 from angee.storage_integrate.models import MountMode
@@ -34,9 +35,7 @@ from tests.conftest import (
     Vendor,
     addon_schema,
     create_platform_admin,
-    execute_schema,
     make_mount,
-    result_data,
 )
 
 storage_integrate_connect = importlib.import_module("angee.storage_integrate.connect")

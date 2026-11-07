@@ -25,14 +25,19 @@ from angee.graphql.actions import ActionResult, action_guard, resolve_action_tar
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
-from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import (
     PublicID,
     instance_for_id,
     require_instance_for_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import RecordReferenceNode, actor_scoped_public_id, with_record_reference_access
+from angee.graphql.related_counts import RelatedCount
+from angee.graphql.relations import (
+    RecordReferenceNode,
+    actor_scoped_public_id,
+    readable_record_references,
+    with_record_reference_access,
+)
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission
@@ -210,7 +215,7 @@ class StorageQuery:
         source = instance_for_id(File, file)
         if source is None:
             return []
-        return list(_file_attachments(source))
+        return list(with_record_reference_access(_file_attachments(source)))
 
     @strawberry.field(name="record_files")
     def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
@@ -591,19 +596,23 @@ _SHARED_TYPES = [
 
 
 def _file_attachments(file: Any) -> Any:
-    """One file's edges with their targets' current read policy."""
+    """One file's edges, the rows its Attached to group lists."""
 
-    return with_record_reference_access(file.attachments.select_related("file"))
+    return file.attachments.select_related("file")
 
 
-def record_edges() -> tuple[RecordEdge, ...]:
-    """A record's files and the readable records a file is attached to, as their groups list them."""
+def related_counts() -> tuple[RelatedCount, ...]:
+    """A record's files and the readable records a file is attached to, as their groups list them.
+
+    The Attached to group drops the edges whose target the reader cannot see; the
+    count keeps the same rows.
+    """
 
     return (
-        RecordEdge("storage.files", FileAttachment._default_manager.for_record),
-        RecordEdge(
+        RelatedCount("storage.files", FileAttachment._default_manager.for_record),
+        RelatedCount(
             "storage.attached-to",
-            lambda file: _file_attachments(file).filter(_angee_record_readable=True),
+            lambda file: readable_record_references(_file_attachments(file)),
             target="storage.File",
         ),
     )

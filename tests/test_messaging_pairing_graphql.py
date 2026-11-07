@@ -9,13 +9,14 @@ from django.contrib.auth import get_user_model
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.integrate import live as live_module
 from angee.integrate import tasks as tasks_module
 from angee.integrate.constants import RUN_SESSION_TASK
 from angee.integrate.live import session_store_path
 from angee.integrate.models import IntegrationRuntimeStatus
-from tests.conftest import SchemaAddon, execute_schema, make_integration
-from tests.conftest import result_data as _data
+from tests.conftest import SchemaAddon, make_integration
 from tests.pairing_backend import FakePairingBackend
 from tests.test_messaging_graphql import (
     Channel,

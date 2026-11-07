@@ -26,7 +26,7 @@ describe("messaging addon manifest", () => {
     expect(Object.keys(messaging.containers?.["form#chrome"] ?? {})).toEqual(["messaging.follow"]);
     expect(messaging.containers?.["related#groups"]).toMatchObject({ "messaging.conversations": { sequence: 40, content: { label: "Conversations", edge: { model: "messaging.ThreadAttachment" } } } });
     const conversations = containerChildren(messaging, "related#groups").find(([id]) => id === "messaging.conversations")?.[1].content as RelatedGroupContent | undefined;
-    expect(conversations?.countEdge).toEqual({
+    expect(conversations?.count).toEqual({
       id: "messaging.conversations", models: ["messaging.ThreadAttachment", "messaging.Thread"],
     });
     expect(conversations?.usePaneCount).toBeUndefined();

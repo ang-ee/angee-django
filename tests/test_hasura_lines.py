@@ -32,7 +32,8 @@ from strawberry import auto
 from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import SchemaAddon, create_platform_admin, create_user, execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import SchemaAddon, create_platform_admin, create_user
 from tests.linesdemo.models import Document, DocumentLine, LineReceipt, PinnedLine, Product, Tag
 
 

@@ -14,7 +14,8 @@ from strawberry import auto
 from angee.graphql.data.hasura import GROUP_ROWS_MAX_LIMIT, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import SchemaAddon, execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import SchemaAddon
 from tests.tables import model_tables
 from tests.test_aggregates import HasuraJsonResourceThing, ResourceChild, ResourceParent
 

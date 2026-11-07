@@ -1453,14 +1453,16 @@ def _group_bucket(model: type[models.Model], drills: Sequence[DataQueryDrill], k
                 if value is None else models.Q(**{lookup: value})
             )
         else:
-            field = require_field_for_path(model, drill.field)
-            # A relation compares its redacted key alias, as relation filters and groups do.
+            # A relation compares its redacted key alias, as relation filters and groups do;
+            # a value drill may name a declared filter expression rather than a field.
             lookup = _relation_axis_alias(drill.field) if drill.kind == "identity" else drill.field
             if value is None:
                 condition = models.Q(**{f"{lookup}__isnull": True})
             elif drill.kind == "identity":
+                field = require_field_for_path(model, drill.field)
                 condition = models.Q(**{lookup: _public_pk(cast(Any, field).related_model, value)})
             elif drill.kind == "range":
+                field = require_field_for_path(model, drill.field)
                 span = getattr(key, cast(str, drill.range_key))
                 start, end = span.from_, span.to
                 if isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
@@ -1802,6 +1804,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             queryset = apply_ordering(queryset, order_by, id_column=id_column, sortable_aliases=sortable_aliases)
             drills = _group_bucket_drills(model, group_axes, batch.group_by)
             buckets = [_group_bucket(model, drills, group.key) for group in batch.groups]
+            # A drill through a declared filter expression reads that expression's alias.
+            queryset = prepare_filters(queryset, reduce(operator.or_, buckets)) if buckets else queryset
             return _first_rows_per_group(queryset, buckets, info=batch.info, limit=limit)
 
         group_fields = {"rows": group_rows_field(node, group_rows)}
@@ -2296,7 +2300,7 @@ def _hasura_query_axis(
     declared_json_type = (json_paths or {}).get(path)
     if declared_json_type is not None:
         key = group_by_alias(path, None)
-        filter_metadata = _hasura_json_group_bucket_filter(model, path, key)
+        filter_metadata = _hasura_json_group_bucket_filter(model, path, key, filterable=filterable)
         return DataQueryAxis(
             field=path,
             server=DataQueryServerAxis(input=group_by_enum_member(path), key=key),
@@ -2406,9 +2410,19 @@ def _hasura_json_group_bucket_filter(
     model: type[models.Model],
     path: str,
     key: str,
+    *,
+    filterable: tuple[str, ...] = (),
 ) -> DataQueryDrill | None:
-    """Return the JSON containment drill-down filter for an allowlisted path."""
+    """Return the drill-down filter for an allowlisted JSON path.
 
+    A resource that declares the path's exact filter under the path's name with
+    underscores (``metadata_mailbox`` for ``metadata.mailbox``) drills through it,
+    so the JSON document itself need not be filterable; otherwise the bucket
+    drills by containment on the JSON field.
+    """
+
+    if (declared := path.replace(".", "_")) in filterable:
+        return DataQueryDrill(kind="value", field=declared, value_key=key)
     root, *json_path = path.split(".")
     if not root or not json_path:
         return None

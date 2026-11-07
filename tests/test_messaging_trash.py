@@ -17,8 +17,9 @@ from rebac import (
 
 from angee.graphql import records
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Message, Thread, ThreadAttachment, ThreadFollower
-from tests.conftest import SchemaAddon, create_platform_admin, execute_schema, result_data
+from tests.conftest import SchemaAddon, create_platform_admin
 from tests.messaging_campaign import comment_record as comment_record
 from tests.messaging_campaign import grant, make_user
 from tests.test_messaging_graphql import (

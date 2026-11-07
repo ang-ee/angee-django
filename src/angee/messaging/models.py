@@ -40,7 +40,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Obje
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.db.backends.base.base import BaseDatabaseWrapper
-from django.db.models.fields.json import DataContains
+from django.db.models.fields.json import DataContains, KeyTextTransform
 from django.db.models.functions import MD5, Coalesce, JSONArray
 from django.db.models.sql.compiler import SQLCompiler
 from django.utils import timezone
@@ -2019,6 +2019,11 @@ class Message(
     ] = {
         "is_held": lambda rows: models.ExpressionWrapper(
             models.Q(**rows.model.held_draft_fields()), output_field=models.BooleanField(),
+        ),
+        # The metadata.mailbox group axis drills by exact match on this one key, so the
+        # provider metadata document itself is not a filter.
+        "metadata_mailbox": lambda rows: KeyTextTransform(
+            "mailbox", "metadata", output_field=models.TextField(null=True),
         ),
     }
 

@@ -16,10 +16,11 @@ from strawberry.schema.config import StrawberryConfig
 
 import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.ids import require_instance_for_id
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.platform import composed
-from tests.conftest import addon_schema, execute_schema, make_addon
+from tests.conftest import addon_schema, make_addon
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 
 platform_schema = importlib.import_module("angee.platform.schema")
 

@@ -13,16 +13,9 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.models import PermissionAuditEvent
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.iam.identity import user_display_labels
-from tests.conftest import (
-    Page,
-    Vault,
-    addon_schema,
-    create_user,
-    execute_schema,
-    result_data,
-    vault_for,
-)
+from tests.conftest import Page, Vault, addon_schema, create_user, vault_for
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
 

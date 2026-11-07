@@ -3,9 +3,10 @@
 import pytest
 from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Thread, ThreadAttachment
 from angee.projects.testing.models import Project, Task
-from tests.conftest import create_user, execute_schema, result_data
+from tests.conftest import create_user
 from tests.test_messaging_graphql import _schema
 
 pytestmark = pytest.mark.django_db(transaction=True)

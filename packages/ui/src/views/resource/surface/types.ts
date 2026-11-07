@@ -88,6 +88,11 @@ export interface ResourceListResult {
   pageInfo: undefined;
   hasNext: boolean;
   hasPrev: boolean;
+  /**
+   * What one page counts: records, or root groups (a server grouped surface, or a
+   * grouping client table). The surface that pages decides it; views read it.
+   */
+  pageUnit: "records" | "groups";
   /** Present only when pages are not records. */
   records?: ListRecordFacts;
   setPage: (page: number) => void;

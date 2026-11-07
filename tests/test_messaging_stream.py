@@ -4,8 +4,8 @@ from datetime import datetime
 
 from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from tests import test_messaging as messaging_models
-from tests.conftest import execute_schema, result_data
 from tests.test_messaging_graphql import _platform_admin, _request, _schema
 
 

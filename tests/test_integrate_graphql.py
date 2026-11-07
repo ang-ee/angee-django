@@ -31,6 +31,8 @@ from rebac import system_context
 
 from angee.base.models.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
@@ -51,13 +53,9 @@ from tests.conftest import (
     Vendor,
     WebhookSubscription,
     current_stream,
-    execute_schema,
     make_integration,
 )
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import (
-    result_data as _data,
-)
 from tests.stream_adapters import failure_state
 from tests.test_agents import InferenceModel, InferenceProvider
 

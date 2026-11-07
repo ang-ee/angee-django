@@ -108,10 +108,14 @@ class RunKind(TimelineKind):
         return result
 
 
+RECORD_RUN_LIMIT = 20
+"""The newest runs a record's timeline lists, and so the most its Runs group counts."""
+
+
 class TimelineSelection:
     """Read and group a record selection's runs, open decisions and attention."""
 
-    def __init__(self, records: Sequence[models.Model], actor: Any, *, run_limit: int = 20) -> None:
+    def __init__(self, records: Sequence[models.Model], actor: Any, *, run_limit: int = RECORD_RUN_LIMIT) -> None:
         self.records = records
         self.actor = actor
         self.run_limit = max(1, min(run_limit, 100))

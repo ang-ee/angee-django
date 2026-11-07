@@ -15,7 +15,11 @@ def check_graphql_channel_layer(
     app_configs: Sequence[AppConfig] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
-    """Report unsafe process-local change delivery before the first publish."""
+    """Report unsafe process-local change delivery before the first publish.
+
+    ``GraphQLConfig`` registers it only where the serving addon is installed:
+    a model-only project's management commands deliver no changes.
+    """
 
     del app_configs, kwargs
     try:

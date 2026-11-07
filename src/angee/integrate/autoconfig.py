@@ -15,7 +15,7 @@ _Settings = TypedDict(
         "ANGEE_INTEGRATE_OAUTH_STATE_TTL": int,
         "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES": dict[str, str],
         "ANGEE_RESOURCE_SOURCE_CLASSES.url": str,
-        "ANGEE_GRAPHQL_RECORD_EDGES:append": list[str],
+        "ANGEE_GRAPHQL_RELATED_COUNTS:append": list[str],
     },
 )
 
@@ -43,6 +43,6 @@ SETTINGS: _Settings = {
     # Networked resource manifests belong to integrate's outbound HTTP owner; the
     # resources addon reads the settings registry lazily when entries materialize.
     "ANGEE_RESOURCE_SOURCE_CLASSES.url": "angee.integrate.resource_source.UrlSource",
-    "ANGEE_GRAPHQL_RECORD_EDGES:append": ["angee.integrate.schema.record_edges"],
+    "ANGEE_GRAPHQL_RELATED_COUNTS:append": ["angee.integrate.schema.related_counts"],
 }
 """Django settings contributed when the integrate addon is installed."""

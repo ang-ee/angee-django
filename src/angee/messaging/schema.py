@@ -45,9 +45,9 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
-from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.related_counts import RelatedCount
 from angee.graphql.relations import (
     RecordPointerType,
     RecordReferenceNode,
@@ -1847,8 +1847,6 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "sent_at",
         "is_trashed",
         "scheduled_at",
-        # The metadata.mailbox group axis drills by JSON containment on metadata.
-        "metadata",
         *declared_hasura_resource_fields(Message, "hasura_filterable_fields"),
         # The transcript's keyset "load older" cursors on (sent_at, created_at).
         "created_at",
@@ -2085,10 +2083,10 @@ _MESSAGING_SCHEMA_BUCKET = {
 }
 
 
-def record_edges() -> tuple[RecordEdge, ...]:
+def related_counts() -> tuple[RelatedCount, ...]:
     """The source conversations a record came from, as the Conversations group lists them."""
 
-    return (RecordEdge("messaging.conversations", ThreadAttachment.objects.source_threads_for_record),)
+    return (RelatedCount("messaging.conversations", ThreadAttachment.objects.source_threads_for_record),)
 
 
 schemas = {
@@ -2307,7 +2305,6 @@ def _record_thread_payload(
             after=after,
             around=around,
             message_types=message_types,
-            attachment=attachment,
         )
         if thread is not None
         else ([], 0)
@@ -2342,7 +2339,7 @@ def _record_thread_payload(
     is_following = self_follower is not None
     notifications = (
         list(
-            ThreadNotification.objects.for_record(record, user=user, role=role, attachment=attachment).select_related(
+            ThreadNotification.objects.for_record(record, user=user, role=role).select_related(
                 "thread", "attachment", "follower", "message", "message__subtype", "user"
             )[:50]
         )
@@ -2350,7 +2347,7 @@ def _record_thread_payload(
         else []
     )
     unread_count = (
-        ThreadFollower.objects.unread_count_for_record(record, user=user, role=role, attachment=attachment)
+        ThreadFollower.objects.unread_count_for_record(record, user=user, role=role)
         if thread is not None and user is not None
         else 0
     )
@@ -2370,7 +2367,7 @@ def _record_thread_payload(
         for message in messages:
             setattr(message, "_current_user_needaction", message.pk in needaction_message_ids)
     message_has_error_counter = (
-        ThreadNotification.objects.error_count_for_record(record, user=user, role=role, attachment=attachment)
+        ThreadNotification.objects.error_count_for_record(record, user=user, role=role)
         if thread is not None and user is not None
         else 0
     )

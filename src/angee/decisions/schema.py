@@ -23,14 +23,14 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
     with_filter_aliases,
 )
-from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
+from angee.graphql.related_counts import RelatedCount
 from angee.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
-    with_record_reference_access,
+    readable_record_references,
 )
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
@@ -84,8 +84,7 @@ class DecisionType(AngeeNode):
         """
         actor = get_current_user(info)
         links = DecisionRecord.objects.with_actor(actor).filter(decision_id=cast(Any, self).pk)
-        return "; ".join(str(link.record) for link in with_record_reference_access(links)
-                         if link._angee_record_readable and link.record is not None)
+        return "; ".join(str(link.record) for link in readable_record_references(links) if link.record is not None)
 
 
 _DECISIONS = hasura_model_resource(
@@ -156,21 +155,22 @@ class DecisionQuery:
         return list(optimize(DecisionType.get_queryset(queryset, info), info))
 
 
-def _readable_concerns(decision: Any) -> Any:
-    """The decision's records the actor reads, as its Concerns group lists them."""
+def related_counts() -> tuple[RelatedCount, ...]:
+    """The decisions concerning a record and the readable records a decision concerns.
 
-    links = with_record_reference_access(DecisionRecord.objects.filter(decision=decision))
-    return links.filter(_angee_record_readable=True)
-
-
-def record_edges() -> tuple[RecordEdge, ...]:
-    """The decisions concerning a record and the readable records a decision concerns."""
+    A decision's Concerns group lists ``decisions_by_pk.records`` and drops the
+    references whose target the reader cannot see; the count keeps the same rows.
+    """
 
     return (
-        RecordEdge("decisions.decisions", lambda record: DecisionRecord.objects.filter(
+        RelatedCount("decisions.decisions", lambda record: DecisionRecord.objects.filter(
             **generic_target(record).lookups(DecisionRecord, "record"),
         )),
-        RecordEdge("decisions.concerns", _readable_concerns, target="decisions.Decision"),
+        RelatedCount(
+            "decisions.concerns",
+            lambda decision: readable_record_references(DecisionRecord.objects.filter(decision=decision)),
+            target="decisions.Decision",
+        ),
     )
 
 

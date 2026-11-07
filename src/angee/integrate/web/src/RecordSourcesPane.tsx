@@ -39,7 +39,7 @@ export const recordSourcesGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enIntegrateMessages["sources.title"]!,
     edge: { model: RECORD_LINK_MODEL },
-    countEdge: { id: RECORD_SOURCES_GROUP_ID, models: [RECORD_LINK_MODEL] },
+    count: { id: RECORD_SOURCES_GROUP_ID, models: [RECORD_LINK_MODEL] },
     render: (context, label) => <>{label()}<li><RecordSourcesPane context={context} /></li></>,
   },
 };

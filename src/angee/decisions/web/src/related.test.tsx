@@ -13,28 +13,28 @@ const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://decisions-related", queryClientConfig: { defaultOptions: { queries: { retry: false } } },
 });
 
-test("the Decisions badge counts its declared edge without reading the decisions", async () => {
-  const custom = vi.fn(async (_params: Partial<CustomParams>) => ({ data: { record_edge_counts: [{ edge: "decisions.decisions", count: 2 }] } }));
+test("the Decisions badge counts its declared related count without reading the decisions", async () => {
+  const custom = vi.fn(async (_params: Partial<CustomParams>) => ({ data: { related_counts: [{ group: "decisions.decisions", count: 2 }] } }));
   const onCount = vi.fn();
   render(<Provider dataProvider={{ custom }}><AppRuntimeProvider runtime={{
     containers: containersFromChildren(CHATTER_CONTAINERS, { "related#groups": { decisions: recordDecisionsGroup } }),
   }}><RelatedCountProbe id="related" context={context} onCount={onCount} /></AppRuntimeProvider></Provider>);
   await waitFor(() => expect(onCount).toHaveBeenLastCalledWith("related", 2));
   expect(custom.mock.calls.map(([request]) => request.meta?.gqlVariables)).toContainEqual(
-    { model: "notes.Note", id: "nte_7", edges: ["decisions.decisions"] },
+    { model: "notes.Note", id: "nte_7", groups: ["decisions.decisions"] },
   );
   expect(custom.mock.calls.map(([request]) => request.meta?.gqlQuery)).not.toContain(RecordDecisionsDocument);
 });
 
-test("a decision's Concerns badge counts its declared edge without reading the decision", async () => {
-  const custom = vi.fn(async (_params: Partial<CustomParams>) => ({ data: { record_edge_counts: [{ edge: "decisions.concerns", count: 1 }] } }));
+test("a decision's Concerns badge counts its declared related count without reading the decision", async () => {
+  const custom = vi.fn(async (_params: Partial<CustomParams>) => ({ data: { related_counts: [{ group: "decisions.concerns", count: 1 }] } }));
   const onCount = vi.fn();
   render(<Provider dataProvider={{ custom }}><AppRuntimeProvider runtime={{
     containers: containersFromChildren(CHATTER_CONTAINERS, { "decisions.Decision#groups": { concerns: decisionConcernsGroup } }),
   }}><RelatedCountProbe id="related" context={{ ...context, route: { ...context.route!, modelLabel: "decisions.Decision", canonicalLabel: "decisions.Decision" } }} onCount={onCount} /></AppRuntimeProvider></Provider>);
   await waitFor(() => expect(onCount).toHaveBeenLastCalledWith("related", 1));
   expect(custom.mock.calls.map(([request]) => request.meta?.gqlVariables)).toContainEqual(
-    { model: "decisions.Decision", id: "nte_7", edges: ["decisions.concerns"] },
+    { model: "decisions.Decision", id: "nte_7", groups: ["decisions.concerns"] },
   );
   expect(custom.mock.calls.map(([request]) => request.meta?.gqlQuery)).not.toContain(DecisionDocument);
 });

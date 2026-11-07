@@ -252,8 +252,9 @@ def test_stage_policy_projects_distinct_board_and_manual_entry_populations(work_
 
 
 def test_stage_policy_graphql_filters_preserve_rule_lanes_but_refuse_manual_entry(work_case):
+    from angee.graphql.testing.documents import execute_schema
     from angee.work import schema as work_schema
-    from tests.conftest import addon_schema, execute_schema
+    from tests.conftest import addon_schema
     actor, queue = work_case
     with system_context(reason="test.work.stage_policy_schema"):
         automatic = Stage.objects.create(queue=queue, name="Rule lane", category="started", rule_owned=True)

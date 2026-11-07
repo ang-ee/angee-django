@@ -9,12 +9,13 @@ from django.db.models.functions import Now
 from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
-from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import addon_schema, create_user, vault_for
 from tests.test_workflows_children import child_graph as child_graph
 from tests.test_workflows_review import review as review
 from tests.test_workflows_review import start_review

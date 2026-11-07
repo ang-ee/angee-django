@@ -10,12 +10,13 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows.decision_steps import AskDecision, DecisionStep
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Trigger, WorkflowRun
-from tests.conftest import execute_schema, result_data, vault_for
+from tests.conftest import vault_for
 from tests.test_workflows_children import child_graph as child_graph
 from tests.test_workflows_review import questions, start_review
 from tests.test_workflows_review import review as review

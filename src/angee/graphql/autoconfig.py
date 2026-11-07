@@ -15,9 +15,9 @@ SETTINGS = {
     # Native HTTP error capture sees coercion values before our safe log policy.
     "SENTRY_DISABLED_INTEGRATIONS:append": [StrawberryIntegration],
     "ANGEE_GRAPHQL_RESOURCE_FILTERS": [],
-    # Owners append dotted callables returning their related groups' record
-    # edges; see ``angee.graphql.edges``.
-    "ANGEE_GRAPHQL_RECORD_EDGES": [],
+    # Owners append dotted callables returning their related groups' count
+    # declarations; see ``angee.graphql.related_counts``.
+    "ANGEE_GRAPHQL_RELATED_COUNTS": [],
     "STRAWBERRY_DJANGO:append": {
         "DEFAULT_PK_FIELD_NAME": PUBLIC_ID_FIELD_NAME,
         "MAP_AUTO_ID_AS_GLOBAL_ID": False,

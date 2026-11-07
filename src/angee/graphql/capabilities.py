@@ -67,7 +67,7 @@ def held_permissions(
     ):
         annotations = permission_annotations(owner, names)
         values = (
-            require_rebac_queryset(owner).with_actor(actor)
+            require_rebac_queryset(owner, actor=actor)
             .filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
             or {}
         )

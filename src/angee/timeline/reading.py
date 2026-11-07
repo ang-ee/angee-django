@@ -65,7 +65,8 @@ _RESULT = {
     "pk": models.BigIntegerField(), "needs": models.BooleanField(), "type": models.IntegerField(),
     "count": models.IntegerField(), "waiting": models.IntegerField(),
 }
-_ORDER = KeysetOrder("_timeline_at", tie_breakers=("_timeline_kind",), key_field="_timeline_pk")
+# Kinds name their columns `_timeline_<column>`; the statement's result names them `_result_<column>`.
+_ORDER = KeysetOrder("at", tie_breakers=("kind",), key_field="pk")
 
 
 def _native(rows: models.QuerySet, *columns: str) -> models.QuerySet:
@@ -177,8 +178,8 @@ class Timeline:
         if needs_me:
             rows = rows.filter(_timeline_needs=True)
         if anchor is not None:
-            rows = rows.filter(_ORDER.before(anchor))
-        page = CTE(rows.order_by("-_timeline_at", "_timeline_kind", "-_timeline_pk")[:limit + 1], name="timeline_page")
+            rows = rows.filter(_ORDER.before(anchor, prefix="_timeline_"))
+        page = CTE(rows.order_by(*_ORDER.ordering(prefix="_timeline_"))[:limit + 1], name="timeline_page")
         entries = _part(
             _rows(page), "entry", kind=models.F("_timeline_kind"), at=models.F("_timeline_at"),
             pk=models.F("_timeline_pk"), needs=models.F("_timeline_needs"), type=models.F("_timeline_type"),
@@ -197,7 +198,7 @@ class Timeline:
             _part(children, "child", kind=models.F("_timeline_kind"), pk=models.F("_timeline_fold_pk"),
                   type=models.F("_timeline_fold_type"), count=models.F("_timeline_count")),
             all=True,
-        ).order_by("-_result_at", "_result_kind", "-_result_pk"))
+        ).order_by(*_ORDER.ordering(prefix="_result_")))
         selected, counts, children_of = [], {}, {}
         for row in statement:
             if row["_result_row"] == "entry":

@@ -37,7 +37,7 @@ export const recordFilesGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: "Files",
     edge: { model: FILE_ATTACHMENT_MODEL },
-    countEdge: { id: "storage.files", models: ATTACHMENT_MODELS },
+    count: { id: "storage.files", models: ATTACHMENT_MODELS },
     useVerb: useRecordFilesVerb,
     render: (context, label) => <RecordFilesGroup key={context.view.sqid} context={context} label={label} />,
   },

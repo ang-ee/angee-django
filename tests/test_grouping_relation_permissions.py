@@ -40,11 +40,8 @@ from angee.graphql.data.hasura import (
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import (
-    SchemaAddon,
-    execute_schema,
-    result_data,
-)
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import SchemaAddon
 from tests.tables import model_tables
 
 

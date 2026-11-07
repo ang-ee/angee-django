@@ -6,9 +6,10 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Channel, Message, Thread
 from angee.spaces.testing.models import Group
-from tests.conftest import execute_schema, make_integration, result_data
+from tests.conftest import make_integration
 from tests.spaces_campaign_helpers import roster as roster
 from tests.spaces_campaign_helpers import spaces_console as spaces_console
 from tests.spaces_campaign_helpers import spaces_storage as spaces_storage

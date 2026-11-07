@@ -33,6 +33,7 @@ LOCATION = re.compile(r"(?<![\w/])((?:src|packages|examples)/[\w./-]+\.\w+)")
 LINE_REFERENCE = re.compile(
     r"(?<![\w/.-])(?!(?:\.\./)*docs/)(?:[\w.{}*-]+/)*[\w.{}*-]*\w\.[a-z]+:\d+"  # path:line, path:line-line
     r"|\bREADME:\d+"  # a README line
+    r"|\b(?:guidelines|glossary|stack|checks|composer):\d+"  # a guide line in shorthand; link its heading
     r"|`:\d+|(?<=[\s(]):\d+(?=[\s),;.-]|$)"  # a bare :line continuing an earlier path
 )
 EXPORT = re.compile(r"^\s*export\s+(?:default\s+)?(?:async\s+)?(?:const|function|class|type|interface)\s+(\w+)", re.M)

@@ -9,12 +9,13 @@ from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
 from angee.base.testing.permissions import installed_field_owners
+from angee.graphql.testing.documents import execute_schema
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project
 from angee.spaces.testing.models import Group, Membership
 from angee.work import schema as work_schema
 from angee.work.models import ProjectWork
-from tests.conftest import addon_schema, execute_schema
+from tests.conftest import addon_schema
 from tests.test_productivity_write_behavior import Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema
 

@@ -305,7 +305,7 @@ def authorized_permission_target(
     """
 
     user = session_user(info)
-    scoped: models.QuerySet[_ActionTarget] = require_rebac_queryset(model).with_actor(user).with_action(permission)
+    scoped: models.QuerySet[_ActionTarget] = require_rebac_queryset(model, actor=user).with_action(permission)
     if narrow is not None:
         scoped = narrow(scoped)
     instance = instance_for_id(model, id, queryset=scoped)

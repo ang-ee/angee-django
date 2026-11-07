@@ -46,11 +46,8 @@ from angee.graphql.data.resource_fields import final_input_only_resource_fields,
 from angee.graphql.ids import require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import (
-    SchemaAddon,
-    execute_schema,
-    result_data,
-)
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import SchemaAddon
 from tests.tables import model_tables
 
 
@@ -1076,6 +1073,16 @@ def test_hasura_relation_axis_has_one_server_identity_and_drill() -> None:
     axis = hasura_query_axes(ResourceChild, ("parent",), ("parent",))[0]
     assert axis.server == DataQueryServerAxis(input="PARENT", key="parent_id")
     assert axis.drill == DataQueryDrill(kind="identity", field="parent", value_key="parent_id")
+
+
+def test_a_json_path_axis_drills_through_its_declared_path_filter() -> None:
+    """A declared exact path filter replaces containment over the whole JSON document."""
+
+    [axis] = hasura_query_axes(
+        HasuraJsonResourceThing, ("metadata.mailbox",), ("name", "metadata_mailbox"),
+        json_paths={"metadata.mailbox": "str"},
+    )
+    assert axis.drill == DataQueryDrill(kind="value", field="metadata_mailbox", value_key="metadata__mailbox")
 
 
 def test_hasura_model_resource_groups_json_path_axes() -> None:

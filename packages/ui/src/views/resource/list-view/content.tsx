@@ -207,8 +207,8 @@ export function ListViewContent<TRow extends Row = Row>({
     />
   );
   // Every grouped list pages its root groups: the server surface by its root read, a
-  // grouping client table by its top-level rows (its list then carries record facts).
-  const pagesGroups = serverGroupedMode || surface.list.records !== undefined;
+  // grouping client table by its top-level rows; the surface says which.
+  const pagesGroups = surface.list.pageUnit === "groups";
   const toolbar: ResourceToolbarProps = {
     pane,
     sortOptions: resolvedColumns.flatMap((column) => column.field && column.sortable !== false

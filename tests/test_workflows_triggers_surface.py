@@ -17,6 +17,7 @@ from rebac import (
 
 from angee.graphql.data.resource_fields import _field_enum_values
 from angee.graphql.impl import impl_choices as graphql_impl_choices
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.schema import ConsoleImplChoicesQuery
 from angee.integrate.testing.integration import Integration
 from angee.resources.testing.models import Resource
@@ -25,7 +26,7 @@ from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import Trigger, TriggerEvent
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 from angee.workflows_messaging.sources import MessageIngested
-from tests.conftest import Vault, Vendor, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
+from tests.conftest import Vault, Vendor, addon_schema, create_user, make_addon, vault_for
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.workflow_steps import document
 

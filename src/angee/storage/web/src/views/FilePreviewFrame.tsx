@@ -1,9 +1,8 @@
 import { useMemo, type ReactElement, type ReactNode } from "react";
-import { useMutation } from "@tanstack/react-query";
 import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
 import {
-  errorMessage, useToast, Button, Card, CardContent, CommandBand, ControlBandProvider, EmptyState, ErrorBanner, formatDate, formatSize,
+  Button, Card, CardContent, CommandBand, ControlBandProvider, EmptyState, ErrorBanner, formatDate, formatSize,
   Glyph, LoadingPanel, RecordHeader, useConfirm, type RecordChromeContext, type RecordNavigation,
 } from "@angee/ui";
 
@@ -35,18 +34,15 @@ export function FilePreviewFrame({
 }): ReactElement {
   const t = useStorageT();
   const confirm = useConfirm();
-  const toast = useToast();
-  const lifecycle = useMutation({
-    mutationFn: async ({ id, restore, name }: { id: string; restore: boolean; name: string }) => {
-      if (restore) {
-        await fileActions.restore(id);
-        return;
-      }
-      if (!(await confirm({ title: t("file.trashTitle", { name }), body: t("file.trashBody"), confirm: t("file.trash"), danger: true }))) return;
-      if (await fileActions.trash(id, { errorNotification: false })) closeDetail();
-    },
-    onError: (error) => toast.danger({ title: errorMessage(error, t("action.failed")) }),
-  });
+  // The file verbs settle their own failures; the pane closes only on a completed trash.
+  const lifecycle = async (id: string, restore: boolean, name: string) => {
+    if (restore) {
+      await fileActions.restore(id);
+      return;
+    }
+    if (!(await confirm({ title: t("file.trashTitle", { name }), body: t("file.trashBody"), confirm: t("file.trash"), danger: true }))) return;
+    if (await fileActions.trash(id)) closeDetail();
+  };
   const metadata = useModelMetadata(FILE_MODEL);
   const query = useAuthoredQuery(StorageFileById, { id }, { models: [FILE_MODEL] });
   const file = query.data?.files_by_pk ?? null;
@@ -85,14 +81,14 @@ export function FilePreviewFrame({
           )}
           {file?.is_trashed ? (
             <Button type="button" size="sm" variant="secondary" loading={fileActions.busy}
-              onClick={() => lifecycle.mutate({ id: file.id, restore: true, name: file.title || file.filename })}>
+              onClick={() => void lifecycle(file.id, true, file.title || file.filename)}>
               <Glyph name="restore" />
               {t("file.restore")}
             </Button>
           ) : (
             <Button type="button" size="sm" variant="danger" loading={fileActions.busy} disabled={!file}
               onClick={() => {
-                if (file) lifecycle.mutate({ id: file.id, restore: false, name: file.title || file.filename });
+                if (file) void lifecycle(file.id, false, file.title || file.filename);
               }}>
               <Glyph name="trash" />
               {t("file.trash")}

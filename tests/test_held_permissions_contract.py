@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from rebac import actor_context, system_context
 
-from angee.graphql.capabilities import held_permissions
+from angee.graphql.capabilities import held_permissions, permission_expression
 from tests.conftest import create_user
 from tests.scopedemo.models import ProposalTarget
 
@@ -28,3 +28,19 @@ def test_held_permissions_require_the_rows_read(composed_tables: None) -> None:
         assert held_permissions(row, NAMES) == frozenset()
     with actor_context(owner):
         assert held_permissions(row, NAMES) == frozenset(NAMES)
+
+
+def test_permission_expression_holds_nothing_without_an_actor(composed_tables: None) -> None:
+    """A queryset with neither a bound nor an ambient actor projects ``False`` on every row."""
+
+    owner = create_user("expression-owner")
+    with system_context(reason="tests.held_contract.expression"):
+        target = ProposalTarget.objects.create(name="Owned", owner=owner)
+    unbound = permission_expression(ProposalTarget.objects.all(), "write")
+    bound = permission_expression(ProposalTarget.objects.with_actor(owner), "write")
+    with system_context(reason="tests.held_contract.expression"):
+        rows = ProposalTarget.objects.filter(pk=target.pk)
+        assert list(rows.annotate(_held=unbound).values_list("_held", flat=True)) == [False]
+    with actor_context(owner):
+        rows = ProposalTarget.objects.filter(pk=target.pk)
+        assert list(rows.annotate(_held=bound).values_list("_held", flat=True)) == [True]

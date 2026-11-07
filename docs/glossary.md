@@ -273,6 +273,12 @@ surface, not an import file.
 may target. A data resource's `recordEdges` lists the edges its records can
 carry; record surfaces for one edge apply only there.
 
+**Related count** — the row count of one Links-tab group on a record, read
+without its rows. The group's addon declares a `RelatedCount` under the group's
+id whose read is the owner method the group's root lists, bounded like that
+root; `related_counts` counts a record's groups in one statement. A related
+count names a group, not an edge model: several groups may list one record edge.
+
 **Merge** — folding one or more *merged records* into a *survivor* of the same
 model (`MergeableMixin.merge`, the shared `merge_records` verb). Each
 *reference* to a merged record, meaning a foreign key or a record edge pointing
@@ -299,8 +305,10 @@ Explicit local row declarations use the same contract and semantics.
 
 **Group axis** — one query dimension with a stable bucket identity, optional
 display label, required row selections and optional server grouping; a server
-axis always carries the drill that selects one bucket. Labels describe buckets;
-identities distinguish them.
+axis always carries the drill that selects one bucket, with two exceptions: an
+extraction part (a weekday, a month number) has no drill and is summary-only,
+and a JSON bucket that drills by containment is unavailable on a backend without
+JSON containment. Labels describe buckets; identities distinguish them.
 
 **REBAC resource** — an authorization object (`ObjectRef`) in the
 `django-zed-rebac` schema. It names what an actor can read/write; it is separate

@@ -9,6 +9,7 @@ from rebac.models import active_relationship_model
 
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge.schema import schemas
 from angee.provenance.context import changeset, changeset_model
 from tests.conftest import (
@@ -19,8 +20,6 @@ from tests.conftest import (
     addon_schema,
     create_platform_admin,
     create_user,
-    execute_schema,
-    result_data,
     vault_for,
 )
 from tests.knowledge_campaign import clone_template as clone_template

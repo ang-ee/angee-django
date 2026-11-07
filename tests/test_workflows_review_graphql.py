@@ -7,11 +7,12 @@ from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
-from tests.conftest import SchemaAddon, create_user, execute_schema, result_data, vault_for
+from tests.conftest import SchemaAddon, create_user, vault_for
 
 
 @pytest.fixture

@@ -7,10 +7,10 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Party, Person, ThreadFollower
 from angee.nexus.testing.models import Cadence, Tie
 from tests.chatterdemo.models import ChatterDoc
-from tests.conftest import execute_schema, result_data
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user

@@ -9,8 +9,9 @@ from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.signals import decision_answered
 from angee.decisions.testing.models import Decision
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows.decision_steps import apply_proposals
-from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data
+from tests.conftest import addon_schema, create_platform_admin, create_user
 
 
 @pytest.fixture

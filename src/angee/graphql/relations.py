@@ -119,6 +119,12 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
     ))
 
 
+def readable_record_references(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    """Keep only the generic references whose targets the actor currently reads."""
+
+    return with_record_reference_access(queryset).filter(_angee_record_readable=True)
+
+
 @strawberry.type
 class RecordReferenceNode(AngeeNode):
     """Project a generic reference only while its current target is readable.
@@ -154,8 +160,8 @@ class RecordReferenceNode(AngeeNode):
             return None
         reference: RecordRef = row.record_ref
         target = (
-            require_rebac_queryset(apps.get_model(reference.model_label))
-            .with_actor(actor).with_action("read").filter(pk=reference.object_id).first()
+            require_rebac_queryset(apps.get_model(reference.model_label), actor=actor)
+            .with_action("read").filter(pk=reference.object_id).first()
         )
         return record_display_label(target) if target is not None else None
 

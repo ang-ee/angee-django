@@ -12,18 +12,10 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.roles import grant
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge.retrieval import LexicalRetrievalBackend
 from angee.provenance.context import changeset_model
-from tests.conftest import (
-    MarkdownPage,
-    Page,
-    Vault,
-    addon_schema,
-    create_user,
-    execute_schema,
-    result_data,
-    vault_for,
-)
+from tests.conftest import MarkdownPage, Page, Vault, addon_schema, create_user, vault_for
 from tests.knowledge_retrieval import ReverseRetrieval
 from tests.test_knowledge import _grant
 

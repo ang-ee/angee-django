@@ -32,7 +32,6 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
-from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import (
     PublicID,
     optional_public_id,
@@ -41,6 +40,7 @@ from angee.graphql.ids import (
     to_public_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.related_counts import RelatedCount
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
@@ -836,13 +836,13 @@ _KNOWLEDGE_SCHEMA_BUCKET = {
 }
 
 
-def record_edges() -> tuple[RecordEdge, ...]:
+def related_counts() -> tuple[RelatedCount, ...]:
     """A record's bound pages, and a page's bound records and backlinks, as their groups list them."""
 
     return (
-        RecordEdge("knowledge.pages", RecordBinding._default_manager.pages_for_record),
-        RecordEdge("knowledge.bound-to", RecordBinding._default_manager.for_knowledge, target="knowledge.Page"),
-        RecordEdge("knowledge.backlinks", Link._default_manager.backlinks_to, target="knowledge.Page"),
+        RelatedCount("knowledge.pages", RecordBinding._default_manager.pages_for_record),
+        RelatedCount("knowledge.bound-to", RecordBinding._default_manager.for_knowledge, target="knowledge.Page"),
+        RelatedCount("knowledge.backlinks", Link._default_manager.backlinks_to, target="knowledge.Page"),
     )
 
 

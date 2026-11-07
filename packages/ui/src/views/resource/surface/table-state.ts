@@ -85,6 +85,7 @@ export function listResultFromPageState<TRow extends Row>({
     ? undefined
     : Math.max(1, Math.ceil(total / pageSize)),
   hasNext = pageCount !== undefined && page < pageCount,
+  pageUnit = "records",
 }: {
   resourceView: ResourceViewContextValue;
   error: unknown;
@@ -96,6 +97,7 @@ export function listResultFromPageState<TRow extends Row>({
   pageSize?: number;
   pageCount?: number | undefined;
   hasNext?: boolean;
+  pageUnit?: ResourceListResult["pageUnit"];
 }): ResourceListResult {
   return {
     rows,
@@ -105,6 +107,7 @@ export function listResultFromPageState<TRow extends Row>({
     pageSize,
     pageInfo: undefined,
     hasNext,
+    pageUnit,
     hasPrev: page > 1,
     setPage: resourceView.setPage,
     firstPage: () => resourceView.setPage(1),
@@ -325,6 +328,7 @@ export function listResultFromTable<TRow extends Row>(
     pageCount: total === undefined ? undefined : Math.max(1, table.getPageCount()),
     hasNext: total !== undefined && table.getCanNextPage(),
     hasPrev: table.getCanPreviousPage(),
+    pageUnit: records ? "groups" : "records",
     ...(records ? { records } : {}),
     setPage: (page) => table.setPageIndex(page - 1),
     firstPage: table.firstPage,

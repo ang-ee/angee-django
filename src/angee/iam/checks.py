@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from django.apps import AppConfig, apps
 from django.core import checks
+from django.core.exceptions import ImproperlyConfigured
 from rebac.schema import Schema
 from rebac.schema.introspection import permission_sources
 from rebac.schema.parser import parse_zed
@@ -30,13 +31,19 @@ def check_view_as_admin_only(
     ``auth/user#view_as`` reaches exactly the arms of IAM's own unextended
     declaration (``admin->member``). A fragment that unions any other arm into it
     would let that relation act as the account; each addon grants its display
-    need through its own record's read instead.
+    need through its own record's read instead. An IAM without its own schema
+    declaration is a broken installation, refused before any arm is compared.
     """
 
     del kwargs
     iam = apps.get_containing_app_config(__name__)
     declaration = declared_schema_path(iam) if iam is not None else None
-    allowed = _view_as_arms(parse_zed(declaration.read_text(encoding="utf-8"))) if declaration is not None else set()
+    if declaration is None:
+        raise ImproperlyConfigured(
+            "angee.iam declares no permissions schema, so auth/user#view_as has no arms to compare; "
+            "restore IAM's permissions.zed.",
+        )
+    allowed = _view_as_arms(parse_zed(declaration.read_text(encoding="utf-8")))
     configs = apps.get_app_configs() if app_configs is None else app_configs
     errors: list[checks.CheckMessage] = []
     for config in sorted(configs, key=lambda config: config.name):

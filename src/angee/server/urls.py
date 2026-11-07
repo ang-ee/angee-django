@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from django.apps import apps
 from django.urls import URLPattern, URLResolver, include, path
 
 from angee.base.addons import addon_modules
@@ -21,9 +20,6 @@ def contributions() -> Iterator[tuple[str, URLPattern | URLResolver]]:
     never opt in by shipping ``urls.py``.
     """
 
-    apps.check_apps_ready()
-    if not apps.ready:
-        raise RuntimeError("URL composition requires completed django.setup()")
     yield __package__, path("", include([path("health/ready", readiness, name="angee-server-readiness")]))
     for config, module in addon_modules("urls"):
         if config.name != __package__:

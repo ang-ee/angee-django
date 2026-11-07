@@ -8,7 +8,8 @@ from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relati
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import addon_schema, create_user, vault_for
 
 
 @pytest.fixture

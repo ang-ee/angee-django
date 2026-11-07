@@ -26,23 +26,16 @@ import tests.test_agents_graphql  # noqa: F401 -- register related models before
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.messaging.testing.models import Channel
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
-from tests.conftest import (
-    Backend,
-    Drive,
-    Integration,
-    MimeType,
-    SchemaAddon,
-    execute_schema,
-    make_integration,
-)
+from tests.conftest import Backend, Drive, Integration, MimeType, SchemaAddon, make_integration
 from tests.conftest import (
     File as StorageFile,
 )
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 
 messaging_schema = importlib.import_module("angee.messaging.schema")
 iam_schema = importlib.import_module("angee.iam.schema")

@@ -21,8 +21,9 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.resources.models import Resource
-from tests.conftest import addon_schema, execute_schema, graphql_request, result_data
+from tests.conftest import addon_schema
 from tests.tables import model_tables
 
 User = get_user_model()

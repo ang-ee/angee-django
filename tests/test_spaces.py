@@ -27,6 +27,7 @@ from angee.base.build import (
 )
 from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Party, Person, Thread
 from angee.projects.testing.models import Queue
 from angee.spaces.testing.models import Group, Membership
@@ -38,8 +39,6 @@ from tests.conftest import (
     Vault,
     assert_private_hasura_insert_access,
     create_user,
-    execute_schema,
-    result_data,
     vault_for,
 )
 
