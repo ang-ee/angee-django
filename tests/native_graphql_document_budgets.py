@@ -209,19 +209,22 @@ ROWS = {
 # composed host; a platform admin reads both actors' messages and projects.
 BUDGETS = {
     # REBAC 0.31 compiles one actor-independent statement per scope, where 0.30 decided each
-    # actor's constant facts first and pruned the policy: statements fall for both actors, and
-    # an admin's read carries the member's full policy (0.31.2 CHANGELOG, known limit).
-    ("admin", "inbox"): (18, 11, 794),  # 0.31: 15 -> 11 statements, 36 -> 794 KB
-    ("admin", "transcript"): (3, 29, 2639),  # 0.31: 35 -> 29 statements, 85 -> 2639 KB
-    ("admin", "person"): (2, 18, 807),  # 0.31: 29 -> 18 statements, 50 -> 807 KB
-    ("admin", "projects"): (6, 8, 250),  # 0.31: 15 -> 8 statements, 24 -> 250 KB
+    # actor's constant facts first and pruned the policy. Since 0.31.4 a witness statement decides
+    # whether the actor holds a permission's constant arms (``admin->member``): an admin then reads
+    # a statement of those arms alone, decided again at each read because this host keeps no
+    # witness (the user type's field-backed ``person`` relation), and a member pays one witness per
+    # distinct arm per request beside the full policy.
+    ("admin", "inbox"): (18, 29, 104),  # 0.31: 15 -> 29 statements (18 witnesses), 36 -> 104 KB
+    ("admin", "transcript"): (3, 59, 200),  # 0.31: 35 -> 59 statements (30 witnesses), 85 -> 200 KB
+    ("admin", "person"): (2, 34, 86),  # 0.31: 29 -> 34 statements (16 witnesses), 50 -> 86 KB
+    ("admin", "projects"): (6, 13, 23),  # 0.31: 15 -> 13 statements (5 witnesses), 24 -> 23 KB
     ("admin", "identity"): (1, 1, 2),
-    ("member", "inbox"): (9, 11, 794),  # 0.31: 123 -> 11 statements, 898 -> 794 KB; id sets are CTEs
+    ("member", "inbox"): (9, 14, 803),  # 0.31: 123 -> 14 statements (3 witnesses), 898 -> 803 KB; id sets are CTEs
     # The feed reads its messages under ``read_inbox`` and the reply-parent fields read ``read``
     # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
-    ("member", "transcript"): (3, 29, 2639),  # 0.31: 250 -> 29 statements, 2505 -> 2639 KB
-    ("member", "person"): (2, 18, 807),  # 0.31: 174 -> 18 statements, 1036 -> 807 KB
-    ("member", "projects"): (3, 8, 249),  # 0.31: 89 -> 8 statements, 538 -> 249 KB
+    ("member", "transcript"): (3, 32, 2648),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2648 KB
+    ("member", "person"): (2, 20, 813),  # 0.31: 174 -> 20 statements (2 witnesses), 1036 -> 813 KB
+    ("member", "projects"): (3, 10, 254),  # 0.31: 89 -> 10 statements (2 witnesses), 538 -> 254 KB
     ("member", "identity"): (1, 1, 2),
 }
 

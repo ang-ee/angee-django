@@ -168,7 +168,7 @@ host under pytest and the composed console schema under Django's test runner:
 ```python
 read = measure_graphql_document(schema, document, variables, actor=member)
 assert read.data["projects_aggregate"]["aggregate"]["count"] == 3
-read.assert_ceiling(statements=8, sql_kb=249)
+read.assert_ceiling(statements=10, sql_kb=254)
 ```
 
 A ceiling is the measured cost: statements exact, SQL text rounded up to the next KB
