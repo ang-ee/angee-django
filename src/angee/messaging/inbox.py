@@ -23,6 +23,7 @@ from rebac import current_actor
 
 from angee.base.pagination import valid_page_size
 from angee.base.permissions import actor_user_id, contextual_action_holds
+from angee.messaging.managers import MessageQuerySet
 
 
 class InboxCoverage(BaseModel):
@@ -172,14 +173,13 @@ class MessageInbox:
         read authorizes the message. The message queryset owns each predicate.
         """
 
-        return apps.get_model("messaging", "Message").objects.inbox_q(through) & MessageInbox.listed(through)
+        return MessageQuerySet.inbox_q(through) & MessageInbox.listed(through)
 
     @staticmethod
     def listed(through: str = "") -> Q:
         """What the inbox lists of its population: published messages outside public threads."""
 
-        messages = apps.get_model("messaging", "Message").objects
-        return messages.published_q(through) & ~Q(**{f"{through}thread__modality": "public_thread"})
+        return MessageQuerySet.published_q(through) & ~Q(**{f"{through}thread__modality": "public_thread"})
 
     def collection(self, app: str, model: str, *, action: str | None = None) -> Any:
         """Propagate the message collection actor to every joined read owner."""

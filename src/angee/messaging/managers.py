@@ -88,7 +88,6 @@ from angee.messaging.delivery import (
 )
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
-from angee.messaging.inbox import MessageInbox
 from angee.messaging.source_copies import observe_email_identity
 from angee.parties.managers import Signing
 from angee.parties.models import Handle
@@ -101,6 +100,7 @@ if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
     from angee.messaging.backends import ParsedMessage, ParsedThread
+    from angee.messaging.inbox import MessageInbox
     from angee.messaging.models import (
         Channel,
         Fragment,
@@ -2513,6 +2513,9 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
 
     def explorer(self) -> MessageInbox:
         """Compose personal-inbox reads from this collection's current scope."""
+
+        # The inbox query owner composes these querysets, so it imports this module.
+        from angee.messaging.inbox import MessageInbox
 
         return MessageInbox(self)
 
