@@ -119,15 +119,16 @@ class TimelineSelection:
 
     @cached_property
     def runs(self) -> models.QuerySet:
-        """The shared run-owner selection, ready for a schema-specific optimizer."""
+        """The run-owner selection, read only for what :meth:`entries` groups by.
+
+        Ancestry groups by the parent run's id, so no parent step row is loaded; a
+        schema reads the grouped runs' own fields through its optimizer.
+        """
 
         runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(self.actor)
-        events = apps.get_model("workflows", "TriggerEvent").objects.with_actor(self.actor)
-        return runs.about(self.records, limit=self.run_limit).order_by("-created_at", "-pk").select_related(
-            "parent_step",
-        ).prefetch_related("records", models.Prefetch(
-            "trigger_event", queryset=with_record_reference_access(events),
-        ))
+        return runs.about(self.records, limit=self.run_limit).order_by("-created_at", "-pk").only(
+            "subject_content_type_id", "subject_object_id",
+        ).annotate(_parent_run_id=models.F("parent_step__run_id")).prefetch_related("records")
 
     @cached_property
     def open_decision_count(self) -> int:
@@ -153,8 +154,8 @@ class TimelineSelection:
                 or any((link.content_type_id, link.object_id) == identity for link in run.records.all()))}
             for run_id in tuple(selected):
                 run = by_run[run_id]
-                while run.parent_step_id and run.parent_step.run_id in by_run:
-                    run = by_run[run.parent_step.run_id]
+                while run._parent_run_id in by_run:
+                    run = by_run[run._parent_run_id]
                     if run.pk in selected:
                         break
                     selected.add(run.pk)

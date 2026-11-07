@@ -20,6 +20,7 @@ from tests.test_workflows_children import child_graph as child_graph
 from tests.test_workflows_review import questions, start_review
 from tests.test_workflows_review import review as review
 from tests.test_workflows_review_graphql import schema as schema
+from tests.test_workflows_run_graph import graph_nodes
 from tests.test_workflows_triggers import capture
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.test_workflows_triggers import trigger_setup as trigger_setup
@@ -30,8 +31,8 @@ pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("
 def timeline(schema, actor, records):
     return result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!) {
       record_timeline(records:$records) { open_decision_count records { record_id
-        decisions { id } runs { id parent_step { id run { id } } graph { nodes { key plan step_run {
-          id hold notes { tone message } records { operation record_id } child_runs { id } } } } } } }
+        decisions { id } runs { id parent_step { id run { id } } graph { nodes { key plan step_run_id } }
+          graph_steps { id hold notes { tone message } records { operation record_id } child_runs { id } } } } }
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
         "record_timeline"
     ]
@@ -42,16 +43,14 @@ RUN_GRAPHS = """query($records:[TimelineRecordInput!]!, $limit:Int!) {
     id can_cancel
     graph {
       edges { source outcome target taken }
-      nodes {
-        key plan item_counts { status count } item_attempts
-        step_run {
-          id status hold outcome_label failure_reason wait_reason attempt page_index map_total map_settled
-          can_retry requires_duplicate_acknowledgement
-          awaited_run { id display_name status } child_runs { id display_name status }
-          records { id label operation record_model record_id } decision { id kind_label }
-          map_steps { id can_retry requires_duplicate_acknowledgement records { id } decision { id } }
-        }
-      }
+      nodes { key plan item_counts { status count } item_attempts step_run_id }
+    }
+    graph_steps {
+      id status hold outcome_label failure_reason wait_reason attempt page_index map_total map_settled
+      can_retry requires_duplicate_acknowledgement
+      awaited_run { id display_name status } child_runs { id display_name status }
+      records { id label operation record_model record_id } decision { id kind_label }
+      map_steps { id can_retry requires_duplicate_acknowledgement records { id } decision { id } }
     }
   } } }
 }"""
@@ -77,7 +76,7 @@ def test_record_timeline_run_graphs_cost_the_same_for_one_or_five_runs(schema, r
                 }], "limit": limit}, user=actor))["record_timeline"]["records"][0]["runs"]
             counts.append(len(queries))
             assert len(rows) == limit and [row["can_cancel"] for row in rows] == [cancelable] * limit
-            assert all(node["step_run"]["decision"] for row in rows for node in row["graph"]["nodes"])
+            assert all(node["step_run"]["decision"] for row in rows for node in graph_nodes(row))
         assert counts[0] == counts[1], counts
 
     for query in (RUN_GRAPHS, RUN_GRAPHS.replace(" can_retry", "")):
@@ -252,8 +251,9 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     query = """query($records: [TimelineRecordInput!]!) {
       record_timeline(records: $records) { records { decisions { id } runs {
         id subject_model subject_id trigger_event { record_model record_id trigger { display_name } }
-        graph { nodes { key rank step_run { hold records { record_model record_id }
-          decision { id is_open records { record_model record_id } } } } }
+        graph { nodes { key rank step_run_id } }
+        graph_steps { id hold records { record_model record_id }
+          decision { id is_open records { record_model record_id } } }
       } } }
     }"""
     data = result_data(execute_schema(schema, query, {"records": [
@@ -264,7 +264,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     assert (result["trigger_event"]["record_model"], result["trigger_event"]["record_id"]) == (
         record._meta.label, record.sqid,
     )
-    step = result["graph"]["nodes"][0]["step_run"]
+    step = graph_nodes(result)[0]["step_run"]
     assert step["hold"] == "decision" and step["decision"]["is_open"]
     assert step["records"][0]["record_id"] == record.sqid
     assert step["decision"]["records"][0]["record_id"] == record.sqid
@@ -340,7 +340,7 @@ def test_a_routed_failure_is_done_and_does_not_hold_the_next_question(review, sc
     assert run.status == "waiting" and failed.hold is None
     data = timeline(schema, actor, [question.review_subject])["records"][0]["runs"][0]
     assert {node["key"]: node["plan"] for node in data["graph"]["nodes"]} == {"failure": "done", "review": "current"}
-    assert data["graph"]["nodes"][0]["step_run"]["hold"] is None
+    assert graph_nodes(data)[0]["step_run"]["hold"] is None
     filtered = result_data(execute_schema(schema, '{ steprun(where:{hold:{_eq:"error"}}) { id hold } }', user=actor))
     assert filtered["steprun"] == []
 
