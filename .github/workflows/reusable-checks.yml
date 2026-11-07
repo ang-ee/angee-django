@@ -216,7 +216,7 @@ jobs:
             tests/test_iam_graphql.py tests/test_intake_access_decision.py \
             tests/test_integrate_streams.py \
             tests/test_knowledge_clone_concurrency_campaign.py tests/test_knowledge_search.py \
-            tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_secondary_locks_and_rollback \
+            tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_locks_replay_and_rollback \
             tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
             tests/test_messaging_inbox_read.py tests/test_inbox_explorer.py tests/test_inbox_part_reads.py \
             tests/test_group_rows.py \
