@@ -34,7 +34,6 @@ from rebac import (
     SubjectRef,
     check_new,
     current_actor,
-    database_context,
     generic_target,
     system_context,
     to_subject_ref,
@@ -638,7 +637,7 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         using = self._db or router.db_for_write(self.model, instance=target)
         bindings = self.db_manager(using, hints={"instance": target})
         boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
-        with database_context(using), boundary, transaction.atomic(using=using):
+        with boundary, transaction.atomic(using=using):
             reference = generic_target(target)
             claim_values = [reference.content_type.pk, reference.object_id, vault.pk, role, body]
             if idempotency_key is not None:
@@ -693,7 +692,7 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         target = self._saved(target, "target")
         using = self._db or router.db_for_write(self.model, instance=target)
         bindings = self.db_manager(using, hints={"instance": target})
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             reference = generic_target(target)
             with system_context(reason="knowledge.record_binding.lock"):
                 canonical = reference.content_type.model_class()
@@ -1353,7 +1352,7 @@ class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
         vault_ids = {body.vault_id for body in batch}
         using = self._db or router.db_for_write(self.model, instance=batch[0])
         links = self.model._base_manager.db_manager(using)
-        with database_context(using), system_context(reason="knowledge.backlinks"), transaction.atomic(using=using):
+        with system_context(reason="knowledge.backlinks"), transaction.atomic(using=using):
             resolved = {
                 (vault_id, title): pk
                 for vault_id, title, pk in page_model._base_manager.using(using).filter(
@@ -1388,7 +1387,7 @@ class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
         for page in batch:
             affected |= models.Q(vault_id=page.vault_id, outgoing_links__target_text=page.title)
         using = self._db or router.db_for_write(self.model, instance=batch[0])
-        with database_context(using), system_context(reason="knowledge.backlinks.targets"):
+        with system_context(reason="knowledge.backlinks.targets"):
             self.db_manager(using).rebuild_many(markdown._base_manager.using(using).filter(affected).distinct())
 
 

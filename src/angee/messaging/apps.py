@@ -17,7 +17,6 @@ class MessagingConfig(AppConfig):
 
     default = True
     name = "angee.messaging"
-    compose_urls = "angee.messaging.urls"
     requires_apps = ('django.contrib.contenttypes', 'django.contrib.postgres')
 
     def ready(self) -> None:

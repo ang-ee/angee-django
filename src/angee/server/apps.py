@@ -1,9 +1,17 @@
-"""Django identity and explicit HTTP routes for the serving capability."""
+"""Django identity and serving checks for the serving capability."""
 
 from django.apps import AppConfig
+from django.core import checks
 
 
 class ServerConfig(AppConfig):
     name = "angee.server"
     default = True
-    compose_urls = "angee.server.urls"
+
+    def ready(self) -> None:
+        """Register the URL collision check; the root URLconf composes only after setup."""
+
+        super().ready()
+        from angee.server.checks import check_url_collisions
+
+        checks.register(check_url_collisions, checks.Tags.urls)

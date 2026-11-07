@@ -7,6 +7,7 @@ from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
@@ -23,6 +24,7 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.models.base import record_display_label
 from angee.base.models.refs import RecordRefMixin
 from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import RecordRef
@@ -102,8 +104,10 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
         model = content_type.model_class()
         if model is None:
             continue
-        targets = require_rebac_queryset(model).with_actor(actor).with_action("read")
-        keys = targets.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
+        targets = require_rebac_queryset(model)
+        if actor is not None:
+            targets = targets.with_actor(actor)
+        keys = targets.with_action("read").order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
         readable |= models.Q(**{
             reference.ct_field_attname: content_type.pk,
             f"{reference.fk_field}__in": _ActorScopedSubquery(keys, "_angee_reference_key"),
@@ -134,6 +138,25 @@ class RecordReferenceNode(AngeeNode):
         row = cast(Any, self)
         return optional_public_id(row.record_public_id or None) if _record_readable(row) else None
 
+    def reference_label(self) -> str | None:
+        """Return the readable target's own label, read through its actor-scoped manager.
+
+        The batched annotation gates the label exactly as it gates the identity
+        fields, so a hidden target is never loaded. A readable row reads its
+        target once when the label is selected.
+        """
+
+        row = cast(Any, self)
+        actor = current_actor()
+        if actor is None or not _record_readable(row):
+            return None
+        reference: RecordRef = row.record_ref
+        target = (
+            require_rebac_queryset(apps.get_model(reference.model_label))
+            .with_actor(actor).with_action("read").filter(pk=reference.object_id).first()
+        )
+        return record_display_label(target) if target is not None else None
+
 
 def _record_readable(row: Any) -> bool:
     """Return the row's batched target-read annotation, computing it once when absent."""
@@ -163,6 +186,9 @@ def actor_scoped_relation_expression(
     becomes SQL ``NULL``. Direct relation keys use the same guard, merging every
     unreadable target into one null bucket without losing source rows. Paths
     with no protected target need no override and return ``None``.
+    Relation guards use REBAC's projection scope: a bound actor (pinned or
+    ambient) scopes the related read, ambient system scope bypasses when no
+    actor is bound, and a missing actor fails closed.
     ``value`` substitutes a model-owned expression for the path's scalar value;
     sort aliases compose the same guard around each referenced path.
     """
@@ -194,7 +220,10 @@ def actor_scoped_relation_expression(
         if not model_resource_type(related_model):
             traversed.append(part)
             continue
-        related_queryset = require_rebac_queryset(related_model).with_actor(actor).with_action("read")
+        related_queryset = require_rebac_queryset(related_model)
+        if actor is not None:
+            related_queryset = related_queryset.with_actor(actor)
+        related_queryset = related_queryset.with_action("read")
 
         if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
             lookup = "__".join((*traversed, relation.attname))

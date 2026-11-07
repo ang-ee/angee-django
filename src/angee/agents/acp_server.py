@@ -234,7 +234,7 @@ class SessionAgent(ABC):
         return self.schema.CloseSessionResponse.model_validate({})
 
     def _config_options(self, session: Any) -> list[dict[str, Any]]:
-        model = session.agent.service_model_handle()
+        model = session.agent.readable_model_handle(self.user)
         return (
             [
                 {

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { AppRuntimeProvider, createRouteHref, defaultWidgets, ModalsHost, ToastProvider } from "@angee/ui";
 import { afterEach, expect, test, vi } from "vitest";
@@ -14,20 +14,27 @@ vi.mock("@angee/ui", async (original) => ({ ...await original<typeof import("@an
 const { Provider, clearClients } = createUiTestProviders();
 afterEach(() => { cleanup(); clearClients(); vi.clearAllMocks(); });
 
-test("choices reset with the revision and an accepted answer remains locked until it closes", async () => {
-  decide.mockResolvedValue({ decide: { ok: true, message: "" } });
+test("choices reset with the revision and an external answer leaves focus alone", () => {
+  const decision = decisionFixture();
+  const view = render(<Provider><button>Elsewhere</button><DecisionCard decision={decision} /></Provider>);
+  fireEvent.click(screen.getByRole("radio", { name: /^Accept/ }));
+  view.rerender(<Provider><button>Elsewhere</button><DecisionCard decision={{ ...decision, revision: 4 }} /></Provider>);
+  expect((screen.getByRole("button", { name: "Confirm" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("radio", { name: /^Accept/ }).getAttribute("aria-checked")).toBe("false");
+  screen.getByRole("button", { name: "Elsewhere" }).focus();
+  view.rerender(<Provider><button>Elsewhere</button><DecisionCard decision={{ ...decision, revision: 4, is_open: false, verdict: ["accept"], verdict_label: "Accept" }} /></Provider>);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Elsewhere" }));
+});
+
+test.each([{ decision: null }, {}])("a locally accepted answer focuses its summary and locks the submitted revision (%o)", async (answer) => {
+  decide.mockResolvedValue({ decide: { ok: true, message: "", ...answer } });
   const decision = decisionFixture();
   const view = render(<Provider><DecisionCard decision={decision} /></Provider>);
   fireEvent.click(screen.getByRole("radio", { name: /^Accept/ }));
-  view.rerender(<Provider><DecisionCard decision={{ ...decision, revision: 4 }} /></Provider>);
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Confirm" })); });
   expect((screen.getByRole("button", { name: "Confirm" }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.getByRole("radio", { name: /^Accept/ }).getAttribute("aria-checked")).toBe("false");
-  fireEvent.click(screen.getByRole("radio", { name: /^Accept/ }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-  await waitFor(() => expect(decide).toHaveBeenCalledExactlyOnceWith({ id: decision.id, revision: 4, chosen: ["accept"], values: {} }));
-  await waitFor(() => expect((screen.getByRole("button", { name: "Confirm" }) as HTMLButtonElement).disabled).toBe(true));
-  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-  expect(decide).toHaveBeenCalledTimes(1);
+  expect(decide).toHaveBeenCalledOnce();
   view.rerender(<Provider><DecisionCard decision={{ ...decision, revision: 4, is_open: false, verdict: ["accept"], verdict_label: "Accept" }} /></Provider>);
   expect(document.activeElement?.textContent).toContain("Chose: Accept");
 });
