@@ -55,6 +55,21 @@ _UNCACHED = object()
 _REFERENCE_TARGET = "_angee_reference_target"
 
 
+def relation_read_queryset[M: models.Model](model: type[M], source: models.QuerySet[Any]) -> RebacQuerySet[M]:
+    """``model``'s ``read`` queryset for the rows ``source`` relates to, read as ``source`` reads.
+
+    The reader is REBAC's ``relation_actor(source)``: the source's pinned actor, else
+    the ambient one. With neither, REBAC's ambient scope answers, as it does for
+    ``source`` itself: system context reads unscoped and an actorless read fails
+    closed. Relation guards, reference access and relation-id decoding read their
+    targets through it, never through an explicit ``None`` reader, which reads nothing.
+    """
+
+    actor = relation_actor(source)
+    related = require_rebac_queryset(model) if actor is None else require_rebac_queryset(model, actor=actor)
+    return related.with_action("read")
+
+
 class _ActorScopedSubquery(models.Expression):
     """An uncorrelated scope projected only when the containing SQL uses it.
 
@@ -99,15 +114,13 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
     content_types = ContentType.objects.filter(pk__in=reference_rows.order_by().values_list(
         reference.ct_field, flat=True,
     )).order_by("app_label", "model")
-    actor = relation_actor(queryset)
     readable = models.Q(pk__in=[])
     for content_type in content_types:
         model = content_type.model_class()
         if model is None:
             continue
         keys = (
-            require_rebac_queryset(model, actor=actor)
-            .with_action("read")
+            relation_read_queryset(model, queryset)
             .order_by()
             .annotate(_angee_reference_key=Cast("pk", output_field=key_field))
         )
@@ -225,7 +238,6 @@ def actor_scoped_relation_expression(
             f"{queryset.model._meta.label}.{field_path} must traverse to-one relations to a scalar field"
         )
 
-    actor = relation_actor(queryset)
     guards: list[models.Q] = []
     traversed: list[str] = []
     parts = field_path.split("__")
@@ -235,7 +247,7 @@ def actor_scoped_relation_expression(
         if not model_resource_type(related_model):
             traversed.append(part)
             continue
-        related_queryset = require_rebac_queryset(related_model, actor=actor).with_action("read")
+        related_queryset = relation_read_queryset(related_model, queryset)
 
         if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
             lookup = "__".join((*traversed, relation.attname))
