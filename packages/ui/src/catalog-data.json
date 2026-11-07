@@ -1290,6 +1290,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "ComboboxStatus",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "ComboboxTrigger",
     "source": "packages/ui/src/ui/combobox.tsx",
     "kind": "primitive",
@@ -3212,6 +3221,15 @@
   {
     "package": "@angee/ui",
     "name": "PaneRows",
+    "source": "packages/ui/src/communication/pane-list.tsx",
+    "kind": "fragment",
+    "owner": "@angee/ui:PaneRow",
+    "status": "stable",
+    "storyId": "communication-panerow--default"
+  },
+  {
+    "package": "@angee/ui",
+    "name": "PaneRowsSkeleton",
     "source": "packages/ui/src/communication/pane-list.tsx",
     "kind": "fragment",
     "owner": "@angee/ui:PaneRow",
