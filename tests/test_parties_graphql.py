@@ -662,7 +662,9 @@ def test_statement_reference_reads_have_a_page_query_budget(
     # principals are admitted in batches; nothing scales with the statement count.
     # 0.31 (15 -> 11): the revision witness, the page, and per batch its rows and one gated-field decision,
     # plus five witnesses of the platform admin's constant ``admin->member`` arm, one per scope that has it.
-    with django_assert_num_queries(11):
+    # 0.31.5 (11 -> 9): the decision cache keeps the witness for every scope whose types read no model
+    # column, so 9 witnesses remain, one per live scope.
+    with django_assert_num_queries(9):
         rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
     assert len(rows) == row_count
 
