@@ -835,17 +835,20 @@ class StepRun(AngeeDataModel, concrete=True):
     def requires_duplicate_acknowledgement(self) -> bool:
         """Whether any attempt on this page may have made a non-idempotent effect.
 
-        A projected marker answers first, so idempotency is consulted only once an
-        effect started on this page; a step whose implementation is gone keeps the
-        fail-closed Step default.
+        A projected marker answers first: with no effect on this page, neither the
+        run nor its implementation is read. Idempotency is consulted only after
+        that, and a step whose implementation is gone keeps the fail-closed Step
+        default.
         """
-        idempotent = self.run.policy_version.definition.effect_idempotent
-        if "_effect_started" in self.__dict__:
-            return bool(self.__dict__["_effect_started"]) and not idempotent(self.node_key)
+        projected = "_effect_started" in self.__dict__
+        if projected and not self.__dict__["_effect_started"]:
+            return False
+        if self.run.policy_version.definition.effect_idempotent(self.node_key):
+            return False
+        if projected:
+            return True
         with system_context(reason="workflows.effect_policy"):
-            return not idempotent(self.node_key) and self.attempts.filter(
-                page_index=self.page_index, effect_started_at__isnull=False,
-            ).exists()
+            return self.attempts.filter(page_index=self.page_index, effect_started_at__isnull=False).exists()
 
     @classmethod
     def effect_started_expression(cls) -> models.Exists:

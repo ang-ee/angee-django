@@ -217,6 +217,18 @@ def test_removed_step_answers_the_fail_closed_effect_default(schema, execution, 
     assert StepRun.system_queryset().get(pk=step.pk).requires_duplicate_acknowledgement
 
 
+def test_projected_effect_marker_answers_before_the_run_is_read(execution):
+    """A step with no effect on its page answers from the projected marker alone."""
+    actor, _ = execution
+    run = start_run(load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor), actor=actor)
+    step = StepRun.system_queryset().annotate(
+        _effect_started=StepRun.effect_started_expression(),
+    ).get(run=run, node_key="entry")
+    with CaptureQueriesContext(connection) as queries:
+        assert step.requires_duplicate_acknowledgement is False
+    assert queries.captured_queries == []
+
+
 def test_removed_entry_step_leaves_the_run_input_unreadable(schema, execution, settings):
     """A reader cannot classify input references without the consuming step, so they stay hidden."""
     actor, _ = execution
