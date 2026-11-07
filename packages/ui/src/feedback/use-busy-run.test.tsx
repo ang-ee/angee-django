@@ -8,6 +8,9 @@ import { AppRuntimeProvider } from "../runtime";
 import { ToastProvider } from "./Toast";
 import { useBusyRun } from "./use-busy-run";
 
+/** A danger toast's title: Base UI stamps the toast type on it, never on the hidden announcer repeating it. */
+const DANGER_TOAST_TITLE = { selector: "[data-type='danger']" };
+
 function wrapper({ children }: { children: ReactNode }) {
   return <AppRuntimeProvider runtime={{ icons: baseIcons }}><ToastProvider>{children}</ToastProvider></AppRuntimeProvider>;
 }
@@ -109,7 +112,7 @@ describe("useBusyRun", () => {
 
     expect(settled).toBe(false);
     expect(onChanged).not.toHaveBeenCalled();
-    expect(await screen.findAllByText("Folder is not empty")).toHaveLength(1);
+    expect(await screen.findAllByText("Folder is not empty", DANGER_TOAST_TITLE)).toHaveLength(1);
     await act(async () => {
       settled = await result.current.settle(async () => true, false);
     });
@@ -126,6 +129,6 @@ describe("useBusyRun", () => {
       }, undefined, "Tags could not be saved");
     });
 
-    expect(await screen.findAllByText("Tags could not be saved")).toHaveLength(1);
+    expect(await screen.findAllByText("Tags could not be saved", DANGER_TOAST_TITLE)).toHaveLength(1);
   });
 });
