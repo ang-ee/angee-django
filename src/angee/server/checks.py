@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from django.core.checks import Error
+from django.apps import apps
+from django.conf import settings
+from django.core.checks import CheckMessage, Error
 from django.urls import URLPattern, URLResolver
 from django.urls.resolvers import RegexPattern, RoutePattern
+
+from angee.base.hooks import check_hook
 
 type _Route = tuple[tuple[object, ...], ...]
 
@@ -61,4 +65,29 @@ def check_url_collisions(**kwargs: object) -> list[Error]:
                         id="angee.server.E001",
                     )
                 )
+    return errors
+
+
+def check_profiling(**kwargs: object) -> list[CheckMessage]:
+    """Validate django-silk's access hook and refuse silk with ``DEBUG`` off by default.
+
+    Silk stores every recorded request's headers, bodies, responses and SQL in the
+    database. ``ANGEE_PROFILING_ALLOW_PRODUCTION`` accepts that only as the boolean
+    ``True``; an environment string never counts. Without silk nothing is checked.
+    """
+
+    del kwargs
+    if not apps.is_installed("silk"):
+        return []
+    errors = check_hook("ANGEE_PROFILING_PERMISSION")
+    if not settings.DEBUG and settings.ANGEE_PROFILING_ALLOW_PRODUCTION is not True:
+        errors.append(
+            Error(
+                "django-silk is installed with DEBUG off: it records every request's headers, "
+                "bodies, responses and SQL into the database.",
+                hint="Remove 'silk' from INSTALLED_APPS, or set ANGEE_PROFILING_ALLOW_PRODUCTION: true "
+                "in settings.yaml to record this deployment's traffic.",
+                id="angee.server.E002",
+            )
+        )
     return errors

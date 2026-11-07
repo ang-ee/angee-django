@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+from django.apps import apps
 from django.urls import URLPattern, URLResolver, include, path
 
 from angee.base.addons import addon_modules
@@ -15,13 +16,16 @@ def contributions() -> Iterator[tuple[str, URLPattern | URLResolver]]:
     """Yield ``(app name, pattern)`` in installed app order, after Django setup.
 
     The server contributes readiness itself through the same unprefixed
-    ``include()`` boundary as addon routes, so ``angee.server.E001`` compares them.
+    ``include()`` boundary as addon routes, so ``angee.server.E001`` compares them,
+    and django-silk's UI under ``profiling/`` when the project roots ``silk``.
     Every other enabled addon that ships a ``urls`` module is included unprefixed,
     and its own ``app_name`` selects the native namespace. Ordinary Django apps
     never opt in by shipping ``urls.py``.
     """
 
     yield __package__, path("", include([path(READINESS_ROUTE, readiness, name="angee-server-readiness")]))
+    if apps.is_installed("silk"):
+        yield __package__, path("profiling/", include("silk.urls"))
     for config, module in addon_modules("urls"):
         if config.name != __package__:
             yield config.name, path("", include(module))
