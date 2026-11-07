@@ -17,7 +17,6 @@ import pytest
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.checks.registry import registry
-from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import MissingActorError, actor_context, system_context
@@ -139,10 +138,14 @@ def test_check_refuses_fragment_arms_on_derived_reads(tmp_path: Path, fragment: 
         assert "inbox_contrib" in error.msg
 
 
-def test_a_missing_messaging_declaration_is_a_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("angee.messaging.checks.declared_schema_path", lambda config: None)
-    with pytest.raises(ImproperlyConfigured, match="angee.messaging declares no permissions schema"):
-        check_derived_reads()
+def test_a_missing_messaging_declaration_is_a_check_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sealed reads are never compared against an empty declaration; the check reports, never raises."""
+
+    monkeypatch.setattr("angee.base.checks.declared_schema_path", lambda config: None)
+    [error] = check_derived_reads()
+    assert error.id == "messaging.E003"
+    assert "messaging declares no permissions schema" in error.msg
+    assert "messaging/thread#read_inbox" in error.msg
 
 
 def test_installed_composition_keeps_the_derived_reads() -> None:

@@ -594,8 +594,11 @@ data through REBAC, never a queryset bypass.
   [`messaging/thread`](../../src/angee/messaging/permissions.zed) takes grants for
   any conversation in `read_granted` and a record's read of its own chatter in
   `chatter_read`, and its inbox checks `read_inbox`, which skips the chatter arms.
-  `messaging.E003` ([`check_derived_reads`](../../src/angee/messaging/checks.py))
-  refuses a fragment arm on a thread or message `read` or `read_inbox`.
+  An owner seals the permissions it derives this way through the base
+  [sealed-permission check](../../src/angee/base/checks.py)
+  (`check_sealed_permissions`), which refuses a fragment that changes one:
+  messaging's [`check_derived_reads`](../../src/angee/messaging/checks.py)
+  (`messaging.E003`) seals the thread and message `read` and `read_inbox`.
 - **One user identity for authorization and attribution.** Every person and
   agent acts as its own `AUTH_USER_MODEL` row. Workflows also act as their linked
   `kind=service` user for trigger admission and triggered runs; source-declared
@@ -1468,9 +1471,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
   checks the real actor's `view_as` permission and the target's eligibility;
   [ViewAs](../../src/angee/graphql/view_as.py) binds both `request.user` and
   the ambient actor to that target. `auth/user#view_as` is IAM's platform-admin
-  arm alone: the `angee.iam.E001` [system check](../../src/angee/iam/checks.py)
-  refuses a permission fragment that extends it, so an addon grants its display
-  need through its own record's read. Mutations and HTTP subscriptions fail with
+  arm alone: IAM seals it ([`angee.iam.E001`](../../src/angee/iam/checks.py), a
+  sealed-permission check), refusing a permission fragment that extends it, so
+  an addon grants its display need through its own record's read. Mutations and HTTP subscriptions fail with
   `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
   [GraphQL WebSocket consumer](../../src/angee/graphql/consumers.py) retains its
   handshake actor and does not support this header. [MCP execution](../../src/angee/mcp/graphql.py)
