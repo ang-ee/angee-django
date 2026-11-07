@@ -2,7 +2,7 @@
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { ResourceViewProvider, ToastProvider, createRouteHref, type ChatterViewContext } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
@@ -203,8 +203,13 @@ test("a status reader names the author and connected account without an unrelate
 test("status backlinks retain provenance and never offer to open the shared feed as a conversation", async () => {
   const inbox = fixture([], true, true);
   render(<ShellPageTestProviders><ToastProvider><InboxRelatedPane navigation={inbox.props.navigation} /></ToastProvider></ShellPageTestProviders>, { wrapper: inbox.wrapper });
-  const source = await screen.findByRole("button", { name: /Ada.*status update.*Original source/ });
+  // The pinned target names its source, and the file's uses list the same message as a backlink.
+  // One wait per read: whichever of the target and uses reads lands first, then both.
+  const sources = { name: /Ada.*status update.*Original source/ };
+  await screen.findAllByRole("button", sources);
+  await waitFor(() => expect(screen.getAllByRole("button", sources)).toHaveLength(2));
   expect(screen.queryByRole("button", { name: "Open conversation" })).toBeNull();
-  fireEvent.click(source);
+  const [, backlink] = screen.getAllByRole("button", sources);
+  fireEvent.click(backlink!);
   expect(inbox.navigation.read).toHaveBeenCalledWith("message-1", "part-2");
 });
