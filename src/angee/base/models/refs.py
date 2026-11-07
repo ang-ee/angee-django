@@ -53,8 +53,9 @@ class _RecordTargets(InstancePrefetch):
     """
 
     def related(
-        self, instances: list[Any], queryset: models.QuerySet[Any], actor: Any,
+        self, instances: list[Any], queryset: models.QuerySet[Any],
     ) -> tuple[list[models.Model], Callable[[models.Model], object], Callable[[Any], object]]:
+        actor = self.reader(queryset)
         key_field = queryset.model._meta.get_field(queryset.model.record_ref_field().fk_field)
         keys = {id(instance): instance.record_ref for instance in instances}
         wanted: dict[str, set[Any]] = {}

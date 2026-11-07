@@ -243,7 +243,7 @@ class PartyStatementType(AngeeNode):
     updated_at: auto
 
     @strawberry_django.field(only=["asserted_by", "source_kind"])
-    def asserted_by(self) -> str:
+    def asserted_by(self, info: strawberry.Info) -> str:
         """The asserting principal when the reader may read it; otherwise only its source kind.
 
         A statement read never widens what the party reader sees: the principal
@@ -251,7 +251,7 @@ class PartyStatementType(AngeeNode):
         """
 
         row = cast(Any, self)
-        source = row.readable_asserting_source
+        source = row.readable_asserting_source(session_user(info))
         if source is not None:
             return str(public_subject_ref(source))
         return str(row.source_kind)
@@ -266,10 +266,7 @@ class PartyStatementType(AngeeNode):
 
     @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence(self, info: strawberry.Info) -> list[StatementEvidenceType]:
-        row = cast(Any, self)
-        refs = row.__dict__.get("_readable_evidence")
-        if refs is None:
-            refs = row.readable_evidence(session_user(info))
+        refs = cast(Any, self).readable_evidence(session_user(info))
         return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id), pointer=ref.pointer) for ref in refs]
 
     @strawberry_django.field(only=["subject_id", "evidence"])

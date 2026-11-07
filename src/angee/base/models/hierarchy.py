@@ -37,9 +37,8 @@ class _Ancestors(InstancePrefetch):
     single = False
 
     def related(
-        self, instances: list[Any], queryset: models.QuerySet[Any], actor: Any,
+        self, instances: list[Any], queryset: models.QuerySet[Any],
     ) -> tuple[list[HierarchyMixin], Callable[[HierarchyMixin], object], Callable[[HierarchyMixin], object]]:
-        del actor
         rows = cast("HierarchyQuerySet[HierarchyMixin]", queryset).ancestors_of(instances).annotate(
             _hierarchy_ancestor_path=F("path"),
         )

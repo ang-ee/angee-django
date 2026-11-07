@@ -47,6 +47,7 @@ from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import TimestampMixin, update_fields_with_auto_now
 from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import instance_actor, require_rebac_queryset
+from angee.base.prefetch import ReaderMemo
 from angee.base.querysets import by_key, query_batch_size
 from angee.base.validators import validate_value
 from angee.provenance.context import current_changeset
@@ -184,8 +185,16 @@ class StatementQuerySet[T: Statement](_StatementQuerySet[T], AngeeHistoryQuerySe
         return rows if actor is None else rows.with_actor(actor)
 
 
+_READABLE = ReaderMemo("_provenance_readable_statement")
+"""A statement page's readable evidence and asserting principal, for the reader its page read them for."""
+
+
 def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
-    """Resolve a statement page's evidence and asserting principals by model."""
+    """Resolve a statement page's evidence and asserting principals by model, remembered for ``actor``.
+
+    Each row then answers ``readable_evidence``, ``readable_evidence_records`` and
+    ``readable_asserting_source`` for that reader from this batch.
+    """
 
     evidence_by_row: list[tuple[Any, tuple[EvidenceReference, ...]]] = []
     refs: list[EvidenceReference] = []
@@ -211,14 +220,12 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
         (ref.model.lower(), ref.id, ref.pointer): record for ref, record in evidence_records
     }
     for row, evidence in evidence_by_row:
-        row._readable_evidence = tuple(
-            ref for ref in evidence if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
-        )
-        row._readable_evidence_records = tuple(
+        records = tuple(
             (ref, readable_evidence[ref.model.lower(), ref.id, ref.pointer])
             for ref in evidence
             if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
         )
+        _READABLE.remember(row, "evidence_records", actor, records)
 
     readable_sources: dict[tuple[type[models.Model], str, str], models.Model] = {}
     for (model, id_attr), sources in sources_by_model.items():
@@ -231,8 +238,7 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
             (model, id_attr, str(getattr(row, id_attr))): row for row in visible
         })
     for row, source_key in sources_by_row:
-        row._asserting_source_readable = source_key in readable_sources
-        row._readable_asserting_source = readable_sources.get(source_key) if source_key is not None else None
+        _READABLE.remember(row, "asserting_source", actor, readable_sources.get(source_key) if source_key else None)
 
 
 _StatementManagerBase = AngeeManager.from_queryset(StatementQuerySet)
@@ -1280,11 +1286,20 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
             return FactAuthority.UNVERIFIED
         return FactAuthority.SOURCE
 
-    @property
-    def readable_asserting_source(self) -> SubjectRef | None:
-        """Return the asserting principal only when ``for_reader`` admitted it."""
+    def readable_asserting_source(self, actor: Any) -> SubjectRef | None:
+        """Return the asserting principal only when ``for_reader(actor)`` admitted it."""
 
-        return SubjectRef.parse(self.asserted_by) if self.__dict__.get("_asserting_source_readable") else None
+        return SubjectRef.parse(self.asserted_by) if self.readable_asserting_record(actor) is not None else None
+
+    def readable_asserting_record(self, actor: Any) -> models.Model | None:
+        """The asserting principal's row when ``for_reader(actor)`` read this statement's page and admitted it."""
+
+        return _READABLE.get(self, "asserting_source", actor)
+
+    def readable_evidence_records(self, actor: Any) -> tuple[tuple[Any, models.Model], ...]:
+        """The readable origins and their rows ``for_reader(actor)`` read for this statement's page."""
+
+        return _READABLE.get(self, "evidence_records", actor) or ()
 
     @property
     def is_confirmed(self) -> bool:
@@ -1317,8 +1332,14 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         return len(self.evidence) > self.EVIDENCE_LIMIT
 
     def readable_evidence(self, actor: Any) -> list[Any]:
-        """The bounded origins ``actor`` may read; each origin keeps its own read gate."""
+        """The bounded origins ``actor`` may read; each origin keeps its own read gate.
 
+        A page ``for_reader(actor)`` read answers from its batch.
+        """
+
+        remembered = _READABLE.get(self, "evidence_records", actor)
+        if remembered is not None:
+            return [ref for ref, _record in remembered]
         self.subject.require_access("read", actor)
         refs = [EvidenceReference.model_validate(value) for value in self.evidence[: self.EVIDENCE_LIMIT]]
         return readable_evidence(refs, actor)

@@ -19,9 +19,8 @@ class InstancePrefetch:
     ``Prefetch("<attribute>", queryset=..., to_attr=...)``: Django reads the
     listed instances' related rows once, through :meth:`related`, and assigns each
     instance its rows (its row, or ``None``, when ``single``) to ``to_attr``.
-    ``queryset`` is the hint's own queryset and ``actor`` the reader it names
-    (REBAC's ``relation_actor``), or ``None`` without one or for an emptied hint
-    (``require_rebac_queryset(..., actor=None)``), which reads for no reader.
+    ``queryset`` is the hint's own queryset: the rows an adapter reads through it,
+    or only the reader it carries (:meth:`reader`).
     """
 
     single: ClassVar[bool] = True
@@ -30,8 +29,18 @@ class InstancePrefetch:
     def __set_name__(self, owner: type, name: str) -> None:
         self.name = name
 
+    @staticmethod
+    def reader(queryset: models.QuerySet[Any]) -> Any:
+        """The reader the hint's queryset names (REBAC's ``relation_actor``).
+
+        ``None`` for an emptied hint (``require_rebac_queryset(..., actor=None)``),
+        which reads for no reader.
+        """
+
+        return None if isinstance(queryset, EmptyQuerySet) else relation_actor(queryset)
+
     def related(
-        self, instances: list[Any], queryset: models.QuerySet[Any], actor: Any,
+        self, instances: list[Any], queryset: models.QuerySet[Any],
     ) -> tuple[Iterable[Any], Callable[[Any], object], Callable[[Any], object]]:
         """Return the related rows, each row's key and each listed instance's key."""
 
@@ -44,9 +53,7 @@ class InstancePrefetch:
 
         if querysets is None or len(querysets) != 1:
             raise ValueError(f"Prefetching {self.name or type(self).__name__} requires one queryset and to_attr.")
-        queryset = querysets[0]
-        actor = None if isinstance(queryset, EmptyQuerySet) else relation_actor(queryset)
-        rows, row_key, instance_key = self.related(instances, queryset, actor)
+        rows, row_key, instance_key = self.related(instances, querysets[0])
         return rows, row_key, instance_key, self.single, self.name, False
 
 

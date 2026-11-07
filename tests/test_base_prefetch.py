@@ -40,8 +40,8 @@ def test_instance_prefetch_owns_the_protocol_tuple_and_the_hint_reader() -> None
     seen: list[Any] = []
 
     class Pairs(InstancePrefetch):
-        def related(self, instances: list[Any], queryset: Any, actor: Any) -> Any:
-            seen.append(actor)
+        def related(self, instances: list[Any], queryset: Any) -> Any:
+            seen.append(self.reader(queryset))
             return instances, id, id
 
     class Owner:

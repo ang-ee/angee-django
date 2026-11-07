@@ -46,7 +46,6 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, NotSupportedError, connections, models, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import MD5, Coalesce, Greatest
-from django.db.models.query import ModelIterable
 from django.utils import timezone
 from django.utils.html import strip_tags
 from rebac import (
@@ -60,7 +59,6 @@ from rebac import (
 )
 from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.backends import backend
-from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.managers import AngeeManager
@@ -70,7 +68,7 @@ from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.permissions import actor_user_id, contextual_action_holds, require_rebac_queryset
-from angee.base.prefetch import ReaderMemo
+from angee.base.prefetch import InstancePrefetch, ReaderMemo
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
@@ -1422,6 +1420,10 @@ class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](AngeeQuerySet[Thre
 _ThreadFollowerManagerBase = AngeeManager.from_queryset(ThreadFollowerQuerySet)
 
 
+_NEEDACTION = ReaderMemo("_messaging_needaction")
+"""A page message's needaction marker, for the reader whose unread scan answered it."""
+
+
 class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerManagerBase[ThreadFollowerT]):
     """Owns party subscriptions to model-attached chatter threads."""
 
@@ -1865,15 +1867,30 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             return 0
         return self.mark_read_up_to(attachment.thread, party=party, user=user, user_id=user_id)
 
+    def needaction_for_messages(self, thread: Any, messages: Sequence[Any], *, user: Any) -> None:
+        """Answer :meth:`needaction_for_message` for a page of ``thread``'s messages with one unread scan.
+
+        The answers are remembered for ``user``; another reader asks the per-message rule.
+        """
+
+        unread = set(self.unread_messages(thread, user=user).filter(
+            pk__in=[message.pk for message in messages],
+        ).values_list("pk", flat=True))
+        for message in messages:
+            _NEEDACTION.remember(message, "needaction", user, message.pk in unread)
+
     def needaction_for_message(self, message: Any, *, party: Any = None, user: Any = None, user_id: Any = None) -> bool:
         """Return whether ``message`` needs ``user``'s attention: past their read receipt
         AND within their subtype subscription.
 
         Reads the same muting rule as the unread scan (``NotificationPreference.is_subscribed_to``),
         so a muted or non-subscribed subtype is never needaction even when it sits past the
-        receipt — the per-message marker cannot disagree with the badge count.
+        receipt — the per-message marker cannot disagree with the badge count. A page
+        :meth:`needaction_for_messages` answered for ``user`` answers from that scan.
         """
 
+        if (remembered := _NEEDACTION.get(message, "needaction", user)) is not None:
+            return bool(remembered)
         if message.thread_id is None or message.is_trashed:
             return False
         party_id = self.get_party_id(party=party, user=user, user_id=user_id)
@@ -1919,27 +1936,28 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         return deleted
 
 
-class NotificationPointerIterable(ModelIterable):
-    """Prime the narrowed inbox projection once per materialized Django page."""
+class MessagePointers(InstancePrefetch):
+    """A notification list's narrow message context, read once for the hint's reader.
 
-    def __iter__(self) -> Iterator[Any]:
-        rows = list(super().__iter__())
-        manager = self.queryset.model._default_manager
-        if not isinstance(manager, ThreadNotificationManager):
-            raise ImproperlyConfigured("NotificationPointerIterable requires a ThreadNotificationManager.")
-        manager.prime_message_pointers(rows, relation_actor(self.queryset))
-        yield from rows
+    Hint it through ``ThreadNotification.message_pointers_prefetch``: each listed
+    notification gets its message, or ``None`` when the reader no longer reads the
+    message's threaded record (``ThreadNotificationManager.message_pointers``).
+    """
+
+    def related(
+        self, instances: list[Any], queryset: models.QuerySet[Any],
+    ) -> tuple[list[Any], Callable[[Any], object], Callable[[Any], object]]:
+        pointers = queryset.model._default_manager.message_pointers(instances, self.reader(queryset))
+        messages = list({message.pk: message for message in pointers.values()}.values())
+        return (
+            messages,
+            lambda message: message.pk,
+            lambda notification: pointers[notification.pk].pk if notification.pk in pointers else None,
+        )
 
 
 class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](AngeeQuerySet[ThreadNotificationT]):
     """Chainable read scopes for per-recipient delivery rows."""
-
-    def with_message_pointers(self) -> Self:
-        """Batch the recipient's narrow message context after filtering and pagination."""
-
-        queryset = self.all()
-        queryset._iterable_class = NotificationPointerIterable
-        return queryset
 
     def for_attachment(self, attachment: Any) -> Self:
         """Return notifications bound to one record's chatter attachment edge."""
@@ -1957,8 +1975,8 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
 ):
     """Owns per-item delivery and acknowledgement, independently of follower cursors."""
 
-    def prime_message_pointers(self, rows: Sequence[Any], actor: Any) -> None:
-        """Load narrow message context, checking read once per distinct attached record.
+    def message_pointers(self, rows: Sequence[Any], actor: Any) -> dict[Any, Any]:
+        """Each notification's narrow message context by pk, checking read once per distinct attached record.
 
         Elevated bookkeeping loads never authorize a message. Only a current
         recipient who can still read its threaded record gets the pointer.
@@ -1967,14 +1985,12 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
 
         from angee.messaging.models import ThreadedModelMixin
 
-        for row in rows:
-            row._inbox_message_pointer = None
         if not rows or actor is None:
-            return
+            return {}
         recipient_id = actor_user_id(actor)
         rows = [row for row in rows if str(row.user_id) == str(recipient_id)]
         if not rows:
-            return
+            return {}
         with system_context(reason="messaging.notification.message_pointers"):
             messages = {
                 message.pk: message
@@ -2009,6 +2025,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             attachment.thread_id: current(attachment) for attachment in attachments if attachment.role == "chatter"
         }
         allowed: dict[tuple[Any, Any], bool] = {}
+        pointers: dict[Any, Any] = {}
         for row in rows:
             attachment = by_id.get(row.attachment_id) if row.attachment_id is not None else by_thread.get(row.thread_id)
             if attachment is None:
@@ -2020,19 +2037,16 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             message = messages.get(row.message_id)
             if allowed[key] and message is not None and not message.is_trashed:
                 message._inbox_attachment = attachment
-                row._inbox_message_pointer = message
+                pointers[row.pk] = message
         senders = {
             sender.pk: sender
             for sender in apps.get_model("parties", "Handle")
             .objects.with_actor(actor)
-            .filter(
-                pk__in={row._inbox_message_pointer.sender_id for row in rows if row._inbox_message_pointer is not None}
-            )
+            .filter(pk__in={message.sender_id for message in pointers.values()})
         }
-        for row in rows:
-            message = row._inbox_message_pointer
-            if message is not None:
-                message._meta.get_field("sender").set_cached_value(message, senders.get(message.sender_id))
+        for message in pointers.values():
+            message._meta.get_field("sender").set_cached_value(message, senders.get(message.sender_id))
+        return pointers
 
     @transaction.atomic
     def mark_read(self, notification: Any, actor: Any) -> Any:
