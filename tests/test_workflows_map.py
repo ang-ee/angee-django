@@ -14,6 +14,7 @@ from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql.events import ChangeRelatedRecord
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem
@@ -21,7 +22,7 @@ from angee.workflows.runner import runner
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun
-from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import addon_schema, create_user, vault_for
 
 
 class MapEcho(Step[None, None, None]):

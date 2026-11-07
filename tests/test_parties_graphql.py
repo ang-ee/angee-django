@@ -12,14 +12,11 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 
 from angee.base.identity import public_subject_ref
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.messaging.testing import models as messaging_models
-from tests.conftest import (
-    SchemaAddon,
-    assert_private_hasura_insert_access,
-    execute_schema,
-)
+from tests.conftest import SchemaAddon, assert_private_hasura_insert_access
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 
 Address = messaging_models.Address
 Circle = messaging_models.Circle

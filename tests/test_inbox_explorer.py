@@ -10,6 +10,7 @@ from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_groups import InboxGroupScope
 from angee.messaging.inbox_navigator import InboxNavigator, InboxNavigatorOptions
@@ -18,7 +19,7 @@ from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.inbox_transcript import InboxTranscript
 from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Participant, Party, Thread
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
-from tests.conftest import execute_schema, make_integration, result_data
+from tests.conftest import make_integration
 from tests.test_messaging import _storage_drive
 from tests.test_nexus import _schema
 

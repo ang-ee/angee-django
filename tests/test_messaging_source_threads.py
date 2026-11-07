@@ -16,10 +16,11 @@ from rebac import (
     write_relationships,
 )
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Thread, ThreadAttachment
 from angee.projects.testing.models import Project, Task
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
-from tests.conftest import create_user, execute_schema, result_data, vault_for
+from tests.conftest import create_user, vault_for
 from tests.test_messaging_graphql import _schema
 
 pytestmark = pytest.mark.django_db(transaction=True)

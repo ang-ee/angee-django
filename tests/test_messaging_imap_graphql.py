@@ -10,11 +10,12 @@ from imapclient.exceptions import LoginError
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import CursorInvalid, advance_stream
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
-from tests.conftest import SchemaAddon, Vendor, create_user, current_stream, execute_schema
-from tests.conftest import result_data as _data
+from tests.conftest import SchemaAddon, Vendor, create_user, current_stream
 from tests.test_messaging_graphql import (
     Channel,
     _platform_admin,

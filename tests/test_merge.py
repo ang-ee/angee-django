@@ -32,6 +32,7 @@ from angee.base.models.merge_references import (
 )
 from angee.base.models.refs import RecordRefMixin
 from angee.graphql import records
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance.context import changeset, changeset_model, current_changeset
@@ -43,7 +44,7 @@ from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema
 from angee.tags.testing.models import Tag, TagAssignment
 from angee.workflows.testing.models import StepWatch, Workflow, WorkflowRun
-from tests.conftest import addon_schema, create_user, execute_schema, make_integration, result_data
+from tests.conftest import addon_schema, create_user, make_integration
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.recordrefdemo.models import CustomColumnEdge, MergeReferenceNode, SelfLinkedNode, TagSlot
 from tests.workflow_steps import document

@@ -16,17 +16,8 @@ from angee.decisions.testing.drivers import seed_decision
 from angee.graphql import records
 from angee.graphql.apps import check_settings
 from angee.graphql.related_counts import RelatedCount, count_related, declared_related_counts
-from tests.conftest import (
-    Backend,
-    Drive,
-    File,
-    Page,
-    addon_schema,
-    create_user,
-    execute_schema,
-    result_data,
-    vault_for,
-)
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import Backend, Drive, File, Page, addon_schema, create_user, vault_for
 
 pytestmark = pytest.mark.django_db(transaction=True, reset_sequences=True)
 

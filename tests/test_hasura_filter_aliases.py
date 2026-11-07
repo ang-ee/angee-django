@@ -13,8 +13,9 @@ from angee.graphql.actions import session_user
 from angee.graphql.data.hasura import _declared_aliases, _declared_filter_expressions, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from tests.composed_host import run_composed_tests
-from tests.conftest import create_user, execute_schema, make_addon, result_data
+from tests.conftest import create_user, make_addon
 from tests.scopedemo.models import Scope
 
 

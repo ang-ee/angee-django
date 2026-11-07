@@ -219,8 +219,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
                             if reference is None:
                                 raise ValueError("The record for a chosen action is missing or inaccessible.")
                             record = (
-                                require_rebac_queryset(actions.target_model(reference))
-                                .with_actor(answering)
+                                require_rebac_queryset(actions.target_model(reference), actor=answering)
                                 .for_write()
                                 .get(
                                     pk=reference.pk,

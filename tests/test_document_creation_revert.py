@@ -9,9 +9,10 @@ from django.test import override_settings
 from rebac import actor_context
 
 from angee.base.models.identity import public_id_of
+from angee.graphql.testing.documents import execute_schema
 from angee.provenance.context import changeset
 from angee.timeline import schema as timeline_schema
-from tests.conftest import addon_schema, create_user, execute_schema
+from tests.conftest import addon_schema, create_user
 from tests.test_timeline import QUERY, read_timeline
 
 pytestmark = pytest.mark.usefixtures("composed_tables")

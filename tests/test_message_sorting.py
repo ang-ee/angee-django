@@ -9,9 +9,10 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, current_actor, system_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.managers import MessageQuerySet
 from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Party, Thread
-from tests.conftest import Vendor, execute_schema, make_integration, result_data
+from tests.conftest import Vendor, make_integration
 from tests.messaging_campaign import grant
 from tests.test_messaging_graphql import _platform_admin, _schema
 

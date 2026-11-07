@@ -19,8 +19,9 @@ from rebac import (
 )
 from rebac.roles import grant
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.iam.roles import subject_permitted
-from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data
+from tests.conftest import addon_schema, create_platform_admin
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")

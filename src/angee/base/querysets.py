@@ -311,7 +311,7 @@ class AngeeQuerySet(
             upper = order.position(newer[-1] if newer else around)
             window = window.exclude(order.after(upper))
         ascending = after_cursor is not None
-        ordering = (order.field, "pk") if ascending else (f"-{order.field}", "-pk")
+        ordering = (order.field, "pk") if ascending else order.ordering()
         selected = list(window.order_by(*ordering)[: limit + 1])
         has_more = len(selected) > limit
         rows = selected[:limit]
@@ -333,7 +333,7 @@ class AngeeQuerySet(
         # Re-fetch the bounded identities through the original queryset so callers
         # retain a composable queryset instead of inheriting this method's probe list.
         return KeysetPage(
-            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(f"-{order.field}", "-pk"),
+            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(*order.ordering()),
             count=count,
             older_cursor=order.sign(rows[-1], signer),
             newer_cursor=order.sign(rows[0], signer),

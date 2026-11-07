@@ -46,11 +46,8 @@ from angee.graphql.data.resource_fields import final_input_only_resource_fields,
 from angee.graphql.ids import require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import (
-    SchemaAddon,
-    execute_schema,
-    result_data,
-)
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import SchemaAddon
 from tests.tables import model_tables
 
 

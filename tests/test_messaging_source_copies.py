@@ -8,6 +8,7 @@ from django.test import RequestFactory
 from django.utils import timezone
 from rebac import actor_context, system_context
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_transcript import InboxTranscript
 from angee.messaging.testing.models import (
@@ -18,7 +19,7 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
-from tests.conftest import execute_schema, make_integration, result_data
+from tests.conftest import make_integration
 from tests.messaging_campaign import grant
 from tests.test_messaging import ThreadedTicket, _ingest, _parsed
 from tests.test_messaging import channel as channel

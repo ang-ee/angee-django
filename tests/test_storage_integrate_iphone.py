@@ -16,10 +16,11 @@ from django.core.management import call_command
 from django.utils import timezone
 from rebac import system_context
 
+from angee.graphql.testing.documents import execute_schema
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate_iphone.connect import create_iphone_backup_mount
 from angee.storage_integrate_iphone.mounts import IphoneBackupMountBackend
-from tests.conftest import Backend, Drive, File, Folder, MimeType, Mount, Vendor, addon_schema, execute_schema
+from tests.conftest import Backend, Drive, File, Folder, MimeType, Mount, Vendor, addon_schema
 from tests.test_integrate_iphone import (
     BASE_MTIME_NS,
     CAMERA_BYTES,

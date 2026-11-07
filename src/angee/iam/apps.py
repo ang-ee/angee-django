@@ -21,10 +21,14 @@ class IAMConfig(AppConfig):
     requires_apps = ('axes', 'django.contrib.auth', 'django.contrib.sessions')
 
     def compose_provision(self, context: ProvisionContext) -> None:
-        """Bootstrap only when deployment inputs explicitly request an initial admin."""
+        """Bootstrap only when deployment inputs explicitly request an initial admin.
+
+        The command writes through the default manager, so the database router
+        places the admin, as it places every provisioning write.
+        """
 
         if any(bootstrap_admin_settings().values()):
-            context.call('bootstrap_admin', database=context.database)
+            context.call('bootstrap_admin')
 
     def ready(self) -> None:
         """Connect IAM's receivers once Django's auth app has connected its own; register IAM's checks."""

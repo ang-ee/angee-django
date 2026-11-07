@@ -124,7 +124,7 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
 
         if actor is None:
             return self.none()
-        subjects = require_rebac_queryset(self.model.statement_subject_model).with_actor(actor).with_action("read")
+        subjects = require_rebac_queryset(self.model.statement_subject_model, actor=actor).with_action("read")
         rows = self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
         member_names = sorted({name for aspect in self.model.statement_aspects.values() for name in aspect.members})
         for name in member_names:
@@ -134,7 +134,7 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
             related = field.remote_field.model
             if model_resource_type(related) is None:
                 continue
-            members = require_rebac_queryset(related).with_actor(actor).with_action("read").scoped()
+            members = require_rebac_queryset(related, actor=actor).with_action("read").scoped()
             rows = rows.filter(
                 Q(**{f"{field.attname}__isnull": True})
                 | Q(**{f"{field.attname}__in": models.Subquery(members.values(field.target_field.name))})
@@ -794,7 +794,7 @@ class Aspect:
             if isinstance(field, models.ForeignKey):
                 pk = field.target_field.value_from_object(value) if isinstance(value, models.Model) else value
                 rows = (
-                    require_rebac_queryset(field.remote_field.model).with_actor(source).with_action("read")
+                    require_rebac_queryset(field.remote_field.model, actor=source).with_action("read")
                     if kind == SourceKind.PERSON and not is_sudo()
                     else field.remote_field.model._base_manager.all()
                 )

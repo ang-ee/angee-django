@@ -26,15 +26,10 @@ from django.test import RequestFactory
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from tests.conftest import (
-    Repository,
-    SchemaAddon,
-    Source,
-    execute_schema,
-    make_integration,
-)
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
+from tests.conftest import Repository, SchemaAddon, Source, make_integration
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 from tests.wheel_fixtures import write_wheel
 
 User = get_user_model()

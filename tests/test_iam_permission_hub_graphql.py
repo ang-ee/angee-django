@@ -26,10 +26,11 @@ from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant, revoke
 
 from angee.graphql.data.metadata import _grantable_relations
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.projects.testing.models import Project
-from tests.conftest import addon_schema, execute_schema
+from tests.conftest import addon_schema
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")

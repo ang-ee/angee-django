@@ -16,6 +16,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import (
     Circle,
     CircleMember,
@@ -29,7 +30,7 @@ from angee.messaging.testing.models import (
     Thread,
 )
 from angee.nexus.timeline import CorrespondenceKind
-from tests.conftest import Backend, Drive, File, MimeType, execute_schema, result_data
+from tests.conftest import Backend, Drive, File, MimeType
 from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _grant, _schema
 from tests.test_timeline import read_timeline

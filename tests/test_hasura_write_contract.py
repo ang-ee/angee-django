@@ -20,7 +20,8 @@ from angee.base.models.base import AngeeDataModel
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import create_platform_admin, create_user, execute_schema, make_addon, result_data
+from angee.graphql.testing.documents import execute_schema, result_data
+from tests.conftest import create_platform_admin, create_user, make_addon
 from tests.linesdemo.models import Document, DocumentLine, Tag
 from tests.scopedemo.models import SharedDoc
 

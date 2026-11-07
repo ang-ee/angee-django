@@ -1577,8 +1577,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             readable = (
                 model._base_manager.using(self.db).filter(predicate, pk__in=record_ids)
                 if predicate is not None
-                else require_rebac_queryset(model).using(self.db)
-                .with_actor(subject)
+                else require_rebac_queryset(model, actor=subject).using(self.db)
                 .with_action(model.thread_read_access)
                 .filter(pk__in=record_ids)
                 .scoped()
@@ -1707,7 +1706,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         )
         if history_before is not None:
             queryset = queryset.filter(_MESSAGE_ORDER.before(history_before.chronological_key))
-        latest = queryset.order_by("-_order_at", "-pk").first()
+        latest = queryset.order_by(*_MESSAGE_ORDER.ordering()).first()
         if latest is None:
             return
         follower.last_read_message = latest
@@ -1742,7 +1741,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                     thread_id__in=thread.member_threads().values("pk"), is_trashed=False,
                 )
                 .annotate(_order_at=MessageQuerySet.chronological_time())
-                .order_by("-_order_at", "-pk")
+                .order_by(*_MESSAGE_ORDER.ordering())
                 .first()
             )
         if target is None:
@@ -2735,7 +2734,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             if kind == "message":
                 canonical |= queryset.untrashed().filter(sqid=value)
             queryset = canonical
-        return queryset.order_by("-_order_at", "-pk")
+        return queryset.order_by(*_MESSAGE_ORDER.ordering())
 
     @staticmethod
     def _feed_search(search: str) -> str:
@@ -3409,7 +3408,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
         # return the page chronological ascending so the client renders it verbatim.
         ascending = ("_order_at", "pk")
-        descending = ("-_order_at", "-pk")
+        descending = _MESSAGE_ORDER.ordering()
         if around not in (None, ""):
             anchor = self._record_message_anchor(queryset, around)
             if anchor is None:

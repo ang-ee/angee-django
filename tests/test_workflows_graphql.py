@@ -14,6 +14,7 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 
 from angee.base.models.base import record_display_label
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.definition import Definition
 from angee.workflows.runner import runner
@@ -21,7 +22,7 @@ from angee.workflows.states import AttemptResult, RunStatus, StepRunStatus
 from angee.workflows.steps import Step, StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
-from tests.conftest import SchemaAddon, create_user, execute_schema, result_data, vault_for
+from tests.conftest import SchemaAddon, create_user, vault_for
 from tests.workflow_steps import Value, document
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")

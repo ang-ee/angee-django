@@ -47,6 +47,8 @@ from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
 from angee.graphql.events import ChangePayload
 from angee.graphql.schema import AngeeSchema
+from angee.graphql.testing.documents import execute_schema
+from angee.graphql.testing.documents import result_data as _data
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
@@ -57,15 +59,8 @@ from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
     test_messaging,  # noqa: F401 -- register the concrete relation graph
 )
-from tests.conftest import (
-    Credential,
-    ExternalAccount,
-    OAuthClient,
-    addon_schema,
-    execute_schema,
-)
+from tests.conftest import Credential, ExternalAccount, OAuthClient, addon_schema
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.conftest import result_data as _data
 from tests.iam_models import Group as IAMGroup
 from tests.tables import model_tables
 from tests.test_decisions_concurrency import submit, wait_for_lock

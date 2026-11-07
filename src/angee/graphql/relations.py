@@ -160,8 +160,8 @@ class RecordReferenceNode(AngeeNode):
             return None
         reference: RecordRef = row.record_ref
         target = (
-            require_rebac_queryset(apps.get_model(reference.model_label))
-            .with_actor(actor).with_action("read").filter(pk=reference.object_id).first()
+            require_rebac_queryset(apps.get_model(reference.model_label), actor=actor)
+            .with_action("read").filter(pk=reference.object_id).first()
         )
         return record_display_label(target) if target is not None else None
 

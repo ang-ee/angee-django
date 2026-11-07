@@ -31,22 +31,11 @@ from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Channel, Message, Person, Thread, ThreadAttachment
 from angee.projects.testing.models import Project, ProjectBinding, Task
 from angee.spaces.testing.models import Group, Membership
-from tests.conftest import (
-    Backend,
-    Drive,
-    File,
-    Folder,
-    SchemaAddon,
-    Vault,
-    Vendor,
-    create_platform_admin,
-    create_user,
-    execute_schema,
-    result_data,
-)
+from tests.conftest import Backend, Drive, File, Folder, SchemaAddon, Vault, Vendor, create_platform_admin, create_user
 
 
 @strawberry_django.type(Task)

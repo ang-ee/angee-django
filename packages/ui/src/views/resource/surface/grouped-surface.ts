@@ -486,6 +486,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
         pageSize: statePageSize,
         pageCount: rootPageCount,
         hasNext: rootWindow?.hasNext ?? false,
+        pageUnit: "groups",
       }),
       summary: rootResult?.summary,
     }),

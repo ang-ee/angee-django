@@ -55,15 +55,22 @@ class KeysetOrder:
     key_field: str = "pk"
     """The final key: the model's primary key, or a composed relation's key column."""
 
-    def _cut(self, position: tuple[Any, ...], *, older: bool, inclusive: bool = False) -> models.Q:
-        columns = (
-            (self.field, True),
-            *((term.removeprefix("-"), term.startswith("-")) for term in self.tie_breakers),
-            (self.key_field, True),
+    def _columns(self, prefix: str) -> tuple[tuple[str, bool], ...]:
+        """Each ordering column named under ``prefix``, and whether it sorts descending."""
+
+        return (
+            (f"{prefix}{self.field}", True),
+            *((f"{prefix}{term.removeprefix('-')}", term.startswith("-")) for term in self.tie_breakers),
+            (f"{prefix}{self.key_field}", True),
         )
+
+    def _cut(
+        self, position: tuple[Any, ...], *, older: bool, inclusive: bool = False, prefix: str = "",
+    ) -> models.Q:
+        columns = self._columns(prefix)
         if len(position) != len(columns):
             raise ValueError("Cursor does not match its declared keyset ordering.")
-        predicate = models.Q(**{f"{self.key_field}__in": []})
+        predicate = models.Q(**{f"{prefix}{self.key_field}__in": []})
         equal: dict[str, Any] = {}
         for (name, descending), value in zip(columns, position, strict=True):
             comparison = "lt" if descending == older else "gt"
@@ -71,15 +78,24 @@ class KeysetOrder:
             equal[name] = value
         return predicate | models.Q(**equal) if inclusive else predicate
 
-    def before(self, position: tuple[Any, ...], *, inclusive: bool = False) -> models.Q:
+    def before(self, position: tuple[Any, ...], *, inclusive: bool = False, prefix: str = "") -> models.Q:
         """Select the older side, respecting each native tie-break direction."""
 
-        return self._cut(position, older=True, inclusive=inclusive)
+        return self._cut(position, older=True, inclusive=inclusive, prefix=prefix)
 
-    def after(self, position: tuple[Any, ...]) -> models.Q:
+    def after(self, position: tuple[Any, ...], *, prefix: str = "") -> models.Q:
         """Select the newer side of this same total ordering."""
 
-        return self._cut(position, older=False)
+        return self._cut(position, older=False, prefix=prefix)
+
+    def ordering(self, prefix: str = "") -> tuple[str, ...]:
+        """The native ``order_by`` terms of this total ordering, newest first.
+
+        ``prefix`` names the columns as a projection that prefixes them does (a
+        union's result columns), so one declaration orders and cuts every stage.
+        """
+
+        return tuple(f"-{name}" if descending else name for name, descending in self._columns(prefix))
 
     def position(self, row: models.Model) -> tuple[Any, ...]:
         """Read the exact tuple declared by the caller's SQL ordering."""

@@ -667,7 +667,7 @@ class HistoryQuery:
         subject_model = provenance_model(model)
         actor = current_actor()
         queryset = (
-            require_rebac_queryset(subject_model).with_actor(actor).with_action("read")
+            require_rebac_queryset(subject_model, actor=actor).with_action("read")
             if actor is not None
             else subject_model._base_manager.none()
         )
@@ -691,7 +691,7 @@ class HistoryQuery:
         tracked = history_model(model)
         actor = current_actor()
         queryset = (
-            require_rebac_queryset(tracked).with_actor(actor).with_action("read")
+            require_rebac_queryset(tracked, actor=actor).with_action("read")
             if actor is not None
             else tracked._base_manager.none()
         )

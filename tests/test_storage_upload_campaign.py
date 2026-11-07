@@ -17,6 +17,7 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 from rebac.models import active_relationship_model
 
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.storage import exceptions
 from angee.storage import schema as storage_schema
 from angee.storage.models import FileAttachmentManager, FileManager, FileVisibility, UploadState
@@ -28,8 +29,6 @@ from tests.conftest import (
     addon_schema,
     create_platform_admin,
     create_user,
-    execute_schema,
-    result_data,
     vault_for,
 )
 from tests.mtidemo.models import MtiChild, MtiParent

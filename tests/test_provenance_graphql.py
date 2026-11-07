@@ -24,6 +24,7 @@ from rebac.testing import install_schema
 from angee.base.identity import public_subject_ref
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import public_id_of
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.knowledge import schema as knowledge_schema
@@ -36,16 +37,7 @@ from angee.provenance.statements import (
     SourceKind,
     StatementLinkMixin,
 )
-from tests.conftest import (
-    Page,
-    addon_schema,
-    create_user,
-    current_stream,
-    execute_schema,
-    make_integration,
-    result_data,
-    vault_for,
-)
+from tests.conftest import Page, addon_schema, create_user, current_stream, make_integration, vault_for
 from tests.core_persistence import OwnedRow
 
 pytestmark = pytest.mark.usefixtures("composed_tables")

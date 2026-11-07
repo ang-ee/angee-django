@@ -15,12 +15,13 @@ from rebac import actor_context
 from angee.base.models.identity import public_id_of
 from angee.base.pagination import KeysetOrder, keyset_signer
 from angee.graphql.publishing import mute_changes
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.timeline import CommentKind
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from angee.timeline.kinds import timeline_kinds
 from angee.timeline.reading import Timeline
-from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data, vault_for
+from tests.conftest import addon_schema, create_platform_admin, vault_for
 
 KINDS = [
     "angee.provenance.timeline.timeline_kinds",
@@ -51,14 +52,18 @@ def read_timeline(record, actor, **variables):
 
 def test_cursor_round_trips_and_orders_the_page_totally() -> None:
     at = datetime(2026, 10, 19, 9, 41, tzinfo=UTC)
-    order = KeysetOrder("_timeline_at", tie_breakers=("_timeline_kind",), key_field="_timeline_pk")
+    order = KeysetOrder("at", tie_breakers=("kind",), key_field="pk")
     signer = keyset_signer(["record", "all-kinds"], salt="angee.timeline")
     token = order.sign_position((at, "provenance.change", 7), signer)
     cursor = order.unsign(token, signer, models.BigIntegerField())
     assert cursor == (at, "provenance.change", 7)
-    predicate = str(order.before(cursor))
+    predicate = str(order.before(cursor, prefix="_timeline_"))
     assert predicate.count("_timeline_at__lt") == 1 and predicate.count("_timeline_kind__gt") == 1
     assert predicate.count("_timeline_pk__lt") == 1 and "'pk__" not in predicate
+    # One declaration orders the page and the union's renamed result columns alike.
+    assert order.ordering(prefix="_timeline_") == ("-_timeline_at", "_timeline_kind", "-_timeline_pk")
+    assert order.ordering(prefix="_result_") == ("-_result_at", "_result_kind", "-_result_pk")
+    assert KeysetOrder("created_at").ordering() == ("-created_at", "-pk")
     with pytest.raises(ValueError):
         order.unsign("nonsense", signer, models.BigIntegerField())
     with pytest.raises(ValueError):

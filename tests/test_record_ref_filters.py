@@ -15,8 +15,9 @@ from angee.decisions.testing.models import Decision, DecisionRecord
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.relations import actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge import schema as knowledge_schema
-from tests.conftest import Page, SchemaAddon, addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import Page, SchemaAddon, addon_schema, create_user, vault_for
 from tests.tables import model_tables
 
 pytestmark = pytest.mark.django_db(transaction=True, reset_sequences=True)
