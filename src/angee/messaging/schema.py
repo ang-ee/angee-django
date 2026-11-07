@@ -648,7 +648,7 @@ class ThreadType(TaggedNode, AngeeNode):
 
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name,
-        only=["title__text"],
+        only=["title__text", "modality"],
         select_related=["title"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )

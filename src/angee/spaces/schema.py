@@ -14,7 +14,7 @@ from angee.graphql.actions import authorized_action_target, authorized_permissio
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
-from angee.graphql.node import AngeeNode
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
@@ -92,6 +92,12 @@ class VaultSpaceExtension:
 class SpaceThreadType(AngeeNode):
     """Read-only projection of a messaging group thread bound to a space."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["title__text", "modality"],
+        select_related=["title"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
     title: FragmentType | None
     modality: auto
     message_count: auto
