@@ -131,12 +131,15 @@ class PublicationCases(TransactionTestCase):
                 locked.validate_visibility("inherited")
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
             # Three audited system scopes (task twice, message once) and one
-            # application SELECT containing the complete blocker predicate.
+            # application SELECT containing the complete blocker predicate. The
+            # embedded scopes are audited when that SELECT executes.
             self.assertEqual(len(queries), 4, queries.captured_queries)
-            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in q["sql"] for q in queries[:3]))
+            audit = 'INSERT INTO "rebac_permissionauditevent"'
+            self.assertEqual(sum(audit in q["sql"] for q in queries), 3)
+            [select] = [q["sql"] for q in queries if audit not in q["sql"]]
             # One EXISTS selects messages; its nested EXISTS follows the
             # canonical (possibly merged) thread attachment for this record.
-            self.assertEqual(queries[3]["sql"].upper().count("EXISTS("), 2)
+            self.assertEqual(select.upper().count("EXISTS("), 2)
         before = self.Task._base_manager.filter(pk=question.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):

@@ -587,11 +587,11 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 `REBAC_SUPERUSER_BYPASS=False`, so every actor — superusers included — reaches
 data through REBAC, never a queryset bypass.
 
-- **The local backend is the only supported REBAC backend.** Base
-  [autoconfig](../../src/angee/base/autoconfig.py) selects it because field- and
-  const-backed relations, `authenticated`, and SQL read scopes are evaluated
-  against the Django rows themselves, which no remote tuple store can see. Do not
-  mirror column facts into tuples to keep another backend viable.
+- **The local backend is the only REBAC backend.** The library ships no other
+  and Angee selects none: field- and const-backed relations, `authenticated`,
+  and SQL read scopes are evaluated against the Django rows themselves, which no
+  remote tuple store can see. Do not mirror column facts into tuples to make a
+  remote backend viable.
 - **Permission fragments widen `read_granted`; the owner derives `read`.**
   Consumer addons union their additional read arms into the resource owner's
   `read_granted` permission. The owning definition alone derives `read`, so its
@@ -830,6 +830,13 @@ data through REBAC, never a queryset bypass.
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
   callers continue under the original actor, never the elevated one.
+- **System work reads an actor-bound row's relations through
+  `<related>.system_context(reason=...)`.** Since REBAC 0.31 a related manager
+  keeps its source instance's actor even inside `system_context`. That actor comes
+  from `with_actor()`, `require_access()` or a fetch under an ambient actor. So
+  system work on a row that a factory or an authorization check bound reads
+  `run.step_runs.system_context(reason="workflows.advance")`, never `run.step_runs`;
+  [`Runner.advance`](../../src/angee/workflows/runner.py) is the reference.
 - **Elevated destructive work keeps its dependents' authorization.** A verb that
   checks the public `delete` permission itself and then runs the owned
   destructive work under `system_context` (storage's soft delete, messaging's

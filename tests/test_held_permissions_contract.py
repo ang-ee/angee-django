@@ -44,3 +44,19 @@ def test_permission_expression_holds_nothing_without_an_actor(composed_tables: N
     with actor_context(owner):
         rows = ProposalTarget.objects.filter(pk=target.pk)
         assert list(rows.annotate(_held=bound).values_list("_held", flat=True)) == [True]
+
+
+def test_held_permissions_inside_system_context_are_the_actors_own(composed_tables: None) -> None:
+    """Ambient elevation neither grants a capability nor hides the ambient actor's own."""
+
+    owner = create_user("held-elevated-owner")
+    outsider = create_user("held-elevated-outsider")
+    with system_context(reason="tests.held_contract.setup"):
+        target = ProposalTarget.objects.create(name="Owned", owner=owner)
+        row = ProposalTarget.objects.get(pk=target.pk)
+    with system_context(reason="tests.held_contract.elevated"):
+        assert held_permissions(row, NAMES) == frozenset()
+        with actor_context(owner):
+            assert held_permissions(row, NAMES) == frozenset(NAMES)
+        with actor_context(outsider):
+            assert held_permissions(row, NAMES) == frozenset()

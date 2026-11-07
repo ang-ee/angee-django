@@ -738,6 +738,56 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
     assert StepAttempt.system_queryset().filter(step_run__run=run, step_run__node_key="join").count() == 1
 
 
+def test_operator_retry_plans_the_preserved_siblings_successor(execution, register_step, run_factory):
+    """A non-admin operator's retry resumes the run and plans the step its settled sibling unlocked.
+
+    The retry authorizes the run for the operator, who may not create step rows; the re-plan
+    still creates the sibling's successor, because advancing never acts with the caller's rights.
+    """
+
+    actor, _sent = execution
+
+    class SettlingSibling(Echo):
+        key = "settling_sibling"
+        mode = StepMode.IO
+
+        def run(self, ctx):
+            failed = StepRun.system_queryset().get(run=ctx.run, node_key="failed")
+            assert runner.execute(failed.pk)
+            assert WorkflowRun.system_queryset().get(pk=ctx.run.pk).status == RunStatus.FAILED
+            ctx.begin_effect()
+            return ctx.done({"value": 41})
+
+    register_step(RecoverableBranch)
+    register_step(SettlingSibling)
+    workflow = load_workflow({
+        "nodes": {
+            "entry": {"step": "echo", "next": {"done": ["failed", "sibling"]}},
+            "failed": {"step": RecoverableBranch.key},
+            "sibling": {"step": SettlingSibling.key, "next": {"done": "after"}},
+            "after": {"step": "echo", "input": {"value": {"from": "sibling", "path": ["value"]}}},
+        },
+        "results": [{"from": "after"}],
+    }, key="operator_retry_successor", actor=actor)
+    operator = create_user("successor_operator")
+    workflow.with_actor(actor).grant_record_access("operator", operator)
+    run = run_factory(workflow, actor=actor).at("sibling")
+    assert runner.execute(StepRun.system_queryset().get(run=run, node_key="sibling").pk)
+    assert not StepRun.system_queryset().filter(run=run, node_key="after").exists()
+    failed = StepRun.system_queryset().get(run=run, node_key="failed")
+    assert failed.can_retry(operator)
+
+    StepRun.objects.retry_step(failed, actor=operator)
+
+    resumed = WorkflowRun.system_queryset().get(pk=run.pk)
+    assert (resumed.status, resumed.error) == (RunStatus.RUNNING, "")
+    assert StepRun.system_queryset().filter(run=run, node_key="after").exists()
+    assert runner.execute(failed.pk)
+    run_until(run)
+    completed = WorkflowRun.system_queryset().get(pk=run.pk)
+    assert completed.status == RunStatus.SUCCEEDED and completed.output == {"value": 41}
+
+
 def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step, run_factory, monkeypatch):
     """A result rejected by persistence cannot erase the original terminal cause."""
 

@@ -55,22 +55,20 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     with system_context(reason="tests.t3.gate_under_system"), CaptureQueriesContext(connection) as gate_queries:
         assert record.thread_reader_ids([*accounts, accounts[0], to_subject_ref(accounts[0])]) == expected
     chunks = [q for q in gate_queries if q["sql"].startswith("SELECT") and "EXISTS(" in q["sql"]]
-    # Native check_many checks a lower bound for every
-    # batch and an upper bound for its recursive denials. Here exactly half
-    # are denied in every batch; this is two statements per 50, not per user.
+    # Native check_bulk_permissions decides 50 items per batch: statements per batch, not per user.
+    # 0.31 (2 -> 2 or 3) splits a batch's bounds at its statement-size budget; registry items compile wider.
+    per_batch = 3 if campaign_access == "registry" else 2
     batches = size // 50
-    assert len(chunks) == 2 * batches
-    # The compiled backend also decides actor memberships together, once per
-    # batch. This exact guard catches its cache evicting part of a live batch
-    # and rebuilding those recipients' memberships individually.
+    assert len(chunks) == per_batch * batches
+    # 0.31 (1 per batch -> 0): actor memberships are predicates of the bound statements, never a separate read.
     tuple_table = connection.ops.quote_name(active_relationship_model()._meta.db_table)
     memberships = [
         q for q in gate_queries if q["sql"].startswith("SELECT DISTINCT") and f"FROM {tuple_table}" in q["sql"]
     ]
-    assert len(memberships) == batches
+    assert memberships == []
     witnesses = sum(is_rebac_revision_read(query["sql"]) for query in gate_queries)
     assert witnesses == 1
-    assert len(gate_queries) == 3 * batches + witnesses
+    assert len(gate_queries) == per_batch * batches + witnesses
     with (
         system_context(reason="tests.t3.fanout_under_system"),
         patch.object(ChatterDoc, "thread_reader_allowed", side_effect=AssertionError("Per-account read gate")),
@@ -91,7 +89,8 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
         if not field.generated and not isinstance(field, models.AutoField)
     ]
     insert_size = connection.ops.bulk_batch_size(fields, [None] * count)
-    assert len(fanout_queries) <= 3 * batches + 8 + ceil(count / insert_size)
+    # 0.31 (3 -> per_batch gate statements per batch): the audience gate above, without membership reads.
+    assert len(fanout_queries) <= per_batch * batches + 8 + ceil(count / insert_size)
 
 
 @pytest.mark.parametrize("attachment_role", ("chatter", "source"))

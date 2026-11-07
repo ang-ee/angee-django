@@ -208,19 +208,23 @@ ROWS = {
 # (actor, document): rows, statement ceiling, SQL ceiling in KB. Measured on the SQLite
 # composed host; a platform admin reads both actors' messages and projects.
 BUDGETS = {
-    ("admin", "inbox"): (18, 15, 36),
-    ("admin", "transcript"): (3, 35, 85),
-    ("admin", "person"): (2, 29, 50),
-    ("admin", "projects"): (6, 15, 24),
+    # REBAC 0.31 compiles one actor-independent statement per scope, where 0.30 decided each
+    # actor's constant facts first and pruned the policy. Since 0.31.4 a witness statement decides
+    # whether the actor holds a permission's constant arms (``admin->member``): an admin then reads
+    # a statement of those arms alone, decided again at each read because this host keeps no
+    # witness (the user type's field-backed ``person`` relation), and a member pays one witness per
+    # distinct arm per request beside the full policy.
+    ("admin", "inbox"): (18, 29, 104),  # 0.31: 15 -> 29 statements (18 witnesses), 36 -> 104 KB
+    ("admin", "transcript"): (3, 59, 200),  # 0.31: 35 -> 59 statements (30 witnesses), 85 -> 200 KB
+    ("admin", "person"): (2, 34, 86),  # 0.31: 29 -> 34 statements (16 witnesses), 50 -> 86 KB
+    ("admin", "projects"): (6, 13, 23),  # 0.31: 15 -> 13 statements (5 witnesses), 24 -> 23 KB
     ("admin", "identity"): (1, 1, 2),
-    ("member", "inbox"): (9, 123, 898),
-    # The feed reads its messages under ``read_inbox`` and the reply-parent fields read
-    # ``read`` through the relation guard, so REBAC 0.30 decides the ``read`` graph's
-    # subject sets a second time: 21 statements more than one ``read`` graph, for 174 KB
-    # less SQL. The ceiling accepts that trade; sharing decided sets across actions is upstream.
-    ("member", "transcript"): (3, 250, 2505),
-    ("member", "person"): (2, 174, 1036),
-    ("member", "projects"): (3, 89, 538),
+    ("member", "inbox"): (9, 14, 803),  # 0.31: 123 -> 14 statements (3 witnesses), 898 -> 803 KB; id sets are CTEs
+    # The feed reads its messages under ``read_inbox`` and the reply-parent fields read ``read``
+    # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
+    ("member", "transcript"): (3, 32, 2648),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2648 KB
+    ("member", "person"): (2, 20, 813),  # 0.31: 174 -> 20 statements (2 witnesses), 1036 -> 813 KB
+    ("member", "projects"): (3, 10, 254),  # 0.31: 89 -> 10 statements (2 witnesses), 538 -> 254 KB
     ("member", "identity"): (1, 1, 2),
 }
 

@@ -1506,7 +1506,8 @@ class FeedDeliveryContracts(DeliveryFixtures):
         with system_context(reason="nested plain-body projection"):
             Part = apps.get_model("messaging", "Part")
             for message in (row, other):
-                message.parts.all().delete()
+                # Each reply keeps its composer pinned, and a related manager would scope to it.
+                Part.objects.filter(message=message).delete()
                 Message.objects._build_parts(message, ParsedPart(type="multipart/mixed", children=(
                     ParsedPart(text="One"), ParsedPart(type="multipart/alternative", children=(
                         ParsedPart(text="Two"), ParsedPart(type="text/html", text="<p>Two</p>"),
