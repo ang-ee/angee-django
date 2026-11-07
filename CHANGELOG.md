@@ -61,7 +61,7 @@ Consumer-facing renames and removals, each with its replacement.
   Move every stored REBAC override on a thread or message `read` or `read_inbox`
   to that definition's `read_granted`, which both reads take. While one remains,
   or the store is not yet synced, the inbox reads threads, messages and their
-  parts under `read` (`contextual_action_holds`): correct, without the narrower
+  parts under `read` (`purpose_read_holds`): correct, without the narrower
   statement.
 
 ## Unreleased — dead subsystems removed with their schema

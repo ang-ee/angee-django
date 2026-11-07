@@ -25,7 +25,7 @@ from rebac.models import SchemaOverride, SchemaPermission
 from rebac.schema import PermBinOp, PermRef, permission_sources
 
 from angee.base.build import extension_source_map, merged_schemas
-from angee.base.permissions import contextual_action_holds
+from angee.base.permissions import contextual_action_holds, purpose_read_holds
 from angee.base.testing.permissions import installed_field_owners
 from angee.messaging.checks import check_derived_reads
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
@@ -328,8 +328,9 @@ def test_an_override_on_a_derived_read_keeps_the_inbox_on_read(
 
     world = _inbox_world(campaign_user)
     # The thread's proof fails, and with it every read whose arrow reaches the thread's inbox read.
-    for model in (Thread, Message, Part):
-        assert not contextual_action_holds(model, "read_inbox"), model
+    for model in (Thread, Message):
+        assert not purpose_read_holds(model, "read_inbox"), model
+    assert not contextual_action_holds(Part, "read_inbox")
     with system_context(reason="tests.messaging.inbox_read.population"):
         population = {Thread: _pks(Thread.objects.inbox()), Message: _pks(Message.objects.inbox())}
     for name in _ACTORS:
@@ -341,7 +342,7 @@ def test_an_override_on_a_derived_read_keeps_the_inbox_on_read(
     assert _pks(Thread.objects.with_actor(world.owner).inbox()) == {world.owned.pk}
     assert world.thread_a.with_actor(world.owner).has_access("read_inbox")
     tightened_thread_read.delete()
-    assert contextual_action_holds(Thread, "read_inbox")
+    assert purpose_read_holds(Thread, "read_inbox")
     assert _pks(Thread.objects.with_actor(world.owner).inbox()) == {world.thread_a.pk, world.owned.pk}
 
 

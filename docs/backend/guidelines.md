@@ -758,10 +758,11 @@ data through REBAC, never a queryset bypass.
   grants on `read`, and select the parent population with relation-path predicates
   from its owner (`MessageInbox.eligible("message__")`), never a second, separately
   scoped parent subquery. [`contextual_action_holds`](../../src/angee/base/permissions.py)
-  admits the action only while the effective policy proves it, for the child and
-  for every parent purpose read its arrow reaches (`messaging/message#read_inbox`,
-  then `messaging/thread#read_inbox`, each stated as declared); otherwise the
-  caller keeps `read` inside the scoped parent population, and the inbox reads
+  admits the action only while the effective policy proves it: the child action
+  stays exactly the arrow, and every parent purpose read it reaches
+  (`messaging/message#read_inbox`, then `messaging/thread#read_inbox`) is stated as
+  declared ([`purpose_read_holds`](../../src/angee/base/permissions.py)); otherwise
+  the caller keeps `read` inside the scoped parent population, and the inbox reads
   threads and messages under `read`. A result population whose own rules read the
   actor's rows (canonical copies, sender scope) stays a scoped subquery.
 - A `read__<field>`-gated field is never filterable, sortable, groupable, or aggregatable.

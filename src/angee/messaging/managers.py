@@ -67,7 +67,7 @@ from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.permissions import actor_user_id, contextual_action_holds, require_rebac_queryset
+from angee.base.permissions import actor_user_id, purpose_read_holds, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch, ReaderMemo
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
@@ -666,10 +666,10 @@ def _inbox_action(model: type[models.Model]) -> str:
 
     An override on a thread or message ``read`` or ``read_inbox``, or a store not yet
     synced to messaging's declaration, keeps the inbox on ``read``
-    (``contextual_action_holds``); overrides meant for both reads target ``read_granted``.
+    (``purpose_read_holds``); overrides meant for both reads target ``read_granted``.
     """
 
-    return "read_inbox" if contextual_action_holds(model, "read_inbox") else "read"
+    return "read_inbox" if purpose_read_holds(model, "read_inbox") else "read"
 
 
 class ThreadQuerySet[ThreadT: Thread](

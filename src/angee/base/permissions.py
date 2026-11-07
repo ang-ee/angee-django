@@ -154,58 +154,88 @@ def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
 
 
 def contextual_action_holds(model: type[models.Model], action: str) -> bool:
-    """Whether a listing may scope ``model`` by its narrower ``action`` in place of ``read``.
+    """Whether a listing constrained to readable parents may scope ``model`` by ``action`` instead of ``read``.
 
-    The effective policy (the synced schema with its overrides) proves it in one of
-    two shapes. A contextual child action is exactly one arrow,
-    ``relation->parent_action``, while ``read`` stays a union with an arrow arm
-    through the same relation: the child's own actor-scoped read checks its live
-    parent, so a listing constrained to readable parents selects them with joins
-    instead of a second, separately scoped parent subquery. Extending ``read``
-    keeps that; an exclusion or intersection over it (a tightening override) does
-    not. A purpose read, such as ``messaging/thread#read_inbox``, is stated with
-    ``read`` exactly as the model's composed declaration states them, and that
-    declaration's owner proves it answers as ``read`` does within the population its
-    listing selects: an override on either, or a store not yet synced to the
-    declaration, leaves it unproved. In both shapes, an arrow to a parent's narrower
-    action where ``read`` takes the parent's ``read`` holds only while the parent's
-    action holds in turn. Unproved, the caller keeps ``read``. Field gates are
+    The effective policy (the synced schema with its overrides) must state the
+    contextual child action as exactly one arrow, ``relation->parent_action``, while
+    ``read`` stays a union with an arrow arm through the same relation: the child's
+    own actor-scoped read checks its live parent, so the listing selects the parents
+    with joins instead of a second, separately scoped parent subquery. Any other arm
+    on the action (a direct grant beside the arrow) could admit a child of an
+    unreadable parent and leaves it unproved, as does an exclusion or intersection
+    over ``read`` (a tightening override); extending ``read`` does not. A
+    ``parent_action`` narrower than the parent's permission the arm names must hold
+    on the parent as a purpose read (:func:`purpose_read_holds`). Unproved, the
+    caller keeps ``read`` inside the scoped parent population. Field gates are
     unaffected; they keep their own ``read__<field>`` checks under either action.
     """
 
     resource_type = model_resource_type(model)
-    return resource_type is not None and _action_holds(backend().schema(), resource_type, action)
+    return resource_type is not None and _contextual_holds(backend().schema(), resource_type, action)
 
 
-def _action_holds(schema: Schema, resource_type: str, action: str) -> bool:
+def purpose_read_holds(model: type[models.Model], action: str) -> bool:
+    """Whether a read of ``model``'s own population may check its purpose read ``action`` instead of ``read``.
+
+    A purpose read, such as ``messaging/thread#read_inbox``, holds while the
+    effective policy states it and ``read`` exactly as the model's composed
+    declaration does, whose owner proves the purpose read answers as ``read`` within
+    the population its read selects; an override on either, or a store not yet
+    synced to the declaration, leaves it unproved. An arrow to a parent's narrower
+    action, where ``read`` takes the parent's ``read``, holds only while that
+    parent's purpose read holds in turn. Unproved, the caller keeps ``read``.
+    """
+
+    resource_type = model_resource_type(model)
+    return resource_type is not None and _purpose_holds(backend().schema(), resource_type, action)
+
+
+def _narrow_and_read(schema: Schema, resource_type: str, action: str) -> tuple[Definition, PermExpr, PermExpr] | None:
+    """The effective definition with its ``action`` and ``read`` expressions, when it states both."""
+
     definition = schema.get_definition(resource_type)
     if definition is None:
-        return False
+        return None
     expressions = {permission.name: permission.expression for permission in definition.permissions}
     narrow, read = expressions.get(action), expressions.get("read")
-    if narrow is None or read is None:
+    return (definition, narrow, read) if narrow is not None and read is not None else None
+
+
+def _contextual_holds(schema: Schema, resource_type: str, action: str) -> bool:
+    found = _narrow_and_read(schema, resource_type, action)
+    if found is None:
         return False
-    if isinstance(narrow, PermArrow):
-        arms = {arm.via: arm.target for arm in _union_arms(read) if isinstance(arm, PermArrow)}
-        pairs = [(narrow, arms.get(narrow.via))]
-    else:
-        model = model_for_resource_type(resource_type)
-        declared = declared_rebac_definition(model) if model is not None else None
-        stated = {permission.name: permission.expression for permission in declared.permissions} if declared else {}
-        if stated.get(action) != narrow or stated.get("read") != read:
-            return False
-        reads = {(arrow.via, arrow.target) for arrow in _arrows(read)}
-        pairs = [
-            (arrow, "read" if (arrow.via, "read") in reads else None)
-            for arrow in _arrows(narrow)
-            if (arrow.via, arrow.target) not in reads
-        ]
+    definition, narrow, read = found
+    if not isinstance(narrow, PermArrow):
+        return False
+    arms = {arm.via: arm.target for arm in _union_arms(read) if isinstance(arm, PermArrow)}
+    return _parent_holds(schema, definition, narrow, arms.get(narrow.via))
+
+
+def _purpose_holds(schema: Schema, resource_type: str, action: str) -> bool:
+    found = _narrow_and_read(schema, resource_type, action)
+    if found is None:
+        return False
+    definition, narrow, read = found
+    model = model_for_resource_type(resource_type)
+    declared = declared_rebac_definition(model) if model is not None else None
+    stated = {permission.name: permission.expression for permission in declared.permissions} if declared else {}
+    if stated.get(action) != narrow or stated.get("read") != read:
+        return False
+    reads = {(arrow.via, arrow.target) for arrow in _arrows(read)}
     return all(
-        target is not None and (
-            arrow.target == target
-            or target == "read" and _action_holds(schema, _parent_type(definition, arrow.via), arrow.target)
-        )
-        for arrow, target in pairs
+        _parent_holds(schema, definition, arrow, "read" if (arrow.via, "read") in reads else None)
+        for arrow in _arrows(narrow)
+        if (arrow.via, arrow.target) not in reads
+    )
+
+
+def _parent_holds(schema: Schema, definition: Definition, arrow: PermArrow, target: str | None) -> bool:
+    """Whether ``arrow``'s parent action stands in for ``target``, the parent permission ``read`` takes."""
+
+    return target is not None and (
+        arrow.target == target
+        or target == "read" and _purpose_holds(schema, _parent_type(definition, arrow.via), arrow.target)
     )
 
 
