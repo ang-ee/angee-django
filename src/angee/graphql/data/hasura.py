@@ -1382,6 +1382,17 @@ def _resource_filter_projection(
     )
 
 
+def optimize_selection[M: models.Model](queryset: models.QuerySet[M], info: strawberry.Info) -> models.QuerySet[M]:
+    """Load what the selection ``info`` names for a queryset a resolver materializes itself.
+
+    The request's active optimizer extension decides, as it does for root fields;
+    outside one, REBAC's guarded ``optimize`` applies the same hints.
+    """
+
+    active = optimizer.get()
+    return active.optimize(queryset, info) if active is not None else optimize(queryset, info)
+
+
 def group_rows_field(
     node: type,
     resolve: Callable[[GroupFieldBatch, int], Sequence[Sequence[Any]]],
@@ -1589,10 +1600,8 @@ def _first_rows_per_group(
         .first_per_group(*partition.partitions, order_by=ordering, limit=limit)
         .order_by(*ordering)
     )
-    active = optimizer.get()
-    kept = active.optimize(kept, info) if active is not None else optimize(kept, info)
     pages: list[list[Any]] = [[] for _ in range(groups)]
-    for row in kept:
+    for row in optimize_selection(kept, info):
         group = partition.index.get(tuple(_bucket_value(getattr(row, name)) for name in names))
         if group is not None:
             pages[group].append(row)

@@ -33,7 +33,12 @@ from angee.graphql.actions import (
     authorized_permission_target,
 )
 from angee.graphql.capabilities import permission_expression, permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
+from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+    optimize_selection,
+)
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
@@ -945,8 +950,8 @@ class _TimelineRuns:
         """The selection's runs oldest first; the native optimizer loads the selected fields once."""
         if self.rows is None:
             rows = WorkflowRun.objects.with_actor(get_current_user(info)).filter(pk__in=self.run_ids)
-            optimized = run_type_get_queryset(rows.order_by("created_at", "pk"), WorkflowRunType, info)
-            self.rows = {run.pk: run for run in optimized}
+            selected = run_type_get_queryset(rows.order_by("created_at", "pk"), WorkflowRunType, info)
+            self.rows = {run.pk: run for run in optimize_selection(selected, info)}
         return self.rows
 
 
