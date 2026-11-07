@@ -7,7 +7,6 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -25,7 +24,7 @@ from angee.dashboards.models import DashboardConflictError, canonical_dashboard_
 from angee.graphql.actions import session_user
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.ids import PublicID, require_public_id, to_public_id
+from angee.graphql.ids import PublicID, public_id_field, require_public_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
@@ -92,9 +91,7 @@ class DashboardType(TrashedRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["owner_id"])
-    def owner(self) -> strawberry.ID | None:
-        return cast(strawberry.ID | None, to_public_id(get_user_model(), cast(Any, self).owner_id))
+    owner = public_id_field("owner", nullable=True)
 
     @strawberry_django.field(only=["owner_id"])
     def owner_label(self, info: strawberry.Info) -> str | None:

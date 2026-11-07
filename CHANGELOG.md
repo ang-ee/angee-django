@@ -12,10 +12,11 @@ live in code docstrings.
 
 - `public_id_field("relation", nullable=False)` (`angee.graphql.ids`) projects a
   primary-key foreign key as a `PublicID` from the row's stored key, without
-  loading or authorizing the target; schema build refuses any other field, and
+  loading or authorizing the target. `nullable` decides the GraphQL type; schema
+  build refuses any other field and an annotation that disagrees with it.
   `actor_scoped_public_id` stays the owner when target readability must redact
-  the reference. Deferred: the hand-written equivalents in the `knowledge`,
-  `storage_integrate` and `dashboards` schemas move to it.
+  the reference. The `knowledge`, `storage_integrate` and `dashboards` schemas
+  declare it in place of their hand-written resolvers.
 
 ## Unreleased — one page bound, reader batches and loading labels
 

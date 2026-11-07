@@ -39,7 +39,7 @@ definition scopedemo/owned_row {
 @strawberry_django.type(OwnedRow)
 class OwnedRowKeys(AngeeNode):
     container: PublicID | None = public_id_field("container", nullable=True)
-    required_container: PublicID = public_id_field("container")
+    required_container = public_id_field("container")
 
 
 @strawberry.type
@@ -124,14 +124,16 @@ def test_field_gate_on_the_key_redacts_the_projection(gated_key: Any) -> None:
 
 @isolate_apps("tests")
 @pytest.mark.parametrize(
-    ("field_name", "refusal"),
+    ("field_name", "annotation", "nullable", "refusal"),
     [
-        ("by_code", r"tests\.Row\.by_code must target its model's primary key"),
-        ("title", r"tests\.Row\.title must be a forward foreign key"),
+        ("by_code", PublicID | None, True, r"tests\.Row\.by_code must target its model's primary key"),
+        ("title", PublicID | None, True, r"tests\.Row\.title must be a forward foreign key"),
+        ("target", PublicID, True, r"tests\.Row\.target: the 'key' annotation disagrees with .*nullable=True"),
+        ("target", PublicID | None, False, r"tests\.Row\.target: the 'key' annotation disagrees with .*nullable=False"),
     ],
 )
-def test_schema_build_refuses_a_projection_that_is_not_a_primary_key_reference(
-    field_name: str, refusal: str,
+def test_schema_build_refuses_a_misdeclared_projection(
+    field_name: str, annotation: Any, nullable: bool, refusal: str,
 ) -> None:
     class Target(models.Model):
         code = models.CharField(max_length=40, unique=True)
@@ -140,15 +142,16 @@ def test_schema_build_refuses_a_projection_that_is_not_a_primary_key_reference(
             app_label = "tests"
 
     class Row(models.Model):
-        by_code = models.ForeignKey(Target, to_field="code", on_delete=models.CASCADE)
+        target = models.ForeignKey(Target, null=True, on_delete=models.CASCADE, related_name="+")
+        by_code = models.ForeignKey(Target, to_field="code", on_delete=models.CASCADE, related_name="+")
         title = models.CharField(max_length=40)
 
         class Meta:
             app_label = "tests"
 
-    @strawberry_django.type(Row)
-    class RowKey:
-        key: PublicID | None = public_id_field(field_name, nullable=True)
+    RowKey = strawberry_django.type(Row)(type("RowKey", (), {
+        "__annotations__": {"key": annotation}, "key": public_id_field(field_name, nullable=nullable),
+    }))
 
     # graphql-core reports a field-thunk failure as a TypeError caused by the refusal.
     with pytest.raises(TypeError, match=refusal) as caught:

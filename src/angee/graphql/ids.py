@@ -10,6 +10,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from strawberry.extensions import FieldExtension
 from strawberry.types import get_object_definition
+from strawberry.types.base import StrawberryOptional
 from strawberry.types.field import StrawberryField
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.utils.typing import get_django_definition
@@ -53,15 +54,16 @@ def public_id_field(field_name: str, *, nullable: bool = False) -> Any:
     """Project a primary-key foreign key as a public id without loading or authorizing its target.
 
     Declare it where the containing row may disclose the reference whatever the
-    reader may see of the target, for example ``company: PublicID =
-    public_id_field("company")``; ``actor_scoped_public_id`` in
-    ``angee.graphql.relations`` redacts a reference to an unreadable target
-    instead. The resolver reads the loaded row's stored key, so a ``read__<field>``
-    gate that redacted the key reads as unset: declare a field-gated or optional
-    key ``nullable=True``. A required projection of an unset key is an error.
-    Schema build refuses a field that is not a forward foreign key to its
-    target's primary key: only a primary-key value encodes as the target's
-    public id.
+    reader may see of the target, for example ``company = public_id_field("company")``;
+    ``actor_scoped_public_id`` in ``angee.graphql.relations`` redacts a reference
+    to an unreadable target instead. ``nullable`` decides the GraphQL type; a
+    class annotation may restate it but must agree. The resolver reads the loaded
+    row's stored key, so a ``read__<field>`` gate that redacted the key reads as
+    unset: declare a field-gated or optional key ``nullable=True``. A required
+    projection of an unset key is an error. Schema build refuses two
+    misdeclarations: a field that is not a forward foreign key to its target's
+    primary key (only a primary-key value encodes as the target's public id), and
+    an annotation that disagrees with ``nullable``.
     """
 
     def resolve(root: models.Model) -> PublicID | None:
@@ -70,14 +72,17 @@ def public_id_field(field_name: str, *, nullable: bool = False) -> Any:
         return to_public_id(field.related_model, value) if nullable else require_public_id(field.related_model, value)
 
     resolve.__annotations__["return"] = PublicID | None if nullable else PublicID
-    return strawberry_django.field(resolver=resolve, only=[field_name], extensions=[_PrimaryKeyReference(field_name)])
+    return strawberry_django.field(
+        resolver=resolve, only=[field_name], extensions=[_PrimaryKeyReference(field_name, nullable)]
+    )
 
 
 class _PrimaryKeyReference(FieldExtension):
     """Refuse at schema build a ``public_id_field`` over anything but a primary-key foreign key."""
 
-    def __init__(self, field_name: str) -> None:
+    def __init__(self, field_name: str, nullable: bool) -> None:
         self.field_name = field_name
+        self.nullable = nullable
 
     def apply(self, field: StrawberryField) -> None:
         definition = cast(StrawberryDjangoField, field).origin_django_type
@@ -91,6 +96,11 @@ class _PrimaryKeyReference(FieldExtension):
         if not relation.target_field.primary_key:
             raise ImproperlyConfigured(
                 f"{label} must target its model's primary key to project a public id without loading it."
+            )
+        if isinstance(field.type, StrawberryOptional) is not self.nullable:
+            raise ImproperlyConfigured(
+                f"{label}: the {field.python_name!r} annotation disagrees with "
+                f"public_id_field(nullable={self.nullable})."
             )
 
 
