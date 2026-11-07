@@ -188,7 +188,6 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
         "display_name",
         "team",
         "intake_queue",
-        "intake_trigger",
         "intake_field_map",
         "intake_requester_domains",
     )

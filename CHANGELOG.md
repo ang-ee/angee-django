@@ -42,6 +42,20 @@ own native migration history. No framework addon or consumer reads these facts.
   `angee.messaging` removes the two indexes and three columns (`RemoveIndex` and
   `RemoveField` on `messaging.threadnotification`); the drop guard admits the
   autodetected removal while every row holds `ready` and empty failure text.
+- **Intake channel triggers.** Channel intake offered `reaction`, `mention`
+  and `command` beside `all_messages`; none of the three ever captured a
+  message. They go with `ChannelIntake.IntakeTrigger` and the `intake_trigger`
+  field, since its one remaining value carries no fact: a channel with an
+  `intake_queue` captures every ingested message. GraphQL drops
+  `ChannelType.intake_trigger` with its update input and its filter, sort and
+  group axes, and the demo channel row drops the key. A project composing
+  `angee.intake` first clears `intake_queue` on channels whose stored trigger
+  is `reaction`, `mention` or `command`, so they keep capturing nothing, and
+  flushes deferred foreign-key checks (`connection.check_constraints()`); then,
+  in the same `messaging` migration (the field folds into the channel table), it
+  removes the column with `RemoveField(model_name="channel", name="intake_trigger")`.
+  The drop guard refuses the autodetected removal while any row holds a retired
+  value.
 
 ## Unreleased — jj workspace slots in the templates
 
