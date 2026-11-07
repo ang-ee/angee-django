@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -281,14 +281,8 @@ class InboxNavigator(MessageInbox):
         header = self.groups(axis).page(page=page, size=size)
         if leaf_size < 1:
             return header
-        InboxPage.window(1, leaf_size)
-        return replace(
-            header,
-            rows=[
-                replace(row, rows=self.page(scope=InboxGroupScope(axis=axis, value=row.value), size=leaf_size).rows)
-                for row in header.rows
-            ],
-        )
+        carried, _ = header.carry(axis, leaf_size, lambda scope, size: self.page(scope=scope, size=size))
+        return carried
 
     def page(
         self, *, scope: InboxGroupScope | None = None, parent: str | None = None, page: int = 1, size: int = 25

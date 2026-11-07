@@ -192,15 +192,11 @@ class InboxResults:
         header = groups.page(page=page, size=size)
         if leaf_size < 1 or not header.rows:
             return replace(header, messages=self.inbox.messages.none())
-        InboxPage.window(1, leaf_size)
         if self.is_content:
-            pages = [
-                self.page(scope=InboxGroupScope(axis=axis, value=row.value), size=leaf_size) for row in header.rows
-            ]
+            carried, pages = header.carry(axis, leaf_size, lambda scope, size: self.page(scope=scope, size=size))
             return replace(
-                header,
-                rows=[replace(row, rows=carried.rows) for row, carried in zip(header.rows, pages, strict=True)],
-                messages=self.inbox.page_messages([row.part.message_id for carried in pages for row in carried.rows]),
+                carried,
+                messages=self.inbox.page_messages([row.part.message_id for leaf in pages for row in leaf.rows]),
             )
         keys = [row.key for row in header.rows]
         members = groups.bucket_rows(keys)
@@ -212,7 +208,9 @@ class InboxResults:
                 _order_at__lt=datetime.combine(days[-1] + timedelta(days=1), time.min, self.zone),
             )
         order = F("_order_at").asc() if self.options.oldest else F("_order_at").desc()
-        kept = members.first_per_group("_bucket", order_by=[order, F("pk").asc()], limit=leaf_size).order_by(
+        kept = members.first_per_group(
+            "_bucket", order_by=[order, F("pk").asc()], limit=InboxPage.valid_size(leaf_size),
+        ).order_by(
             "_order_at" if self.options.oldest else "-_order_at", "pk"
         )
         carried_rows: dict[Any, list[InboxResultRow]] = defaultdict(list)
