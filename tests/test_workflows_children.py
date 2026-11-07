@@ -269,6 +269,8 @@ def test_observing_an_already_failed_child_keeps_its_open_siblings(child_graph):
     fresh = [WorkflowRun.system_queryset().get(pk=run.pk) for run in (parent, child)]
     assert [run.can_cancel(actor) for run in seeded] == [run.can_cancel(actor) for run in fresh]
     assert seeded[0].can_cancel(actor)
+    # A seed serves only the reader it was read for; another actor asks the run's policy.
+    assert not seeded[0].can_cancel(create_user("cancel-seed-outsider"))
     result = WorkflowRun.objects.cancel(parent, actor=actor)
     pending.refresh_from_db()
     child.refresh_from_db()

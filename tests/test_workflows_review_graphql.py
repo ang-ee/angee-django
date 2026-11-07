@@ -13,6 +13,7 @@ from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
 from tests.conftest import SchemaAddon, create_user, vault_for
+from tests.test_workflows_run_graph import graph_nodes
 
 
 @pytest.fixture
@@ -140,9 +141,8 @@ def test_record_timeline_reads_the_asking_run_and_its_question(schema, linked_de
     link = step.records.model.system_queryset().get(step_run=step)
     query = """query($records: [TimelineRecordInput!]!) {
       record_timeline(records: $records) { open_decision_count records {
-        record_model record_id decisions { id } runs { id graph { nodes {
-          key plan step_run { id hold decision { id is_open } records { operation record_model record_id } }
-        } } }
+        record_model record_id decisions { id } runs { id graph { nodes { key plan step_run_id } }
+          graph_steps { id hold decision { id is_open } records { operation record_model record_id } } }
       } }
     }"""
     inputs = {"records": [{"model": link.record_model_label, "id": link.record_public_id}]}
@@ -150,7 +150,7 @@ def test_record_timeline_reads_the_asking_run_and_its_question(schema, linked_de
     entry = data["record_timeline"]["records"][0]
     assert data["record_timeline"]["open_decision_count"] == 1
     assert entry["runs"][0]["id"] == run.sqid
-    node = entry["runs"][0]["graph"]["nodes"][0]
+    node = graph_nodes(entry["runs"][0])[0]
     assert node["plan"] == "current"
     assert node["step_run"]["hold"] == "decision"
     assert node["step_run"]["decision"] == {"id": decision.sqid, "is_open": True}

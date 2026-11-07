@@ -3,7 +3,9 @@ import type { TimelineData, TimelineSelection } from "./RecordTimeline";
 
 export type TimelineState = "decision" | "clean" | "error" | "run" | "stopped" | "interrupted" | "set" | "empty" | "unknown";
 type Run = TimelineData[number]["runs"][number];
-type Node = Run["graph"]["nodes"][number];
+type Step = Run["graph_steps"][number];
+/** A topology node with its step row joined, as the fixture builds and adjusts it before answering the read. */
+type Node = NonNullable<Run["graph"]>["nodes"][number] & { step_run: Step | null };
 const at = "2026-10-03T10:00:00Z";
 
 /** Neutral fixtures over the generated read, including long history and branches. */
@@ -15,6 +17,7 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
   } });
   const node = (key: string, label: string, rank: number, plan: string): Node => ({
     key, label, rank, plan, body_key: null, step_label: label, outcomes: [], item_counts: [], item_attempts: 0,
+    step_run_id: plan === "certain" || plan === "optional" ? null : `wsr_${key}`,
     step_run: plan === "certain" || plan === "optional" ? null : {
       id: `wsr_${key}`, status: plan === "done" ? "SUCCEEDED" : "WAITING", hold: plan === "done" ? null : "decision",
       outcome: plan === "done" ? "done" : "", outcome_label: plan === "done" ? "Done" : "", failure_reason: null,
@@ -33,7 +36,7 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
     version: { workflow: { display_name: "Record review" } },
     created_at: at, finished_at: null, stopped_at: null, output: {}, can_cancel: true, run_as: { display_name: "River" },
     subject_model: null, subject_id: null,
-    parent_step: null, trigger_event: null, graph: { nodes, edges: [] },
+    parent_step: null, trigger_event: null, graph: { nodes: [], edges: [] }, graph_steps: [],
   };
   if (state === "clean") {
     run.status = "SUCCEEDED"; run.can_cancel = false; run.finished_at = at;
@@ -55,6 +58,9 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
   }
   // A status the client does not know: the generated enums cannot name it, so the fixture widens the type.
   if (state === "unknown") { (run as { status: string }).status = "FUTURE_STATE"; (review as { status: string }).status = "FUTURE_STATE"; }
+  // The read names each node's step by id and lists the step rows once.
+  run.graph = { nodes: nodes.map(({ step_run: _step, ...rest }) => rest), edges: [] };
+  run.graph_steps = nodes.flatMap(({ step_run }) => step_run ? [step_run] : []);
   const entry: TimelineData[number] = {
     record_model: "notes.Note", record_id: "nte_7",
     decisions: decision.is_open && state !== "error" && state !== "run" ? [decision] : [], runs: [run],

@@ -1384,14 +1384,31 @@ class Definition(BaseModel):
     def _consumer_schema(
         self, key: str, path: tuple[str | int, ...], opaque: list[tuple[str | int, ...]] | None,
     ) -> dict[str, Any] | None:
-        """One input consumer's contract; a reader sets aside one lost with an unregistered step."""
+        """One input consumer's contract; a reader sets aside one an unregistered step owns.
+
+        Any other configuration failure still raises, so a broken registered
+        contract is never mistaken for a removed step.
+        """
         try:
             return schema_at(self.node_input_schema(key), []) or {}
         except ImproperlyConfigured:
-            if opaque is None or not self.unregistered_steps:
+            if opaque is None or not self._reads_unregistered(key):
                 raise
             opaque.append(path)
             return None
+
+    def _reads_unregistered(self, key: str) -> bool:
+        """Whether an unregistered step owns part of ``key``'s input contract.
+
+        A node's contract reads its own step. A map's also reads its body and the
+        upstream producer whose output it maps, so its control ancestors and their
+        bodies count too.
+        """
+        reads = {key}
+        if key in self.nodes and self.nodes[key].body is not None:
+            upstream = self.ancestors(key)
+            reads |= {map_body_key(key), *upstream, *(map_body_key(source) for source in upstream)}
+        return not self.unregistered_steps.isdisjoint(reads)
 
     def _input_bindings(
         self, opaque: list[tuple[str | int, ...]] | None = None,

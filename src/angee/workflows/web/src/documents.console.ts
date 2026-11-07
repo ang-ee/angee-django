@@ -36,24 +36,24 @@ export const RecordTimelineDocument = graphql(`
           edges { source outcome target taken }
           nodes {
             key label step_label rank body_key plan outcomes { outcome label }
-            item_counts { status count } item_attempts
-            step_run {
-              id status hold outcome outcome_label failure_reason wait_reason notes { tone message }
-              attempt page_index map_total map_settled created_at updated_at
-              can_retry requires_duplicate_acknowledgement
-              awaited_run { id display_name status }
-              child_runs { id display_name status }
-              records { id label operation record_model record_id }
-              decision { ...DecisionCardFields }
-              map_steps {
-                id node_label map_index status hold outcome_label failure_reason wait_reason notes { tone message }
-                can_retry requires_duplicate_acknowledgement updated_at
-                awaited_run { id display_name status }
-                child_runs { id display_name status }
-                records { id label operation record_model record_id }
-                decision { ...DecisionCardFields }
-              }
-            }
+            item_counts { status count } item_attempts step_run_id
+          }
+        }
+        graph_steps {
+          id status hold outcome outcome_label failure_reason wait_reason notes { tone message }
+          attempt page_index map_total map_settled created_at updated_at
+          can_retry requires_duplicate_acknowledgement
+          awaited_run { id display_name status }
+          child_runs { id display_name status }
+          records { id label operation record_model record_id }
+          decision { ...DecisionCardFields }
+          map_steps {
+            id node_label map_index status hold outcome_label failure_reason wait_reason notes { tone message }
+            can_retry requires_duplicate_acknowledgement updated_at
+            awaited_run { id display_name status }
+            child_runs { id display_name status }
+            records { id label operation record_model record_id }
+            decision { ...DecisionCardFields }
           }
         }
       }
@@ -86,14 +86,14 @@ export const WorkflowRunGraphDocument = graphql(`
   query WorkflowRunGraph($id: String!) {
     workflowrun_by_pk(id: $id) {
       id
+      graph_steps {
+        id status waiting_kind wait_reason outcome outcome_label failure_reason
+        attempt page_index map_total map_settled created_at updated_at deadline_at wake_at
+      }
       graph {
         nodes {
           key label step_label rank body_key outcomes { outcome label }
-          item_counts { status count } item_attempts
-          step_run {
-            id status waiting_kind wait_reason outcome outcome_label failure_reason
-            attempt page_index map_total map_settled created_at updated_at deadline_at wake_at
-          }
+          item_counts { status count } item_attempts step_run_id
         }
         edges { source outcome target taken }
       }

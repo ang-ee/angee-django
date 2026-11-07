@@ -242,6 +242,27 @@ def test_run_subject_label_follows_the_record_reference_proof(schema, callers):
     }]}
 
 
+def test_run_subject_labels_cost_the_same_for_one_or_twenty_five_rows(schema, callers):
+    """A run list reads its subjects' labels once per subject type, never once per row."""
+
+    admin, owner, _ = callers
+    workflow = load_workflow(document("entry"), key="subject_labels", actor=admin, subject_model="knowledge.vault")
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    subjects = [vault_for(owner, name=f"Labelled subject {index}") for index in range(25)]
+    for subject in subjects:
+        start_run(workflow, actor=owner, subject=subject)
+    labels = {record_display_label(subject) for subject in subjects}
+    query = "query($limit: Int!) { workflowrun(limit: $limit) { subject_label } }"
+    counts = []
+    for limit in (1, 25):
+        with CaptureQueriesContext(connection) as queries:
+            rows = result_data(execute_schema(schema, query, {"limit": limit}, user=owner))["workflowrun"]
+        counts.append(len(queries))
+        assert len(rows) == limit and {row["subject_label"] for row in rows} <= labels
+    assert {row["subject_label"] for row in rows} == labels
+    assert counts[0] == counts[1], counts
+
+
 def test_run_input_reads_declared_mti_sources_under_their_own_permission(schema, callers, register_step):
     """Canonical retained edges neither hide a readable child nor authorize it by its parent."""
     from tests.mtidemo.models import MtiChild, MtiParent
@@ -394,14 +415,14 @@ def test_duplicate_retry_action_records_requesting_operator(schema, callers, reg
             "step_runs": [{"can_retry": True, "requires_duplicate_acknowledgement": True}],
         }
     ]
-    graph = result_data(execute_schema(
+    steps = result_data(execute_schema(
         schema,
         """query($id: String!) { workflowrun_by_pk(id: $id) {
-          graph { nodes { step_run { can_retry requires_duplicate_acknowledgement } } }
+          graph_steps { can_retry requires_duplicate_acknowledgement }
         } }""",
         {"id": run.sqid}, user=operator,
-    ))["workflowrun_by_pk"]["graph"]
-    assert graph["nodes"][0]["step_run"] == {"can_retry": True, "requires_duplicate_acknowledgement": True}
+    ))["workflowrun_by_pk"]["graph_steps"]
+    assert steps == [{"can_retry": True, "requires_duplicate_acknowledgement": True}]
     assert not result_data(action(schema, "retry_step", step, operator))["retry_step"]["ok"]
     acknowledged = result_data(action(schema, "retry_step_accepting_duplicate", step, operator))
     assert acknowledged["retry_step_accepting_duplicate"]["ok"]
