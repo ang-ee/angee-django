@@ -208,19 +208,20 @@ ROWS = {
 # (actor, document): rows, statement ceiling, SQL ceiling in KB. Measured on the SQLite
 # composed host; a platform admin reads both actors' messages and projects.
 BUDGETS = {
-    ("admin", "inbox"): (18, 15, 36),
-    ("admin", "transcript"): (3, 35, 85),
-    ("admin", "person"): (2, 29, 50),
-    ("admin", "projects"): (6, 15, 24),
+    # REBAC 0.31 compiles one actor-independent statement per scope, where 0.30 decided each
+    # actor's constant facts first and pruned the policy: statements fall for both actors, and
+    # an admin's read carries the member's full policy (0.31.2 CHANGELOG, known limit).
+    ("admin", "inbox"): (18, 11, 794),  # 0.31: 15 -> 11 statements, 36 -> 794 KB
+    ("admin", "transcript"): (3, 29, 2639),  # 0.31: 35 -> 29 statements, 85 -> 2639 KB
+    ("admin", "person"): (2, 18, 807),  # 0.31: 29 -> 18 statements, 50 -> 807 KB
+    ("admin", "projects"): (6, 8, 250),  # 0.31: 15 -> 8 statements, 24 -> 250 KB
     ("admin", "identity"): (1, 1, 2),
-    ("member", "inbox"): (9, 123, 898),
-    # The feed reads its messages under ``read_inbox`` and the reply-parent fields read
-    # ``read`` through the relation guard, so REBAC 0.30 decides the ``read`` graph's
-    # subject sets a second time: 21 statements more than one ``read`` graph, for 174 KB
-    # less SQL. The ceiling accepts that trade; sharing decided sets across actions is upstream.
-    ("member", "transcript"): (3, 250, 2505),
-    ("member", "person"): (2, 174, 1036),
-    ("member", "projects"): (3, 89, 538),
+    ("member", "inbox"): (9, 11, 794),  # 0.31: 123 -> 11 statements, 898 -> 794 KB; id sets are CTEs
+    # The feed reads its messages under ``read_inbox`` and the reply-parent fields read ``read``
+    # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
+    ("member", "transcript"): (3, 29, 2639),  # 0.31: 250 -> 29 statements, 2505 -> 2639 KB
+    ("member", "person"): (2, 18, 807),  # 0.31: 174 -> 18 statements, 1036 -> 807 KB
+    ("member", "projects"): (3, 8, 249),  # 0.31: 89 -> 8 statements, 538 -> 249 KB
     ("member", "identity"): (1, 1, 2),
 }
 

@@ -678,7 +678,9 @@ def test_handle_party_batches_one_related_model_query(
         if query["sql"].lstrip().upper().startswith("SELECT")
         and f'FROM "{messaging_models.Party._meta.db_table}"' in query["sql"]
     ]
-    assert len(party_selects) == 1, party_selects
+    # 0.31 (1 -> 2): one read of the parties, and REBAC's one batched decision of their gated fields
+    # over the fetched ids.
+    assert len(party_selects) == 2, party_selects
 
 
 def test_handle_party_regates_sudo_loaded_parent(
