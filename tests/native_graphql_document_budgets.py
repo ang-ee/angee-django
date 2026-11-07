@@ -208,13 +208,13 @@ ROWS = {
 # (actor, document): rows, statement ceiling, SQL ceiling in KB. Measured on the SQLite
 # composed host; a platform admin reads both actors' messages and projects.
 BUDGETS = {
-    ("admin", "inbox"): (18, 125, 267),
+    ("admin", "inbox"): (18, 15, 36),
     ("admin", "transcript"): (3, 35, 85),
     ("admin", "person"): (2, 29, 50),
     ("admin", "projects"): (6, 15, 24),
     ("admin", "identity"): (1, 1, 2),
-    ("member", "inbox"): (9, 221, 2341),
-    ("member", "transcript"): (3, 229, 2684),
+    ("member", "inbox"): (9, 123, 900),
+    ("member", "transcript"): (3, 229, 2514),
     ("member", "person"): (2, 174, 1037),
     ("member", "projects"): (3, 89, 539),
     ("member", "identity"): (1, 1, 2),
