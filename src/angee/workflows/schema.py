@@ -39,6 +39,7 @@ from angee.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
+    record_reference_targets,
     with_record_reference_access,
 )
 from angee.graphql.subscriptions import changes
@@ -236,6 +237,7 @@ class WorkflowRunType(RecordReferenceNode):
     )
     subject_label: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_label, only=["subject_content_type_id", "subject_object_id"],
+        prefetch_related=[record_reference_targets],
     )
 
 

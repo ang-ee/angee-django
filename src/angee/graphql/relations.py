@@ -7,10 +7,10 @@ from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
-from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django.db.models import prefetch_related_objects
 from django.db.models.expressions import Combinable
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast
@@ -52,6 +52,7 @@ class RecordPointerType:
         )
 
 _UNCACHED = object()
+_REFERENCE_TARGET = "_angee_reference_target"
 
 
 class _ActorScopedSubquery(models.Expression):
@@ -140,24 +141,32 @@ class RecordReferenceNode(AngeeNode):
         row = cast(Any, self)
         return optional_public_id(row.record_public_id or None) if _record_readable(row) else None
 
-    def reference_label(self) -> str | None:
-        """Return the readable target's own label, read through its actor-scoped manager.
+    def reference_label(self, info: Info) -> str | None:
+        """Return the readable target's own label, read under the reader's scope.
 
         The batched annotation gates the label exactly as it gates the identity
-        fields, so a hidden target is never loaded. A readable row reads its
-        target once when the label is selected.
+        fields, so a hidden target is never loaded. Declare
+        :func:`record_reference_targets` as the field's prefetch hint: a list then
+        reads each referenced type's targets once, and a row loaded another way
+        reads its own target through the same prefetch.
         """
 
         row = cast(Any, self)
-        actor = current_actor()
-        if actor is None or not _record_readable(row):
+        if current_actor() is None or not _record_readable(row):
             return None
-        reference: RecordRef = row.record_ref
-        target = (
-            require_rebac_queryset(apps.get_model(reference.model_label))
-            .with_actor(actor).with_action("read").filter(pk=reference.object_id).first()
-        )
+        if not hasattr(row, _REFERENCE_TARGET):
+            prefetch_related_objects([row], record_reference_targets(info))
+        target = getattr(row, _REFERENCE_TARGET)
         return record_display_label(target) if target is not None else None
+
+
+def record_reference_targets(info: Info) -> models.Prefetch:
+    """Prefetch a reference list's readable targets, one read per referenced type, for its labels."""
+
+    field = cast(StrawberryDjangoField, info._field)
+    assert field.origin_django_type is not None
+    model = cast(type[RecordRefMixin], field.origin_django_type.model)
+    return model.record_targets_prefetch(current_actor(), to_attr=_REFERENCE_TARGET)
 
 
 def _record_readable(row: Any) -> bool:
