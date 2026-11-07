@@ -1,11 +1,9 @@
 {
   "name": "@angee-example/theme-web",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
-  "sideEffects": [
-    "**/*.css"
-  ],
+  "sideEffects": ["**/*.css"],
   "exports": {
     ".": "./src/index.tsx",
     "./themes": "./src/themes.mjs"

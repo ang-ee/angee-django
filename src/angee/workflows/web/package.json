@@ -1,17 +1,12 @@
 {
   "name": "@angee/workflows",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "license": "LGPL-3.0-or-later",
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
-  },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
   "dependencies": {
     "@angee/app": "workspace:*",
     "@angee/decisions": "workspace:*",
@@ -22,11 +17,7 @@
     "lucide-react": "^1.21.0",
     "valibot": "^1.4.2"
   },
-  "peerDependencies": {
-    "@tanstack/react-router": "^1",
-    "react": "^19",
-    "react-dom": "^19"
-  },
+  "peerDependencies": { "@tanstack/react-router": "^1", "react": "^19", "react-dom": "^19" },
   "devDependencies": {
     "@angee/storybook": "workspace:*",
     "@refinedev/core": "^5.0.12",

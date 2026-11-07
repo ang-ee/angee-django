@@ -1,16 +1,12 @@
 {
   "name": "@angee/knowledge-integrate-notion",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "license": "LGPL-3.0-or-later",
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "exports": {
-    ".": "./src/index.tsx"
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit"
-  },
+  "exports": { ".": "./src/index.tsx" },
+  "scripts": { "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@angee/app": "workspace:*",
     "@angee/integrate": "workspace:*",

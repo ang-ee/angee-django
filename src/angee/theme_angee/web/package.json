@@ -1,17 +1,12 @@
 {
   "name": "@angee/theme-angee",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
-  "sideEffects": [
-    "**/*.css"
-  ],
+  "sideEffects": ["**/*.css"],
   "exports": {
     ".": "./src/index.ts",
-    "./themes": {
-      "types": "./src/themes.d.mts",
-      "import": "./src/themes.mjs"
-    }
+    "./themes": { "types": "./src/themes.d.mts", "import": "./src/themes.mjs" }
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
