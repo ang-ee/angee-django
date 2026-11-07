@@ -30,6 +30,7 @@ const sdk = vi.hoisted(() => {
     invalidations: [] as unknown[],
     refuseRestoreId: null as string | null,
     blockedDeleteId: null as string | null,
+    failedUpdateId: null as string | null,
   };
 });
 
@@ -97,10 +98,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   return {
     ...actual,
     useCreate: mutation("create", () => ({ id: "row_1" })),
-    useUpdate: mutation("update", (input) => ({
-      id: (input as { id?: string }).id,
-      ...(input as { values?: Record<string, unknown> }).values,
-    })),
+    useUpdate: mutation("update", (input) => {
+      if ((input as { id?: string }).id === sdk.failedUpdateId) throw new Error("Move refused");
+      return { id: (input as { id?: string }).id, ...(input as { values?: Record<string, unknown> }).values };
+    }),
     useCustomMutation: mutation("deletePreview", (input) => {
       const preview = (input as { values?: { id?: string } }).values?.id === sdk.blockedDeleteId
         ? { ...deletePreview, has_blockers: true, total_deleted_count: 0 }
@@ -130,6 +131,7 @@ describe("storage file/folder actions", () => {
     sdk.invalidations.length = 0;
     sdk.refuseRestoreId = null;
     sdk.blockedDeleteId = null;
+    sdk.failedUpdateId = null;
   });
 
   test("file actions use refine mutations and confirm soft deletes", async () => {
@@ -149,8 +151,8 @@ describe("storage file/folder actions", () => {
 
     await act(async () => {
       await result.current.trash("fil_1");
-      await result.current.move("fil_1", "fld_1");
-      await result.current.move("fil_1", null, { errorNotification: false });
+      await expect(result.current.move("fil_1", "fld_1")).resolves.toBe(true);
+      await result.current.move("fil_1", null);
       await result.current.trashMany(["fil_2", "fil_3"]);
       await result.current.restore("fil_1");
     });
@@ -160,8 +162,9 @@ describe("storage file/folder actions", () => {
       expect.objectContaining({ values: { id: "fil_2", confirm: true } }),
       expect.objectContaining({ values: { id: "fil_3", confirm: true } }),
     ]);
+    // The verbs own the error surface: Refine's notification is off on every call.
     expect(updateFile?.calls).toEqual([
-      { id: "fil_1", values: { folder: "fld_1" } },
+      { id: "fil_1", values: { folder: "fld_1" }, errorNotification: false },
       { id: "fil_1", values: { folder: null }, errorNotification: false },
     ]);
     expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }]);
@@ -183,7 +186,7 @@ describe("storage file/folder actions", () => {
     sdk.blockedDeleteId = "fil_2";
     const { result } = renderHook(() => useFileActions(), { wrapper: MetadataWrapper });
     await act(async () => {
-      await expect(result.current.trashMany(["fil_1", "fil_2", "fil_3"], { errorNotification: false })).resolves.toBe(false);
+      await expect(result.current.trashMany(["fil_1", "fil_2", "fil_3"])).resolves.toBe(false);
     });
     expect(sdk.refineMutations[0]?.calls).toHaveLength(2);
     expect(sdk.refineMutations[0]?.calls).toEqual([
@@ -191,6 +194,16 @@ describe("storage file/folder actions", () => {
       expect.objectContaining({ values: { id: "fil_2", confirm: true }, errorNotification: false }),
     ]);
     expect(sdk.invalidations).toEqual([FILE_INVALIDATION]);
+  });
+
+  test("a failed move settles once in the verb and resolves false", async () => {
+    sdk.failedUpdateId = "fil_9";
+    const onChanged = vi.fn();
+    const { result } = renderHook(() => useFileActions({ onChanged }), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.move("fil_9", "fld_1")).resolves.toBe(false);
+    });
+    expect(onChanged).not.toHaveBeenCalled();
   });
 
   test("a blocked folder deletion preserves the folder and does not refresh its files", async () => {

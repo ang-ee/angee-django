@@ -5,11 +5,13 @@ import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
   refineResourceName, } from "@angee/metadata";
-import { useBusyRun, useDeleteWithPreview } from "@angee/ui";
+import { useDeleteWithPreview } from "@angee/ui";
 import {
   useModelMetadata,
   useResourceInvalidates,
 } from "@angee/metadata";
+
+import { useStorageActionRun } from "./use-action-run";
 
 export interface FolderActions {
   busy: boolean;
@@ -21,14 +23,15 @@ export interface FolderActions {
   }) => Promise<void>;
   /** Rename a folder. */
   rename: (id: string, name: string) => Promise<void>;
-  /** Delete a folder, its files falling back to the drive root; resolves whether it was deleted. */
-  remove: (id: string, options?: Parameters<ReturnType<typeof useDeleteWithPreview>["remove"]>[1]) => Promise<boolean>;
+  /** Delete a folder, its files falling back to the drive root; resolves whether it was deleted, settling failures once. */
+  remove: (id: string) => Promise<boolean>;
 }
 
 /**
  * Folder write verbs over the Hasura resource mutations; folder creation is
- * backed by the storage manager factory server-side. `onChanged` fires after
- * each so the navigator can refetch its tree.
+ * backed by the storage manager factory server-side. `remove` settles its
+ * failures through `useStorageActionRun`, the storage verbs' one error surface.
+ * `onChanged` fires after each so the navigator can refetch its tree.
  */
 export function useFolderActions(
   options: { onChanged?: () => void } = {},
@@ -54,7 +57,7 @@ export function useFolderActions(
   });
   const deleteWithPreview = useDeleteWithPreview(resource);
   const invalidate = useInvalidate();
-  const { busy, run } = useBusyRun(onChanged);
+  const { busy, run, settle } = useStorageActionRun(onChanged);
   const invalidateFiles = async () => {
     if (!fileResource) {
       throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
@@ -75,10 +78,10 @@ export function useFolderActions(
         await updateFolder.mutateAsync({ id, values: { name } });
         await invalidateFiles();
       }),
-    remove: (id, options) =>
-      run(async () => {
+    remove: (id) =>
+      settle(async () => {
         requireFolderResource(resource);
-        if (!(await deleteWithPreview.remove(id, options))) return false;
+        if (!(await deleteWithPreview.remove(id, { errorNotification: false }))) return false;
         await invalidateFiles();
         return true;
       }),

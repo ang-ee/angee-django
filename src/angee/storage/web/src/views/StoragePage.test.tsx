@@ -54,8 +54,8 @@ const routerMocks = vi.hoisted(() => ({
 
 const sdkMocks = vi.hoisted(() => ({
   confirmResult: true,
-  trash: vi.fn(async (_id: string, _options?: { errorNotification?: false }) => true),
-  trashMany: vi.fn(async (_ids: Iterable<string>, _options?: { errorNotification?: false }) => true),
+  trash: vi.fn(async (_id: string) => true),
+  trashMany: vi.fn(async (_ids: Iterable<string>) => true),
   restoreMany: vi.fn(async (_ids: Iterable<string>) => true),
   clearSelection: vi.fn(),
   folderDrives: [] as string[],
@@ -193,11 +193,11 @@ vi.mock("@angee/ui/views/RelationPicker", () => ({
 
 vi.mock("../data/use-file-actions", () => ({
   useFileActions: () => ({
-    busy: false, move: vi.fn(), restore: vi.fn(async () => true), restoreMany: sdkMocks.restoreMany, trash: sdkMocks.trash, trashMany: sdkMocks.trashMany, }), }));
+    busy: false, move: vi.fn(async () => true), restore: vi.fn(async () => true), restoreMany: sdkMocks.restoreMany, trash: sdkMocks.trash, trashMany: sdkMocks.trashMany, }), }));
 
 vi.mock("../data/use-folder-actions", () => ({
   useFolderActions: () => ({
-    busy: false, create: vi.fn(), remove: vi.fn(async () => undefined), rename: vi.fn(), }), }));
+    busy: false, create: vi.fn(), remove: vi.fn(async () => true), rename: vi.fn(), }), }));
 
 vi.mock("../data/use-upload", () => ({
   useStorageUpload: () => ({
@@ -395,13 +395,13 @@ afterEach(() => {
 });
 
 describe("StoragePage explorer wiring", () => {
-  test.each(["throw", "blocked", "cancel", "success"] as const)("file preview settles %s without closing a retained file", async (outcome) => {
+  // The file verbs settle their own failures (data/actions.test.tsx); the views act on the resolved boolean.
+  test.each(["blocked", "cancel", "success"] as const)("file preview settles %s without closing a retained file", async (outcome) => {
     const close = vi.fn();
-    if (outcome === "throw") sdkMocks.trash.mockRejectedValue(new Error("Deletion refused"));
-    else sdkMocks.trash.mockResolvedValue(outcome === "success");
+    sdkMocks.trash.mockResolvedValue(outcome === "success");
     sdkMocks.confirmResult = outcome !== "cancel";
     render(pageTree(<FilePreviewFrame id="file-a" fileNavigation={null} closeDetail={close} fileActions={{
-      busy: false, trash: sdkMocks.trash, restore: async () => true, move: async () => undefined,
+      busy: false, trash: sdkMocks.trash, restore: async () => true, move: async () => true,
       trashMany: sdkMocks.trashMany, restoreMany: sdkMocks.restoreMany,
     }} />));
     await waitFor(() => expect(screen.getByTestId("preview-pane").textContent).toBe("alpha.txt"));
@@ -412,24 +412,21 @@ describe("StoragePage explorer wiring", () => {
       await act(async () => { await Promise.resolve(); });
       expect(sdkMocks.trash).not.toHaveBeenCalled();
     } else {
-      await waitFor(() => expect(sdkMocks.trash).toHaveBeenCalledWith("file-a", { errorNotification: false }));
+      await waitFor(() => expect(sdkMocks.trash).toHaveBeenCalledWith("file-a"));
     }
-    if (outcome === "throw") await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Deletion refused"));
     if (outcome === "success") await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
     else expect(close).not.toHaveBeenCalled();
   });
 
-  test.each(["throw", "blocked", "success"] as const)("bulk trash settles its %s outcome without clearing failed selection", async (outcome) => {
-    if (outcome === "throw") sdkMocks.trashMany.mockRejectedValue(new Error("Deletion refused"));
-    else sdkMocks.trashMany.mockResolvedValue(outcome === "success");
+  test.each(["blocked", "success"] as const)("bulk trash settles its %s outcome without clearing failed selection", async (outcome) => {
+    sdkMocks.trashMany.mockResolvedValue(outcome === "success");
     render(pageTree());
     await waitFor(() => expect(fileListAttribute("data-row-ids")).toContain("file-a"));
     const trashButton = within(screen.getByTestId("file-list")).getByRole("button", { name: "Trash" }) as HTMLButtonElement;
     expect(trashButton.disabled).toBe(false);
     fireEvent.click(trashButton);
     await waitFor(() => expect(sdkMocks.trashMany).toHaveBeenCalledTimes(1));
-    expect(sdkMocks.trashMany).toHaveBeenCalledWith(expect.any(Set), { errorNotification: false });
-    if (outcome === "throw") await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Deletion refused"));
+    expect(sdkMocks.trashMany).toHaveBeenCalledWith(expect.any(Set));
     if (outcome === "success") await waitFor(() => expect(sdkMocks.clearSelection).toHaveBeenCalledTimes(1));
     else expect(sdkMocks.clearSelection).not.toHaveBeenCalled();
   });
