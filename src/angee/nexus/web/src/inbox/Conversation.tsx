@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { ThreadTranscript } from "@angee/messaging";
-import { Button, Chip, ErrorBanner, Glyph, PaneToolbarHost, RecordHeader } from "@angee/ui";
+import { Button, Chip, ErrorBanner, Glyph, PaneToolbarHost, RecordHeader, SkeletonStatus, SkeletonText } from "@angee/ui";
 import { InboxTranscriptMatches } from "./documents";
 import type { DocumentType } from "@angee/gql/console";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
@@ -37,7 +37,8 @@ export function InboxConversation({
         crumbs={t(statusFeed ? "inbox.updates" : "inbox.conversation")}
         title={matches?.thread.conversation_label || t("inbox.conversation")}
         meta={matches ? t(statusFeed ? "inbox.statusFeedCount" : matches.count === matches.total ? "inbox.conversationCount" : "inbox.transcriptCount",
-          { count: matches.count, total: matches.total }) : t("inbox.loading")}
+          { count: matches.count, total: matches.total })
+          : error ? undefined : <SkeletonStatus label={t("inbox.loading")} className="w-full py-1"><SkeletonText lines={1} lineClassName="w-64 max-w-full" /></SkeletonStatus>}
       />
       <ErrorBanner description={error} />
       {/* The transcript's own controls publish into this pane's toolbar row. */}

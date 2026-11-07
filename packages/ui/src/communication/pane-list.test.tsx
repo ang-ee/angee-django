@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { InAppLinkProvider } from "../lib/in-app-link";
-import { PaneRow } from "./pane-list";
+import { PaneRow, PaneRowsSkeleton } from "./pane-list";
 
 afterEach(cleanup);
 
@@ -58,4 +58,18 @@ test("outbound rows preserve native new-tab navigation", () => {
   expect(link.getAttribute("target")).toBe("_blank");
   expect(fireEvent.click(link)).toBe(true);
   expect(navigate).not.toHaveBeenCalled();
+});
+
+test("pending pane rows keep the row geometry under one status and render no visible copy", () => {
+  render(<PaneRowsSkeleton label="Loading results" rowCount={3} />);
+  const status = screen.getByRole("status");
+  expect(status.textContent).toBe("Loading results");
+  const rows = [...status.children].filter((child) => child.getAttribute("aria-hidden") === "true");
+  expect(rows).toHaveLength(3);
+  // Each row keeps the pane row's box: a leading glyph, then the title and second lines.
+  for (const row of rows) {
+    expect(row.className).toContain("px-2 py-2");
+    expect(row.querySelectorAll(".rounded-full")).toHaveLength(3);
+  }
+  expect(screen.queryAllByText(/\S/, { ignore: ".sr-only, script, style" })).toEqual([]);
 });

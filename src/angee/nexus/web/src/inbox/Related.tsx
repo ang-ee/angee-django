@@ -3,7 +3,8 @@ import { useAuthoredQuery } from "@angee/refine";
 import { MessagePaneRow } from "@angee/messaging";
 import {
   Button, Dialog, ErrorBanner, PreviewPane, EmptyState, Glyph, ListView, PaneLabel, PaneRow,
-  PaneRows, PaneToolbar, formatNumber, optionLabel, useEnumOptions, useInAppLink, useResourceRecordHrefLookup,
+  PaneRows, PaneToolbar, SkeletonStatus, SkeletonText, formatNumber, optionLabel, useEnumOptions, useInAppLink,
+  useResourceRecordHrefLookup,
 } from "@angee/ui";
 import { InboxRelatedTarget, type InboxConnectionRow } from "./documents";
 import { relatedSource } from "./sources";
@@ -46,7 +47,8 @@ export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }
                 <Dialog.Header className="flex items-center justify-between"><Dialog.Title>{target.label}</Dialog.Title><Dialog.Close /></Dialog.Header>
                 <Dialog.Body><PreviewPane file={file} /></Dialog.Body>
               </Dialog.Content></Dialog.Portal>
-            </Dialog.Root> : target?.label ?? t("inbox.loading")}
+            </Dialog.Root> : target?.label ?? (query.error ? null
+              : <SkeletonStatus label={t("inbox.loading")} className="py-0.5"><SkeletonText lines={1} lineClassName="w-32" /></SkeletonStatus>)}
           </PaneLabel>
           {file ? <li><div role="region" aria-label={t("inbox.filePreview")} className="h-96 overflow-hidden rounded-6 border border-border-subtle">
             <PreviewPane file={file} />

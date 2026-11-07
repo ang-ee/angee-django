@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { senderDisplayName } from "@angee/parties";
 import { isStatusUpdate, MessagePaneRow, useMessageChannelLabel } from "@angee/messaging";
 import {
-  AbsoluteTime, Button, Dialog, Glyph, ListView, PaneRow, PreviewPane, RecordHeader, Select,
+  AbsoluteTime, Button, Dialog, Glyph, ListView, PaneRow, PreviewPane, RecordHeader, Select, SkeletonStatus, SkeletonText,
   optionLabel, useEnumOptions, useResourceView,
 } from "@angee/ui";
 import type { GroupLabelContext } from "@angee/ui/views/resource-view-types";
@@ -30,7 +30,7 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={t("inbox.results")}>
       <RecordHeader density="compact" title={selected
-        ? selectionLabel
+        ? selectionLabel ?? <SkeletonStatus label={t("inbox.loading")} className="py-0.5"><SkeletonText lines={1} size="md" lineClassName="w-40" /></SkeletonStatus>
         : t(updates.only ? "inbox.allUpdates" : updates.includes ? "inbox.allActivity" : "inbox.anyKind")}
         meta={updates.only ? t("inbox.updatesHint") : selected ? t("inbox.selectionHint") : t("inbox.coverageHint", { timezone })}
         actions={selected ? <Button size="iconSm" variant="ghost" aria-label={t("inbox.clearSelection")}
