@@ -135,6 +135,34 @@ def test_server_launcher_unwinds_after_failure_and_logs_once(tmp_path: Path) -> 
     ]
 
 
+def test_server_launcher_runs_serving_checks_only_for_serving_commands(tmp_path: Path) -> None:
+    _project(tmp_path)
+    (tmp_path / "plain" / "apps.py").write_text('''from django.apps import AppConfig
+from django.core import checks
+from angee.server.checks import SERVING_TAG
+def refuse(app_configs=None, **kwargs):
+    return [checks.Error("serving refused", id="plain.E001")]
+class PlainConfig(AppConfig):
+    name = "plain"
+    def ready(self): checks.register(refuse, SERVING_TAG, deploy=True)
+''')
+    build = tmp_path / "plain" / "management" / "commands" / "build.py"
+    build.write_text('''from django.core.management.base import BaseCommand
+class Command(BaseCommand):
+    def handle(self, *args, **options): print("built")
+''')
+    settings_file = tmp_path / "alternate.py"
+    settings_file.write_text(settings_file.read_text().replace('"plain"]', '"plain.apps.PlainConfig"]'))
+    arguments = ("--settings=alternate", f"--pythonpath={tmp_path}")
+    built = _invoke(tmp_path, "build", *arguments)
+    assert built.returncode == 0, built.stderr
+    assert "built" in built.stdout
+    checked = _invoke(tmp_path, "check", *arguments)
+    assert checked.returncode != 0
+    assert "plain.E001" in checked.stderr
+    assert "first-enter" not in checked.stdout
+
+
 def test_native_launcher_extension_receives_server_utility(monkeypatch):
     seen = []
 

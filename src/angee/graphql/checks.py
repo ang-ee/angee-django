@@ -17,8 +17,8 @@ def check_graphql_channel_layer(
 ) -> list[checks.CheckMessage]:
     """Report unsafe process-local change delivery before the first publish.
 
-    ``GraphQLConfig`` registers it only where the serving addon is installed:
-    a model-only project's management commands deliver no changes.
+    ``GraphQLConfig`` registers it under ``angee.server``'s ``SERVING_TAG``:
+    build and data commands deliver no changes to subscribers.
     """
 
     del app_configs, kwargs

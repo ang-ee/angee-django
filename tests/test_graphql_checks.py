@@ -59,19 +59,18 @@ def test_graphql_channel_layer_check_matches_publishing_guard(
         )
 
 
-@pytest.mark.parametrize("serving", [False, True])
-def test_the_delivery_check_registers_only_where_the_server_serves(monkeypatch, serving: bool) -> None:
-    """A model-only project's commands never meet angee.graphql.E003."""
+def test_the_delivery_check_is_a_serving_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build and data commands never meet angee.graphql.E003; the serving tag runs it."""
 
     from django.apps import apps
     from django.core.checks.registry import registry
 
     from angee.graphql.apps import GraphQLConfig
+    from angee.server.checks import SERVING_TAG
 
-    monkeypatch.setattr(registry, "registered_checks", {
-        check for check in registry.registered_checks if check is not check_graphql_channel_layer
-    })
-    installed = apps.is_installed
-    monkeypatch.setattr(apps, "is_installed", lambda name: serving if name == "angee.server" else installed(name))
+    monkeypatch.setattr(registry, "registered_checks", registry.registered_checks.copy())
+    monkeypatch.setattr(registry, "deployment_checks", registry.deployment_checks.copy())
     GraphQLConfig("angee.graphql", apps.get_app_config("graphql").module).ready()
-    assert (check_graphql_channel_layer in registry.registered_checks) is serving
+    assert check_graphql_channel_layer not in registry.get_checks()
+    assert check_graphql_channel_layer in registry.get_checks(include_deployment_checks=True)
+    assert SERVING_TAG in check_graphql_channel_layer.tags  # type: ignore[attr-defined]

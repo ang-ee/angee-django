@@ -2,24 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from functools import partial
 
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.core import checks
 from sentry_sdk.integrations.logging import ignore_logger
 
 from angee.base.hooks import check_hooks
+from angee.server.checks import SERVING_TAG
 
-
-def check_settings(app_configs: Sequence[AppConfig] | None = None, **kwargs: object) -> list[checks.CheckMessage]:
-    """Validate GraphQL's hook settings, then resolve every related count declaration and target."""
-
-    errors = check_hooks(("ANGEE_GRAPHQL_RESOURCE_FILTERS", "ANGEE_GRAPHQL_RELATED_COUNTS"), app_configs, **kwargs)
-    if errors:
-        return errors
-    from angee.graphql.related_counts import check_related_counts
-
-    return check_related_counts()
+check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS", "ANGEE_GRAPHQL_RELATED_COUNTS"))
 
 
 class GraphQLConfig(AppConfig):
@@ -47,14 +39,12 @@ class GraphQLConfig(AppConfig):
         from angee.graphql import field_types  # noqa: F401
         from angee.graphql.checks import check_graphql_channel_layer, check_graphql_schemas
         from angee.graphql.publishing import connect_change_publishers
+        from angee.graphql.related_counts import check_related_counts
 
         checks.register(check_settings, checks.Tags.models)
-
+        checks.register(check_related_counts, checks.Tags.models)
         checks.register(check_graphql_schemas)
-        # Cross-process change delivery matters only where the serving addon
-        # serves subscriptions; a model-only project's commands never deliver.
-        if apps.is_installed("angee.server"):
-            checks.register(check_graphql_channel_layer)
+        checks.register(check_graphql_channel_layer, SERVING_TAG, deploy=True)
         if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None and mode() is None:
             connect_change_publishers()
         # Compose connects in SchemaIntegration after all ready callbacks. Bare

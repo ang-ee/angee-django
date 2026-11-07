@@ -1598,9 +1598,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
   in ordinary `manage.py check` and commands requesting the default system checks.
   ASGI WebSocket routing at application boot and the `schema` command also demand
   schema construction; MCP's resource-tool check validates its console contract.
-  The same addon's `angee.graphql.E003` check, registered where the serving addon
-  is installed, refuses a process-local Channels layer when a Celery broker is
-  configured: `enqueue_task` sends through `send_task`,
+  The same addon's `angee.graphql.E003` check, a
+  [serving check](../../src/angee/server/checks.py), refuses a process-local
+  Channels layer when a Celery broker is configured: `enqueue_task` sends through `send_task`,
   which Celery never runs eagerly, so a broker means a worker's broadcasts need
   Redis to reach web subscribers even with `DEBUG=True`. A host without a Celery
   broker may use the in-memory layer in DEBUG. Set `CHANNEL_REDIS_URL` in project
