@@ -28,7 +28,6 @@ from itertools import batched
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
-import httpx2
 from deepdiff import DeepDiff
 from django.apps import apps
 from django.conf import settings
@@ -37,7 +36,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import OperationalError, connection, models, transaction
+from django.db import connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.utils import timezone
 from django_compose.models import Composable
@@ -77,7 +76,9 @@ from angee.integrate.errors import (
     INTEGRATION_FAILURE_MESSAGE,
     IntegrationError,
     IntegrationFailure,
+    is_transient_failure,
     safe_integration_failure,
+    transient_retry_delay,
 )
 from angee.integrate.events import EventKind
 from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl
@@ -2657,22 +2658,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             except Exception as error:  # noqa: BLE001 — provider diagnostics never become public telemetry.
                 if not isinstance(error, IntegrationError):
                     logger.exception("Connection discovery failed for integration %s.", target.pk)
-                retryable = (
-                    isinstance(error, IntegrationError)
-                    and error.transient
-                    or isinstance(error, (httpx2.TransportError, OperationalError))
-                    or isinstance(error, httpx2.HTTPStatusError)
-                    and error.response.status_code >= 500
-                    or isinstance(error, OAuthFlowError)
-                    and error.http_status >= 500
-                )
-                if retryable and credential_pk is not None:
-                    hint = error.retry_after if isinstance(error, IntegrationError) else None
-                    backoff = min(timedelta(minutes=2 ** (target.discovery_attempts - 1)), timedelta(hours=1))
+                if is_transient_failure(error) and credential_pk is not None:
                     target.defer_discovery(
                         credential_pk=credential_pk,
                         generation=generation,
-                        retry_after=max(backoff, hint) if hint is not None else backoff,
+                        retry_after=transient_retry_delay(error, target.discovery_attempts, cap=timedelta(hours=1)),
                     )
                     self.refresh_from_db()
                     return {"ok": False, "reason": "deferred" if target.discovery_pending else "attempt-limit"}
@@ -2816,7 +2806,15 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     """Bridge-scoped settings interpreted by the selected backend."""
     poll_interval = models.PositiveIntegerField(default=300)
     subscription_state = models.JSONField(default=dict, blank=True)
-    next_subscription_refresh_at = models.DateTimeField(null=True, blank=True)
+    live_retry_at = models.DateTimeField(null=True, blank=True)
+    """Earliest time the reconciler may restart a transiently failed live session.
+
+    NULL means no deferral. :meth:`record_live_session_failure` sets it; pairing
+    (:meth:`clear_sync_error`), the generic repair verbs and an explicit start
+    (:meth:`end_live_retry`) end the streak. An operator's start is never
+    deferred by it."""
+    live_retry_attempts = models.PositiveIntegerField(default=0)
+    """Transient live-session failures since the streak began; sets the backoff."""
     last_sync_started_at = models.DateTimeField(null=True, blank=True)
     last_sync_completed_at = models.DateTimeField(null=True, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
@@ -2959,10 +2957,8 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             self.subscription_state = state
             fields.append("subscription_state")
         if drop_pairing_report:
-            progress = dict(self.sync_progress) if isinstance(self.sync_progress, Mapping) else {}
-            details = dict(progress.get("details") or {}) if isinstance(progress.get("details"), Mapping) else {}
-            if details.pop("pairing", None) is not None:
-                progress["details"] = details
+            progress = self._progress_without_pairing(self.sync_progress)
+            if progress != self.sync_progress:
                 self.sync_progress = progress
                 fields.append("sync_progress")
         if fields:
@@ -3125,15 +3121,31 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
 
         return record_lock_key(self._meta.label_lower, self.pk, "live-host")
 
-    def report_live_session_interrupted(self, *, exitcode: int | None) -> None:
-        """Report a reaped child failure while keeping automatic recovery eligible.
+    LIVE_RETRY_BACKOFF_CAP: ClassVar[timedelta] = timedelta(hours=1)
+    """Longest wait between automatic restarts of a transiently failing live session."""
 
-        The caller holds the bridge lock after the child exits. Native crashes
-        are host failures, not evidence that the account needs fresh credentials.
-        Terminal session outcomes and a concurrent operator stop remain intact.
+    def record_live_session_failure(self, error: Exception, *, now: datetime) -> None:
+        """Record a failed live session: latch a broken handshake, defer a transient one.
+
+        The one policy owner for every live-session failure, raised or reported.
+        A non-transient outcome is a known-broken handshake:
+        :meth:`record_sync_error` latches ``runtime_status`` and the reconciler
+        waits for the operator's repair verb. A transient failure
+        (:func:`~angee.integrate.errors.is_transient_failure`) — a dropped
+        connection, a DNS or resource error, a crashed session process — is not
+        evidence the account needs repair: runtime health is left as it is, the
+        failure is shown on the sync axis without the dead session's pairing
+        report, and :attr:`live_retry_at` defers the reconciler's restart by a
+        doubling backoff that an error's ``retry_after`` can only lengthen.
+
+        The caller holds the bridge lock after the session ended. A terminal
+        outcome or an operator stop that landed first is left intact.
         """
 
-        with system_context(reason="integrate.live.interrupted"), transaction.atomic():
+        if not is_transient_failure(error):
+            self.record_sync_error(error, now=now)
+            return
+        with system_context(reason="integrate.live.retry"), transaction.atomic():
             row = self.lock_capability()
             if (
                 row.lifecycle != row.Lifecycle.CONNECTED
@@ -3141,12 +3153,78 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
                 or row.subscription_state.get("desired") != row.LiveState.LIVE
             ):
                 return
-            with bridge_progress_context(row) as reporter:
-                reporter.report(
-                    row.SyncStage.FAILED,
-                    message="The live session process stopped unexpectedly; automatic recovery will retry.",
-                    details={"session": {"state": "interrupted", "exitcode": exitcode}},
-                )
+            row.live_retry_attempts += 1
+            delay = transient_retry_delay(error, row.live_retry_attempts, cap=self.LIVE_RETRY_BACKOFF_CAP)
+            row.live_retry_at = now + delay
+            row._mark_sync_failed(error)
+            row.sync_progress = row._progress_without_pairing(row.sync_progress)
+            row.save(
+                update_fields=[
+                    "live_retry_at",
+                    "live_retry_attempts",
+                    "sync_error",
+                    "sync_progress",
+                    "sync_stage",
+                    "updated_at",
+                ],
+            )
+        logger.warning(
+            "Live session for %s %s failed transiently (attempt %s); the reconciler retries after %s.",
+            self._meta.label_lower,
+            self.pk,
+            row.live_retry_attempts,
+            delay,
+        )
+
+    def end_live_retry(self) -> None:
+        """End a transient-failure streak because the operator asked for the session now."""
+
+        if self.live_retry_at is None and not self.live_retry_attempts:
+            return
+        with system_context(reason="integrate.live.retry.end"), transaction.atomic():
+            row = self.lock_capability()
+            fields = row._reset_live_retry()
+            if fields:
+                row.save(update_fields=[*fields, "updated_at"])
+        self.live_retry_at = None
+        self.live_retry_attempts = 0
+
+    def _reset_live_retry(self) -> list[str]:
+        """Clear the retry deferral in memory; return the fields that changed."""
+
+        fields = []
+        if self.live_retry_at is not None:
+            self.live_retry_at = None
+            fields.append("live_retry_at")
+        if self.live_retry_attempts:
+            self.live_retry_attempts = 0
+            fields.append("live_retry_attempts")
+        return fields
+
+    def _set_connection_fields(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> set[str]:
+        """The generic repair verbs reset health, so they also end a retry streak."""
+
+        fields = super()._set_connection_fields(credential=credential, account=account)
+        return {*fields, *self._reset_live_retry()}
+
+    def _mark_sync_failed(self, error: Exception) -> IntegrationFailure:
+        """Set the failed stage and the operator-safe message on this row, unsaved."""
+
+        failure = safe_integration_failure(error)
+        self.sync_stage = self.SyncStage.FAILED
+        self.sync_error = failure.message
+        self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=failure.message)
+        return failure
+
+    @staticmethod
+    def _progress_without_pairing(progress: Any) -> dict[str, Any]:
+        """Return ``sync_progress`` without a live session's pairing report."""
+
+        progress = dict(progress) if isinstance(progress, Mapping) else {}
+        details = progress.get("details")
+        if isinstance(details, Mapping) and "pairing" in details:
+            progress["details"] = {key: value for key, value in details.items() if key != "pairing"}
+        return progress
 
     _SYNC_OUTCOME_KEYS = ("error", "items", "completed_at")
     """Marker keys that describe one run's outcome; a new marker starts without them."""
@@ -3353,11 +3431,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     def record_sync_error(self, error: Exception, *, now: datetime) -> None:
         """Persist one failed scheduler sync result and error status report."""
 
-        failure = safe_integration_failure(error)
-        error_message = failure.message
-        self.sync_stage = self.SyncStage.FAILED
-        self.sync_error = error_message
-        self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
+        failure = self._mark_sync_failed(error)
         with transaction.atomic():
             self.lock_capability()
             self.refresh_from_db(
@@ -3386,10 +3460,10 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     def clear_sync_error(self) -> None:
         """Clear a stale failure once a live session proves the account healthy.
 
-        The mirror of :meth:`record_sync_error` — that method is the only writer
-        of ``sync_error``, ``sync_stage == FAILED``, and the ``error``
-        outcome key, and only the poll scheduler's start/finish markers drop them
-        again. A live-desired bridge never enters the poll loop
+        The mirror of :meth:`_mark_sync_failed` — the only writer of
+        ``sync_error``, ``sync_stage == FAILED`` and the ``error`` outcome key,
+        for scheduler syncs and live sessions alike — and only the poll
+        scheduler's start/finish markers drop them again. A live-desired bridge never enters the poll loop
         (:meth:`Channel._next_sync_at` returns ``None`` while ``desired`` is
         ``live``), so a months-old failure would otherwise outlive a successful
         reconnect forever. :meth:`LiveSession._mark_paired` calls this the moment
@@ -3402,30 +3476,33 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         writer of the same ``sync_progress`` dict: the pairing ``details`` (the QR
         the operator is looking at) and the scheduler's ``stage``/``queued_at``
         markers must survive. Dropping the failure is exactly :meth:`_sync_marker`
-        with no new values — it keeps everything but this run's outcome keys. A row
-        with nothing to clear is left untouched so a healthy reconnect writes
-        nothing to the change feed.
+        with no new values — it keeps everything but this run's outcome keys. The
+        same proof ends a transient-failure streak
+        (:meth:`record_live_session_failure`): its deferral and attempt count
+        reset. A row with nothing to clear is left untouched so a healthy
+        reconnect writes nothing to the change feed.
         """
 
         with system_context(reason="integrate.bridge.clear_sync_error"), transaction.atomic():
             row = self.lock_capability()
             progress = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
-            if not row.sync_error and row.sync_stage != row.SyncStage.FAILED and "error" not in progress:
+            retry_fields = row._reset_live_retry()
+            if (
+                not row.sync_error
+                and row.sync_stage != row.SyncStage.FAILED
+                and "error" not in progress
+                and not retry_fields
+            ):
                 return
             row.sync_stage = row.SyncStage.COMPLETED if row.last_sync_completed_at else row.SyncStage.IDLE
             row.sync_error = ""
             row.sync_progress = row._sync_marker()
-            row.save(
-                update_fields=[
-                    "sync_stage",
-                    "sync_error",
-                    "sync_progress",
-                    "updated_at",
-                ],
-            )
+            row.save(update_fields=[*retry_fields, "sync_stage", "sync_error", "sync_progress", "updated_at"])
         self.sync_stage = row.sync_stage
         self.sync_error = row.sync_error
         self.sync_progress = row.sync_progress
+        self.live_retry_at = row.live_retry_at
+        self.live_retry_attempts = row.live_retry_attempts
 
     def run_sync(self, *, now: datetime) -> int | SyncDispatch:
         """Run one sync attempt and persist its lifecycle telemetry."""

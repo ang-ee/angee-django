@@ -79,8 +79,12 @@ test("an unrelated row event does not starve an exact record's pending first req
     expect(firstSignal.aborted).toBe(false);
     live.push({ model: "workflows.Decision", id: "wdc_current" });
     await vi.advanceTimersByTimeAsync(300);
+    // The matching change waits for the running request instead of cancelling it.
+    expect(requests).toBe(1);
+    expect(firstSignal.aborted).toBe(false);
+    first.resolve(1);
+    await vi.advanceTimersByTimeAsync(300);
     expect(requests).toBe(2);
-    expect(firstSignal.aborted).toBe(true);
     await vi.waitFor(() => expect(observer.getCurrentResult().data).toBe(2));
   } finally {
     first.resolve(1);
@@ -125,8 +129,11 @@ test("a related child refreshes an exact parent without unrelated-child starvati
       relatedRecords: [{ model: "workflows.WorkflowRun", id: "wfr_current" }],
     });
     await vi.advanceTimersByTimeAsync(300);
+    expect(requests).toBe(1);
+    expect(firstSignal.aborted).toBe(false);
+    first.resolve(1);
+    await vi.advanceTimersByTimeAsync(300);
     expect(requests).toBe(2);
-    expect(firstSignal.aborted).toBe(true);
     await vi.waitFor(() => expect(observer.getCurrentResult().data).toBe(2));
   } finally {
     first.resolve(1);
@@ -326,38 +333,72 @@ test("a continuous change stream still flushes within the max wait", async () =>
   }
 });
 
-test("a live change cancels a populated in-flight refresh at once; its late response never commits", async () => {
+test("a live change lets a running refresh commit, then refetches once it settles", async () => {
   vi.useFakeTimers();
   const cache = client();
   const live = createAuthoredLiveInvalidation(cache);
-  const stale = pending<string[]>();
+  const running = pending<string[]>();
   let revision = "initial";
-  let staleSignal!: AbortSignal;
+  let runningSignal!: AbortSignal;
   const observer = new QueryObserver(cache, {
     queryKey: ["notes", "live"],
     meta: { angeeModels: ["notes.Note"] },
     queryFn: ({ signal }: { signal: AbortSignal }) => {
-      if (revision === "stale") { staleSignal = signal; return stale.promise; }
+      if (revision === "running") { runningSignal = signal; return running.promise; }
       return Promise.resolve([revision]);
     },
   });
-  const unsubscribe = observer.subscribe(() => undefined);
+  const seen: unknown[] = [];
+  const unsubscribe = observer.subscribe((result) => { seen.push(result.data); });
   try {
     await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["initial"]));
-    revision = "stale";
+    revision = "running";
     void observer.refetch();
-    await vi.waitFor(() => expect(staleSignal).toBeDefined());
+    await vi.waitFor(() => expect(runningSignal).toBeDefined());
     revision = "current";
-    live.push({ model: "notes.Note", id: "note_revoked" });
-    // Cancelled on arrival, before the coalesced flush.
-    expect(staleSignal.aborted).toBe(true);
-    stale.resolve(["initial", "revoked"]);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(observer.getCurrentResult().data).toEqual(["initial"]);
+    live.push({ model: "notes.Note", id: "note_changed" });
     await vi.advanceTimersByTimeAsync(300);
+    expect(runningSignal.aborted).toBe(false);
+    running.resolve(["snapshot"]);
+    // The change arrived after that read started, so it refetches as it settles.
     await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["current"]));
+    expect(seen).toContainEqual(["snapshot"]);
+    expect(seen.findIndex((data) => JSON.stringify(data) === '["snapshot"]'))
+      .toBeLessThan(seen.findIndex((data) => JSON.stringify(data) === '["current"]'));
   } finally {
-    stale.resolve([]);
+    running.resolve([]);
+    unsubscribe(); cache.clear();
+  }
+});
+
+test("a continuous stream never starves a read slower than its gaps", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const live = createAuthoredLiveInvalidation(cache);
+  let requests = 0;
+  let commits = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["inbox", "groups"],
+    meta: { angeeModels: ["messaging.Message"] },
+    // Each read takes 2.5 s: longer than the max wait and than any gap below.
+    queryFn: () => {
+      const request = ++requests;
+      return new Promise<number>((resolve) => { setTimeout(() => resolve(request), 2500); });
+    },
+  });
+  const unsubscribe = observer.subscribe((result) => { if (result.isSuccess) commits++; });
+  try {
+    for (let tick = 0; tick < 100; tick++) {
+      live.push({ model: "messaging.Message", id: `msg_${tick}` });
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    // 10 s of changes every 100 ms: reads keep completing back to back.
+    expect(commits).toBeGreaterThanOrEqual(3);
+    await vi.advanceTimersByTimeAsync(6000);
+    // The last read started after the last change.
+    expect(observer.getCurrentResult().data).toBe(requests);
+    expect(observer.getCurrentResult().fetchStatus).toBe("idle");
+  } finally {
     unsubscribe(); cache.clear();
   }
 });

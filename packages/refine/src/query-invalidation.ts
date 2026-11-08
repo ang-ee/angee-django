@@ -45,15 +45,26 @@ function authoredQueryReadsLiveChange(meta: unknown, change: AuthoredLiveChange)
     });
 }
 
-/** Refetch every active authored read registered against one of the moved models. */
+/**
+ * Refetch every active authored read registered against one of the models a
+ * caller's own write moved: a read that started before the write never commits.
+ * Live changes from other writers coalesce without cancelling
+ * (`createAuthoredLiveInvalidation`); connection catch-up
+ * (`catchUpAuthoredQueries`) is the separate non-cancelling protocol.
+ */
 export async function invalidateAuthoredQueries(
   queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
   modelLabels: readonly string[],
 ): Promise<void> {
-  return invalidateAuthoredQueriesMatching(
-    queryClient,
-    (query) => authoredQueryReadsAnyModel(query.meta, modelLabels),
-  );
+  const predicate = (query: Query) => authoredQueryReadsAnyModel(query.meta, modelLabels);
+  // Native invalidation joins an initial in-flight request instead of restarting
+  // it. Cancel that snapshot first so the write cannot be lost when it settles.
+  await queryClient.cancelQueries({
+    predicate: (query) => predicate(query)
+      && query.state.data === undefined
+      && query.state.fetchStatus !== "idle",
+  });
+  return queryClient.invalidateQueries({ predicate, type: "all", refetchType: "active" });
 }
 
 /** Catch up retained authored reads; a retry restarts running data-holding refetches. */
@@ -105,42 +116,58 @@ export interface AuthoredLiveInvalidation {
 /**
  * Coalesce live changes so each affected read refetches once per burst.
  *
- * A change cancels matching in-flight requests as it arrives, so a response
- * read before the change never commits. Only the refetch is deferred: one flush
- * applies the shared protocol to the union of the burst, so affected reads keep
- * their last committed data for at most the max wait. Under a continuous stream
- * a read slower than the max wait is restarted at each flush.
+ * A burst closes after a quiet window or the max wait, and one flush refetches
+ * the union of reads it affects. A read still fetching at the flush is never
+ * cancelled: it commits its snapshot, which is no older than the data already on
+ * screen, and refetches as soon as it settles, so every change is still followed
+ * by a read that started after it. Cancelling instead would starve any read
+ * slower than the gaps of a continuous stream (a history backfill), leaving it
+ * on its old data or its loading state for as long as the stream lasts.
  */
 export function createAuthoredLiveInvalidation(
-  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
+  queryClient: Pick<QueryClient, "invalidateQueries" | "getQueryCache">,
 ): AuthoredLiveInvalidation {
   let changes: AuthoredLiveChange[] = [];
+  const awaited = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let firstAt: number | undefined;
+
+  function refetch(predicate: (query: Query) => boolean): void {
+    void queryClient.invalidateQueries({ predicate, type: "all", refetchType: "active" });
+  }
+
+  // A read still fetching at a flush refetches the moment it settles.
+  queryClient.getQueryCache().subscribe((event) => {
+    const hash = event.query.queryHash;
+    if (!awaited.has(hash)) return;
+    if (event.type === "removed") awaited.delete(hash);
+    else if (event.type === "updated" && event.query.state.fetchStatus !== "fetching") {
+      awaited.delete(hash);
+      refetch((query) => query.queryHash === hash);
+    }
+  });
 
   function flush(): void {
     const batch = changes;
     changes = [];
     timer = undefined;
     firstAt = undefined;
-    void invalidateAuthoredQueriesMatching(
-      queryClient,
-      (query) => batch.some((change) => authoredQueryReadsLiveChange(query.meta, change)),
-    );
+    const reads = (query: Query) => batch.some((change) => authoredQueryReadsLiveChange(query.meta, change));
+    for (const query of queryClient.getQueryCache().findAll({ predicate: reads })) {
+      if (query.state.fetchStatus === "fetching") awaited.add(query.queryHash);
+    }
+    refetch((query) => !awaited.has(query.queryHash) && reads(query));
   }
 
   return {
     clear() {
       if (timer !== undefined) clearTimeout(timer);
       changes = [];
+      awaited.clear();
       timer = undefined;
       firstAt = undefined;
     },
     push(change) {
-      void queryClient.cancelQueries({
-        predicate: (query) => query.state.fetchStatus !== "idle"
-          && authoredQueryReadsLiveChange(query.meta, change),
-      });
       changes.push(change);
       const now = performance.now();
       firstAt ??= now;
@@ -148,27 +175,4 @@ export function createAuthoredLiveInvalidation(
       timer = setTimeout(flush, Math.max(0, Math.min(LIVE_WINDOW_MS, firstAt + LIVE_MAX_WAIT_MS - now)));
     },
   };
-}
-
-/**
- * The cancelling protocol shared by model-wide, exact-row and live invalidation
- * (mutations included); connection catch-up (`catchUpAuthoredQueries`) is the
- * separate non-cancelling protocol on first and idle-reopen connections.
- */
-async function invalidateAuthoredQueriesMatching(
-  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
-  predicate: (query: Query) => boolean,
-): Promise<void> {
-  // Native invalidation joins an initial in-flight request instead of restarting
-  // it. Cancel that snapshot first so an event cannot be lost when it settles.
-  await queryClient.cancelQueries({
-    predicate: (query) => predicate(query)
-      && query.state.data === undefined
-      && query.state.fetchStatus !== "idle",
-  });
-  return queryClient.invalidateQueries({
-    predicate,
-    type: "all",
-    refetchType: "active",
-  });
 }

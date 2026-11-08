@@ -2042,6 +2042,14 @@ bridge advisory lock as polling and delivery settlement.
   clearing that status itself, never by a lifecycle edge as a side effect. Keep
   the gate on the shared `runtime_status`, not a private health key the generic
   verbs cannot clear.
+- **Only a known-broken handshake latches.** A transient failure
+  (`angee.integrate.errors.is_transient_failure`: a dropped connection, a DNS or
+  resource error, a crashed session process) is not evidence the account needs
+  repair, so it must never park a live bridge behind the operator's verb.
+  `Bridge.record_live_session_failure` owns every live-session failure: it shows
+  a transient one on the sync axis and defers the reconciler's restart
+  (`live_retry_at`) by the shared doubling backoff. Pairing, the generic repair
+  verbs and an explicit start end the streak.
 - **Periodic tasks accept an optional `timestamp`.** Static Celery beat ticks
   call without it; tests and scheduler backends may inject a Unix timestamp.
 - **TLS trust is an environment concern, not a per-call one.** Which CA roots we
