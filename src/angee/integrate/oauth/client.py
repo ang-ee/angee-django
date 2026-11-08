@@ -7,9 +7,10 @@ extends this in ``angee.iam_integrate_oidc.protocol.OAuthClientOidcProtocol``.
 
 The OAuth2 protocol mechanism (token request, client authentication, PKCE, and
 the token-response parsing) is owned by Authlib's ``OAuth2Client`` over httpx2;
-this module is the thin per-row adapter behind a stable seam. The authorization
-URL is still built here (a deterministic string the OIDC layer extends), and the
-small ``token_request_format == "json"`` provider quirk — a non-standard JSON
+this module is the thin per-row adapter behind a stable seam. Authlib also
+builds the standard authorization parameters; this module merges them into the
+row's endpoint (the OIDC layer extends them), and the small
+``token_request_format == "json"`` provider quirk — a non-standard JSON
 token body Authlib does not emit, plus Anthropic's required ``state`` echo —
 keeps a documented shim.
 
@@ -396,18 +397,19 @@ class OAuthClientProtocol:
         challenge = code_challenge if getattr(self.oauth_client, "supports_pkce", False) else None
         if not challenge and not self._client_secret():
             raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client needs PKCE or a client secret.")
-        query: dict[str, str] = {
-            **_string_param_values(self.oauth_client, "authorize_param_values"),
-            "client_id": str(getattr(self.oauth_client, "client_id", "")),
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(scopes),
-            "state": state,
+        # Authlib owns the standard authorization parameters; provider extras
+        # never replace the client identity or the flow's state.
+        params = {
+            key: value
+            for key, value in _string_param_values(self.oauth_client, "authorize_param_values").items()
+            if key not in ("client_id", "state")
         }
+        params.update(response_type="code", redirect_uri=redirect_uri, scope=" ".join(scopes))
         if challenge:
-            query["code_challenge"] = challenge
-            query["code_challenge_method"] = "S256"
-        return query
+            params.update(code_challenge=challenge, code_challenge_method="S256")
+        with self._session() as client:
+            url, _state = client.create_authorization_url("", state=state, **params)
+        return dict(parse.parse_qsl(parse.urlsplit(url).query, keep_blank_values=True))
 
     def _endpoint(self, field: str) -> str:
         """Return a configured endpoint value, or raise when the row omits it."""
