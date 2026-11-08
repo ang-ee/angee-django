@@ -3,7 +3,8 @@
 Write observation is transport-neutral: an owner's write becomes one
 :class:`ModelChange`, delivered robustly to local observers
 (:data:`change_published`) and then to adapters (:data:`change_observed`),
-such as GraphQL's change feeds, inside the writing transaction.
+such as GraphQL's change feeds, inside the writing transaction. An adapter's
+failure fails the write; its delivery is queued robustly on commit.
 """
 
 from __future__ import annotations
@@ -171,10 +172,13 @@ receivers. Observers queue external effects with ``transaction.on_commit``.
 """
 
 change_observed = Signal()
-"""Sent robustly after every :data:`change_published` receiver ran, with the same arguments.
+"""Sent after every :data:`change_published` receiver ran, with the same arguments.
 
 Transport adapters project and queue delivery here, so local observers' commit
 effects run before transport. It is a later lifecycle point, not a second write.
+A receiver's exception propagates to the writer: a projection that breaks its
+contract, or a failing query it makes, aborts the write. Adapters queue their
+delivery with ``transaction.on_commit(..., robust=True)``.
 """
 
 _mute_depth: ContextVar[int] = ContextVar("angee_change_mute_depth", default=0)
@@ -244,13 +248,13 @@ def publish_change(
         changed_fields=fields, instance=instance, changed_values=values,
         during_ingestion=publication_ingestion_active(), broadcasts=broadcast,
     )
-    for signal, name in ((change_published, "change_published"), (change_observed, "change_observed")):
-        for receiver, response in signal.send_robust(sender=type(instance), payload=payload):
-            if isinstance(response, Exception):
-                logger.error(
-                    "%s receiver %r failed for %s %s.", name, receiver, payload.model, payload.id,
-                    exc_info=(type(response), response, response.__traceback__),
-                )
+    for receiver, response in change_published.send_robust(sender=type(instance), payload=payload):
+        if isinstance(response, Exception):
+            logger.error(
+                "change_published receiver %r failed for %s %s.", receiver, payload.model, payload.id,
+                exc_info=(type(response), response, response.__traceback__),
+            )
+    change_observed.send(sender=type(instance), payload=payload)
 
 
 def publish_bulk_update(

@@ -1611,7 +1611,8 @@ open fresh evaluator scopes for authorization and change-feed reads.
   delivers owner observations inside the transaction; transport adapters such
   as [GraphQL's change feeds](../../src/angee/graphql/publishing.py) project them
   on `change_observed`, after every local observer, so local commit effects
-  precede transport. A model's `change_related_records()` returns `RecordRef`
+  precede transport. A local observer's failure is logged; an adapter's
+  projection failure fails the write. A model's `change_related_records()` returns `RecordRef`
   values, widened to inherited views only where the model calls
   `record_view_refs`. The
   [timeline observer](../../src/angee/timeline/events.py) captures affected

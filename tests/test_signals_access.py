@@ -517,6 +517,25 @@ def test_related_records_project_without_view_expansion() -> None:
         ChangePayload.from_instance(WireConcernGroup(id=2, name="wire"), action="update", update_fields=None)
 
 
+@pytest.mark.django_db
+def test_a_broken_feed_projection_fails_the_write(group_feed: Any) -> None:
+    """A related-records hook that breaks its contract aborts the save that observed it."""
+
+    class BrokenConcernGroup(Group):
+        class Meta:
+            proxy = True
+            app_label = "auth"
+
+        def change_related_records(self) -> tuple[str, ...]:
+            return ("not-a-record-ref",)
+
+    group_feed(BrokenConcernGroup, readable_fields=("name",))
+    with pytest.raises(TypeError, match="RecordRef"), transaction.atomic():
+        BrokenConcernGroup.objects.create(name="broken-feed")
+
+    assert not Group.objects.filter(name="broken-feed").exists()
+
+
 def test_publish_change_robust_receivers_log_and_continue(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
