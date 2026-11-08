@@ -1835,11 +1835,10 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         if stage_id is None:
             return None
         stage_model = self.stage_model()
-        queryset = stage_model._base_manager.all()
-        sudo = getattr(queryset, "sudo", None)
-        if callable(sudo):
-            queryset = sudo(reason="work.task.loaded_stage_category")
-        return cast(str | None, queryset.filter(pk=stage_id).values_list("category", flat=True).first())
+        return cast(
+            str | None,
+            stage_model._base_manager.filter(pk=stage_id).values_list("category", flat=True).first(),
+        )
 
     def _stage_for_category(self, category: str) -> Stage:
         """Return the first ordered stage in this task's queue for ``category``."""
