@@ -234,6 +234,25 @@ def test_postgres_blocking_acquire_waits_for_another_session() -> None:
         assert process.exitcode == 0
 
 
+@pytest.mark.django_db(transaction=True)
+def test_postgres_blocking_acquire_refuses_this_sessions_own_key() -> None:
+    """A session lock would nest silently, so a wait on this session's own key fails fast."""
+
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL advisory lock behavior")
+    backend = locks.PostgresAdvisoryLockBackend()
+    key = record_lock_key("integrate.Credential", uuid.uuid4().hex, "refresh")
+    holder = backend.try_acquire(key)
+    assert holder is not None
+    try:
+        with pytest.raises(RuntimeError, match="not reentrant"):
+            backend.acquire(key)
+    finally:
+        holder.release()
+    # The refusal took no nested session lock: one release frees the key.
+    assert backend.is_held(key) is False
+
+
 @pytest.mark.django_db
 def test_task_lock_releases_after_context() -> None:
     """The context helper releases an acquired lock when the task body exits."""

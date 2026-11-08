@@ -50,8 +50,8 @@ class LockBackend(Protocol):
     def acquire(self, key: LockKey) -> LockHandle:
         """Wait until ``key`` is free, then return its handle.
 
-        The caller must not already hold ``key``: the local backend refuses
-        that wait, which could never end.
+        A caller already holding ``key`` is refused: the local wait could never
+        end, and a PostgreSQL session lock would silently nest.
         """
 
     def is_held(self, key: LockKey) -> bool:
@@ -180,23 +180,31 @@ class PostgresAdvisoryLockBackend:
         return _PostgresAdvisoryLockHandle(self.alias, advisory_key)
 
     def acquire(self, key: LockKey) -> LockHandle:
-        """Wait in ``pg_advisory_lock`` until another session releases ``key``."""
+        """Wait in ``pg_advisory_lock`` until another session releases ``key``.
 
-        connection = connections[self.alias]
-        if connection.vendor != "postgresql":
-            raise ImproperlyConfigured("PostgresAdvisoryLockBackend requires a PostgreSQL database connection.")
+        ``pg_advisory_lock`` is reentrant within a session, so a wait on a key
+        this session already holds would return at once; it is refused, as the
+        local backend refuses a thread's wait on its own key.
+        """
+
+        if self._probe(key, this_session=True):
+            raise RuntimeError(f"{key.name} is already held by this session; advisory locks are not reentrant.")
         advisory_key = _advisory_pair(key.name)
-        with connection.cursor() as cursor:
+        with connections[self.alias].cursor() as cursor:
             cursor.execute("SELECT pg_advisory_lock(%s, %s)", advisory_key)
         return _PostgresAdvisoryLockHandle(self.alias, advisory_key)
 
     def is_held(self, key: LockKey) -> bool:
         """Return whether Postgres reports ``key`` as held."""
 
+        return self._probe(key)
+
+    def _probe(self, key: LockKey, *, this_session: bool = False) -> bool:
+        """Return whether a session, or only this one, holds ``key`` in ``pg_locks``."""
+
         connection = connections[self.alias]
         if connection.vendor != "postgresql":
             raise ImproperlyConfigured("PostgresAdvisoryLockBackend requires a PostgreSQL database connection.")
-        advisory_key = _advisory_pair(key.name)
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -211,9 +219,10 @@ class PostgresAdvisoryLockBackend:
                       AND objid = %s
                       AND objsubid = 2
                       AND granted
+                      AND (NOT %s OR pid = pg_backend_pid())
                 )
                 """,
-                advisory_key,
+                (*_advisory_pair(key.name), this_session),
             )
             return bool(cursor.fetchone()[0])
 
