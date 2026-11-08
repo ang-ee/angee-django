@@ -291,6 +291,12 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
 
         return f"{self.kind}:{self.path or '/'}"
 
+    def complete_sync(self, *, now: datetime | None = None) -> None:
+        """Stamp a successful output reconciliation inside its caller's transaction."""
+
+        self.last_synced_at = now or timezone.now()
+        self.save(update_fields=["last_synced_at", "updated_at"])
+
     @classmethod
     def kind_models(cls) -> tuple[type[registry.VcsOutput], ...]:
         """Return the output models that declare a ``source_kind`` (e.g. ``Template``).
@@ -366,8 +372,7 @@ class TemplateManager(AngeeManager, registry.VcsOutputManager):
                 update_fields=["name", "kind", "inputs", "updated_at"],
             )
             self.filter(source=source).exclude(path__in=descriptors_by_path).delete()
-            source.last_synced_at = now
-            source.save(update_fields=["last_synced_at", "updated_at"])
+            source.complete_sync(now=now)
         return len(descriptors)
 
     def _row_from_descriptor(self, source: Any, descriptor: dict[str, Any], *, now: datetime) -> Any:

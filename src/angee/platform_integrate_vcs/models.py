@@ -7,7 +7,6 @@ from typing import Any, ClassVar
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
-from django.utils import timezone
 from django_compose.models import Composable
 from rebac import system_context
 
@@ -147,8 +146,7 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
                     .update(state=addon.AddonState.REMOVED, **addon.reset_runtime_facts())
                 )
                 rows.reconcile_dependencies()
-                current_source.last_synced_at = timezone.now()
-                current_source.save(using=using, update_fields=["last_synced_at", "updated_at"])
+                current_source.complete_sync()
                 source.last_synced_at = current_source.last_synced_at
             return len(descriptors)
 
