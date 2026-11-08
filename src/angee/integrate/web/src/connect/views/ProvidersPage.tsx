@@ -20,15 +20,10 @@ const providerList = (
   </List>
 );
 
-// Connect-readiness is an OAuth concern: an enabled client with credentials and an
-// authorize/token endpoint pair. Discovery can fill those endpoints, but the
-// actual connect flow requires the resolved transport fields.
+// The registration owner's readiness rule (`OAuthClient.configuration_state`)
+// admits discovery-backed endpoints, which the connect flow resolves at startup.
 function canConnectAccount(record: Record<string, unknown>): boolean {
-  if (record.is_enabled !== true) return false;
-  if (!fieldString(record.client_id)) return false;
-  return Boolean(
-    fieldString(record.authorize_endpoint) && fieldString(record.token_endpoint),
-  );
+  return record.configuration_state === "ready";
 }
 
 function fieldString(value: unknown): string {
