@@ -51,7 +51,7 @@ from django.core.exceptions import (
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
 from django.db import IntegrityError, models, router, transaction
-from django.db.models import Q
+from django.db.models import ProtectedError, Q
 from django.db.models.signals import post_save
 from django.urls import reverse
 from django.utils import timezone
@@ -1793,6 +1793,36 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
                 storage.discard(key, context="purge")
 
         transaction.on_commit(discard_unreferenced)
+
+    def purge_if_unretained(self) -> bool:
+        """Purge this row only while nothing retains it, and return whether it did.
+
+        The cleanup for an acquisition its flow created: ``created`` from
+        :meth:`FileManager.ingest_bytes` names an insert, not exclusive use, so
+        the decision is made here under the row lock. A committed edit or owner
+        change since this instance was read, an attachment, a direct share, or a
+        protected reference keeps the row. Unless the row's own authority is
+        elevated (:meth:`effective_actor`), its actor needs ``delete``; once
+        admitted, the retention recheck and the purge run in a system scope.
+        """
+
+        actor, elevated = self.effective_actor()
+        if not elevated:
+            self.require_access("delete", actor)
+        try:
+            with transaction.atomic(), system_context(reason="storage.file.purge_if_unretained"):
+                locked = type(self).system_queryset(lock=("self",)).filter(pk=self.pk).first()
+                if (
+                    locked is None
+                    or (locked.updated_at, locked.owner_id) != (self.updated_at, self.owner_id)
+                    or locked.attachments.exists()
+                    or locked.system_direct_record_access()
+                ):
+                    return False
+                locked.purge()
+        except ProtectedError:
+            return False
+        return True
 
     def _fail(self, *, reason: str) -> None:
         """Transition this row to FAILED, recording why for audit surfaces."""

@@ -1006,6 +1006,42 @@ def test_ingest_dedup_grants_read_reach_to_second_owner(drive: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_file_purge_if_unretained_removes_only_an_unshared_unchanged_unattached_row(drive: Any) -> None:
+    """A creation flag never authorizes the purge alone: an edit, a dedup share or an attachment keeps the row."""
+
+    bob = get_user_model().objects.create_user(username="storage-retained-bob")
+    with system_context(reason="test storage unretained purge"):
+        ingest = {"drive_id": str(drive.sqid), "owner_id": drive.alice.pk}
+        lone, lone_created = File.objects.ingest_bytes(b"lone", filename="lone.txt", **ingest)
+        edited, _created = File.objects.ingest_bytes(b"edited", filename="edited.txt", **ingest)
+        shared, shared_created = File.objects.ingest_bytes(b"shared", filename="shared.txt", **ingest)
+        attached, _created = File.objects.ingest_bytes(b"attached", filename="attached.txt", **ingest)
+        current = File.objects.get(pk=edited.pk)
+        current.title = "Kept by another caller"
+        current.save(update_fields=["title", "updated_at"])
+        File.objects.ingest_bytes(b"shared", filename="again.txt", drive_id=str(drive.sqid), owner_id=bob.pk)
+        FileAttachment.objects.attach(attached, MtiChild.objects.create(title="Holder", detail="record"))
+
+        assert lone_created and shared_created
+        assert lone.purge_if_unretained()
+        assert [row.purge_if_unretained() for row in (edited, shared, attached)] == [False, False, False]
+        remaining = set(File._base_manager.filter(drive=drive).values_list("pk", flat=True))
+    assert remaining == {edited.pk, shared.pk, attached.pk}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_purge_if_unretained_requires_delete_outside_a_system_scope(drive: Any) -> None:
+    """An actor without delete on the file cannot discard it, and the row stays."""
+
+    outsider = get_user_model().objects.create_user(username="storage-purge-outsider")
+    with system_context(reason="test storage unretained purge setup"):
+        row, _created = File.objects.ingest_bytes(b"kept", filename="kept.txt", drive_id=str(drive.sqid))
+    with actor_context(outsider), pytest.raises(PermissionDenied):
+        File._base_manager.get(pk=row.pk).purge_if_unretained()
+    assert File._base_manager.filter(pk=row.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_ingest_image_takes_raster_bytes_and_refuses_script_or_oversized_content(
     image_drive: Any, settings: Any
 ) -> None:
