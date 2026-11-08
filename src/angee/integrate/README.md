@@ -33,8 +33,8 @@ their protected `applied_base`, a snapshot in the link's own native history.
 Observation never advances that base. Remote-only changes apply locally;
 local-only changes may write back with a remote version fence. Divergent edits
 and remote deletion against a local edit require an explicit choice. Identical
-edits converge. Adapters revalidate
-their local projection under domain locks before applying.
+edits converge. Adapters revalidate their local projection under domain locks
+before applying.
 
 A conditional write returns authoritative source evidence and version, retained
 with the local projection so the driver recognizes its next pull echo. The link
@@ -42,9 +42,8 @@ checks its complete retained reflection precondition beside the transport's
 remote-version fence. Neither makes the two systems atomic.
 Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
 
-Each applied record retains the observe row and the application-evidence row
-(commit 8 review ruling); a record delivered again unchanged retains only its
-observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
+Each applied record retains the observe row and the application-evidence row;
+a record delivered again unchanged retains only its observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
 the snapshots from generation changes, when retained links follow the new epoch.
 The Streams tab's link history drill-down is the provenance
 [History timeline](../provenance/README.md#history-surface) for the link: one
