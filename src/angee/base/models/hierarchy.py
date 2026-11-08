@@ -154,7 +154,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
             parent = parents[id(row)]
             if parent is not None and any(getattr(row, name) != getattr(parent, name) for name in scope):
                 raise ValidationError({"parent": "Parent must belong to the same scope."})
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             rank_fields = tuple(
                 column for column in model._meta.concrete_fields if isinstance(column, FractionalRankField)
             )
@@ -434,7 +434,7 @@ class HierarchyMixin(PersistenceMixin):
 
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         kwargs["using"] = using
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             if self._state.adding:
                 self._save_created(*args, **kwargs)
             else:
@@ -473,7 +473,7 @@ class HierarchyMixin(PersistenceMixin):
         """Insert the row, then derive its ``path`` from the parent's committed path."""
 
         using = kwargs["using"]
-        with transaction.atomic(using=using), type(self).initialize_rows([self], using=using) as deferred:
+        with transaction.atomic(), type(self).initialize_rows([self], using=using) as deferred:
             super().save(*args, **kwargs)
             parent = self._hierarchy_parent(using=using)
             if parent is not None:
@@ -506,7 +506,7 @@ class HierarchyMixin(PersistenceMixin):
         if update_fields is not None:
             kwargs["update_fields"] = set(update_fields) | {"parent", "path"}
         using = kwargs["using"]
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             old_path = self._lock_moved_paths(using=using)
             subtree = type(self).system_queryset(lock=("self",)).using(using).filter(path__startswith=old_path)
             descendant_paths = []

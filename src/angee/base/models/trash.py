@@ -180,7 +180,7 @@ class TrashMixin(PersistenceMixin, models.Model):
 
         reason = clean_trash_reason(reason)
         db = self._state.db
-        with transaction.atomic(using=db):
+        with transaction.atomic():
             self._require_trash_state(trashed=False)
             self.validate_trash()
             self.is_trashed = True
@@ -196,7 +196,7 @@ class TrashMixin(PersistenceMixin, models.Model):
         """Take this row out of the trash, clearing its trash stamps."""
 
         db = self._state.db
-        with transaction.atomic(using=db):
+        with transaction.atomic():
             self._require_trash_state(trashed=True)
             for name, value in self.UNTRASHED_VALUES.items():
                 setattr(self, name, value)
@@ -318,7 +318,7 @@ class TrashQuerySet(CanonicalQuerySet[_TrashModelT]):
     def _update_trash(self, values: Mapping[str, Any]) -> int:
         """Freeze authorized keys, update through history, then publish bounded batches."""
 
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             keys = list(self.select_for_update().values_list("pk", flat=True))
             if not keys:
                 return 0

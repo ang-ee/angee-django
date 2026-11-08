@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import nullcontext
 from typing import Any, ClassVar, Self, TypeVar
 
 from django.core import checks
 from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django_compose.models import Composable
 from rebac import (
     RebacMixin,
@@ -199,11 +198,7 @@ class AngeeModel(
     def _write_declared_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
         """Keep fresh subject admission and the native relationship write under owner locks."""
 
-        using = router.db_for_write(type(self), instance=self)
-        relationships_using = router.db_for_write(active_relationship_model())
-        with transaction.atomic(using=using), (
-            transaction.atomic(using=relationships_using) if relationships_using != using else nullcontext()
-        ):
+        with transaction.atomic():
             actor, elevated = self.effective_actor()
             target = self.lock_for_record_access()
             if elevated:
@@ -254,8 +249,7 @@ class AngeeModel(
         """Delete the tuple and notify its lifecycle owners in the same transaction."""
 
         subject_ref = _relationship_subject(subject)
-        using = router.db_for_write(active_relationship_model())
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             delete_relationship(
                 RelationshipTuple(
                     resource=to_object_ref(self),

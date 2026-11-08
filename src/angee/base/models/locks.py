@@ -84,7 +84,7 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
             return super().update(**kwargs)
         rows = self.select_for_update()
         alias = rows.db
-        with transaction.atomic(using=alias):
+        with transaction.atomic():
             rows = rows.with_action("write").scoped() if isinstance(rows, RebacQuerySet) else rows
             fields: dict[str, models.Field[Any, Any]] = {}
             for name in kwargs:
@@ -391,7 +391,7 @@ class OptimisticLockMixin(PersistenceMixin, models.Model):
         else:
             kwargs["force_insert"] = True
         try:
-            with transaction.atomic(using=using):
+            with transaction.atomic():
                 if expected_revision is not None:
                     updated = rows.filter(**{counter: expected_revision}).update(**{counter: F(counter) + 1})
                     if not updated:

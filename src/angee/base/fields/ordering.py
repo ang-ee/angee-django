@@ -242,8 +242,7 @@ class FractionalRankField(models.FloatField):
         Staging avoids all stored and final ranks, including an exhausted tail.
         """
 
-        using = rows.db
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             instances = list(rows.select_for_update(of=("self",)).order_by(self.name, "pk"))
             if not instances:
                 return 0

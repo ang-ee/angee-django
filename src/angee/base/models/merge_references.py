@@ -245,7 +245,7 @@ class Reference:
                     "resolve that before merging."
                 )
         try:
-            with transaction.atomic(using=using):
+            with transaction.atomic():
                 # A hierarchy's ``parent`` is re-pointed by its model's ``merge_contract``
                 # above (the path and cycle owner), never by this bulk update.
                 rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
