@@ -20,7 +20,20 @@ from typing import Any
 import httpx
 import httpx2
 import pytest
-from anthropic.types import Message, TextBlock, Usage
+from anthropic.types import (
+    Message,
+    MessageDeltaUsage,
+    RawContentBlockDeltaEvent,
+    RawContentBlockStartEvent,
+    RawContentBlockStopEvent,
+    RawMessageDeltaEvent,
+    RawMessageStartEvent,
+    RawMessageStopEvent,
+    RawMessageStreamEvent,
+    TextBlock,
+    TextDelta,
+    Usage,
+)
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
@@ -515,6 +528,36 @@ class _FakeAnthropicMessages:
             stop_sequence=None,
             usage=Usage(input_tokens=3, output_tokens=1),
         )
+
+
+def _anthropic_event_stream(message: Message) -> bytes:
+    """Encode an SDK message as the server-sent events of a streamed Messages response."""
+
+    events: list[RawMessageStreamEvent] = [
+        RawMessageStartEvent(type="message_start", message=message.model_copy(update={"content": []})),
+    ]
+    for index, block in enumerate(message.content):
+        assert isinstance(block, TextBlock)
+        events += [
+            RawContentBlockStartEvent(
+                type="content_block_start", index=index, content_block=TextBlock(type="text", text="")
+            ),
+            RawContentBlockDeltaEvent(
+                type="content_block_delta", index=index, delta=TextDelta(type="text_delta", text=block.text)
+            ),
+            RawContentBlockStopEvent(type="content_block_stop", index=index),
+        ]
+    events += [
+        RawMessageDeltaEvent.model_validate(
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": message.stop_reason, "stop_sequence": message.stop_sequence},
+                "usage": MessageDeltaUsage(output_tokens=message.usage.output_tokens),
+            }
+        ),
+        RawMessageStopEvent(type="message_stop"),
+    ]
+    return b"".join(f"event: {event.type}\ndata: {event.model_dump_json()}\n\n".encode() for event in events)
 
 
 class _FakeAnthropicClient:
@@ -1106,11 +1149,17 @@ def inference_http(monkeypatch, request):
                 },
                 request=request,
             )
-        response = (
-            _FakeAnthropicMessages(None).create()
-            if request.url.path.endswith("/messages")
-            else _FakeOpenAICompletions(None).create()
-        )
+        if request.url.path.endswith("/messages"):
+            message = _FakeAnthropicMessages(None).create()
+            if json.loads(content).get("stream"):
+                return httpx2.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=_anthropic_event_stream(message),
+                    request=request,
+                )
+            return httpx2.Response(200, json=message.model_dump(mode="json"), request=request)
+        response = _FakeOpenAICompletions(None).create()
         if scenario == "structured":
             response.choices[0].message.content = '{"text":"pong"}'
         return httpx2.Response(200, json=response.model_dump(mode="json"), request=request)
