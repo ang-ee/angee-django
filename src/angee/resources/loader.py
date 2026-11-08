@@ -130,7 +130,7 @@ class AngeeResource(resources.ModelResource):
             if row[name] is NOT_PROVIDED:
                 del row[name]
         row_number = kwargs["row_number"]
-        xref = self._row_xref(row.get("_xref"), row_number=row_number)
+        xref = self.entry.normalize_xref(row.get("_xref"), row_number)
         row["_xref"] = xref
         self._row_hashes[xref] = self._row_content_hash(row)
         super().before_import_row(row, **kwargs)
@@ -138,7 +138,7 @@ class AngeeResource(resources.ModelResource):
     def bind_instance(self, xref: str, instance: models.Model, *, replace: bool = False) -> None:
         """Ledger an owner-created identity; retarget only through an explicit owner verb."""
 
-        xref = self._row_xref(xref, row_number=0)
+        xref = self.entry.normalize_xref(xref, 0)
         identity = str(public_id_of(instance))
         defaults = self._ledger_defaults(instance, self._row_content_hash({"identity": identity}))
         manager = self.ledger_model._default_manager.db_manager(self.get_db_connection_name())
@@ -214,7 +214,7 @@ class AngeeResource(resources.ModelResource):
     ) -> None:
         """Restore auto-managed source values and upsert the ledger row."""
 
-        xref = self._row_xref(row.get("_xref"), row_number=kwargs["row_number"])
+        xref = self.entry.normalize_xref(row.get("_xref"), kwargs["row_number"])
         self._restore_auto_fields(instance, row)
         self._upsert_ledger(
             xref=xref,
@@ -269,7 +269,7 @@ class AngeeResource(resources.ModelResource):
     def instance_for_row(self, row: Mapping[str, Any]) -> models.Model | None:
         """Resolve row identity and record native import hash skips."""
 
-        xref = self._row_xref(row.get("_xref"), row_number=0)
+        xref = self.entry.normalize_xref(row.get("_xref"), 0)
         ledger = self._ledger_for_xref(xref)
         identity = self._adopt_identity(row)
         instance = self.instance_for_xref(xref)
@@ -371,7 +371,7 @@ class AngeeResource(resources.ModelResource):
             for source_row in dataset.dict:
                 row = {name: value for name, value in source_row.items() if value is not NOT_PROVIDED}
                 try:
-                    xref = resource._row_xref(row.get("_xref"), row_number=0)
+                    xref = resource.entry.normalize_xref(row.get("_xref"), 0)
                     instance = resource.get_instance(loader, row)
                 except (ResourceLoadError, ValueError, ValidationError, ImproperlyConfigured):
                     continue
@@ -383,7 +383,7 @@ class AngeeResource(resources.ModelResource):
     def _prime_existing_ledgers(self, dataset: tablib.Dataset) -> None:
         """Load existing ledger rows for this import dataset in one query."""
 
-        xrefs = {self._row_xref(value, row_number=index) for index, value in enumerate(dataset["_xref"], start=1)}
+        xrefs = {self.entry.normalize_xref(value, index) for index, value in enumerate(dataset["_xref"], start=1)}
         self._existing_ledgers = {xref: None for xref in xrefs}
         if not xrefs:
             return
@@ -396,13 +396,6 @@ class AngeeResource(resources.ModelResource):
                 "Resource",
                 ledger,
             )
-
-    def _row_xref(self, value: Any, *, row_number: int) -> str:
-        """Return the normalized xref for one import row."""
-
-        if not isinstance(value, str) or not value.strip():
-            raise ResourceLoadError(f"{self.entry.display} row {row_number}: missing _xref")
-        return value.strip()
 
     def _row_content_hash(self, row: Mapping[str, Any]) -> str:
         """Hash updateable seed values, excluding identity and initial state."""

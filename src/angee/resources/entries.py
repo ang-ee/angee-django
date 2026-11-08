@@ -360,7 +360,7 @@ class ResourceEntry:
                 group = ResourceGroup(self, label, tablib.Dataset(headers=["_xref"]), [])
                 groups[key] = group
             raw_xref = record.get("_xref") or record.get("xref")
-            xref = self._normalized_xref(raw_xref, index)
+            xref = self.normalize_xref(raw_xref, index)
             values = self._values_for(record)
             for name in values:
                 if name not in group.dataset.headers:
@@ -378,7 +378,7 @@ class ResourceEntry:
         values = dataset["_xref"] if "_xref" in dataset.headers else [None] * len(dataset)
         aliases = dataset["xref"] if "xref" in dataset.headers else [None] * len(dataset)
         xrefs = [
-            self._normalized_xref(value or alias, index)
+            self.normalize_xref(value or alias, index)
             for index, (value, alias) in enumerate(zip(values, aliases, strict=True), start=1)
         ]
         for column in ("_xref", "xref"):
@@ -392,11 +392,11 @@ class ResourceEntry:
             list(range(1, len(dataset) + 1)),
         )
 
-    def _normalized_xref(self, value: Any, index: int) -> str:
-        """Return the one technical identity column with source diagnostics."""
+    def normalize_xref(self, value: Any, row: int) -> str:
+        """Return one row's addon-local xref, refusing a blank one with this entry's source diagnostics."""
 
         if not isinstance(value, str) or not value.strip():
-            raise ResourceLoadError(f"{self.display} row {index}: missing _xref")
+            raise ResourceLoadError(f"{self.display} row {row}: missing _xref")
         return value.strip()
 
     @staticmethod
