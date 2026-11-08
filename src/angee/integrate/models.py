@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from copy import copy, deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -90,7 +90,6 @@ from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document as oidc_metadata_document
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
-from angee.integrate.oauth.registrations import oauth_client_is_ready
 from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import (
@@ -177,12 +176,18 @@ class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeHistoryQuerySet[OAuthC
         )
         return self.filter(pk=Subquery(alternatives.values("pk")[:1]))
 
+    def ready_registrations(self) -> tuple[OAuthClientT, ...]:
+        """Apply the model's readiness rule to each slug's preferred registration, without secrets."""
+
+        return tuple(
+            row for row in self.preferred().only(*self.model.readiness_fields) if row.configuration_state == "ready"
+        )
+
     def connectable(self) -> Self:
         """Use the model's readiness rule for the public connection picker."""
 
-        public = self.system_context(reason="integrate.graphql.connectable").preferred()
-        ready_ids = [row.pk for row in public.only(*self.model.readiness_fields) if row.configuration_state == "ready"]
-        return public.filter(pk__in=ready_ids)
+        public = self.system_context(reason="integrate.graphql.connectable")
+        return public.filter(pk__in=[row.pk for row in public.ready_registrations()])
 
     def enabled_for_slug(self, slug: str, *, environment: str = "prod") -> OAuthClientT | None:
         """Resolve the same ready registration the picker and projection offer."""
@@ -2014,8 +2019,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             .get(pk=self.vendor_id)
         )
 
-    def is_oauth_connectable(self) -> bool:
-        """Use registration readiness without constructing a runtime or loading secrets."""
+    def is_oauth_connectable(self, *, ready_slugs: Collection[str] | None = None) -> bool:
+        """Use registration readiness without constructing a runtime or loading secrets.
+
+        ``ready_slugs`` is a caller's readiness snapshot, such as the GraphQL
+        operation's; without one, this capability's registration is read once.
+        """
 
         if (self.declared_concrete_model() or type(self)) is apps.get_model("integrate", "Integration"):
             return False
@@ -2023,9 +2032,18 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             slug = self.connection_oauth_slug()
         except OAuthFlowError:
             return False
-        return oauth_client_is_ready(slug)
+        if ready_slugs is not None:
+            return slug in ready_slugs
+        with system_context(reason="integrate.oauth.public_readiness"):
+            return bool(apps.get_model("integrate", "OAuthClient").objects.filter(slug=slug).ready_registrations())
 
-    def can_connect(self, actor: Any = None, *, write_access: bool | None = None) -> bool:
+    def can_connect(
+        self,
+        actor: Any = None,
+        *,
+        write_access: bool | None = None,
+        ready_slugs: Collection[str] | None = None,
+    ) -> bool:
         """OAuth Connect requires ownership, write, registration and consent need.
 
         A healthy grant with failed discovery is repaired by Retry, so that row
@@ -2037,7 +2055,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             self.owner_id == actor_user_id(subject)
             and (check_permission("write", self, actor=actor).allowed if write_access is None else write_access)
             and (self.credential_id is None or self.is_reconnect_required)
-            and self.is_oauth_connectable()
+            and self.is_oauth_connectable(ready_slugs=ready_slugs)
         )
 
     def require_connect(self, actor: Any) -> None:

@@ -70,7 +70,7 @@ from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationManager
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
-from angee.integrate.oauth.registrations import OAuthRegistrationExtension
+from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
@@ -1065,7 +1065,12 @@ class IntegrationConnectionMixin:
     def can_connect(self) -> bool:
         """Project the model's owner-scoped OAuth Connect admission."""
 
-        return bool(cast(Any, self).can_connect(write_access="write" in held_permissions(cast(Any, self), ("write",))))
+        return bool(
+            cast(Any, self).can_connect(
+                write_access="write" in held_permissions(cast(Any, self), ("write",)),
+                ready_slugs=operation_registration_slugs(),
+            )
+        )
 
     @strawberry_django.field(
         only=[
@@ -1150,7 +1155,7 @@ class IntegrationOAuthMixin:
     def is_oauth_connectable(self) -> bool:
         """Read public registration readiness without resolving protected relations."""
 
-        return bool(cast(Any, self).is_oauth_connectable())
+        return bool(cast(Any, self).is_oauth_connectable(ready_slugs=operation_registration_slugs()))
 
 
 @strawberry.type

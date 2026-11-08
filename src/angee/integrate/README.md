@@ -126,9 +126,12 @@ through `OAuthClientProtocol.confidential_client_secret()`; public clients are
 refused before secret storage is accessed; confidential clients without a secret
 are refused too. `OAuthClient.is_public_client` owns that classification.
 
-`OAuthClient.configuration_state` is the readiness rule used by the picker,
-connect and the operation-local [registration snapshot](oauth/registrations.py).
-The snapshot reads public configuration fields, never client secrets. OIDC
+`OAuthClient.configuration_state` is the readiness rule;
+`OAuthClientQuerySet.ready_registrations` applies it to each slug's preferred
+registration for the picker, connect and the operation-local
+[registration snapshot](oauth/registrations.py), which the console projections
+pass to `Integration.is_oauth_connectable`. Readiness reads public
+configuration fields, never client secrets. OIDC
 metadata discovery resolves OAuth endpoints independently of connection
 discovery. Host
 settings are applied through `oauth_clients` after resources load.
