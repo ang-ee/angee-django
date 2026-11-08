@@ -74,7 +74,6 @@ vi.mock("@refinedev/core", async (importOriginal) => {
 });
 
 vi.mock("@angee/operator/runtime", () => ({
-  OperatorTransportProvider: ({ children }: { children: ReactNode }) => children,
   ServiceRow: ({ name }: { name: string }) => (
     <section data-testid="service-row">{name}</section>
   ),

@@ -94,16 +94,28 @@ export interface OperatorConnection {
   token: string;
   restartJob: string | null;
 }
+const INITIAL_CONNECTION_STATE: OperatorConnectionState = { kind: "loading" };
 const OperatorConnectionContext = createContext<OperatorConnection | null>(null);
-const OperatorConnectionStateContext = createContext<OperatorConnectionState>({ kind: "loading" });
+/** `null` outside any transport, so a nested provider can find the one that owns the bearer. */
+const OperatorConnectionStateContext = createContext<OperatorConnectionState | null>(null);
 
 export interface OperatorTransportProviderProps {
   children: ReactNode;
 }
 
+/**
+ * The operator daemon transport for its subtree. The outermost provider owns the
+ * one bearer (mint, rotation, socket, clearing on unmount); a nested provider
+ * reuses it, so mounting or unmounting a nested one never touches the host bearer.
+ */
 export function OperatorTransportProvider({
   children,
 }: OperatorTransportProviderProps): ReactNode {
+  const host = useContext(OperatorConnectionStateContext);
+  return host ? children : <OperatorTransportOwner>{children}</OperatorTransportOwner>;
+}
+
+function OperatorTransportOwner({ children }: OperatorTransportProviderProps): ReactNode {
   const t = useOperatorT();
   const queryClient = useQueryClient();
   const connectionQuery = useAuthoredQuery(OperatorConnectionQuery, undefined, {
@@ -129,7 +141,7 @@ export function OperatorTransportProvider({
     }
   }, [connectionQuery.data, connectionQuery.error, connectionQuery.isFetching, t]);
 
-  const [committedState, setCommittedState] = useState<OperatorConnectionState>({ kind: "loading" });
+  const [committedState, setCommittedState] = useState<OperatorConnectionState>(INITIAL_CONNECTION_STATE);
   useEffect(() => {
     const token = state.kind === "ready" ? state.connection.token : null;
     // Child effects can start requests before this effect runs. Retain the old
@@ -184,7 +196,7 @@ export function OperatorTransportProvider({
 }
 
 export function useOperatorConnectionState(): OperatorConnectionState {
-  return useContext(OperatorConnectionStateContext);
+  return useContext(OperatorConnectionStateContext) ?? INITIAL_CONNECTION_STATE;
 }
 
 /** The daemon connection (endpoint + bearer) for non-GraphQL transports (log sockets). */
