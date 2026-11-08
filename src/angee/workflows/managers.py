@@ -77,6 +77,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
+DISPATCH_RECOVERY_SECONDS = 60
+"""Database-clock delivery age shared by message expiry and replacement admission."""
 PRUNE_BATCH_LIMIT = 25
 """Prune examines at most 25 roots per tick; blocked roots retry after one day."""
 _held_runs: ContextVar[set[int] | None] = ContextVar("workflows_held_runs", default=None)
@@ -1052,14 +1054,18 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
         return {"waiting_kind": None, "wait_reason": "", "wake_at": None, "deadline_at": None, "updated_at": Now()}
 
     def dispatch(self) -> None:
-        """Send unlocked ready rows after refreshing their delivery timestamp."""
+        """Send ready rows with native expiry; the retained row owns recovery."""
         with transaction.atomic(), system_context(reason="workflows.dispatch"):
             ready = self.filter(status=StepRunStatus.READY).exclude(run__status__in=RunStatus.terminal_values())
             selected = ready.order_by("pk").lock_if_supported(no_key=True, skip_locked=True)
             selected_ids = list(selected.values_list("pk", flat=True))
             ready.filter(pk__in=selected_ids).update(dispatched_at=Now(), updated_at=Now())
-            for pk in selected_ids:
-                enqueue_task("workflows.execute", kwargs={"step_run_id": pk})
+            deliveries = ready.filter(pk__in=selected_ids).order_by("pk").values_list("pk", "dispatched_at")
+            for pk, dispatched_at in deliveries:
+                enqueue_task(
+                    "workflows.execute", kwargs={"step_run_id": pk},
+                    expires=dispatched_at + timedelta(seconds=DISPATCH_RECOVERY_SECONDS),
+                )
 
     def count_redispatch(self) -> int:
         """Count a tick redelivery without changing status or publishing a change."""
@@ -1224,7 +1230,9 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
 
     def undispatched(self) -> Any:
         """Return ready rows whose most recent delivery is old enough to retry."""
-        return self.filter(status=StepRunStatus.READY, dispatched_at__lte=Now() - timedelta(seconds=60))
+        return self.filter(
+            status=StepRunStatus.READY, dispatched_at__lte=Now() - timedelta(seconds=DISPATCH_RECOVERY_SECONDS),
+        )
 
     def expired(self) -> Any:
         """Return committed claims whose database deadline has expired."""
