@@ -220,6 +220,9 @@ def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monke
     retained_conflict = next(
         (row for row in SyncStream.objects.get(pk=replica.pk).sync_failures(open_only=False) if row.id == conflict.pk)
     )
+    stream = SyncStream.objects.get(pk=replica.pk)
+    assert stream.sync_failures(kind=SyncFailureKind.CONFLICT) == (retained_conflict,)
+    assert stream.sync_failures(kind=SyncFailureKind.REMOTE_REJECTED) == ()
     retained_link = RecordLink.objects.filter(pk=link.pk).values().get()
     adapter = Mock(spec=BridgeImpl, supports_identity_reads=True)
     monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
