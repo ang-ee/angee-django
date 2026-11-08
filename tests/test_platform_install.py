@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.db import DatabaseError
 from rebac import system_context, to_object_ref
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -97,6 +98,30 @@ def test_enable_appends_the_root_and_reflects_pending(
     assert row.pending is True
     assert str(row.state) == Addon.AddonState.DISABLED  # not composed until the next boot
     assert to_object_ref(row).resource_id == str(row.pk)
+
+
+def test_enable_reports_a_committed_edit_whose_catalogue_refresh_failed(
+    composed_tables: None,
+    project_settings_yaml: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mirror failure after the settings edit is an applied edit with pending reconciliation."""
+
+    del composed_tables
+    admin = _platform_admin("install-mirror-admin")
+
+    def fail_reconcile(self: Any, *, desired: frozenset[str] | None) -> None:
+        raise DatabaseError("catalogue mirror unavailable")
+
+    # Scoped to the mutation: the teardown flush reruns the post-migrate reconcile.
+    with monkeypatch.context() as patched:
+        patched.setattr(platform_models.AddonManager, "reconcile_from_registry", fail_reconcile)
+        result = _data(execute_schema(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=admin))["enable"]
+
+    assert result["ok"] is True
+    assert result["message"].startswith(f"Enabled {_AVAILABLE_ADDON}; the change is pending a restart.")
+    assert "reconciles on the next restart" in result["message"]
+    assert _AVAILABLE_ADDON in project_settings_yaml.read_text(encoding="utf-8")
 
 
 def test_enable_is_idempotent_for_an_already_listed_root(
