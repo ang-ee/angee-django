@@ -169,7 +169,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
             for row in rows:
                 row.parent = None
             for column, values in final_ranks.items():
-                temporary = column.get_temporary_ranks(rows, values, using=using)
+                temporary = column.get_temporary_ranks(rows, values)
                 for row, rank in zip(rows, temporary, strict=True):
                     setattr(row, column.attname, rank)
             with model.initialize_rows(rows, using=using):

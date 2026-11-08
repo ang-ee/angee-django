@@ -133,7 +133,7 @@ class AngeeModel(
                     # Immediate uniqueness forbids cyclic swaps: stage the moving
                     # lines on free ranks, then save their exact final values below.
                     temporary = position.get_temporary_ranks(
-                        moving, (values.get(position.name) for _pid, values in desired), using=lines.db,
+                        moving, (values.get(position.name) for _pid, values in desired),
                     )
                     staged = [copy(line) for line in moving]
                     for line, rank in zip(staged, temporary, strict=True):
