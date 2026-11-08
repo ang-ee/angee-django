@@ -404,3 +404,19 @@ def test_currency_rate_rejects_inexact_values_before_writing(
             assert rate.rate == Decimal("0.9")
         else:
             assert not CurrencyRate.objects.filter(currency=eur).exists()
+
+
+def test_rate_read_keeps_the_selected_rate_population(composed_tables: None) -> None:
+    """A rate read resolves within the rows its queryset selected, not the whole table."""
+
+    del composed_tables
+    usd = _make_currency("USD")
+    eur = _make_currency("EUR")
+    first = _make_rate(eur, date(2026, 1, 1), "0.9")
+    _make_rate(eur, date(2026, 2, 1), "0.8")
+    with system_context(reason="money rate population test"), override_settings(ANGEE_MONEY_REFERENCE_CURRENCY="USD"):
+        assert CurrencyRate.objects.rate_for(eur, date(2026, 3, 1)) == Decimal("0.8")
+        assert CurrencyRate.objects.filter(pk=first.pk).rate_for(eur, date(2026, 3, 1)) == Decimal("0.9")
+        with pytest.raises(CurrencyRate.DoesNotExist):
+            CurrencyRate.objects.none().rate_for(eur, date(2026, 3, 1))
+        assert CurrencyRate.objects.none().rate_for(usd, date(2026, 3, 1)) == Decimal(1)

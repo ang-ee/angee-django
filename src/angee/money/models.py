@@ -147,7 +147,7 @@ class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         rates = apps.get_model(self._meta.app_label, "CurrencyRate").objects
         if context is not None:
             rates.validate_context_reference(context, reference_currency)
-        canonical_source, canonical_target = rates._canonical_currencies(
+        canonical_source, canonical_target = rates.canonical_currencies(
             self,
             to_currency,
         )
@@ -171,7 +171,7 @@ class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
 
 
 class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHistoryQuerySet[RateT]):
-    """Protect contextual identity fields that also govern rate visibility."""
+    """Resolve effective rates within the selected rows; protect the identity fields that govern visibility."""
 
     _identity_fields = {
         "currency",
@@ -193,13 +193,6 @@ class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHis
             raise ValidationError("Currency-rate identity changes through its native owner.")
         return super().update(**kwargs)
 
-
-_CurrencyRateManagerBase = AngeeHistoryManager.from_queryset(CurrencyRateQuerySet)
-
-
-class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
-    """Resolves the effective exchange rate for a currency on a date."""
-
     def rate_for(
         self,
         currency: models.Model,
@@ -220,7 +213,7 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
 
         if (context is None) != (reference_currency is None):
             raise ValidationError("Contextual currency conversion requires its explicit reference currency.")
-        canonical_currency, canonical_reference = self._canonical_currencies(
+        canonical_currency, canonical_reference = self.canonical_currencies(
             currency,
             reference_currency,
         )
@@ -269,7 +262,7 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
         if context is None or reference_currency is None:
             raise ValidationError("Contextual currency conversion requires saved canonical owners.")
         context_ref = self._canonical_context(context)
-        self._canonical_currencies(
+        self.canonical_currencies(
             reference_currency,
             reference_currency,
         )
@@ -290,9 +283,11 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
             raise ValidationError("The currency-rate context is unavailable.")
         return canonical
 
-    def _canonical_currencies(
+    def canonical_currencies(
         self, currency: models.Model, reference_currency: models.Model | None
     ) -> tuple[Currency, Currency]:
+        """Reload saved canonical Currency rows; the reference defaults to ``currency`` itself."""
+
         if currency is None or currency.pk is None:
             raise ValidationError("Currency-rate reads require saved canonical currencies.")
         declared_model = self.model.currency.field.related_model
@@ -310,6 +305,9 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
             rows[currency.pk],
             rows[currency.pk] if reference_currency is None else rows[reference_currency.pk],
         )
+
+
+CurrencyRateManager = AngeeHistoryManager.from_queryset(CurrencyRateQuerySet)
 
 
 class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel, concrete=True):
