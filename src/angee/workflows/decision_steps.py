@@ -1,14 +1,16 @@
 """Ask-and-continue support over independent decisions."""
 
+from copy import copy
 from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import transaction
 from pydantic import BaseModel, ConfigDict, Field
-from rebac import actor_context
+from rebac import PermissionDenied, RebacMixin, actor_context
 
 from angee.base.models.identity import public_id_of
+from angee.base.models.persistence import PersistenceMixin
 from angee.base.permissions import require_rebac_queryset
 from angee.base.querysets import row_lock_paths
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRequest
@@ -36,11 +38,22 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                 if reference is None:
                     raise ValidationError("The record for a chosen action is missing or inaccessible.")
                 target_model = actions.target_model(reference)
-                record = (
-                    require_rebac_queryset(target_model, actor=actor).for_write()
-                    .filter(pk=reference.pk).select_for_update(of=row_lock_paths(target_model)).get()
-                )
+                targets = require_rebac_queryset(target_model, actor=actor).for_write().filter(pk=reference.pk)
+                record = targets.get()
                 try:
+                    if isinstance(record, PersistenceMixin):
+                        candidate = copy(record)
+                        proposed = actions.resolve(record, context={"actor": actor},
+                                                   values=(decision.verdict_values or {}).get(identity))
+                        for name, value in proposed.items():
+                            if not record._meta.get_field(name).many_to_many:
+                                setattr(candidate, name, value)
+                        candidate.lock_subject()
+                        record = targets.get()
+                    else:
+                        record = targets.select_for_update(of=row_lock_paths(target_model)).get()
+                    if isinstance(record, RebacMixin) and not record.with_actor(actor).has_access("write"):
+                        raise PermissionDenied(f"Denied: cannot write {target_model._meta.label} {identity!r}")
                     values = actions.resolve(record, context={"actor": actor},
                                              values=(decision.verdict_values or {}).get(identity))
                 except ValueError as error:
