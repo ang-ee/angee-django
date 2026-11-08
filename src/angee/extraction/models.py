@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -398,6 +398,39 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
             self.outcome["kind"] == ExtractionStatus.FAILED
             and self.outcome.get("code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
         )
+
+    def inference_admission(
+        self,
+        *,
+        allow_inference: bool,
+        identity_mapping: Mapping[str, str],
+    ) -> Literal["correspondence_required", "unchanged", "correspondence", "infer"]:
+        """Choose this candidate's next inference act, without reading sources or writing.
+
+        ``correspondence_required`` and ``unchanged`` settle the request;
+        ``correspondence`` finalizes a held candidate with the given mapping and
+        ``infer`` calls the mapping model. A held candidate the mapping model has
+        not read still owes its inference; correspondence is then judged on the
+        inferred candidate.
+        """
+        profile = self.get_profile_impl()()
+        corresponding = self.awaiting_correspondence and not (
+            allow_inference
+            and not identity_mapping
+            and ExtractionRole.MAPPING not in self.used_model_roles
+            and profile.inference_required(self.result, self.unresolved_reasons)
+        )
+        if corresponding and not identity_mapping:
+            return "correspondence_required"
+        if not self.awaiting_correspondence and (
+            not allow_inference or not profile.inference_required(self.result, self.unresolved_reasons)
+        ):
+            return "unchanged"
+        return "correspondence" if corresponding else "infer"
+
+    def retained_inference_parts(self) -> tuple[DocumentPart, ...]:
+        """Return the retained carriers inference reads; a source hold offers none."""
+        return () if self.outcome.get("code") == "source_hold" else self.document_parts()
 
     def fact_authority(self, pointer: str) -> FactAuthority:
         """Classify a retained fact as source-grounded or unverified."""

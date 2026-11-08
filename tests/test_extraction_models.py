@@ -208,6 +208,21 @@ def test_exact_retry_reuses_revision_and_conflicting_request_is_rejected(evidenc
     assert Extraction.objects.count() == 1
 
 
+def test_retained_inference_admission_settles_without_reading_sources(evidence, monkeypatch):
+    retain, values = evidence
+    row = retain()
+    unresolved = replace(values["result"], provider_metadata={"unresolved_reasons": ["missing total"]})
+    pending = retain(result=unresolved, request_key="unresolved")
+    held = retain(result=unresolved, request_key="held", error_code="source_hold")
+    monkeypatch.setattr(Extraction, "document_sources", lambda self: pytest.fail("Admission must not read sources."))
+
+    assert row.inference_admission(allow_inference=True, identity_mapping={}) == "unchanged"
+    assert pending.inference_admission(allow_inference=False, identity_mapping={}) == "unchanged"
+    assert pending.inference_admission(allow_inference=True, identity_mapping={}) == "infer"
+    assert row.retained_inference_parts() == row.document_parts()
+    assert held.retained_inference_parts() == ()
+
+
 def test_carrier_storage_writes_and_reads_precede_the_lineage_transaction(evidence, monkeypatch):
     retain, _values = evidence
     ingest, read = FileManager.ingest_bytes, File.read_verified
