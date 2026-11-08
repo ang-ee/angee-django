@@ -1,4 +1,11 @@
-"""Advisory task locks for queue workers."""
+"""Advisory locks for model operations, external work and background tasks.
+
+A key names work that must not run twice at once, such as a bridge sync, a
+live session host or a credential refresh. PostgreSQL arbitrates across
+processes through session-level advisory locks; the SQLite floor uses an
+in-process table that another process cannot see
+(:func:`task_locks_are_cross_process`).
+"""
 
 from __future__ import annotations
 
@@ -35,10 +42,17 @@ class LockHandle(Protocol):
 
 
 class LockBackend(Protocol):
-    """Backend capable of acquiring one advisory task lock."""
+    """Backend capable of acquiring one advisory lock."""
 
     def try_acquire(self, key: LockKey) -> LockHandle | None:
         """Return a handle when ``key`` is acquired, else ``None``."""
+
+    def acquire(self, key: LockKey) -> LockHandle:
+        """Wait until ``key`` is free, then return its handle.
+
+        The caller must not already hold ``key``: the local backend refuses
+        that wait, which could never end.
+        """
 
     def is_held(self, key: LockKey) -> bool:
         """Return whether ``key`` is currently held."""
@@ -75,28 +89,40 @@ class LocalLockBackend:
     def __init__(self) -> None:
         """Create an empty local lock table."""
 
-        self._mutex = threading.Lock()
-        self._held: set[LockKey] = set()
+        self._released = threading.Condition()
+        self._held: dict[LockKey, int] = {}
 
     def try_acquire(self, key: LockKey) -> LockHandle | None:
         """Acquire ``key`` when no local caller already holds it."""
 
-        with self._mutex:
+        with self._released:
             if key in self._held:
                 return None
-            self._held.add(key)
+            self._held[key] = threading.get_ident()
+        return _LocalLockHandle(self, key)
+
+    def acquire(self, key: LockKey) -> LockHandle:
+        """Wait for another thread's release; refuse a wait on this thread's own key."""
+
+        with self._released:
+            while (holder := self._held.get(key)) is not None:
+                if holder == threading.get_ident():
+                    raise RuntimeError(f"{key.name} is already held by this thread; advisory locks are not reentrant.")
+                self._released.wait()
+            self._held[key] = threading.get_ident()
         return _LocalLockHandle(self, key)
 
     def release(self, key: LockKey) -> None:
-        """Release ``key`` from the local table."""
+        """Release ``key`` from the local table and wake its waiters."""
 
-        with self._mutex:
-            self._held.discard(key)
+        with self._released:
+            self._held.pop(key, None)
+            self._released.notify_all()
 
     def is_held(self, key: LockKey) -> bool:
         """Return whether ``key`` is held locally."""
 
-        with self._mutex:
+        with self._released:
             return key in self._held
 
 
@@ -153,6 +179,17 @@ class PostgresAdvisoryLockBackend:
             return None
         return _PostgresAdvisoryLockHandle(self.alias, advisory_key)
 
+    def acquire(self, key: LockKey) -> LockHandle:
+        """Wait in ``pg_advisory_lock`` until another session releases ``key``."""
+
+        connection = connections[self.alias]
+        if connection.vendor != "postgresql":
+            raise ImproperlyConfigured("PostgresAdvisoryLockBackend requires a PostgreSQL database connection.")
+        advisory_key = _advisory_pair(key.name)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_lock(%s, %s)", advisory_key)
+        return _PostgresAdvisoryLockHandle(self.alias, advisory_key)
+
     def is_held(self, key: LockKey) -> bool:
         """Return whether Postgres reports ``key`` as held."""
 
@@ -185,16 +222,23 @@ _LOCAL_BACKEND = LocalLockBackend()
 
 
 def record_lock_key(model_label: str, pk: object, purpose: str) -> LockKey:
-    """Return a stable task lock key for one model record and purpose."""
+    """Return a stable lock key for one model record and purpose."""
 
     return LockKey("record", (str(model_label), str(pk), str(purpose)))
 
 
 @contextmanager
-def task_lock(key: LockKey) -> Iterator[bool]:
-    """Yield whether the configured backend acquired ``key`` for this task."""
+def task_lock(key: LockKey, *, blocking: bool = False) -> Iterator[bool]:
+    """Yield whether the configured backend acquired ``key``, releasing it on exit.
 
-    handle = get_lock_backend().try_acquire(key)
+    By default a held key yields ``False`` at once, so duplicate work is skipped.
+    ``blocking=True`` waits for the holder's release and always yields ``True``,
+    so a second consumer can adopt the result the first one persisted. Wait only
+    outside a transaction holding row locks the holder may need.
+    """
+
+    backend = get_lock_backend()
+    handle = backend.acquire(key) if blocking else backend.try_acquire(key)
     if handle is None:
         yield False
         return

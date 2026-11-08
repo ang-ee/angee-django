@@ -13,6 +13,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db.models import Q
 from rebac import system_context
 
+from angee.base.locks import task_locks_are_cross_process
 from angee.integrate import scheduler
 from angee.integrate.constants import DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES, ENSURE_SESSIONS_TASK, RUN_SESSION_TASK
 from angee.integrate.impl import LiveBridgeImpl
@@ -21,7 +22,6 @@ from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.registry import models_with
 from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.sync_runner import run_bridge_sync_job
-from angee.jobs.locks import task_locks_are_cross_process
 from angee.jobs.scheduler import periodic_now
 
 logger = logging.getLogger(__name__)

@@ -57,6 +57,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.base.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
@@ -109,7 +110,6 @@ from angee.integrate.streams import sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
 from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager

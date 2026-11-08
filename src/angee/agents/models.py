@@ -66,7 +66,7 @@ from angee.iam.service_users import sync_service_user
 from angee.integrate.models import IntegrationCreateMode
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import LockKey, record_lock_key
+from angee.base.locks import LockKey, record_lock_key
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager

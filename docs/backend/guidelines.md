@@ -2009,11 +2009,13 @@ bridge advisory lock as polling and delivery settlement.
   baked into the opencode image (the `OPENCODE_ANTHROPIC_AUTH_PLUGIN` build arg) and using a
   Pro/Max token there violates Anthropic's ToS — enabling it without the plugin silently drops
   Anthropic from OpenCode's model list.
-- **Task locks are advisory, row locks are authoritative.** Celery task bodies may
-  use `angee.jobs.locks.task_lock()` to prevent duplicate workers from doing the
-  same external work, but persisted state transitions still use model/queryset row
-  locks, constraints, and idempotent managers. Do not hold row locks during network
-  IO.
+- **Task locks are advisory, row locks are authoritative.** Task bodies, live
+  sessions and model verbs may use [`angee.base.locks.task_lock()`](../../src/angee/base/locks.py)
+  to prevent duplicate workers from doing the same external work; `blocking=True`
+  makes a second consumer wait for the holder and adopt its persisted result.
+  Persisted state transitions still use model/queryset row locks, constraints, and
+  idempotent managers. Do not hold row locks during network IO, and do not wait on
+  an advisory lock while holding row locks its holder may need.
 - **A long-lived session task stops within one reconciler tick.** A task that
   outlives the tick (a live connection) runs on a dedicated queue consumed by a
   threads-pool worker, so queue isolation — not a time limit — is its

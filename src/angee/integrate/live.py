@@ -18,11 +18,11 @@ import strawberry
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
+from angee.base.locks import task_locks_are_cross_process
 from angee.integrate.constants import SESSION_PROCESS_STOP_SECONDS
 from angee.integrate.constants import STOP_JOIN_SECONDS as STOP_JOIN_SECONDS
 from angee.integrate.constants import WAKE_SECONDS as WAKE_SECONDS
 from angee.integrate.locks import bridge_is_locked
-from angee.jobs.locks import task_locks_are_cross_process
 
 AWAITING_PASSWORD_WAKE_SECONDS = 1.0
 """Deliberate 1 Hz wake while awaiting a password; bounded by operator action."""
