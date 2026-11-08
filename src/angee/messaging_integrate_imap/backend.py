@@ -50,6 +50,7 @@ from email import policy
 from email.parser import BytesHeaderParser
 from functools import partial
 from hashlib import sha256
+from time import monotonic
 from typing import Any, TypeVar
 
 from django.core.exceptions import ValidationError
@@ -65,7 +66,7 @@ from angee.integrate.streams import CursorInvalid, StreamPage, open_stream, rese
 from angee.integrate.sync import current_bridge_progress
 from angee.messaging.backends import ParsedMessage
 from angee.messaging.email import AnymailEmailChannelBackend
-from angee.messaging_integrate_imap.parser import fallback_message, parse_message
+from angee.messaging_integrate_imap.parser import MIME_ERRORS, fallback_message, parse_message
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,10 @@ class ImapError(IntegrationError):
     payload, so sync telemetry and the connection test may
     show it verbatim.
     """
+
+
+class _DeadlineReached(Exception):
+    """Unwind an unfinished IMAP page when its extraction budget expires."""
 
 
 class ImapSampleMessage(BaseModel):
@@ -216,6 +221,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._cursor: dict[str, Any] = {}
         self._credential: Any = None
         self._external_account: Any = None
+        self._deadline: float | None = None
 
     def _load_credentials(self) -> None:
         """Reload transport authentication for each extraction page or preview."""
@@ -224,39 +230,51 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._external_account = self._credential.external_account if self._credential is not None else None
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
-        """Fetch a bounded mailbox page without mutating its durable cursor."""
+        """Fetch one complete page; a budget stop leaves the durable cursor unchanged."""
 
-        self._load_credentials()
-        identity = (stream.partition, stream.generation)
-        if self._stream_identity != identity:
-            self._stream_identity = identity
+        self._deadline = deadline
+        try:
+            self._timeout()
+            self._load_credentials()
+            identity = (stream.partition, stream.generation)
+            if self._stream_identity != identity:
+                self._stream_identity = identity
+                self._cursor = deepcopy(stream.cursor)
+                with _server_step(stream.partition, "listing messages"):
+                    self._work = self._discover(stream.partition)
+            batch_size = min(max(1, page_bound), self._batch_size())
+            while self._work:
+                self._timeout()
+                work = self._work[0]
+                chunk = work.take(batch_size)
+                if not chunk:
+                    self._work.popleft()
+                    continue
+                with _server_step(work.name, "fetching messages"):
+                    messages = self._fetch_chunk(work, chunk)
+                answered = {
+                    int(message.metadata["uid"])
+                    for message in messages
+                    if isinstance(message.metadata, dict) and message.metadata.get("uid") is not None
+                }
+                self._confirm_expunged(
+                    work.name,
+                    work.uidvalidity,
+                    set(chunk) - answered,
+                    retry_hint="Retry the sync before advancing its cursor.",
+                )
+                self._cursor.update(uidvalidity=work.uidvalidity, last_uid=chunk[-1])
+                if messages:
+                    return StreamPage(records=messages, cursor=deepcopy(self._cursor), exhausted=not work.uids)
+            return StreamPage(records=(), cursor=deepcopy(self._cursor), exhausted=True)
+        except _DeadlineReached:
+            # Discovery mutates _cursor and take() consumes UIDs before FETCH.
+            # Rebuild both from the last committed page, never from an aborted plan.
+            self._stream_identity = None
+            self._work = None
             self._cursor = deepcopy(stream.cursor)
-            with _server_step(stream.partition, "listing messages"):
-                self._work = self._discover(stream.partition)
-        batch_size = min(max(1, page_bound), self._batch_size())
-        while self._work:
-            work = self._work[0]
-            chunk = work.take(batch_size)
-            if not chunk:
-                self._work.popleft()
-                continue
-            with _server_step(work.name, "fetching messages"):
-                messages = self._fetch_chunk(work, chunk)
-            answered = {
-                int(message.metadata["uid"])
-                for message in messages
-                if isinstance(message.metadata, dict) and message.metadata.get("uid") is not None
-            }
-            self._confirm_expunged(
-                work.name,
-                work.uidvalidity,
-                set(chunk) - answered,
-                retry_hint="Retry the sync before advancing its cursor.",
-            )
-            self._cursor.update(uidvalidity=work.uidvalidity, last_uid=chunk[-1])
-            if messages:
-                return StreamPage(records=messages, cursor=deepcopy(self._cursor), exhausted=not work.uids)
-        return StreamPage(records=(), cursor=deepcopy(self._cursor), exhausted=True)
+            self.close()
+            return StreamPage(records=(), cursor=deepcopy(stream.cursor), exhausted=False)
 
     def _sample_mailbox(self, mailbox: str, *, uidvalidity: int | None = None) -> int:
         """Open an explicitly selected configured folder read-only and pin its epoch."""
@@ -303,6 +321,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             or request.total_count < 0
         ):
             raise ValidationError("Preview this mailbox scope again before loading its next page.")
+        self._deadline = None
         self._load_credentials()
         try:
             current_uidvalidity = self._sample_mailbox(
@@ -382,6 +401,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         if len(set(uids)) != len(uids):
             raise ValidationError("Select each message UID once.")
         requested = sorted(uids)
+        self._deadline = None
         self._load_credentials()
         try:
             self._sample_mailbox(mailbox, uidvalidity=uidvalidity)
@@ -407,10 +427,16 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
     def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
         """Declare one event-feed partition per mailbox."""
 
-        self._load_credentials()
-        client = self._connect()
-        names = sorted(self._select_mailboxes(client))
-        return tuple(self._mailbox_stream(name) for name in names)
+        self._deadline = deadline
+        try:
+            self._timeout()
+            self._load_credentials()
+            client = self._connect()
+            names = sorted(self._select_mailboxes(client))
+            return tuple(self._mailbox_stream(name) for name in names)
+        except _DeadlineReached:
+            self.close()
+            return ()
 
     @staticmethod
     def _mailbox_stream(name: str) -> StreamDefinition:
@@ -442,6 +468,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         all remote IO has finished before that transaction begins.
         """
 
+        self._deadline = None
         self._load_credentials()
         try:
             client = self._connect()
@@ -505,7 +532,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         selection = boundary.get("mailbox_selection", ())
         if new_only and sorted(selection) != sorted(self._select_mailboxes(client)):
             raise ImapError("The selected IMAP mailboxes changed. Pause the channel and set the starting point again.")
-        status = client.folder_status(name, [b"UIDVALIDITY", b"UIDNEXT"])
+        status = self._request(partial(client.folder_status, name, [b"UIDVALIDITY", b"UIDNEXT"]))
         uidvalidity = int(status[b"UIDVALIDITY"])
         uidnext = self._uidnext(name, status)
         retained = self._cursor.get("uidvalidity")
@@ -534,7 +561,9 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         found: list[int] = []
         for start in range(lower, upper + 1, _SEARCH_UID_WINDOW):
             end = min(start + _SEARCH_UID_WINDOW - 1, upper)
-            answer = (int(uid) for uid in client.search(["UID", f"{start}:{end}", *criteria]))
+            answer = (
+                int(uid) for uid in self._request(partial(client.search, ["UID", f"{start}:{end}", *criteria]))
+            )
             found.extend(sorted(uid for uid in answer if start <= uid <= end))
         return found
 
@@ -552,7 +581,9 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         cursor: dict[str, Any] = {}
         if self.delivery_boundary():
             if uidnext is None:
-                uidnext = self._uidnext(name, self._client_or_fail().folder_status(name, [b"UIDNEXT"]))
+                uidnext = self._uidnext(
+                    name, self._request(partial(self._client_or_fail().folder_status, name, [b"UIDNEXT"])),
+                )
             cursor = {"uidvalidity": uidvalidity, "last_uid": max(0, uidnext - 1)}
         raise CursorInvalid(cursor=cursor)
 
@@ -574,7 +605,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         skip_names = {str(name).casefold() for name in (config.get("skip_mailboxes") or [])}
         all_folder: str | None = None
         selected: list[str] = []
-        for raw_flags, delimiter, name in client.list_folders():
+        for raw_flags, delimiter, name in self._request(client.list_folders):
             flags = {_text(flag).casefold() for flag in raw_flags}
             if "\\noselect" in flags:
                 continue
@@ -680,11 +711,11 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
         def search() -> set[int]:
             client = self._client_or_fail()
-            current = int(client.folder_status(mailbox, [b"UIDVALIDITY"])[b"UIDVALIDITY"])
+            current = int(self._request(partial(client.folder_status, mailbox, [b"UIDVALIDITY"]))[b"UIDVALIDITY"])
             if current != uidvalidity:
                 self._invalidate_cursor(mailbox, uidvalidity=current)
             sequence = ",".join(str(uid) for uid in uids)
-            return {int(uid) for uid in client.search(["UID", sequence])} & set(uids)
+            return {int(uid) for uid in self._request(partial(client.search, ["UID", sequence]))} & set(uids)
 
         return self._with_retry(mailbox, search)
 
@@ -705,6 +736,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
         messages: list[ParsedMessage] = []
         for uid in sorted(data):
+            self._timeout()
             item = data[uid]
             raw = item.get(body_key)
             if raw is None:
@@ -725,7 +757,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                         truncated_bytes=int(item[b"RFC822.SIZE"]) if truncated else None,
                     )
                 )
-            except Exception as error:  # noqa: BLE001 — one poison message must not abort the sync.
+            except MIME_ERRORS as error:
                 messages.append(
                     fallback_message(
                         bytes(raw),
@@ -769,14 +801,39 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         """Run one server operation, reconnecting and retrying once on transport loss."""
 
         try:
-            return operation()
+            return self._request(operation)
         except _TRANSIENT_ERRORS:
             self.close()
+            self._timeout()
             self._connect()
             self._select(mailbox, expected_uidvalidity=expected_uidvalidity)
-            return operation()
+            return self._request(operation)
 
     # --- connection ---
+
+    def _timeout(self) -> float:
+        """Bound the native client timeout by the remaining extraction budget."""
+
+        timeout = float(self.bridge.config.get("timeout") or _DEFAULT_TIMEOUT_SECONDS)
+        if self._deadline is not None:
+            remaining = self._deadline - monotonic()
+            if remaining <= 0:
+                raise _DeadlineReached
+            timeout = min(timeout, remaining)
+        return timeout
+
+    def _request(self, operation: Callable[[], _T]) -> _T:
+        """Admit one IMAP command and distinguish budget expiry from transport loss."""
+
+        timeout = self._timeout()
+        if self._client is not None:
+            self._client.socket().settimeout(timeout)
+        try:
+            return operation()
+        except TimeoutError as error:
+            if self._deadline is not None and monotonic() >= self._deadline:
+                raise _DeadlineReached from error
+            raise
 
     def test_connection(self) -> str:
         """Dial, secure, log in, and log out again — the operator's connection test.
@@ -787,6 +844,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         worker log after the next poll.
         """
 
+        self._deadline = None
         self._load_credentials()
         client = self._open()
         try:
@@ -829,20 +887,21 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._check_host(host, port)
         context = ssl.create_default_context() if security in ("ssl", "starttls") else None
         try:
-            client = self.client_class(
+            client = self._request(partial(
+                self.client_class,
                 host,
                 port=port,
                 ssl=security == "ssl",
                 ssl_context=context if security == "ssl" else None,
-                timeout=int(config.get("timeout") or _DEFAULT_TIMEOUT_SECONDS),
-            )
+                timeout=self._timeout(),
+            ))
             # IMAPClient's default converts INTERNALDATE to *naive local* time; the
             # parser needs the aware server-declared offset, so times stay honest on
             # any host timezone.
             self._client = client
             client.normalise_times = False
             if security == "starttls":
-                client.starttls(context)
+                self._request(partial(client.starttls, context))
         except _TRANSIENT_ERRORS as error:
             self.close()
             logger.exception("IMAP connection to %s failed.", host)
@@ -884,7 +943,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
         if self._selected == name:
             return
-        status = self._client_or_fail().select_folder(name, readonly=True)
+        status = self._request(partial(self._client_or_fail().select_folder, name, readonly=True))
         self._selected = name
         if expected_uidvalidity is not None and int(status[b"UIDVALIDITY"]) != expected_uidvalidity:
             self._invalidate_cursor(name, uidvalidity=int(status[b"UIDVALIDITY"]))
@@ -921,7 +980,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         """Run one login call, translating the server's refusal to the operator message."""
 
         try:
-            login()
+            self._request(login)
         except LoginError as error:
             logger.exception("IMAP login failed for %r at %s.", username, self._host())
             raise ImapError(
@@ -989,15 +1048,28 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         return self._client
 
     def close(self) -> None:
-        """Log out quietly (the ChannelBackend teardown hook); the session may already be gone."""
+        """Bound LOGOUT by the budget; expired sessions close without another command."""
 
         if self._client is None:
             return
-        client, self._client = self._client, None
-        client.__exit__(None, None, None)
-
-        self._selected = ""
-        self._login_name = ""
+        client = self._client
+        logged_out = False
+        try:
+            self._request(client.logout)
+            logged_out = True
+        except (_DeadlineReached, OSError, EOFError, IMAPClientError):
+            pass
+        finally:
+            self._client = None
+            self._selected = ""
+            self._login_name = ""
+            # Successful logout closes the socket. On failure, including worker
+            # cancellation, local cleanup runs without suppressing cancellation.
+            if not logged_out:
+                try:
+                    client.shutdown()
+                except (OSError, EOFError):
+                    pass
 
 
 @contextmanager

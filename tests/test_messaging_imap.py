@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import ValidationError
 from imapclient.exceptions import IMAPClientError, LoginError
 from rebac import system_context
@@ -629,6 +630,9 @@ class FakeImapAccount:
         self.searches: list[tuple[str, Any]] = []
         self.fetches: list[tuple[str, tuple[int, ...], tuple[bytes, ...]]] = []
         self.logouts = 0
+        self.shutdowns = 0
+        self.connection_timeouts: list[float | None] = []
+        self.read_timeouts: list[float | None] = []
 
     def uids(self, folder: str) -> list[int]:
         return sorted(self.folders[folder].get("messages", {}))
@@ -646,9 +650,10 @@ class FakeIMAPClient:
         port: int | None = None,
         ssl: bool = True,
         ssl_context: Any = None,
-        timeout: int | None = None,
+        timeout: float | None = None,
     ) -> None:
-        del host, port, ssl, ssl_context, timeout
+        del host, port, ssl, ssl_context
+        self.account.connection_timeouts.append(timeout)
         self._selected = ""
         # The real IMAPClient defaults to converting INTERNALDATE to naive local
         # time; the backend must opt out, and this fake's aware datetimes are
@@ -740,6 +745,17 @@ class FakeIMAPClient:
 
     def logout(self) -> None:
         self.account.logouts += 1
+
+    def socket(self) -> FakeIMAPClient:
+        """Expose the native timeout surface without a network socket."""
+
+        return self
+
+    def settimeout(self, timeout: float | None) -> None:
+        self.account.read_timeouts.append(timeout)
+
+    def shutdown(self) -> None:
+        self.account.shutdowns += 1
 
 
 class _BridgeStub:
@@ -1644,6 +1660,162 @@ def test_ssl_context_is_the_stdlib_default(monkeypatch: pytest.MonkeyPatch) -> N
     assert captured["ssl"] is True
 
 
+def test_expired_imap_budget_does_not_connect_or_advance(monkeypatch: pytest.MonkeyPatch) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml())})
+    backend = _backend(monkeypatch, account)
+    monkeypatch.setattr(imap_backend, "monotonic", lambda: 10.0)
+    stream = SimpleNamespace(partition="INBOX", generation=1, cursor={"uidvalidity": 100, "last_uid": 0})
+
+    assert backend.streams(deadline=10) == ()
+    page = backend.extract(stream, 10, deadline=10)
+
+    assert not page.records and not page.exhausted
+    assert page.cursor == stream.cursor
+    assert account.connection_timeouts == []
+
+
+def test_imap_search_budget_stop_rebuilds_the_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml(subject="A"), _eml(subject="B"))})
+    backend = _backend(monkeypatch, account)
+    clock = [0.0]
+    monkeypatch.setattr(imap_backend, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(imap_backend, "_SEARCH_UID_WINDOW", 1)
+    search = FakeIMAPClient.search
+
+    def expire_after_search(self: FakeIMAPClient, criteria: Any = "ALL") -> list[int]:
+        result = search(self, criteria)
+        clock[0] = 10
+        return result
+
+    monkeypatch.setattr(FakeIMAPClient, "search", expire_after_search)
+    stream = SimpleNamespace(partition="INBOX", generation=1, cursor={})
+    page = backend.extract(stream, 10, deadline=10)
+    assert not page.records and not page.exhausted and page.cursor == {}
+    assert len(account.searches) == 1 and account.fetches == []
+    assert account.shutdowns == 1 and account.logouts == 0
+
+    resumed = backend.extract(stream, 10, deadline=20)
+    assert [message.subject for message in resumed.records] == ["A", "B"]
+    assert resumed.cursor == {"uidvalidity": 100, "last_uid": 2}
+    assert len(account.searches) == 3
+    backend.close()
+
+
+def test_imap_connection_and_commands_use_remaining_native_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml())})
+    backend = _backend(monkeypatch, account, config={"timeout": 4})
+    clock = [7.0]
+    monkeypatch.setattr(imap_backend, "monotonic", lambda: clock[0])
+    status = FakeIMAPClient.folder_status
+
+    def slower_status(self: FakeIMAPClient, name: str, what: Any = None) -> dict[bytes, int]:
+        result = status(self, name, what)
+        clock[0] = 9
+        return result
+
+    monkeypatch.setattr(FakeIMAPClient, "folder_status", slower_status)
+    stream = SimpleNamespace(partition="INBOX", generation=1, cursor={})
+    page = backend.extract(stream, 10, deadline=10)
+    backend.close()
+
+    assert len(page.records) == 1
+    assert account.connection_timeouts == [3.0]
+    assert account.read_timeouts[0] == 3.0
+    assert account.read_timeouts[-1] == 1.0  # LOGOUT is bounded too.
+    assert max(account.read_timeouts) == 3.0
+    assert account.logouts == 1 and account.shutdowns == 0
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_imap_timeout_retries_only_with_budget(monkeypatch: pytest.MonkeyPatch, expired: bool) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml())})
+    backend = _backend(monkeypatch, account)
+    clock = [0.0]
+    monkeypatch.setattr(imap_backend, "monotonic", lambda: clock[0])
+    fetch = FakeIMAPClient.fetch
+    attempts = []
+
+    def timeout_once(self: FakeIMAPClient, uids: list[int], data: list[bytes]) -> dict[int, dict[bytes, Any]]:
+        attempts.append(data)
+        if len(attempts) == 1:
+            clock[0] = 10 if expired else 1
+            raise TimeoutError("socket read timed out")
+        return fetch(self, uids, data)
+
+    monkeypatch.setattr(FakeIMAPClient, "fetch", timeout_once)
+    stream = SimpleNamespace(partition="INBOX", generation=1, cursor={})
+    page = backend.extract(stream, 10, deadline=10)
+    backend.close()
+
+    if expired:
+        assert not page.records and not page.exhausted and page.cursor == {}
+        assert len(attempts) == len(account.logins) == account.shutdowns == 1
+        assert account.logouts == 0
+    else:
+        assert len(page.records) == 1 and page.exhausted
+        assert len(account.logins) == 2
+
+
+def test_imap_protocol_failure_is_not_disguised_as_budget_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml())})
+    backend = _backend(monkeypatch, account)
+    clock = [0.0]
+    monkeypatch.setattr(imap_backend, "monotonic", lambda: clock[0])
+
+    def refused(*args: Any, **kwargs: Any) -> None:
+        clock[0] = 10
+        raise IMAPClientError("refused")
+
+    monkeypatch.setattr(FakeIMAPClient, "fetch", refused)
+    stream = SimpleNamespace(partition="INBOX", generation=1, cursor={})
+    with pytest.raises(ImapError, match="refused a command"):
+        backend.extract(stream, 10, deadline=10)
+    backend.close()
+    assert account.shutdowns == 1
+
+
+@pytest.mark.parametrize("phase", ["fetch", "parse", "logout"])
+def test_imap_worker_cancellation_propagates(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml())})
+    backend = _backend(monkeypatch, account)
+    monkeypatch.setattr(imap_backend, "monotonic", lambda: 0.0)
+
+    def cancelled(*args: Any, **kwargs: Any) -> None:
+        raise SoftTimeLimitExceeded
+
+    if phase == "parse":
+        monkeypatch.setattr(imap_backend, "parse_message", cancelled)
+    else:
+        monkeypatch.setattr(FakeIMAPClient, phase, cancelled)
+    stream = SimpleNamespace(partition="INBOX", generation=1, cursor={})
+    with pytest.raises(SoftTimeLimitExceeded):
+        backend.extract(stream, 10, deadline=10)
+        backend.close()
+    if phase == "logout":
+        assert account.shutdowns == 1
+        assert backend._client is None
+    else:
+        assert stream.cursor == {}
+        backend.close()
+
+
+@pytest.mark.parametrize("phase", ["body", "header", "html"])
+def test_mime_fallbacks_propagate_worker_cancellation(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
+    def cancelled(*args: Any, **kwargs: Any) -> None:
+        raise SoftTimeLimitExceeded
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        if phase == "body":
+            monkeypatch.setattr(imap_parser.MIMEPart, "get_content", cancelled)
+            parse_message(_eml(), mailbox="INBOX", uid=1, uidvalidity=100)
+        elif phase == "header":
+            monkeypatch.setattr(imap_parser, "decode_header", cancelled)
+            fallback_message(_eml(), mailbox="INBOX", uid=1, uidvalidity=100)
+        else:
+            monkeypatch.setattr(imap_parser.HTMLParser, "feed", cancelled)
+            html_to_text("<p>Hello</p>")
+
+
 # --- end to end: Channel.run_sync over real tables ---
 
 
@@ -1700,6 +1872,51 @@ def _wire_fake(monkeypatch: pytest.MonkeyPatch, account: FakeImapAccount) -> Non
 
     monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
     monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_aborted_imap_fetch_keeps_durable_cursor_and_replays_whole_chunk(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fetched but unapplied UIDs cannot be skipped on the same adapter's next attempt."""
+
+    account = FakeImapAccount({"INBOX": _folder(*(
+        _eml(message_id=f"<deadline-{uid}@example.com>", subject=str(uid)) for uid in range(1, 4)
+    ))})
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel(max_batch_bytes=1)
+    clock = [0.0]
+    monkeypatch.setattr(imap_backend, "monotonic", lambda: clock[0])
+    fetch = FakeIMAPClient.fetch
+
+    def expire_after_body(self: FakeIMAPClient, uids: list[int], data: list[bytes]) -> dict[int, dict[bytes, Any]]:
+        result = fetch(self, uids, data)
+        if b"BODY.PEEK[]" in data:
+            clock[0] = 10
+        return result
+
+    monkeypatch.setattr(FakeIMAPClient, "fetch", expire_after_body)
+    with system_context(reason="test imap aborted page replay"):
+        backend = channel.backend
+        stream = current_stream(channel, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 1})
+        try:
+            stopped = advance_stream(stream, backend, page_bound=2, deadline=10)
+            stream.refresh_from_db()
+            assert stopped.count == 0 and not stopped.exhausted
+            assert stream.cursor == {"uidvalidity": 100, "last_uid": 1}
+            assert Message._base_manager.count() == 0
+            assert [uids for _, uids, fields in account.fetches if b"BODY.PEEK[]" in fields] == [(2,)]
+
+            resumed = advance_stream(stream, backend, page_bound=2, deadline=20)
+            stream.refresh_from_db()
+            assert resumed.count == 2 and resumed.exhausted
+            assert stream.cursor == {"uidvalidity": 100, "last_uid": 3}
+            assert set(Message._base_manager.values_list("external_id", flat=True)) == {
+                "deadline-2@example.com", "deadline-3@example.com",
+            }
+            assert [uids for _, uids, fields in account.fetches if b"BODY.PEEK[]" in fields] == [(2,), (2,), (3,)]
+        finally:
+            backend.close()
 
 
 @pytest.mark.django_db(transaction=True)
