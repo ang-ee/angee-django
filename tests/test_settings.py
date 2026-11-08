@@ -290,8 +290,21 @@ def test_graphql_uses_channels_redis_when_redis_url_is_set(
 
     assert settings["CHANNEL_LAYERS"]["default"] == {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": ["redis://127.0.0.1:6379/0"], "group_expiry": 900},
+        "CONFIG": {
+            "hosts": [{"address": "redis://127.0.0.1:6379/0", "socket_timeout": 15.0}],
+            "group_expiry": 900,
+        },
     }
+
+
+def test_channel_layer_reads_outlast_its_blocking_pop() -> None:
+    """redis-py 8's 5 s default read timeout must not cut off the layer's blocking receive."""
+
+    from channels_redis.core import RedisChannelLayer
+
+    from angee.graphql.constants import CHANNEL_LAYER_SOCKET_TIMEOUT_SECONDS
+
+    assert CHANNEL_LAYER_SOCKET_TIMEOUT_SECONDS > RedisChannelLayer.brpop_timeout
 
 
 @pytest.mark.parametrize(
@@ -314,7 +327,7 @@ def test_graphql_uses_redis_broker_when_no_channel_url_is_set(
     layer = settings["CHANNEL_LAYERS"]["default"]
     assert layer["BACKEND"] == expected_backend
     if expected_backend == "channels_redis.core.RedisChannelLayer":
-        assert layer["CONFIG"]["hosts"] == [broker_url]
+        assert [host["address"] for host in layer["CONFIG"]["hosts"]] == [broker_url]
 
 
 def test_jobs_use_celery_broker_url_from_environment(
@@ -537,7 +550,7 @@ def test_native_environment_values_reach_declared_and_derived_capability_setting
     assert namespace["CELERY_BROKER_URL"] == (
         "redis://broker.example.test/1" if environment else "redis://project.example.test/0"
     )
-    assert namespace["CHANNEL_LAYERS"]["default"]["CONFIG"]["hosts"] == [
+    assert [host["address"] for host in namespace["CHANNEL_LAYERS"]["default"]["CONFIG"]["hosts"]] == [
         "redis://channels.example.test/2" if environment else "redis://project.example.test/1"
     ]
     assert namespace["ANGEE_OPERATOR_URL"] == (
