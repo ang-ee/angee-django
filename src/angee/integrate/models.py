@@ -3229,15 +3229,54 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     _SYNC_OUTCOME_KEYS = ("error", "items", "completed_at")
     """Marker keys that describe one run's outcome; a new marker starts without them."""
 
+    def report_progress(
+        self,
+        stage: str,
+        *,
+        message: str = "",
+        details: Mapping[str, Any] | None = None,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Merge telemetry under a row lock; supplied details replace prior details.
+
+        Dispatch identity belongs to :attr:`sync_run_id`, independently of this
+        payload. A progress report preserves a queued stage until work starts.
+        """
+
+        with transaction.atomic():
+            row = type(self).objects.sudo(reason="integrate.bridge.progress").lock_if_supported().get(pk=self.pk)
+            existing = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
+            payload = dict(existing)
+            queue_pending = str(row.sync_stage) == str(row.SyncStage.QUEUED)
+            if not queue_pending:
+                payload["stage"] = str(stage)
+            if message:
+                payload["message"] = message
+            elif "message" in payload:
+                payload.pop("message")
+            if details is not None:
+                payload["details"] = dict(details)
+            payload.update(extra)
+
+            row.sync_progress = payload
+            update_fields = ["sync_progress", "updated_at"]
+            if not queue_pending and str(stage) in row.SyncStage.values:
+                row.sync_stage = row.SyncStage(str(stage))
+                update_fields.append("sync_stage")
+            row.save(update_fields=update_fields)
+        self.sync_progress = payload
+        self.sync_stage = row.sync_stage
+        return payload
+
     def _sync_marker(self, **values: Any) -> dict[str, Any]:
         """Return ``sync_progress`` with this run's marker keys set, others kept.
 
         ``sync_progress`` has disjoint owners: the scheduler writes the lifecycle
         marker (``stage``/``queued_at``/``started_at`` and the run's outcome),
-        while a progress reporter writes ``details`` — a live session's pairing
+        while :meth:`report_progress` writes ``details`` — a live session's pairing
         report lives there, and it is the QR the operator is currently looking
         at. Replacing the whole dict drops it, so a marker merges the way
-        :class:`~angee.integrate.sync.BridgeProgressReporter` already does and
+        :meth:`report_progress` already does and
         sets only the keys it owns. A previous run's outcome is the marker's own
         to drop: a failed run's ``error`` must not ride into the next run's
         ``completed`` marker.
