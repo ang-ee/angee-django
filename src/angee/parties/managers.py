@@ -352,7 +352,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if handle is None:
             try:
                 # A savepoint isolates the insert, so the caller's transaction stays usable.
-                with transaction.atomic(using=self.db):
+                with transaction.atomic():
                     return self.create(
                         platform=platform,
                         value=value,
@@ -394,7 +394,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         using = self.db
         while True:
             try:
-                with transaction.atomic(using=using):
+                with transaction.atomic():
                     source = self.model.system_queryset().using(using).filter(pk=handle.pk).first()
                     if source is None or source.merged_into_id is not None or source.value != expected_value:
                         return None
@@ -505,7 +505,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         link_owner = apps.get_model("parties", "Party").objects.db_manager(using)
         with (
             system_context(reason="parties.handle.claim_control"),
-            transaction.atomic(using=using),
+            transaction.atomic(),
         ):
             handle = handles_owner.upsert(
                 platform=platform,
@@ -546,7 +546,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         handle_id = handle.pk if isinstance(handle, models.Model) else handle
         using = (handle._state.db if isinstance(handle, models.Model) else None) or self.db
         owner = apps.get_model("parties", "Party").objects.db_manager(using)
-        with transaction.atomic(using=using), system_context(reason="parties.handle.resolve"):
+        with transaction.atomic(), system_context(reason="parties.handle.resolve"):
             handles, parties = owner.lock_identity_rows(party_ids=(), handle_ids=(handle_id,))
             handle = handles[handle_id]
             candidates = list(
@@ -598,7 +598,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
 
         avatar_id = getattr(avatar, "pk", None)
         owner = self.db_manager(hints={"instance": handle})
-        with system_context(reason="parties.handle.set_avatar"), transaction.atomic(using=handle._state.db):
+        with system_context(reason="parties.handle.set_avatar"), transaction.atomic():
             locked = owner.filter(pk=handle.pk).lock_if_supported().first()
             if locked is None or locked.avatar_id == avatar_id:
                 return False
@@ -999,7 +999,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Assert normal handle facts from native supporting records, preserving person decisions."""
         owner = self.db_manager(self._db or party._state.db, hints={"instance": party})
         using = owner.db
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             source = to_subject_ref(asserted_by)
             subject = apps.get_model("parties", "Party")._base_manager.using(using).get(pk=party.pk)
             refs = [EvidenceReference.of(row) for row in evidence]
