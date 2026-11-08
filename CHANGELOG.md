@@ -8,6 +8,12 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — record access threads no database alias
+
+- `AngeeModel.lock_for_record_access()` takes no `using` argument: an override
+  drops it and locks its prerequisite rows through their managers. The
+  `record_access_revoked` signal no longer sends `using`.
+
 ## Unreleased — django-zed-rebac 0.31
 
 - The base addon requires `django-zed-rebac>=0.31.5,<0.32` (GraphQL its
