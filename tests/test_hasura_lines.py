@@ -661,6 +661,29 @@ def test_lines_writable_relation_requires_a_public_id_decode():
         )
 
 
+def test_lines_writable_non_column_fails_the_build():
+    """A declared line field the parent cannot write (no concrete column) fails at build, not at first write."""
+
+    computed = HasuraLines(
+        field="lines",
+        model=DocumentLine,
+        node=DocumentLineType,
+        writable=("label", "quantity", "position", "sqid"),
+    )
+    with pytest.raises(ImproperlyConfigured, match="DocumentLine.sqid is not a writable line column"):
+        hasura_model_resource(
+            DocumentType,
+            model=Document,
+            name="documents_computed",
+            filterable=["id", "title"],
+            sortable=["title"],
+            aggregatable=["id"],
+            writable=["title", "note"],
+            lines=computed,
+            id_column="sqid",
+        )
+
+
 def test_lines_resource_metadata_is_emitted():
     """The resource advertises the editable-lines contract + the save root."""
 

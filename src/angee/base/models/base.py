@@ -75,7 +75,8 @@ class AngeeModel(
         creation that just authorized this row. Values are native model values:
         a foreign key by primary key under its ``attname``, a many-to-many field
         as its complete related set, and a name no field owns as an input-extension
-        value for the line's :meth:`apply_input_extensions`.
+        value for the line's :meth:`apply_input_extensions`; :meth:`line_relation`
+        refuses any other name before anything is written.
 
         Replacing requires ``write`` on this row. The line writes then run
         elevated, authorized by that check, yet each still meets the line's own
@@ -85,12 +86,10 @@ class AngeeModel(
         position is staged first so a reorder never collides with itself.
         """
 
-        relation = self._meta.get_field(field)
-        if not isinstance(relation, models.ManyToOneRel) or relation.one_to_one:
-            raise ImproperlyConfigured(f"{self._meta.label}.{field} is not a to-many line relation.")
+        desired = [(public_id, dict(values)) for public_id, values in rows]
+        relation = type(self).line_relation(field, {name for _pid, values in desired for name in values})
         line_model = relation.related_model
         parent_link = relation.field
-        desired = [(public_id, dict(values)) for public_id, values in rows]
         if replace:
             self.require_access("write")
         with transaction.atomic(), system_context(reason="base.replace_lines"):
@@ -163,6 +162,32 @@ class AngeeModel(
                         getattr(line, name).set(value)
                 if extensions:
                     cast(InputExtensionsMixin, line).apply_input_extensions(**extensions)
+
+    @classmethod
+    def line_relation(cls, field: str, names: Iterable[str] = ()) -> models.ManyToOneRel:
+        """Return the line relation ``field`` names, refusing what :meth:`replace_lines` cannot write.
+
+        ``field`` must be a reverse foreign key. Each of ``names`` that names a
+        field of the line must be a concrete column (by name or ``attname``) or
+        a forward many-to-many; a reverse relation is refused, and a name no
+        field owns is an input extension. Resource builders pass their declared
+        line columns, so a bad declaration fails the build, not the first write.
+        """
+
+        relation = cls._meta.get_field(field)
+        if not isinstance(relation, models.ManyToOneRel) or relation.one_to_one:
+            raise ImproperlyConfigured(f"{cls._meta.label}.{field} is not a to-many line relation.")
+        line_model = relation.related_model
+        for name in names:
+            try:
+                column = line_model._meta.get_field(name)
+            except FieldDoesNotExist:
+                continue
+            if not isinstance(column, models.ManyToManyField) and not (
+                isinstance(column, models.Field) and column.concrete
+            ):
+                raise ImproperlyConfigured(f"{line_model._meta.label}.{name} is not a writable line column.")
+        return relation
 
     def retained(self) -> bool:
         """Whether a live or historical reference, or a stored grant, names this row.
@@ -591,11 +616,9 @@ def _assign_line_values(line: models.Model, values: Mapping[str, Any]) -> list[t
 
     related: list[tuple[str, Any]] = []
     for name, value in values.items():
-        field = line._meta.get_field(name)
+        field = cast("models.Field[Any, Any]", line._meta.get_field(name))  # AngeeModel.line_relation admitted it.
         if isinstance(field, models.ManyToManyField):
             related.append((name, value))
-        elif not isinstance(field, models.Field) or not field.concrete:
-            raise ImproperlyConfigured(f"{line._meta.label}.{name} is not a writable line column.")
         elif name == field.attname != field.name:
             setattr(line, name, value)
         else:

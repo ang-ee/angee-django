@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -17,6 +17,7 @@ from rebac import (
 
 from tests.conftest import create_user
 from tests.linesdemo.models import Document, DocumentLine, PinnedLine, Product, Tag
+from tests.test_aggregates import ResourceChild, ResourceParent
 
 
 def _grant(document: Document, relation: str, user: Any) -> None:
@@ -97,3 +98,26 @@ def test_replace_lines_meets_the_line_row_lock_under_elevation(composed_tables: 
         loaded.replace_lines("pinned_lines", [])
     with system_context(reason="test.replace_lines.lock_read"):
         assert PinnedLine.objects.get(pk=pinned.pk).label == "Pinned"
+
+
+def test_line_relation_admits_columns_and_forward_many_to_many_only() -> None:
+    """A reverse relation is no line column; a name no field owns is an input extension."""
+
+    relation = ResourceParent.line_relation("children", ["name", "parent_id", "related_parents", "stamp"])
+    assert relation.related_model is ResourceChild
+    with pytest.raises(ImproperlyConfigured, match="ResourceChild.grandchildren is not a writable line column"):
+        ResourceParent.line_relation("children", ["name", "grandchildren"])
+    with pytest.raises(ImproperlyConfigured, match="not a to-many line relation"):
+        ResourceParent.line_relation("name")
+
+
+def test_replace_lines_refuses_a_non_column_before_writing(composed_tables: None) -> None:
+    """Called directly with arbitrary values, the parent refuses a non-column name before any line write."""
+
+    with system_context(reason="test.replace_lines.column_seed"):
+        document = Document.objects.create(title="Document")
+        DocumentLine.objects.create(document=document, label="Kept", quantity=1, position=0)
+        with pytest.raises(ImproperlyConfigured, match="not a writable line column"):
+            document.replace_lines("lines", [(None, {"label": "New", "sqid": "forged"})])
+
+    assert _rows(document) == [("Kept", 1, 0)]

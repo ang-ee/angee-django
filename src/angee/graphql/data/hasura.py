@@ -131,13 +131,15 @@ class HasuraLines:
 
     ``field`` is the parent's reverse-FK accessor to the child rows; the child's
     FK back to the parent is derived from it and set by the write, never asked
-    for on the wire. ``writable`` overrides the child's editable-column allowlist;
-    ``public_id_fields`` names the child relation columns exposed as public ids
-    (decoded on write). ``node`` is the child GraphQL node, used only to name the
-    child field metadata the frontend line cells render. ``defaults`` seeds scalar
-    cells on a newly added row and may name only writable child fields.
-    ``position_field`` names the numeric order column (advertised so the composer
-    maintains it).
+    for on the wire. ``writable`` overrides the child's editable-column allowlist:
+    concrete columns and forward many-to-many fields only, since the parent
+    (:meth:`~angee.base.models.base.AngeeModel.line_relation`) refuses any other
+    field at build; ``public_id_fields`` names the child relation columns
+    exposed as public ids (decoded on write). ``node`` is the child GraphQL
+    node, used only to name the child field metadata the frontend line cells
+    render. ``defaults`` seeds scalar cells on a newly added row and may name
+    only writable child fields. ``position_field`` names the numeric order
+    column (advertised so the composer maintains it).
 
     Lines are owned parts: rows that exist only as part of their parent and are
     saved with it, by the parent's :meth:`~angee.base.models.base.AngeeModel.replace_lines`
@@ -166,16 +168,6 @@ class HasuraLines:
     public_id_fields: Sequence[str] = ()
     position_field: str = "position"
     defaults: Mapping[str, str | int | float | bool | None] = dataclasses.field(default_factory=dict)
-
-
-def _child_back_fk(parent_model: type[models.Model], relation: str) -> str:
-    """Return the child FK field name behind a parent's to-many ``relation``."""
-
-    reverse = parent_model._meta.get_field(relation)
-    field = getattr(reverse, "field", None)
-    if field is None:
-        raise ImproperlyConfigured(f"{parent_model._meta.label}.{relation} is not a to-many child relation.")
-    return field.name
 
 
 class _MutationResultExtension(FieldExtension):
@@ -233,12 +225,9 @@ class AngeeHasuraWriteBackend:
         self.model = model
         self.public_id_fields = _public_id_field_models(model, public_id_fields or ())
         self.lines = lines
-        if lines is not None:
-            if not issubclass(model, AngeeModel):
-                raise ImproperlyConfigured(f"{model._meta.label} must be an AngeeModel to own editable lines.")
-            self._line_public_id_fields = _public_id_field_models(lines.model, lines.public_id_fields)
-        else:
-            self._line_public_id_fields = {}
+        self._line_public_id_fields = (
+            _public_id_field_models(lines.model, lines.public_id_fields) if lines is not None else {}
+        )
 
     def write_target_queryset(self) -> models.QuerySet[Any]:
         """Return the queryset that resolves this backend's update/delete/save targets.
@@ -1749,12 +1738,16 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         surface=f"resource {resource_name!r}",
     )
     if lines is not None:
+        if not issubclass(model, AngeeModel):
+            raise ImproperlyConfigured(f"{model._meta.label} must be an AngeeModel to own editable lines.")
+        # The parent's own rule: a declared line column replace_lines cannot write fails here.
+        line_relation = model.line_relation(lines.field, lines.writable or ())
         _check_writable_relations_decoded(
             lines.model,
             writable=lines.writable,
             id_column=PUBLIC_ID_FIELD_NAME,
             declared=lines.public_id_fields,
-            exclude=(_child_back_fk(model, lines.field),),
+            exclude=(line_relation.field.name,),
             surface=f"resource {resource_name!r} lines",
         )
     # A filterable relation column is filtered by the related row's public id;
