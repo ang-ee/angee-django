@@ -3077,6 +3077,24 @@ def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) 
 
 
 @pytest.mark.django_db(transaction=True)
+def test_name_untitled_names_only_the_selected_threads(channel: Any) -> None:
+    """The queryset verb never titles a thread the caller's selection excludes."""
+
+    with system_context(reason="test name untitled selection"):
+        selected = Thread.objects.create(channel=channel, external_id="selected")
+        excluded = Thread.objects.create(channel=channel, external_id="excluded")
+        named = Thread.objects.filter(pk=selected.pk).name_untitled(
+            {selected.pk: "Selected", excluded.pk: "Excluded"},
+        )
+        selected.refresh_from_db()
+        excluded.refresh_from_db()
+
+    assert named == 1
+    assert selected.title.text == "Selected"
+    assert excluded.title_id is None
+
+
+@pytest.mark.django_db(transaction=True)
 def test_ingest_named_thread_honors_visibility_hint(channel: Any) -> None:
     """A broadcast adapter names its feed public; the default stays private.
 

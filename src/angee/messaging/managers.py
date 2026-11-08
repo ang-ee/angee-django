@@ -764,6 +764,34 @@ class ThreadQuerySet[ThreadT: Thread](
 ):
     """Chainable read scopes for message threads."""
 
+    def name_untitled(self, names: Mapping[Any, str], *, created_by_id: Any = None) -> int:
+        """Title this selection's untitled threads from source names; never rename one.
+
+        ``names`` maps thread pks to names; a pk outside this selection is left
+        alone. Each row is re-read under its lock, so a title set concurrently (a
+        racing ingest) always wins. Returns the number of threads named.
+        """
+
+        fragment_model = apps.get_model("messaging", "Fragment")
+        named = 0
+        for pk, name in names.items():
+            text = str(name or "").strip()
+            if not text:
+                continue
+            with transaction.atomic():
+                thread = (
+                    self.sudo(reason="messaging.thread.name_untitled")
+                    .lock_if_supported()
+                    .filter(pk=pk, title__isnull=True)
+                    .first()
+                )
+                if thread is None:
+                    continue
+                thread.title_id = fragment_model.objects.upsert(text=text, created_by_id=created_by_id).pk
+                thread.save(update_fields=["title"])
+                named += 1
+        return named
+
     def inbox(self) -> Self:
         """Return channel/inbox threads — those not attached to a record — under ``read_inbox``.
 
@@ -876,34 +904,6 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
         """The external-id namespace of one channel's named chat threads."""
 
         return f"chat:{channel.pk if channel is not None else ''}:"
-
-    def name_untitled(self, names: Mapping[Any, str], *, created_by_id: Any = None) -> int:
-        """Title threads that have none from source names; never rename one.
-
-        ``names`` maps thread pks to names. Each row is re-read under its lock, so
-        a title set concurrently (a racing ingest) always wins. Returns the number
-        of threads named.
-        """
-
-        fragment_model = apps.get_model("messaging", "Fragment")
-        named = 0
-        for pk, name in names.items():
-            text = str(name or "").strip()
-            if not text:
-                continue
-            with transaction.atomic():
-                thread = (
-                    self.sudo(reason="messaging.thread.name_untitled")
-                    .lock_if_supported()
-                    .filter(pk=pk, title__isnull=True)
-                    .first()
-                )
-                if thread is None:
-                    continue
-                thread.title_id = fragment_model.objects.upsert(text=text, created_by_id=created_by_id).pk
-                thread.save(update_fields=["title"])
-                named += 1
-        return named
 
     def fill_chat_titles(self, channel: Any, titles: Mapping[str, str], *, created_by_id: Any = None) -> int:
         """Name a channel's untitled chat threads from source conversation names.
