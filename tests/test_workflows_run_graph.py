@@ -240,6 +240,8 @@ def test_removed_step_answers_the_fail_closed_effect_default(schema, execution, 
     without_step(settings, IdempotentEcho.key)
     assert acknowledgement() is True
     assert StepRun.system_queryset().get(pk=step.pk).requires_duplicate_acknowledgement
+    outsider = create_user("effect-marker-outsider")
+    assert StepRun.system_queryset().get(pk=step.pk).with_actor(outsider).requires_duplicate_acknowledgement
 
 
 def test_projected_effect_marker_answers_before_the_run_is_read(execution):
@@ -325,7 +327,10 @@ def test_failure_routed_error_edge_is_taken(schema, execution):
 
 
 def test_run_failure_reason_prefers_output_then_first_retained_failed_error(execution, register_step):
-    """Reader diagnostics have one deterministic precedence and require an error outcome."""
+    """Reader diagnostics have one deterministic precedence and require an error outcome.
+
+    The failed steps are read elevated, whichever reader the run is bound to.
+    """
     actor, _ = execution
 
     class Failing(Echo):
@@ -346,6 +351,7 @@ def test_run_failure_reason_prefers_output_then_first_retained_failed_error(exec
     assert run.failure_reason == "Run failure"
     run.output = {}
     assert run.failure_reason == "Second failure"
+    assert run.with_actor(create_user("failure-reason-outsider")).failure_reason == "Second failure"
     run.outcome = "done"
     assert run.failure_reason is None
 

@@ -42,7 +42,8 @@ live in code docstrings.
   context returns the first actor's relations; load the rows for that actor.
   That actor survives `system_context()`, so system work on an actor-bound row
   reads its relations through `<related>.system_context(reason=...)`, as
-  workflow advancement and operator step retry do.
+  workflow advancement, operator step retry, a run's failure reason and change
+  concerns and a step's effect marker do.
 - REBAC's `relation_actor()` answers no actor inside `system_context()`, where
   0.30 answered the ambient actor. `held_permissions`, `permission_annotations`
   and `permissions_field` decide for the ambient actor they stamp, so a verb's
