@@ -16,7 +16,7 @@ from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Trigger, WorkflowRun
-from tests.conftest import vault_for
+from tests.conftest import create_user, vault_for
 from tests.test_workflows_children import child_graph as child_graph
 from tests.test_workflows_review import questions, start_review
 from tests.test_workflows_review import review as review
@@ -307,6 +307,8 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
         assert concern in stored.change_related_records()
         assert concern in stored.step_runs.get(node_key="entry").change_related_records()
         assert concern in stored.step_runs.get(node_key="entry").decision.change_related_records()
+    outsider = create_user("timeline-concern-outsider")
+    assert concern in WorkflowRun.system_queryset().get(pk=run.pk).with_actor(outsider).change_related_records()
 
 
 def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(review, register_step, schema):
