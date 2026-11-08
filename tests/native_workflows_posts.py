@@ -35,10 +35,6 @@ from rebac.roles import grant as grant_role
 from rebac.roles import revoke as revoke_role
 
 from angee.agents.context import record_view_context
-from angee.agents.grants import (
-    builtin_mcp_server,
-    sync_builtin_tool_catalogue,
-)
 from angee.agents.provisioning import provision_agent
 from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.runners import TurnOutcome
@@ -135,8 +131,8 @@ class CommentReplyTests(TransactionTestCase):
                 owner_id=self.owner.pk,
             )[0]
         with actor_context(self.admin):
-            sync_builtin_tool_catalogue()
-            self.server = builtin_mcp_server()
+            MCPTool.objects.sync_builtin()
+            self.server = MCPServer.objects.builtin()
             self.agent.mcp_servers.add(self.server)
             for name in sorted(READ_TOOLS):
                 self.agent.mcp_tools.add(MCPTool.objects.get(server=self.server, name=name))
@@ -894,8 +890,8 @@ class CommentReplyTests(TransactionTestCase):
 
     def test_catalogue_sync_provisions_and_adopts_without_demo_rows(self):
         self.assertEqual(MCPServer.system_queryset().count(), 1)
-        sync_builtin_tool_catalogue()
-        self.assertEqual(builtin_mcp_server().pk, self.server.pk)
+        MCPTool.objects.sync_builtin()
+        self.assertEqual(MCPServer.objects.builtin().pk, self.server.pk)
         self.assertEqual(
             set(
                 MCPTool.system_queryset().filter(server=self.server, name__in=READ_TOOLS).values_list("name", flat=True)
@@ -987,7 +983,7 @@ class CommentReplyTests(TransactionTestCase):
             self.agent.with_actor(self.admin).resource_reader = False
             self.agent.save(update_fields=("resource_reader", "updated_at"))
             self.assertTrue(provision_agent(self.agent.sqid).ok)
-            sync_builtin_tool_catalogue()
+            MCPTool.objects.sync_builtin()
         run, session = self.waiting_run()
         toolset = AngeeToolset(session, ToolGrantAccess(self.agent.principal_subject()), str(self.server.sqid))
         tools = async_to_sync(toolset.get_tools)(SimpleNamespace(max_retries=0))

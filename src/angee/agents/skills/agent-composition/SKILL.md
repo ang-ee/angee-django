@@ -26,7 +26,7 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 | `src/angee/agents/runtimes.py`; `agents_runtime_pydantic/runtime.py` | `AgentRuntime`, `NoRuntime`, `OpenCodeRuntime`, `ClaudeCodeRuntime`, `operator_secret_ref`; `PydanticAIRuntime` | docstrings |
 | `src/angee/agents/backends.py`, `sdk_backends.py`; vendor `agents_integrate_*/backend.py` | `InferenceBackend`, `ManualInferenceBackend`; `SDKInferenceBackend`; `AnthropicInferenceBackend` (`agents_integrate_anthropic/backend.py`) | module docstring |
 | `src/angee/agents/autoconfig.py`; runtime/vendor `autoconfig.py` | `ANGEE_INFERENCE_BACKEND_CLASSES`, `ANGEE_AGENT_RUNTIME_CLASSES`, `ANGEE_INFERENCE_APPROVED_DEPLOYMENTS`, `ANGEE_MCP_ACTOR_VERIFIER`, `ANGEE_AGENT_CHAT_TOKEN_TTL` (`SETTINGS`); contributed keys (`SETTINGS` in `agents_runtime_pydantic/autoconfig.py`, `agents_integrate_anthropic/autoconfig.py`) | comments |
-| `src/angee/agents/grants.py`, `permissions.zed`; `agents_runtime_pydantic/toolsets.py` | `tool_grant_ref`, `sync_builtin_tool_catalogue`; `agents/agent`, `agents/toolrole`, `agents/tool_grant` definitions; `ToolGrantAccess`, `toolsets_for_session` | zed comments |
+| `src/angee/agents/models.py`; `grants.py`, `permissions.zed`; `agents_runtime_pydantic/toolsets.py` | `MCPServerManager.builtin`, `MCPToolManager.sync_builtin`, `MCPToolManager.authorization_ids`; `tool_grant_ref`, `sync_resource_reader_grants`; `agents/agent`, `agents/toolrole`, `agents/tool_grant` definitions; `ToolGrantAccess`, `toolsets_for_session` | docstrings, zed comments |
 | `src/angee/agents/skills.py`; `models.py` | `parse_skill_meta`; `SkillManager.sync_from_source` | docstrings |
 | `src/angee/agents/runners.py`, `sessions.py`, `tasks.py`, `acp_server.py`, `protocol.py` | `SessionRunner`, `TurnOutcome`; `run_next_turn`; `run_session`; ACP mappings; `ACP_PATH` | docstrings |
 | `src/angee/agents/provisioning.py` | `provision_agent`, `adopt_agent`, `replace_agent`, `reprovision_agent`, `deprovision_agent` | module docstring |
@@ -102,7 +102,7 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
    classification, vendor addons SDK and transport policy ([Stack](../../../../../docs/stack.md#backend), pydantic-ai row).
 
 6. **Attach tools and skills.** `mcp_servers`/`mcp_tools` select catalogue rows; the built-in `agents.mcp_angee` server is
-   synced from the registered FastMCP tools (`sync_builtin_tool_catalogue` in `grants.py`), and a tool is usable only through an `agents/tool_grant`
+   synced from the registered FastMCP tools (`MCPToolManager.sync_builtin` in `models.py`), and a tool is usable only through an `agents/tool_grant`
    tuple (`use`, re-checked per call by `ToolGrantAccess`). Skills are `Skill` rows discovered from an `integrate_vcs.Source`
    with `source_kind="skill"` (`SkillManager.sync_from_source`, SKILL.md frontmatter) and selected through `Agent.skills`;
    the operator mounts them. **Owner rule:** `angee.mcp` owns registration (`tool_registrar` in `src/angee/mcp/server.py`), agents the

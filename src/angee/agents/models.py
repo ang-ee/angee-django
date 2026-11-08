@@ -14,13 +14,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from collections.abc import Collection, Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
+from asgiref.sync import async_to_sync
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
@@ -67,6 +68,7 @@ from angee.iam.models import ServiceUserMixin
 from angee.integrate.models import IntegrationCreateMode
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.jobs.enqueue import enqueue_task
+from angee.mcp.server import mcp_server
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -717,6 +719,33 @@ class Skill(VcsOutput, AuditMixin, AngeeDataModel, concrete=True):
         return self.name or self.path or f"skill:{self.public_id}"
 
 
+class MCPServerManager[ServerT: MCPServer](AngeeHistoryManager[ServerT]):
+    """Own adoption of the one built-in server row and its first provisioning."""
+
+    def builtin(self, *, create: bool = False) -> ServerT:
+        """Adopt the built-in row, or provision it during catalogue synchronization.
+
+        A predeclared row retains its name and credential. A canonical unique name
+        makes concurrent first syncs converge without replacing an external server.
+        """
+
+        rows = self.model._base_manager
+        servers = [server for server in rows.order_by("pk") if server.builtin == BUILTIN_MCP_ANGEE]
+        if not servers and create:
+            server, _ = rows.get_or_create(
+                name="angee",
+                defaults={"placement": MCPPlacement.INTERNAL, "config": {"builtin": BUILTIN_MCP_ANGEE}},
+            )
+            if server.builtin != BUILTIN_MCP_ANGEE:
+                raise ImproperlyConfigured("MCP server 'angee' is already assigned to an external server.")
+            servers = [server]
+        if len(servers) != 1:
+            raise ImproperlyConfigured(
+                f"Exactly one agents.MCPServer row must declare config.builtin='angee' (found {len(servers)})."
+            )
+        return cast(ServerT, servers[0])
+
+
 class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     """An MCP server an agent can reach — internal to the platform or external.
 
@@ -748,7 +777,7 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     )
     config = models.JSONField(default=dict, blank=True)
 
-    objects = AngeeHistoryManager()
+    objects = MCPServerManager()
 
     class Meta:
         """Django model options for MCP servers."""
@@ -882,6 +911,51 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
         return sqid, digest
 
 
+class MCPToolManager[ToolT: MCPTool](AngeeHistoryManager[ToolT]):
+    """Own the built-in tool catalogue and its primary-key grant identities."""
+
+    def authorization_ids(self, server_sqid: str, tool_names: Iterable[str]) -> dict[str, str]:
+        """Resolve public catalogue keys to primary-key authorization identities."""
+
+        server_model = apps.get_model("agents", "MCPServer")
+        lookup = {f"server__{field}": value for field, value in server_model.public_id_lookup(server_sqid).items()}
+        rows = self.model._base_manager.filter(**lookup, name__in=tool_names).values_list("name", "pk")
+        return {str(name): str(pk) for name, pk in rows}
+
+    def sync_builtin(self) -> int:
+        """Mirror the live built-in registry into its deterministic pinning catalogue.
+
+        The FastMCP registry remains execution truth. ``MCPTool`` rows are only the
+        grant/pinning catalogue used by agent selections and REBAC ids; this sync
+        updates that projection, prunes tools no longer registered in code, binds
+        their resource identities, and replaces the ``resource_reader`` bundle's
+        generated-reader grants. Agent writes own bundle membership.
+        """
+
+        # Source models load during app population; the grant policy reaches the GraphQL
+        # schema and Django's auth backends, which import only once apps are ready.
+        from angee.agents.grants import sync_resource_reader_grants
+
+        registered = sorted(async_to_sync(mcp_server().list_tools)(), key=lambda tool: tool.name)
+        tools = self.model._base_manager
+        with system_context(reason="agents.builtin_tools.sync"), transaction.atomic():
+            server = apps.get_model("agents", "MCPServer").objects.builtin(create=True)
+            ledger = apps.get_model("resources", "Resource").objects
+            addon = apps.get_app_config("agents")
+            source = "builtin_tool_catalogue"
+            ledger.bind_instance(addon=addon, xref="mcp_angee", instance=server, source=source)
+            for tool in registered:
+                row, _ = tools.update_or_create(
+                    server_id=server.pk,
+                    name=tool.name,
+                    defaults={"description": str(tool.description or ""), "input_schema": dict(tool.parameters or {})},
+                )
+                ledger.bind_instance(addon=addon, xref=f"tool_{tool.name}", instance=row, source=source, replace=True)
+            tools.filter(server=server).exclude(name__in=[tool.name for tool in registered]).delete()
+            sync_resource_reader_grants(server, registered)
+        return len(registered)
+
+
 class MCPTool(AuditMixin, AngeeDataModel, concrete=True):
     """One tool an MCP server exposes; agents select the tools they may call."""
 
@@ -894,6 +968,8 @@ class MCPTool(AuditMixin, AngeeDataModel, concrete=True):
     enabled = models.BooleanField(default=True)
     requires_approval = models.BooleanField(default=False)
     """Whether invoking this tool must suspend for an owner decision."""
+
+    objects = MCPToolManager()
 
     class Meta:
         """Django model options for MCP tools."""

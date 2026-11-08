@@ -45,13 +45,9 @@ from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.relationships import write_relationships
 
-from angee.agents import grants as grants_module
+from angee.agents import models as agent_models
 from angee.agents import provisioning
-from angee.agents.grants import (
-    TOOL_GRANT_RESOURCE_TYPE,
-    sync_builtin_tool_catalogue,
-    tool_grant_ref,
-)
+from angee.agents.grants import TOOL_GRANT_RESOURCE_TYPE, tool_grant_ref
 from angee.agents.models import ToolRole
 from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.testing.models import (
@@ -347,6 +343,29 @@ def test_tool_grant_identity_is_the_catalogue_primary_key(composed_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
+def test_builtin_server_manager_adopts_refuses_and_requires_one_row(composed_tables: None) -> None:
+    """The manager adopts an authored builtin, refuses a foreign name, and never picks among two."""
+
+    del composed_tables
+    with system_context(reason="test builtin server manager"):
+        with pytest.raises(ImproperlyConfigured, match="found 0"):
+            MCPServer.objects.builtin()
+        external = MCPServer.objects.create(name="angee", config={})
+        with pytest.raises(ImproperlyConfigured, match="external server"):
+            MCPServer.objects.builtin(create=True)
+        assert MCPServer.system_queryset().count() == 1
+
+        external.delete()
+        authored = MCPServer.objects.create(name="Authored builtin", config={"builtin": "angee"})
+        assert MCPServer.objects.builtin(create=True).pk == authored.pk
+        assert MCPServer.system_queryset().count() == 1
+
+        MCPServer.objects.create(name="Second builtin", config={"builtin": "angee"})
+        with pytest.raises(ImproperlyConfigured, match="found 2"):
+            MCPServer.objects.builtin(create=True)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_m2m_grant_write_is_discarded_with_rolled_back_edit(composed_tables: None) -> None:
     """The on-commit mirror cannot outlive a rolled-back Agent.mcp_tools edit."""
 
@@ -431,10 +450,10 @@ def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
     registry.add_tool(
         Tool.from_function(write_records, annotations=ToolAnnotations(readOnlyHint=False))
     )
-    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
+    monkeypatch.setattr(agent_models, "mcp_server", lambda: registry)
 
-    assert sync_builtin_tool_catalogue() == 2
-    assert sync_builtin_tool_catalogue() == 2
+    assert MCPTool.objects.sync_builtin() == 2
+    assert MCPTool.objects.sync_builtin() == 2
     with system_context(reason="test builtin catalogue verify"):
         rows = list(MCPTool.objects.filter(server=server).order_by("name"))
     assert [row.name for row in rows] == ["query_records", "write_records"]
@@ -496,7 +515,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     registry = FastMCP(name="production-reader-path")
     register_resource_tools(registry)
-    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
+    monkeypatch.setattr(agent_models, "mcp_server", lambda: registry)
     monkeypatch.setattr(toolsets_module, "mcp_server", lambda: registry)
 
     async def execute_probe(
@@ -519,7 +538,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
 
     monkeypatch.setattr(mcp_graphql, "execute_under_actor", execute_probe)
 
-    sync_builtin_tool_catalogue()
+    MCPTool.objects.sync_builtin()
     assert "query_probes" not in async_to_sync(
         AngeeToolset(
             session,

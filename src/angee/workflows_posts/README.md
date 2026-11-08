@@ -93,9 +93,9 @@ scheduled release; a positive number schedules a draft that many hours out;
 zero queues delivery immediately. Console approval and the release sweep remain
 messaging concerns.
 
-The FastMCP registry and `agents.grants.sync_builtin_tool_catalogue` own tool
-registration and catalogue synchronization. Sync creates or adopts the builtin
-server and runs during in-process agent provisioning and before named resource selections
+The FastMCP registry and `MCPTool.objects.sync_builtin` own tool registration
+and catalogue synchronization. Sync creates or adopts the builtin server
+(`MCPServer.objects.builtin`) and runs during in-process agent provisioning and before named resource selections
 resolve, without demo resources. Catalogue identities are `agents.mcp_angee`
 and `agents.tool_<name>`. Named tool bundles use `agents/toolrole` and
 `agents/tool_grant`; runtime advertisement and per-call revocation checks stay

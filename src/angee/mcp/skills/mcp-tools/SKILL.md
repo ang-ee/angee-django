@@ -127,7 +127,7 @@ through the same ambient actor.
 - An actor, user id or tenant argument on a tool: `ActorMiddleware` supplies the actor ambiently (`src/angee/mcp/middleware.py`; [GraphQL actor and write contracts](../../../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts)).
 - A second FastMCP instance, mount or lifespan in an addon: `angee.mcp.server.mcp_server` is the process-wide owner (`src/angee/mcp/server.py`; [Serving](../../../../../docs/composer.md#serving)).
 - A tool registry, decorator or settings list beside `mcp_tools.register`: [MCP server](../../server.py) discovers and validates registrars through Base's optional-module reader ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
-- Hand-rolled CRUD readers for a console resource: generated readers already exist and the agents catalogue grants them (`register_resource_tools` in `src/angee/mcp/resource_tools.py`, `_sync_resource_reader_grants` in `src/angee/agents/grants.py`; [DRY](../../../../../docs/guidelines.md#dont-repeat-yourself-dry)).
+- Hand-rolled CRUD readers for a console resource: generated readers already exist and the agents catalogue grants them (`register_resource_tools` in `src/angee/mcp/resource_tools.py`, `sync_resource_reader_grants` in `src/angee/agents/grants.py`; [DRY](../../../../../docs/guidelines.md#dont-repeat-yourself-dry)).
 - A list query without `limit_arg` or a page bound above `MAX_QUERY_LIMIT`: the compiler refuses the first and clamps the second (`_validate` in `src/angee/mcp/graphql.py`).
 - Projecting owner-gated or nullable-sensitive fields in a tool every actor may call: field gates redact, the projection then fails (`examples/src/example/notes/mcp_tools.py`; [field-backed conditional access](../../../../../docs/backend/guidelines.md#rebac)).
 - A base-level `ANGEE_MCP_ACTOR_VERIFIER` default in an addon autoconfig: the catalogue owner supplies it and an empty default clobbers it (`SETTINGS` in `src/angee/mcp/autoconfig.py`; [Autoconfig](../../../../../docs/composer.md#autoconfig)).
@@ -153,7 +153,7 @@ against console-schema drift (`check_resource_tool_specs` in `src/angee/mcp/reso
 - Agent bearers authenticate as the agent's service user, not its owner; owner-gated fields are null for them (`resolve_actor` in `src/angee/agents/mcp_verifier.py`).
 - The MCP path has no request lifecycle; `_execute_sync` recycles connections itself, so do not add signals or middleware for it (`src/angee/mcp/graphql.py`).
 - `readOnlyHint` is derived from the root `op_type`; a hand-written tool must declare it or the pydantic runtime refuses to advertise it (`_assert_in_process_compatible` in `src/angee/agents_runtime_pydantic/toolsets.py`).
-- Non-GraphQL tools register with `tags`; the resource-reader tag is reserved for generated readers and drives grant sync (`RESOURCE_READER_TOOL_TAG` in `src/angee/mcp/resource_tools.py`, `_sync_resource_reader_grants` in `src/angee/agents/grants.py`).
+- Non-GraphQL tools register with `tags`; the resource-reader tag is reserved for generated readers and drives grant sync (`RESOURCE_READER_TOOL_TAG` in `src/angee/mcp/resource_tools.py`, `sync_resource_reader_grants` in `src/angee/agents/grants.py`).
 
 ## Read next
 

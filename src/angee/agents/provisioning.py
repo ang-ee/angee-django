@@ -26,7 +26,6 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, transaction
 from rebac import system_context
 
-from angee.agents.grants import sync_builtin_tool_catalogue
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.locks import task_lock
 from angee.graphql.actions import ActionResult, resolve_action_target
@@ -190,7 +189,7 @@ def _provision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
         in_process = agent.runs_in_process
         try:
             if in_process:
-                sync_builtin_tool_catalogue()
+                apps.get_model("agents", "MCPTool").objects.sync_builtin()
             agent.mark_provisioning()
             if in_process:
                 agent.mark_provisioned(workspace="", service="")

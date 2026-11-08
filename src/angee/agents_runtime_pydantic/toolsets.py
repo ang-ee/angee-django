@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from asgiref.sync import sync_to_async
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError, ValidationError
@@ -38,12 +39,7 @@ from rebac import PermissionDenied, SubjectRef, actor_context
 from rebac.backends import backend
 
 from angee.agents.constants import BUILTIN_MCP_ANGEE
-from angee.agents.grants import (
-    TOOL_GRANT_RESOURCE_TYPE,
-    builtin_mcp_server,
-    tool_grant_ids,
-    tool_grant_ref,
-)
+from angee.agents.grants import TOOL_GRANT_RESOURCE_TYPE, tool_grant_ref
 from angee.base.serialization import canonical_json, json_safe
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.server import mcp_server
@@ -117,11 +113,12 @@ class AngeeToolset(AbstractToolset[Any]):
         granted = await self.access.granted_ids()
         server_sqid = self.server_sqid
         if server_sqid is None:
-            server_sqid = await sync_to_async(lambda: str(builtin_mcp_server().sqid), thread_sensitive=True)()
+            server_sqid = await sync_to_async(_builtin_server_sqid, thread_sensitive=True)()
         server = await sync_to_async(mcp_server, thread_sensitive=True)()
         tools: dict[str, ToolsetTool[Any]] = {}
         registered_tools = sorted(await server.list_tools(), key=lambda item: item.name)
-        grant_ids = await sync_to_async(tool_grant_ids, thread_sensitive=True)(
+        authorization_ids = apps.get_model("agents", "MCPTool").objects.authorization_ids
+        grant_ids = await sync_to_async(authorization_ids, thread_sensitive=True)(
             server_sqid,
             tuple(tool.name for tool in registered_tools),
         )
@@ -165,9 +162,7 @@ class AngeeToolset(AbstractToolset[Any]):
             raise TypeError("AngeeToolset received a tool it did not advertise.")
         try:
             if self.server_sqid is None:
-                self.server_sqid = await sync_to_async(
-                    lambda: str(builtin_mcp_server().sqid), thread_sensitive=True
-                )()
+                self.server_sqid = await sync_to_async(_builtin_server_sqid, thread_sensitive=True)()
             await self.access.check(self.server_sqid, name)
         except PermissionDenied as error:
             raise ModelRetry("You no longer have permission to use this tool.") from error
@@ -204,7 +199,8 @@ class ToolGrantToolset(WrapperToolset[Any]):
 
         granted = await self.access.granted_ids()
         tools = await self.wrapped.get_tools(ctx)
-        grant_ids = await sync_to_async(tool_grant_ids, thread_sensitive=True)(
+        authorization_ids = apps.get_model("agents", "MCPTool").objects.authorization_ids
+        grant_ids = await sync_to_async(authorization_ids, thread_sensitive=True)(
             self.server_sqid,
             tools,
         )
@@ -240,7 +236,7 @@ def toolsets_for_session(session: Any) -> list[Any]:
             selected[tool.server_id][tool.name] = bool(tool.requires_approval)
 
     access = ToolGrantAccess(agent.principal_subject())
-    builtin = builtin_mcp_server()
+    builtin = apps.get_model("agents", "MCPServer").objects.builtin()
     native: Any = AngeeToolset(session, access, str(builtin.sqid))
     native_approvals = frozenset(
         name for name, required in selected.get(builtin.pk, {}).items() if required
@@ -270,6 +266,12 @@ def toolsets_for_session(session: Any) -> list[Any]:
             )
         toolsets.append(toolset)
     return toolsets
+
+
+def _builtin_server_sqid() -> str:
+    """Return the public key of the one built-in MCP server row."""
+
+    return str(apps.get_model("agents", "MCPServer").objects.builtin().sqid)
 
 
 def _accessible_tool_grant_ids(agent: SubjectRef) -> frozenset[str]:
