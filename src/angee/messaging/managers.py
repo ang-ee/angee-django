@@ -243,6 +243,28 @@ _MESSAGE_METADATA_MAX_BYTES = 512 * 1024
 class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
     """Chainable scopes over messaging channels and their pairing attempts."""
 
+    def for_backend(self, backend_class: str) -> Self:
+        """Constrain this channel selection to one declared backend."""
+
+        return self.filter(backend_class=backend_class)
+
+    def require_backend_target(self, public_id: str, *, backend_class: str) -> ChannelT:
+        """Resolve an explicit import target, refusing a missing or other-backend channel uniformly.
+
+        The caller already authorized the import; the target is read elevated and
+        only its backend and public id decide it.
+        """
+
+        backend = self.model.backend_class.field.resolve_class(backend_class)
+        channel = (
+            self.system_context(reason="messaging.channel.confirm_target")
+            .for_backend(backend_class)
+            .from_public_id(public_id)
+        )
+        if channel is None:
+            raise ValidationError({"target": f"No {backend.label} channel {public_id!r}."})
+        return channel
+
     def unfinished_pairing(self, user: Any, backend_class: str) -> Self:
         """Return the user's empty, never-claimed, non-paused channels, newest first.
 
@@ -309,7 +331,7 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
             vendor_id=vendor_model.objects.seeded(backend_class).pk,
             owner_id=user.pk,
             backend_class=backend_class,
-            display_name=name,
+            display_name=self.normalized_name(name),
             lifecycle=IntegrationLifecycle.DISCONNECTED,
             created_by_id=user.pk,
             **extra,
@@ -349,6 +371,34 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
         else:
             channel.resume_pairing()
         return channel.with_actor(actor)
+
+    @staticmethod
+    def normalized_name(name: str) -> str:
+        """Return a channel display name stripped of surrounding space, refusing a blank one."""
+
+        value = str(name or "").strip()
+        if not value:
+            raise ValueError("A channel name is required.")
+        return value
+
+    def named_import_channel(self, user: Any, *, name: str, backend_class: str) -> Any:
+        """Return the owner's import channel with this name and backend, creating it once.
+
+        Ordinary channels may share names; only this import factory promises
+        reuse. The owner's row lock serializes concurrent first creation.
+        """
+
+        name = self.normalized_name(name)
+        with system_context(reason="messaging.channel.named_import"), transaction.atomic():
+            get_user_model().system_queryset(lock=("self",)).get(pk=user.pk)
+            existing = (
+                self.model._base_manager.filter(owner_id=user.pk, backend_class=backend_class, display_name=name)
+                .order_by("pk")
+                .first()
+            )
+            if existing is not None:
+                return existing
+            return self.create_disconnected(user, name=name, backend_class=backend_class)
 
     def inventory(self, channel: Any) -> dict[type[models.Model], int]:
         """Return ``{model: count}`` for every row a purge of ``channel`` would delete.

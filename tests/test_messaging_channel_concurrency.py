@@ -57,3 +57,29 @@ def test_concurrent_pairing_attempts_reuse_one_channel(channel_owner: Any) -> No
         assert list(Channel.objects.filter(owner=channel_owner).values_list("display_name", flat=True)) == [
             "First attempt",
         ]
+
+
+def test_concurrent_named_imports_create_one_channel(channel_owner: Any) -> None:
+    """A second first-import waits on the owner row, then reuses the committed channel."""
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic(), system_context(reason="test.messaging.named_import.race"):
+            get_user_model().system_queryset(lock=("self",)).get(pk=channel_owner.pk)
+            contender, pid = submit(
+                pool,
+                lambda: Channel.objects.named_import_channel(
+                    channel_owner,
+                    name="Archive",
+                    backend_class=FakePairingBackend.key,
+                ),
+            )
+            wait_for_lock(pid, contender)
+            first = Channel.objects.named_import_channel(
+                channel_owner,
+                name="Archive",
+                backend_class=FakePairingBackend.key,
+            )
+        second = contender.result(timeout=10)
+    assert second.pk == first.pk
+    with system_context(reason="test.messaging.named_import.race.verify"):
+        assert Channel.objects.filter(owner=channel_owner).count() == 1
