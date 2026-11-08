@@ -687,6 +687,17 @@ class MimeType(ResourceLoadMixin, AngeeDataModel, concrete=True):
 class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], AngeeHistoryQuerySet[FileT]):
     """REBAC-scoped reads for file rows; ``trashed()`` backs the Trash smart folder."""
 
+    def trash_missing_external(self, drive: Any, present_paths: Collection[str]) -> int:
+        """Soft-trash this selection's live rows in ``drive`` whose external path vanished."""
+
+        present = {str(path) for path in present_paths}
+        with system_context(reason="storage.file.trash_missing_external"):
+            rows = self.filter(drive=drive).untrashed().values_list("pk", "storage_path")
+            missing = [pk for pk, storage_path in rows.iterator(chunk_size=2000) if str(storage_path) not in present]
+            if not missing:
+                return 0
+            return int(self.filter(pk__in=missing).trash())
+
     def stale_drafts(self, cutoff: datetime) -> Self:
         """Return unfinished DRAFT/FAILED rows reserved before ``cutoff``."""
 
@@ -1110,17 +1121,6 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             if content_changed:
                 row._emit_finalized()
             return row
-
-    def trash_missing_external(self, drive: Any, present_paths: Collection[str]) -> int:
-        """Soft-trash live rows in ``drive`` whose external path vanished."""
-
-        present = {str(path) for path in present_paths}
-        with system_context(reason="storage.file.trash_missing_external"):
-            rows = self.filter(drive=drive).untrashed().values_list("pk", "storage_path")
-            missing = [pk for pk, storage_path in rows.iterator(chunk_size=2000) if str(storage_path) not in present]
-            if not missing:
-                return 0
-            return int(self.filter(pk__in=missing).trash())
 
     def _cached_mime_row(self, mime_type: str, *, cache: dict[str, Any | None] | None) -> Any | None:
         """Resolve one MIME taxonomy row, caching distinct values for a sync run."""
