@@ -3980,7 +3980,31 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel, concrete=True):
         self.refresh_from_db(fields=("consecutive_failures",))
 
 
-class SyncStreamManager[SyncStreamT: SyncStream](AngeeHistoryManager[SyncStreamT]):
+class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStreamT]):
+    """Chainable reads over stream epochs."""
+
+    def current_for_bridge(self, bridge: models.Model, key: str | None = None) -> Self:
+        """Return one current epoch per partition of the bridge's named stream, or of every stream.
+
+        Without ``key`` this is one query over every (key, partition) the bridge
+        has opened, so a caller resolving across streams reads them once.
+        """
+
+        rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(integration_id=bridge.pk)
+        if key is not None:
+            rows = rows.filter(key=key)
+        latest = (
+            rows.filter(key=OuterRef("key"), partition=OuterRef("partition"))
+            .order_by("-generation")
+            .values("generation")[:1]
+        )
+        return rows.filter(generation=Subquery(latest)).order_by("key", "partition")
+
+
+_SyncStreamManagerBase = AngeeHistoryManager.from_queryset(SyncStreamQuerySet)
+
+
+class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStreamT]):
     """Serialize stream discovery and epoch changes on the integration row."""
 
     def lock_current(self, stream: Any, *, fenced_to: Any = None) -> Any:
@@ -4004,23 +4028,6 @@ class SyncStreamManager[SyncStreamT: SyncStream](AngeeHistoryManager[SyncStreamT
             if fenced_to is not None and locked.operation_fence != fenced_to.operation_fence:
                 raise RuntimeError("Stream state changed during external work; retry the operation.")
             return locked
-
-    def current_for_bridge(self, bridge: models.Model, key: str | None = None) -> Any:
-        """Return one current epoch per partition of the bridge's named stream, or of every stream.
-
-        Without ``key`` this is one query over every (key, partition) the bridge
-        has opened, so a caller resolving across streams reads them once.
-        """
-
-        rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(integration_id=bridge.pk)
-        if key is not None:
-            rows = rows.filter(key=key)
-        latest = (
-            rows.filter(key=OuterRef("key"), partition=OuterRef("partition"))
-            .order_by("-generation")
-            .values("generation")[:1]
-        )
-        return rows.filter(generation=Subquery(latest)).order_by("key", "partition")
 
     def current(
         self,
