@@ -325,7 +325,9 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
         resumes. A process-local lock backend cannot prove the reset safe, so there
         a channel with a store is left alone and a new one is created. Reset errors
         propagate without creating another channel, so an unproven shutdown leaves
-        the store intact and the caller can retry shortly.
+        the store intact and the caller can retry shortly. The owner's row lock,
+        taken before any channel row, serializes concurrent attempts so they reuse
+        one channel instead of each creating its own.
         """
 
         field = self.model.live_implementation_field()
@@ -335,6 +337,7 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
             raise PairingActionError("This action requires a live channel.")
         actor = current_actor() or user
         with system_context(reason="messaging.resume_or_create_channel"), transaction.atomic():
+            get_user_model().system_queryset(lock=("self",)).get(pk=user.pk)
             channel = self.unfinished_pairing(user, backend_class).first()
             if channel is not None and session_store_path(channel).exists() and not task_locks_are_cross_process():
                 channel = None
