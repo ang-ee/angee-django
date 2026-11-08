@@ -1192,7 +1192,7 @@ def test_credential_crud_create_delete_are_admin_only(
     assert revoked == []
     assert len(scheduled) == 1
     callback, using, robust = scheduled.pop()
-    assert using == credential._state.db
+    assert using is None  # One database: the commit hook names no alias.
     assert robust is True
     callback()
     assert revoked == [credential.pk]

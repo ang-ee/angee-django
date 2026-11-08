@@ -875,7 +875,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
 
         candidates = self.select_related("oauth_client", "external_account").select_for_update(of=("self",))
         using = candidates.db
-        with system_context(reason="integrate.credential.disconnect"), transaction.atomic(using=using):
+        with system_context(reason="integrate.credential.disconnect"), transaction.atomic():
             credential = (
                 candidates
                 .filter(user=user, external_account__sqid=external_account_sqid)
@@ -908,7 +908,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             target = integration.concrete_capability()
             target.set_lifecycle(IntegrationLifecycle.DISCONNECTED)
             target.attach_credential(None)
-        transaction.on_commit(copy(credential).revoke_remote, using=credential._state.db, robust=True)
+        transaction.on_commit(copy(credential).revoke_remote, robust=True)
 
     def delete_unattached_derived(self, credential_pk: int | None) -> None:
         """Dispose of discovery-created material after its last attachment releases it."""
