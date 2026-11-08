@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -16,6 +16,7 @@ from rebac import system_context
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
+from angee.base.implementations import resolve_impl_class
 from angee.integrate.models import (
     Bridge,
     IntegrationCreateMode,
@@ -26,7 +27,7 @@ from angee.integrate.models import (
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions
-from angee.storage_integrate.mounts import MountBackend, MountEntry
+from angee.storage_integrate.mounts import MountBackend, MountBrowseResult, MountEntry, MountLocation
 
 _PROGRESS_BATCH_SIZE = 200
 _LOCAL_VENDOR_SLUG = "local"
@@ -53,12 +54,40 @@ class MountMode(models.TextChoices):
 class MountQuerySet[MountT: Mount](IntegrationQuerySet[MountT]):
     """Mount selections by their persisted source identity."""
 
+    def for_roots(self, roots: Iterable[str]) -> Self:
+        """Return the mounts of these source roots; one root is one mount across modes and source kinds."""
+
+        return self.filter(config__root__in=tuple(roots))
+
 
 _MountManagerBase = IntegrationManager.from_queryset(MountQuerySet)
 
 
 class MountManager[MountT: Mount](_MountManagerBase[MountT]):
     """Provision mounts together with the drive their source synchronizes into."""
+
+    def browse_source(self, backend_class: str, *, credential: Any | None = None, token: str = "") -> MountBrowseResult:
+        """List one bounded level of a configured mount backend's source tree, before a Mount exists.
+
+        A location some mount already roots at is offered blocked as already
+        mounted, unless the backend already blocked it for its own reason.
+        """
+
+        try:
+            impl = cast(type[MountBackend], resolve_impl_class(MountBackend, backend_class))
+        except ImproperlyConfigured as error:
+            raise ValidationError({"backend_class": str(error)}) from error
+        listing = impl.browse(credential=credential, token=token)
+        tokens = (location.token for location in (listing.location, *listing.entries))
+        with system_context(reason="storage_integrate.browse_mount_source"):
+            mounted = set(self.for_roots(tokens).values_list("config__root", flat=True))
+
+        def admitted(location: MountLocation) -> MountLocation:
+            if location.token not in mounted or location.blocked_reason:
+                return location
+            return replace(location, is_mountable=False, blocked_reason="Already mounted")
+
+        return replace(listing, location=admitted(listing.location), entries=tuple(map(admitted, listing.entries)))
 
     def provision(
         self,
@@ -96,7 +125,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
             storage_backend_spec = source.backend.storage_backend_spec()
 
         with system_context(reason=reason), transaction.atomic():
-            if self.filter(config__root=str(root)).exists():
+            if self.for_roots((str(root),)).exists():
                 raise ValidationError({"path": already_mounted_message})
             slug = self._available_slug(
                 display_name,

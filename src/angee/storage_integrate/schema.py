@@ -20,10 +20,7 @@ from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.schema import BridgeTypeMixin
 from angee.storage_integrate.connect import create_local_folder_mount
 from angee.storage_integrate.models import MountMode
-from angee.storage_integrate.mounts import (
-    MountBrowseResult,
-    browse_mount_source,
-)
+from angee.storage_integrate.mounts import MountBrowseResult
 
 Mount = apps.get_model("storage_integrate", "Mount")
 Credential = apps.get_model("integrate", "Credential")
@@ -120,7 +117,7 @@ class StorageIntegrateQuery:
             if credential_id is not None
             else None
         )
-        result: MountBrowseResult = browse_mount_source(
+        result: MountBrowseResult = Mount.objects.browse_source(
             backend_class,
             credential=credential,
             token=token,
