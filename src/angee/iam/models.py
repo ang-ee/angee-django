@@ -597,15 +597,14 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         """
 
         with system_context(reason="iam.service_user.sync"), transaction.atomic():
-            rows = self.get_queryset().lock_if_supported(no_key=True)
             if user_id is None:
-                user, created = rows.get_or_create(
+                user, created = self.get_or_create(
                     username=username, defaults=self.model.service_identity_values(username=username, name=name),
                 )
                 if created:
                     return user
             else:
-                user = rows.get(pk=user_id)
+                user = self.get(pk=user_id)
             user.update_service_identity(username=username, name=name)
             return user
 
