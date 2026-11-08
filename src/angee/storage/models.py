@@ -1238,10 +1238,12 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             return None
         folder_model = self.model.folder.field.related_model
         folder = folder_model._default_manager.all().from_public_id(str(folder_id))
-        if folder is None or folder.is_virtual:
-            raise exceptions.UploadTargetNotFound("folder not found")
-        if folder.drive_id != drive.pk:
-            raise exceptions.UploadConflict("folder does not belong to the drive")
+        try:
+            self.model.validate_placement(folder, drive.pk)
+        except ValidationError as error:
+            if error.code == "folder_not_found":
+                raise exceptions.UploadTargetNotFound("folder not found") from error
+            raise exceptions.UploadConflict("folder does not belong to the drive") from error
         return folder
 
 
@@ -1326,9 +1328,26 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         super().clean()
         if self.folder_id:
             folder_model = type(self).folder.field.related_model
-            folder = folder_model._base_manager.filter(pk=self.folder_id).values("drive_id", "is_virtual").first()
-            if folder is None or folder["is_virtual"] or folder["drive_id"] != self.drive_id:
-                raise ValidationError({"folder": "Folder must be a real folder in this file's drive."})
+            folder = folder_model._base_manager.filter(pk=self.folder_id).only("drive_id", "is_virtual").first()
+            try:
+                self.validate_placement(folder, self.drive_id)
+            except ValidationError as error:
+                raise ValidationError({"folder": error}) from error
+
+    @staticmethod
+    def validate_placement(folder: Any, drive_id: Any) -> None:
+        """Require ``folder`` to be a real folder of the drive ``drive_id`` names.
+
+        The one placement rule for a file row and for a draft naming its folder.
+        Raises ``ValidationError`` coded ``folder_not_found`` for an absent or
+        smart folder and ``wrong_drive`` for a folder of another drive.
+        """
+
+        message = "Folder must be a real folder in this file's drive."
+        if folder is None or folder.is_virtual:
+            raise ValidationError(message, code="folder_not_found")
+        if folder.drive_id != drive_id:
+            raise ValidationError(message, code="wrong_drive")
 
     def set_visibility(self, value: FileVisibility | str) -> Self:
         """Narrow with file write, or widen with drive share, retaining all grants."""

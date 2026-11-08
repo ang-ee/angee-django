@@ -1169,6 +1169,34 @@ def test_create_folder_factory_gates_on_drive_write(drive: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_file_placement_requires_a_real_folder_of_the_files_drive(drive: Any) -> None:
+    """One placement rule refuses a row's folder and answers a draft's folder with its upload error."""
+
+    with system_context(reason="test storage placement"):
+        other = Drive._base_manager.create(
+            backend=drive.backend,
+            slug="other",
+            name="Other",
+            prefix="other",
+            created_by=drive.alice,
+        )
+        foreign = Folder.objects.create(drive=other, name="Elsewhere")
+        smart = Folder._base_manager.get(owner=drive.alice, is_virtual=True)
+        row = File(drive=drive, folder=foreign, filename="placed.png")
+        with pytest.raises(ValidationError) as wrong_drive:
+            row.clean()
+        assert list(wrong_drive.value.message_dict) == ["folder"]
+        row.folder = smart
+        with pytest.raises(ValidationError, match="real folder"):
+            row.clean()
+    with actor_context(drive.alice):
+        with pytest.raises(exceptions.UploadConflict, match="does not belong"):
+            File.objects.draft(filename="x.png", drive_id=str(drive.sqid), folder_id=str(foreign.sqid))
+        with pytest.raises(exceptions.UploadTargetNotFound, match="folder not found"):
+            File.objects.draft(filename="x.png", drive_id=str(drive.sqid), folder_id=str(smart.sqid))
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("kind", ["file", "folder"])
 def test_checked_storage_factories_preserve_field_validation(drive: Any, kind: str) -> None:
     before = File._base_manager.count(), Folder._base_manager.count()
