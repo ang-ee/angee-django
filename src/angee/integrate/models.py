@@ -84,7 +84,7 @@ from angee.integrate.errors import (
 from angee.integrate.events import EventKind
 from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
-from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked
+from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked, bridge_session_is_hosted
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -1587,6 +1587,31 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
             .order_by("pk")
         )
 
+    def live_session_candidates(self, *, now: datetime) -> Self:
+        """Select connected, healthy, ready rows whose selected backend hosts a live session.
+
+        A transiently failed session waits until its ``live_retry_at``
+        (``Bridge.record_live_session_failure``); a known-broken handshake stays
+        out through ``runtime_status`` until the operator repairs it.
+        """
+
+        model = cast("type[Bridge]", self.model)
+        field = model.live_implementation_field()
+        keys = model.live_implementation_keys()
+        if field is None or not keys:
+            return self.none()
+        return (
+            self.of_concrete_type()
+            .ready_for_work()
+            .filter(
+                Q(live_retry_at__isnull=True) | Q(live_retry_at__lte=now),
+                **{f"{field.name}__in": keys},
+                lifecycle=IntegrationLifecycle.CONNECTED,
+                runtime_status=IntegrationRuntimeStatus.OK,
+            )
+            .order_by("pk")
+        )
+
     def live_account_owners(
         self,
         bridge: Any,
@@ -2882,6 +2907,45 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
                 f"{cls._meta.label}.{field_name} must be an ImplClassField to select live implementations."
             )
         return field
+
+    @classmethod
+    def live_implementation_keys(cls) -> tuple[str, ...]:
+        """Return the registered implementation keys that can host a live session."""
+
+        field = cls.live_implementation_field()
+        if field is None:
+            return ()
+        keys = []
+        for key in field.registered_keys():
+            try:
+                impl_class = field.resolve_class(key)
+            except AttributeError, ImportError, ImproperlyConfigured:
+                logger.exception("Skipping unresolvable %s live implementation key %r.", cls._meta.label_lower, key)
+                continue
+            if issubclass(impl_class, LiveBridgeImpl):
+                keys.append(key)
+        return tuple(keys)
+
+    def reconcile_live_session(self, *, cross_process: bool) -> str | None:
+        """Dispatch a missing session; return its queue when the queue looks starved.
+
+        ``None`` means nothing was dispatched: the selected backend has no live
+        session, or a worker already holds or hosts it. The live desire is
+        written only when it disagrees, because ``start_live`` publishes without
+        a dirty check. ``""`` means dispatched with no starvation signal; a queue
+        name means the row already shows an active stage with no running session.
+        """
+
+        impl = self.live_impl
+        if not isinstance(impl, LiveBridgeImpl):
+            return None
+        if cross_process and (bridge_is_locked(self) or bridge_session_is_hosted(self)):
+            return None
+        if self.subscription_state.get("desired") != self.LiveState.LIVE:
+            self.start_live()
+        else:
+            impl.start_live()
+        return impl.session_queue if cross_process and self.sync_stage in self.LIVE_SYNC_STAGES else ""
 
     @property
     def live_impl(self) -> IntegrationImpl:
