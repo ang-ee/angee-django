@@ -212,7 +212,8 @@ def publish_change(
 
     if changes_muted():
         return
-    # Base model classes import this module while they are being constructed.
+    # models.identity declares models, which need a ready app registry; this
+    # signals module stays importable before apps load.
     from angee.base.models.identity import public_id_of
 
     fields = tuple(sorted(str(name) for name in update_fields)) if update_fields is not None else None
