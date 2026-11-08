@@ -9,7 +9,6 @@ import strawberry_django
 from django.apps import apps
 from django.core import signing
 from django.core.exceptions import ValidationError
-from django.db.models import Q
 from rebac import PermissionDenied, current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -280,11 +279,10 @@ class DashboardQuery:
         if not 1 <= limit <= 100:
             raise ValidationError({"limit": "Dashboard summary pages contain from 1 to 100 items."})
         rows = list(
-            Dashboard.objects.filter(Q(scope="personal") | Q(owner=user) | Q(is_baseline=True))
+            Dashboard.objects.catalogue(user)
             .annotate(**permission_annotations(Dashboard, ("write", "delete")))
             .select_related("owner")
-            .prefetch_related("widgets")
-            .order_by("sqid")[:5_001]
+            .prefetch_related("widgets")[:5_001]
         )
         if len(rows) > 5_000:
             return DashboardSummaryPageType(status="limit", total=len(rows))

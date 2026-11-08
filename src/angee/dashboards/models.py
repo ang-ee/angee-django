@@ -455,6 +455,22 @@ class DashboardQuerySet[DashboardT: Dashboard](
 ):
     """Actor-scoped dashboards with removal reserved for personal snapshots."""
 
+    def catalogue(self, owner: Any) -> Self:
+        """Readable personal, owned and installed dashboards, including removed personal ones."""
+
+        return self.filter(
+            models.Q(scope="personal") | models.Q(owner=owner) | models.Q(is_baseline=True)
+        ).order_by("sqid")
+
+    def target_candidates(self, owner: Any, scope: str, scope_key: str | None) -> Self:
+        """Readable dashboards for one scoped target: the owner's authored snapshot before the baseline."""
+
+        if scope == "personal":
+            raise ValueError("Personal dashboards resolve by public id.")
+        return self.filter(
+            models.Q(owner=owner) | models.Q(is_baseline=True), scope=scope, scope_key=scope_key
+        ).order_by(models.F("owner").desc(nulls_last=True))
+
     def trash_targets(self) -> Self:
         """Installed and scoped snapshots reset through their owning verb."""
 
@@ -470,13 +486,7 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
     def for_target(self, owner: Any, scope: str, scope_key: str | None) -> DashboardT | None:
         """Return the readable target, preferring the actor's authored snapshot."""
 
-        if scope == "personal":
-            raise ValueError("Personal dashboards resolve by public id.")
-        return (
-            self.filter(models.Q(owner=owner) | models.Q(is_baseline=True), scope=scope, scope_key=scope_key)
-            .order_by(models.F("owner").desc(nulls_last=True))
-            .first()
-        )
+        return self.target_candidates(owner, scope, scope_key).first()
 
     def may_create(self, owner: Any, actor: Any = None) -> Any:
         """Authorize the actor to create an ordinary (non-baseline) dashboard owned by ``owner``.

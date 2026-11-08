@@ -148,3 +148,18 @@ def test_copy_requires_a_readable_source_and_rolls_back_an_invalid_snapshot(monk
             )
         assert list(DashboardTarget.objects.values_list("name", flat=True)) == ["Source"]
         assert not changeset_model()._base_manager.filter(key="invalid").exists()
+
+
+def test_catalogue_lists_personal_owned_and_installed_dashboards():
+    owner, other = create_user("catalogue-owner"), create_user("catalogue-other")
+    with system_context(reason="test.dashboard.catalogue"):
+        owned = DashboardTarget.objects.create(owner=owner, scope="addon", scope_key="owned", name="Owned")
+        baseline = DashboardTarget.objects.create(
+            owner=None, is_baseline=True, scope="addon", scope_key="base", name="Base"
+        )
+        DashboardTarget.objects.create(owner=other, scope="addon", scope_key="foreign", name="Foreign")
+    with actor_context(owner):
+        personal = DashboardTarget.objects.create_personal(owner, name="Mine", idempotency_key="mine")
+        listed = list(DashboardTarget.objects.catalogue(owner).values_list("pk", flat=True))
+    # The public id encodes the primary key, so its ordering is the key's.
+    assert listed == sorted((owned.pk, baseline.pk, personal.pk))
