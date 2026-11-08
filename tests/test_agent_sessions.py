@@ -785,6 +785,22 @@ def test_deprovision_closes_sessions_of_another_person(session: AgentSession) ->
     assert session.status == SessionStatus.CLOSED
 
 
+def test_selected_session_close_keeps_sessions_outside_the_selection_open(session: AgentSession) -> None:
+    """A selected-set close cancels its open turns and leaves every other session open."""
+
+    turn = session.post("Close with the selection")
+    other = AgentSession.objects.start(session.agent, user=session.user, context={})
+
+    AgentSession.system_queryset().filter(pk=session.pk).close_as_system(reason="test selected close")
+
+    session.refresh_from_db()
+    other.refresh_from_db()
+    turn.refresh_from_db()
+    assert session.status == SessionStatus.CLOSED
+    assert turn.status == TurnStatus.CANCELED
+    assert other.status == SessionStatus.IDLE
+
+
 def test_provider_exception_detail_is_logged_without_being_shown_to_readers(
     session: AgentSession,
     runner: FakeRunner,

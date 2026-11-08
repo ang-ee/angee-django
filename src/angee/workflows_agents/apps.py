@@ -18,9 +18,7 @@ def close_run_conversations(sender: Any, *, run: Any, **kwargs: Any) -> None:
     with system_context(reason="workflows_agents.run_stopping"):
         created = records.system_queryset().filter(run=run, operation="created")
         owned = created.filter(content_type=content_types.objects.get_for_model(sessions)).values("object_id")
-        sessions.objects.close_as_system(
-            sessions.system_queryset().filter(pk__in=owned), reason="workflows_agents.run_stopping",
-        )
+        sessions.system_queryset().filter(pk__in=owned).close_as_system(reason="workflows_agents.run_stopping")
         own_turns = created.filter(content_type=content_types.objects.get_for_model(turns)).values("object_id")
         open_turns = (
             turns.objects.open()

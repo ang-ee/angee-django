@@ -1968,7 +1968,26 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         return model.credential
 
 
-class AgentSessionManager[SessionT: AgentSession](AngeeHistoryManager[SessionT]):
+class AgentSessionQuerySet[SessionT: AgentSession](AngeeHistoryQuerySet[SessionT]):
+    """Conversation selections and their selected-set lifecycle writes."""
+
+    def close_as_system(self, *, reason: str) -> None:
+        """Close the selected sessions with their open turns, leaving closed rows unlocked."""
+
+        with system_context(reason=reason), transaction.atomic():
+            for session in (
+                self.model.system_queryset(lock=("self",))
+                .filter(pk__in=self.values("pk"))
+                .exclude(status=SessionStatus.CLOSED)
+                .order_by("pk")
+            ):
+                session._close_locked()
+
+
+_AgentSessionManagerBase = AngeeHistoryManager.from_queryset(AgentSessionQuerySet)
+
+
+class AgentSessionManager[SessionT: AgentSession](_AgentSessionManagerBase[SessionT]):
     """Create conversations under the caller's native REBAC create gate."""
 
     def current_for_agent(self, agent: Any) -> SessionT | None:
@@ -2005,19 +2024,7 @@ class AgentSessionManager[SessionT: AgentSession](AngeeHistoryManager[SessionT])
     def close_for_agent_as_system(self, agent: Any) -> None:
         """Close an agent's sessions as part of its authorized in-process teardown."""
 
-        self.close_as_system(self.model.system_queryset().filter(agent=agent), reason="agents.session.deprovision")
-
-    def close_as_system(self, sessions: models.QuerySet[Any], *, reason: str) -> None:
-        """Close selected sessions with their open turns, leaving closed rows unlocked."""
-
-        with system_context(reason=reason), transaction.atomic():
-            for session in (
-                self.model.system_queryset(lock=("self",))
-                .filter(pk__in=sessions.values("pk"))
-                .exclude(status=SessionStatus.CLOSED)
-                .order_by("pk")
-            ):
-                session._close_locked()
+        self.model.system_queryset().filter(agent=agent).close_as_system(reason="agents.session.deprovision")
 
 
 class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
