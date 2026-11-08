@@ -19,7 +19,7 @@ from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, TypedDict, cast
 
 import yaml
 from asgiref.sync import async_to_sync
@@ -47,7 +47,6 @@ from rebac.mixins import RebacModelBase
 
 from angee.agents.backends import InferenceBackend
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
-from angee.agents.deployments import InferenceDeploymentIdentity
 from angee.agents.reader_role import sync_resource_reader_role
 from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
@@ -111,6 +110,16 @@ class InferenceModelStatus(models.TextChoices):
 
 class InferenceModelUnavailable(ValueError):
     """A selected catalogue model cannot serve the requested inference role."""
+
+
+class InferenceDeploymentIdentity(TypedDict):
+    """Non-secret exact identity of one callable inference deployment, used by role approval policy."""
+
+    model: str
+    provider: str
+    backend: str
+    native_model: str
+    endpoint: str
 
 
 class MCPPlacement(models.TextChoices):
