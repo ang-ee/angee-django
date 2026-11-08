@@ -41,7 +41,17 @@ from openai import AsyncOpenAI, DefaultHttpxClient
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.exceptions import (
+    ModelAPIError,
+    ModelConnectionError,
+    ModelHTTPError,
+    ModelOverloadedError,
+    ModelQuotaExceededError,
+    ModelRateLimitError,
+    ModelRequestRejectedError,
+    ModelServerError,
+    ModelTimeoutError,
+)
 from pydantic_ai.messages import (
     BinaryContent,
     ModelRequest,
@@ -1302,6 +1312,26 @@ def test_inference_backend_classifies_transport_exception_types(error, wrapped):
         wrapper.__cause__ = error
         error = wrapper
     assert InferenceBackend(SimpleNamespace()).is_transient_error(error)
+
+
+@pytest.mark.parametrize(
+    ("error_type", "retryable"),
+    [
+        (ModelConnectionError, True),
+        (ModelTimeoutError, True),
+        (ModelRateLimitError, True),
+        (ModelOverloadedError, True),
+        (ModelServerError, True),
+        (ModelQuotaExceededError, False),
+        (ModelRequestRejectedError, False),
+    ],
+)
+def test_inference_backend_classifies_typed_provider_failures(error_type, retryable):
+    """The SDK's typed failures decide retry policy, whatever transport raised them (httpx2 included)."""
+
+    error = error_type("test-model", "provider failure")
+    error.__cause__ = httpx2.ReadTimeout("stream stalled")
+    assert InferenceBackend(SimpleNamespace()).is_transient_error(error) is retryable
 
 
 @pytest.mark.parametrize("message", ["timeout", "rate limit", "temporarily unavailable", "try again"])
