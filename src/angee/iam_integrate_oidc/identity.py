@@ -10,7 +10,6 @@ login policy allows. Account-connect (no login) lives in ``integrate.connect``.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -248,7 +247,7 @@ class OidcIdentityResolver:
         manager = user_model.objects
         with system_context(reason="iam_integrate_oidc.link_user"):
             try:
-                user = manager.get(pk=record.user_id)
+                user = manager.get_for_session(record.user_id)
             except user_model.DoesNotExist as exc:
                 raise OAuthFlowError(INVALID_STATE, 400) from exc
         return user
@@ -273,32 +272,14 @@ class OidcIdentityResolver:
             user_fields["last_name"] = str(family_name)
         try:
             with transaction.atomic():
-                return manager.create_user(
-                    username=self._available_username(email or f"oidc-{sub}"),
-                    email=email,
-                    password=None,
-                    is_staff=False,
-                    is_superuser=False,
-                    **user_fields,
+                return manager.create_user_from_seed(
+                    email or f"oidc-{sub}", fallback="oidc-user", email=email, **user_fields,
                 )
         except IntegrityError:
             user = self._find_by_email(email)
             if self.oauth_client.link_on_email_match and user is not None and can_authenticate_user(user):
                 return user
             raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403) from None
-
-    def _available_username(self, seed: str) -> str:
-        """Return a unique Django username derived from ``seed``."""
-
-        manager = get_user_model().objects
-        base = re.sub(r"[^\w.@+-]", "-", seed).strip("-")[:140] or "oidc-user"
-        candidate = base
-        suffix = 1
-        while manager.filter(username=candidate).exists():
-            suffix_text = f"-{suffix}"
-            candidate = f"{base[: 150 - len(suffix_text)]}{suffix_text}"
-            suffix += 1
-        return candidate
 
 
 def resolve(

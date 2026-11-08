@@ -228,7 +228,7 @@ def _state_user(record: StateRecord) -> AbstractBaseUser:
     user_model = get_user_model()
     with system_context(reason="integrate.oauth.connect.user"):
         try:
-            user = cast(Any, user_model.objects).get(pk=record.user_id)
+            user = cast(Any, user_model.objects).get_for_session(record.user_id)
         except user_model.DoesNotExist as exc:
             raise OAuthFlowError(INVALID_STATE, 400) from exc
     return cast(AbstractBaseUser, user)

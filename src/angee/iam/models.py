@@ -13,6 +13,7 @@ active-human filtering, search, ordering, and limits.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from collections.abc import Mapping
 from copy import copy
@@ -539,6 +540,36 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         extra_fields.setdefault("is_superuser", False)
 
         return self._create_user(username, email, password, **extra_fields)
+
+    def create_user_from_seed(
+        self,
+        seed: str,
+        *,
+        fallback: str,
+        email: str = "",
+        first_name: str = "",
+        last_name: str = "",
+    ) -> UserT:
+        """Create a passwordless person from a trusted identity's proposed name.
+
+        A trusted, elevated system path (like :meth:`create_user`): the identity's
+        protocol admits it and handles a lost race. This factory owns username
+        sanitation, length and the first free numeric suffix, and never grants
+        staff or superuser flags.
+        """
+
+        maximum = cast(int, self.model._meta.get_field("username").max_length)
+        base = re.sub(r"[^\w.@+-]", "-", seed).strip("-")[: maximum - 10] or fallback
+        candidate = base
+        suffix = 1
+        while self.filter(username=candidate).exists():
+            suffix_text = f"-{suffix}"
+            candidate = f"{base[: maximum - len(suffix_text)]}{suffix_text}"
+            suffix += 1
+        return self.create_user(
+            candidate, email=email, password=None, first_name=first_name, last_name=last_name,
+            is_staff=False, is_superuser=False,
+        )
 
     def create_superuser(
         self,
