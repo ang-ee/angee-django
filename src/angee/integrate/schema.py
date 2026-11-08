@@ -1565,10 +1565,7 @@ def _authorized_failure(
         if linked.stream_id != epoch.pk:
             raise ValidationError("The failure link does not belong to the selected stream.")
         owner = linked
-    for failure in owner.failures():
-        if failure.slot == slot:
-            return failure
-    raise ValidationError("The retained sync failure no longer exists.")
+    return owner.failure_at(slot)
 
 
 @strawberry.type
