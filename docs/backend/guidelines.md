@@ -829,7 +829,11 @@ data through REBAC, never a queryset bypass.
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
-  callers continue under the original actor, never the elevated one.
+  callers continue under the original actor, never the elevated one. A read
+  through a model's unscoped `_base_manager` (its `Meta.base_manager_name`, the
+  manager Django's relation descriptors use) is an owner-level bypass: owner
+  code takes it for structural work it owns, such as locks, existence checks and
+  counters, with no audit row, and never returns its rows as an actor's read.
 - **System work reads an actor-bound row's relations through
   `<related>.system_context(reason=...)`.** Since REBAC 0.31 a related manager
   keeps its source instance's actor even inside `system_context`. That actor comes
