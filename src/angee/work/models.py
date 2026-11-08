@@ -99,7 +99,7 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
         using = queues.db
         with (
             system_context(reason="work.queue.personal.provision"),
-            transaction.atomic(using=using),
+            transaction.atomic(),
         ):
             queue = queues.personal_for(user)
             if queue is None:
@@ -117,7 +117,7 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
                 )
                 queue.sudo(reason="work.queue.personal.provision.create")
                 try:
-                    with transaction.atomic(using=using):
+                    with transaction.atomic():
                         queue.save(using=using)
                 except IntegrityError:
                     queue = queues.personal_for(user)
@@ -280,7 +280,7 @@ class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits
         kwargs["using"] = using
         try:
             self.key = self.key.strip().upper()
-            with transaction.atomic(using=using):
+            with transaction.atomic():
                 self._validate_default_stage()
                 self._validate_estimate_settings()
                 super().save(*args, **kwargs)
@@ -1191,7 +1191,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         self._state.db = using
         kwargs["using"] = using
         try:
-            with transaction.atomic(using=using):
+            with transaction.atomic():
                 defaulted = self._apply_queue_and_stage_defaults(provision=True)
                 defaulted.update(self._validate_estimate(update_fields=update_fields))
                 if not stage_written:
@@ -1243,8 +1243,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
     def complete(self, *, feedback: str = "") -> Any:
         """Move to the first completed stage, or use the base verb without a queue."""
 
-        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             if self.queue_id is None:
                 return self._base_verb("complete", feedback=feedback)
             previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
