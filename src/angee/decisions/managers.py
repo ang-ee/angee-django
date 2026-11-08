@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models import BooleanField, Exists, ExpressionWrapper, F, OuterRef, Q
 from django.db.models.functions import Now
 from pydantic import JsonValue, TypeAdapter
@@ -99,7 +99,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         actor = actor if actor is not None else current_actor()
         withdrawing = _user(actor, active=False) if actor is not None else None
         pk = decision.pk if isinstance(decision, models.Model) else decision
-        with transaction.atomic(using=router.db_for_write(self.model)), system_context(reason="decisions.withdraw"):
+        with transaction.atomic(), system_context(reason="decisions.withdraw"):
             row = self.filter(pk=pk).lock_if_supported().get()
             if row.is_open:
                 self.filter(pk=pk).open().owner_update(
@@ -151,7 +151,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         )
         readable_records(references, participants)
         targets = {generic_target(record) for record in request.records}
-        with transaction.atomic(using=router.db_for_write(self.model)), system_context(reason="decisions.ask"):
+        with transaction.atomic(), system_context(reason="decisions.ask"):
             # Capture admission only after its immutable concern links exist.
             with mute_changes():
                 decision = self.create(
@@ -185,7 +185,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         """Record one final verdict. Proposal actions belong to the asker."""
         answering = _user(actor)
         pk = decision.pk if isinstance(decision, models.Model) else decision
-        with transaction.atomic(using=router.db_for_write(self.model)):
+        with transaction.atomic():
             with system_context(reason="decisions.decide"):
                 row = self.filter(pk=pk).lock_if_supported().get()
                 row.require_access("act", answering)
