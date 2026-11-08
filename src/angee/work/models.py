@@ -580,6 +580,27 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
 class CycleManager[CycleT: Cycle](AngeeManager[CycleT]):
     """Own idempotent queue-cadence generation and due-cycle closure."""
 
+    def maintain_cadence(self, *, now: datetime | None = None) -> int:
+        """Maintain every cycle-enabled queue's cadence; return how many cycles were generated.
+
+        Runs in the caller's trusted system context, like the scheduled task that calls it.
+        """
+
+        now = now or timezone.now()
+        as_of = timezone.localtime(now).date()
+        queues = (
+            apps.get_model("work", "Queue")
+            .objects.sudo(reason="work.tasks.generate_cycles.queues")
+            .filter(cycles_enabled=True)
+            .order_by("pk")
+        )
+        generated = 0
+        for queue in queues:
+            before = self.model._base_manager.filter(queue=queue).count()
+            self.generate_for_queue(queue, as_of=as_of, completed_at=now)
+            generated += self.model._base_manager.filter(queue=queue).count() - before
+        return generated
+
     @staticmethod
     def _start_on_or_before(value: date, weekday: int) -> date:
         """Return the configured weekday on or immediately before ``value``."""
