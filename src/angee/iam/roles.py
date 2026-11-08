@@ -23,7 +23,6 @@ from rebac import (
     evaluator_scope,
     resolve_subjects,
     system_context,
-    to_object_ref,
     to_subject_ref,
     user_subject_type,
 )
@@ -33,7 +32,7 @@ from rebac.memberships import revoke as revoke_membership
 from rebac.models import active_relationship_model
 from rebac.models.relationship import RelationshipQuerySet, RelationshipRegistryQuerySet
 from rebac.resources import model_for_resource_type, model_resource_type
-from rebac.roles import ROLE_INCLUDES_RELATION, ROLE_RELATION
+from rebac.roles import ROLE_INCLUDES_RELATION, ROLE_RELATION, ROLE_TYPE_SUFFIX, is_role_type
 from rebac.schema import (
     Definition,
     Schema,
@@ -52,7 +51,6 @@ IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
 PERMISSION_HUB_LIST_CAP = 1000
 PRIVILEGED_PERMISSION_NAMES = frozenset({"admin", "create", "write", "delete"})
-ROLE_SUFFIX = "/role"
 PROTECTED_ACCOUNTS = ObjectRef("iam/protected", "main")
 """IAM's Zed set of elevated accounts; consumers union their elevated roles into its ``member``."""
 
@@ -379,13 +377,7 @@ class OverviewInfo:
 def role_namespace(resource_type: str) -> str:
     """Return the namespace portion of a role resource type."""
 
-    return resource_type.removesuffix(ROLE_SUFFIX)
-
-
-def is_role_type(resource_type: str) -> bool:
-    """Return whether ``resource_type`` names a role resource."""
-
-    return resource_type.endswith(ROLE_SUFFIX)
+    return resource_type.removesuffix(ROLE_TYPE_SUFFIX)
 
 
 def role_label(role_id: str) -> str:
@@ -587,32 +579,10 @@ def permission_hub_grant_rows(
     return rows
 
 
-def group_member_rows(
-    group: Any,
-    *,
-    limit: int | None = PERMISSION_HUB_LIST_CAP,
-) -> QuerySet[Any]:
-    """Return direct membership tuples for ``group``."""
-
-    group_ref = to_object_ref(group)
-    rows = (
-        active_relationship_model()
-        .objects.filter(
-            resource_type=group_ref.resource_type,
-            resource_id=group_ref.resource_id,
-            relation=ROLE_RELATION,
-        )
-        .order_by_subject()
-    )
-    if limit is not None:
-        rows = rows[:limit]
-    return cast(QuerySet[Any], rows)
-
-
 def group_members(group: Any) -> list[IAMGroupMemberRow]:
     """Project a group's direct members without computing effective permissions."""
 
-    rows = list(group_member_rows(group))
+    rows = list(group.member_rows()[:PERMISSION_HUB_LIST_CAP])
     subjects = [
         SubjectRef.of(str(row.subject_type), str(row.subject_id), str(row.optional_subject_relation)) for row in rows
     ]
@@ -644,15 +614,7 @@ def group_bindings(group: Any) -> list[IAMGroupBindingRow]:
     """Project tuples bound directly to a group's member subject set."""
 
     subject = to_subject_ref(group)
-    rows = list(
-        active_relationship_model()
-        .objects.filter(
-            subject_type=subject.subject_type,
-            subject_id=subject.subject_id,
-            optional_subject_relation=subject.optional_relation,
-        )
-        .order_by_resource()[:PERMISSION_HUB_LIST_CAP]
-    )
+    rows = list(group.binding_rows()[:PERMISSION_HUB_LIST_CAP])
     targets = _binding_targets(rows)
     result: list[IAMGroupBindingRow] = []
     for row in rows:
@@ -1003,14 +965,6 @@ def permission_schema() -> tuple[Schema, list[Definition]]:
     schema = rebac_backend().schema()
     definitions = sorted(schema.definitions, key=lambda item: item.resource_type)
     return schema, definitions[:PERMISSION_HUB_LIST_CAP]
-
-
-def iam_overview(
-    peek_limit: int,
-) -> OverviewInfo:
-    """Return IAM dashboard facts independent of paginated list rows."""
-
-    return OverviewInfo.build(peek_limit)
 
 
 def clamped_peek_limit(value: int) -> int:

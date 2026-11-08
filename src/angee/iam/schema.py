@@ -70,6 +70,7 @@ from angee.iam.roles import (
 from angee.iam.roles import (
     IAMGrantRow,
     IAMRoleRow,
+    OverviewInfo,
     validate_subject,
 )
 from angee.iam.roles import assignment_subject_labels as _assignment_subject_labels_owner
@@ -81,9 +82,6 @@ from angee.iam.roles import (
 )
 from angee.iam.roles import (
     group_members as _group_members_owner,
-)
-from angee.iam.roles import (
-    iam_overview as _iam_overview_owner,
 )
 from angee.iam.roles import (
     permission_conditions as _permission_conditions_owner,
@@ -578,12 +576,6 @@ def _principal_access(subject: str) -> IAMPrincipalAccessType:
     )
 
 
-def _iam_overview(peek_limit: int) -> IAMOverviewType:
-    """Return IAM dashboard facts independent of paginated list rows."""
-
-    return cast(IAMOverviewType, _iam_overview_owner(peek_limit))
-
-
 def _admin_relationship_queryset(info: strawberry.Info) -> QuerySet[Any]:
     """Return active REBAC relationship rows scoped to platform admins.
 
@@ -948,7 +940,7 @@ class IAMConsoleQuery:
     ) -> IAMOverviewType:
         """Return IAM dashboard aggregates and peek rows."""
 
-        return _iam_overview(peek_limit)
+        return cast(IAMOverviewType, OverviewInfo.build(peek_limit))
 
 
 @strawberry.type

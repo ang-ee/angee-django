@@ -36,12 +36,14 @@ from rebac import (
     current_actor,
     resolve_subjects,
     system_context,
+    to_object_ref,
     to_subject_ref,
     user_subject_type,
 )
 from rebac.errors import MissingActorError
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
+from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
@@ -110,6 +112,23 @@ class Group(AngeeDataModel, concrete=True):
         """Return the group name used by subject-label resolution."""
 
         return self.name
+
+    def member_rows(self) -> models.QuerySet[Any]:
+        """Select this group's direct membership tuples, ordered by subject."""
+
+        ref = to_object_ref(self)
+        return active_relationship_model().objects.filter(
+            resource_type=ref.resource_type, resource_id=ref.resource_id, relation=ROLE_RELATION,
+        ).order_by_subject()
+
+    def binding_rows(self) -> models.QuerySet[Any]:
+        """Select the tuples bound to this group's member subject set, ordered by resource."""
+
+        subject = to_subject_ref(self)
+        return active_relationship_model().objects.filter(
+            subject_type=subject.subject_type, subject_id=subject.subject_id,
+            optional_subject_relation=subject.optional_relation,
+        ).order_by_resource()
 
     @staticmethod
     def member_subject(value: str, *, require_existing: bool = True) -> SubjectRef:
@@ -300,6 +319,30 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
         """Return the active, unprotected people ``actor`` may assume in a preview."""
 
         return self.active_people().unprotected(actor)
+
+    def directory(self, actor: Any) -> Self:
+        """Return the accounts ``actor`` lists in the people directory, scoped by ``auth/user#list``.
+
+        People managers list every account; anyone else lists nobody.
+        """
+
+        return cast(Self, self.with_actor(actor).with_action("list"))
+
+    def colleagues(self, actor: Any) -> Self:
+        """Return the accounts ``actor`` is offered in pickers, scoped by ``auth/user#colleague``.
+
+        People managers are offered every account; anyone else their own and
+        the arms identity owners contribute, such as the active people whose
+        identity they read through records.
+        """
+
+        return cast(Self, self.with_actor(actor).with_action("colleague"))
+
+    def view_as_queryset(self, actor: Any) -> Self:
+        """The single admission scope used by the picker and header lookup."""
+
+        subject = to_subject_ref(actor)
+        return cast(Self, self.with_actor(subject).with_action("view_as")).preview_candidates(subject)
 
     def without_direct_roles(self, grant_rows: Any, role_resource_types: set[str]) -> Self:
         """Return users without direct role memberships in the installed schema."""
@@ -613,24 +656,6 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             user.unsudo()
         return user
 
-    def directory(self, actor: Any) -> UserQuerySet[UserT]:
-        """Return the accounts ``actor`` lists in the people directory, scoped by ``auth/user#list``.
-
-        People managers list every account; anyone else lists nobody.
-        """
-
-        return cast(UserQuerySet[UserT], self.with_actor(actor).with_action("list"))
-
-    def colleagues(self, actor: Any) -> UserQuerySet[UserT]:
-        """Return the accounts ``actor`` is offered in pickers, scoped by ``auth/user#colleague``.
-
-        People managers are offered every account; anyone else their own and
-        the arms identity owners contribute, such as the active people whose
-        identity they read through records.
-        """
-
-        return cast(UserQuerySet[UserT], self.with_actor(actor).with_action("colleague"))
-
     def visible_people(
         self,
         actor: Any,
@@ -653,12 +678,6 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         bounded = bounded_limit(limit, maximum=VIEWABLE_PEOPLE_MAX_LIMIT)
         return [copy(person) for person in self.view_as_queryset(actor).search_users(search).ordered_users()[:bounded]]
-
-    def view_as_queryset(self, actor: Any) -> UserQuerySet[UserT]:
-        """The single admission scope used by the picker and header lookup."""
-
-        subject = to_subject_ref(actor)
-        return self.with_actor(subject).with_action("view_as").preview_candidates(subject)
 
     def admit_view_as(self, actor: Any, public_id: str) -> UserT | None:
         """Admit a preview identity for both the picker and GraphQL header.
