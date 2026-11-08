@@ -364,6 +364,28 @@ def test_multipart_with_attachment_and_inline_image() -> None:
     assert (inline.disposition, inline.cid, inline.type) == ("inline", "logo@cid", "image/png")
 
 
+@pytest.mark.parametrize("disposition,expected", [("ATTACHMENT", "attachment"), ("inline", "inline"), (None, "inline")])
+def test_content_id_preserves_explicit_attachment_disposition(disposition: str | None, expected: str) -> None:
+    """Content-ID identifies a PDF; its explicit disposition still owns presentation."""
+    disposition_header = f"Content-Disposition: {disposition}; filename=invoice.pdf\r\n" if disposition else ""
+    raw = (
+        "From: ada@example.com\r\n"
+        "To: bob@example.com\r\n"
+        "Subject: Document\r\n"
+        "Message-ID: <cid-document@example.com>\r\n"
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: application/pdf; name=invoice.pdf\r\n"
+        "Content-ID: <document@example.com>\r\n"
+        f"{disposition_header}\r\n"
+        "%PDF-1.4 synthetic document"
+    ).encode()
+    part = _parse(raw).body
+    assert (part.type, part.disposition, part.cid, part.name) == (
+        "application/pdf", expected, "document@example.com", "invoice.pdf",
+    )
+    assert part.content == b"%PDF-1.4 synthetic document"
+
+
 def test_attachment_filename_is_preserved_for_its_write_owner() -> None:
     """Parsing retains the decoded name; the shared part/File writes bound it."""
 

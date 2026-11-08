@@ -61,7 +61,7 @@ class AttachedFileSkipReason(models.Func):
                     ('multipart/report', 'message/delivery-status', 'message/global-delivery-status',
                      'message/disposition-notification', 'message/global-disposition-notification'))
                     THEN 'delivery_report'
-                WHEN EXISTS (SELECT 1 FROM typed WHERE cid <> '' OR
+                WHEN EXISTS (SELECT 1 FROM typed WHERE (cid <> '' AND disposition <> 'attachment') OR
                     (file_id IS NOT NULL AND disposition = 'inline' AND
                         (name = '' OR NOT (mime IN ('application/pdf', 'application/xml', 'text/xml')
                             OR mime LIKE '%%+xml')))) THEN 'inline'

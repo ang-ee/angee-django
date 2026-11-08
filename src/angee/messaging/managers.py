@@ -4525,8 +4525,9 @@ class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):
         Use ``message.parts.attached_files()`` under the usual actor context, or
         ``message.parts.with_actor(actor).attached_files()``. Compose stored-file,
         disposition, role, MIME and byte-size predicates with the existing
-        message-bounded, cycle-safe ancestor navigation. Exclude inline decoration
-        (Content-ID references, inline files without a filename or of a non-document
+        message-bounded, cycle-safe ancestor navigation. Explicit attachment
+        disposition is preserved even with a Content-ID. Exclude inline decoration
+        (other Content-ID references, inline files without a filename or of a non-document
         type), signature and delivery-report branches, and zero-byte files; an inline
         PDF or XML with a filename is a document and stays selected. Open one
         parsed ``message/rfc822`` level regardless of multipart depth; skip raw
