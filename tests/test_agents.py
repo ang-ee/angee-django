@@ -1071,15 +1071,14 @@ def inference_http(monkeypatch, request):
     clients = []
 
     async def respond(self, request):
-        transport_http = httpx2 if isinstance(request, httpx2.Request) else httpx
         content = b"".join([chunk async for chunk in request.stream])
-        requests.append(transport_http.Request(request.method, request.url, headers=request.headers, content=content))
+        requests.append(httpx2.Request(request.method, request.url, headers=request.headers, content=content))
         if isinstance(scenario, int):
-            return transport_http.Response(
+            return httpx2.Response(
                 scenario, json={"error": {"message": "provider rejected request", "type": "test"}}, request=request
             )
         if scenario == "tool":
-            return transport_http.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "id": "call-response",
@@ -1114,14 +1113,12 @@ def inference_http(monkeypatch, request):
         )
         if scenario == "structured":
             response.choices[0].message.content = '{"text":"pong"}'
-        return transport_http.Response(200, json=response.model_dump(mode="json"), request=request)
+        return httpx2.Response(200, json=response.model_dump(mode="json"), request=request)
 
     def client_class(path):
         cls = import_string(path)
 
         def build(**kwargs):
-            if "http_client" not in kwargs:
-                kwargs["http_client"] = httpx.AsyncClient()
             kwargs.setdefault("base_url", "https://provider.invalid/v1")
             kwargs["max_retries"] = 0
             client = cls(**kwargs)
@@ -1130,7 +1127,6 @@ def inference_http(monkeypatch, request):
 
         return build
 
-    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
     monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", respond)
     monkeypatch.setattr("angee.agents.sdk_backends.import_string", client_class)
     return requests, clients
