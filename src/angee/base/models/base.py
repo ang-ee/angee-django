@@ -32,7 +32,6 @@ from angee.base.models.identity import PublicIdentity, SqidMixin, public_id_of
 from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.locks import RowLockMixin
 from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
-from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.transitions import StateTransitionsMixin
 from angee.base.permissions import DirectRecordAccess, declared_grants, declared_rebac_definition, instance_actor
@@ -95,10 +94,7 @@ class AngeeModel(
         if replace:
             self.require_access("write")
         with transaction.atomic(), system_context(reason="base.replace_lines"):
-            if isinstance(self, PersistenceMixin):
-                self.lock_subject()
-            else:
-                type(self)._default_manager.select_for_update(of=row_lock_paths(type(self))).filter(pk=self.pk).first()
+            self.lock_subject()  # The row's own lock order: overrides take their domain locks first.
             lines = line_model._base_manager.filter(**{parent_link.name: self})
             existing = lines.in_bulk()
             by_public_id = {public_id_of(line): line for line in existing.values()}
