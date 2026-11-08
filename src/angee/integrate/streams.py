@@ -34,13 +34,11 @@ from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
     UNSET,
-    ConflictKeep,
     LinkStatus,
     StreamDefinition,
     StreamDirection,
     StreamKind,
     StreamPhase,
-    StreamState,
     SyncFailureKind,
 )
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
@@ -806,82 +804,6 @@ def read_stream_keys(adapter: BridgeImpl, stream: Any, keys: Sequence[str]) -> t
             "read_keys must return each requested key exactly once, including remote tombstones."
         )
     return records
-
-
-def resolve_conflict(link: Any, slot: int | None, keep: ConflictKeep) -> Any:
-    """Fresh-read and retain the chosen side of one linked conflict."""
-
-    if keep not in ConflictKeep.values:
-        raise ValidationError("Choose remote or local changes.")
-    if connection.in_atomic_block:
-        raise RuntimeError("Conflict resolution must run outside a database transaction.")
-    with system_context(reason="integrate.record.resolve_conflict"):
-        link = type(link).objects.with_sync_evidence().get(pk=link.pk)
-        row = next(row for row in link.failures() if row.slot == slot)
-        if row.kind != SyncFailureKind.CONFLICT:
-            raise ValidationError("Conflict resolution requires a linked conflict.")
-        if not row.is_open:
-            return row
-        stream = link.stream
-        if stream.state == StreamState.CLOSED:
-            raise ValidationError("Resync the closed stream before resolving its conflict.")
-        owner = link.parent if link.parent is not None else link
-        adapter = stream.integration.concrete_capability().capability_impl
-        keys = frozenset((owner.external_key,))
-        resolved = False
-        try:
-            if not adapter.supports_identity_reads:
-                raise ValidationError("Conflict resolution requires an adapter with identity reads.")
-            if stream.resync_required:
-                raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-            if keep == ConflictKeep.LOCAL and (not stream.writes_back or not stream.has_completed_baseline()):
-                raise ValidationError("Keeping local changes requires a completed writable baseline.")
-            precondition = owner.sync_precondition
-            remote = read_stream_keys(adapter, stream, tuple(keys))[0] if keep == ConflictKeep.LOCAL else None
-            with transaction.atomic():
-                type(stream).objects.lock_current(stream, fenced_to=stream)
-                locked = type(owner).objects.lock_if_supported().get(pk=owner.pk)
-                current_link = type(link).objects.lock_if_supported().get(pk=link.pk)
-                current = next(row for row in current_link.failures() if row.slot == slot)
-                if not current.is_open:
-                    return current
-                if not locked.sync_precondition_matches(precondition):
-                    raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
-                if remote is not None:
-                    type(locked).objects.observe(
-                        stream,
-                        locked.external_key,
-                        source_payload=remote.source_payload,
-                        source_hash=remote.source_hash,
-                        remote_version=remote.remote_version,
-                    )
-                current_link.resolve_failure(slot, conflict=True)
-            resolved = True
-            if keep == ConflictKeep.REMOTE:
-                prepared = begin_stream_cycle(stream, adapter, force_apply=keys)
-                if prepared.resync_required:
-                    raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-            elif not push_stream(stream, adapter, external_keys=keys).count:
-                raise ValidationError("The selected local record could not be written; its failure remains open.")
-            if type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
-                raise ValidationError("The record could not be synchronized; its failure remains open.")
-            fresh = type(link).objects.get(pk=link.pk)
-            return next(row for row in fresh.failures() if row.slot == slot)
-        except Exception:
-            if resolved:
-                fresh = type(link).objects.get(pk=link.pk)
-                if not type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
-                    fresh.record_failure(
-                        kind=row.kind,
-                        code=row.code,
-                        source_hash=row.source_hash,
-                        mapping_version=row.mapping_version,
-                        details=row.details,
-                        outbox=slot is None,
-                    )
-            raise
-        finally:
-            adapter.close()
 
 
 def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100, deadline: float | None = None) -> int:

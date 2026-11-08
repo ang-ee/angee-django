@@ -96,6 +96,7 @@ from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import (
     UNSET,
+    ConflictKeep,
     LinkStatus,
     OutboxState,
     StreamDefinition,
@@ -107,7 +108,7 @@ from angee.integrate.states import (
     SyncFailureKind,
     SyncFailureStatus,
 )
-from angee.integrate.streams import sync_bridge
+from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
@@ -4889,6 +4890,86 @@ class RecordLink(
             locked.outbox_retry_at = datetime.fromisoformat(data["retry_at"]) if data["retry_at"] else None
             self.on_sync_state_saved(locked)
             return SyncFailure.from_state(self, None, data)
+
+    def resolve_conflict(self, slot: int | None, keep: ConflictKeep) -> SyncFailure:
+        """Fresh-read and retain the chosen side of one linked conflict.
+
+        The row decision runs under the stream, owner and link locks. The remote
+        read before it and the apply or push after it are adapter I/O, run by the
+        stream driver outside the transaction. A follow-through that leaves the
+        record unsynchronized reopens the conflict.
+        """
+
+        if keep not in ConflictKeep.values:
+            raise ValidationError("Choose remote or local changes.")
+        if connection.in_atomic_block:
+            raise RuntimeError("Conflict resolution must run outside a database transaction.")
+        with system_context(reason="integrate.record.resolve_conflict"):
+            link = type(self).objects.with_sync_evidence().get(pk=self.pk)
+            row = link.failure_at(slot)
+            if row.kind != SyncFailureKind.CONFLICT:
+                raise ValidationError("Conflict resolution requires a linked conflict.")
+            if not row.is_open:
+                return row
+            stream = link.stream
+            if stream.state == StreamState.CLOSED:
+                raise ValidationError("Resync the closed stream before resolving its conflict.")
+            owner = link.parent if link.parent is not None else link
+            adapter = stream.integration.concrete_capability().capability_impl
+            keys = frozenset((owner.external_key,))
+            resolved = False
+            try:
+                if not adapter.supports_identity_reads:
+                    raise ValidationError("Conflict resolution requires an adapter with identity reads.")
+                if stream.resync_required:
+                    raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
+                if keep == ConflictKeep.LOCAL and (not stream.writes_back or not stream.has_completed_baseline()):
+                    raise ValidationError("Keeping local changes requires a completed writable baseline.")
+                precondition = owner.sync_precondition
+                remote = read_stream_keys(adapter, stream, tuple(keys))[0] if keep == ConflictKeep.LOCAL else None
+                with transaction.atomic():
+                    type(stream).objects.lock_current(stream, fenced_to=stream)
+                    locked = type(owner).objects.lock_if_supported().get(pk=owner.pk)
+                    current_link = type(link).objects.lock_if_supported().get(pk=link.pk)
+                    current = current_link.failure_at(slot)
+                    if not current.is_open:
+                        return current
+                    if not locked.sync_precondition_matches(precondition):
+                        raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
+                    if remote is not None:
+                        type(locked).objects.observe(
+                            stream,
+                            locked.external_key,
+                            source_payload=remote.source_payload,
+                            source_hash=remote.source_hash,
+                            remote_version=remote.remote_version,
+                        )
+                    current_link.resolve_failure(slot, conflict=True)
+                resolved = True
+                if keep == ConflictKeep.REMOTE:
+                    prepared = begin_stream_cycle(stream, adapter, force_apply=keys)
+                    if prepared.resync_required:
+                        raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
+                elif not push_stream(stream, adapter, external_keys=keys).count:
+                    raise ValidationError("The selected local record could not be written; its failure remains open.")
+                if type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
+                    raise ValidationError("The record could not be synchronized; its failure remains open.")
+                return type(link).objects.get(pk=link.pk).failure_at(slot)
+            except Exception:
+                if resolved:
+                    fresh = type(link).objects.get(pk=link.pk)
+                    if not type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
+                        fresh.record_failure(
+                            kind=row.kind,
+                            code=row.code,
+                            source_hash=row.source_hash,
+                            mapping_version=row.mapping_version,
+                            details=row.details,
+                            outbox=slot is None,
+                        )
+                raise
+            finally:
+                adapter.close()
 
     def local_changed(self, projection: Any) -> bool:
         """Compare a JSON-native projection with this link's protected applied base."""

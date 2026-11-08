@@ -218,6 +218,4 @@ class SyncFailure(BaseModel):
     def resolve_conflict(self, *, keep: ConflictKeep) -> SyncFailure:
         if self.link is None:
             raise ValidationError("Conflict resolution requires a linked conflict.")
-        from angee.integrate.streams import resolve_conflict
-
-        return resolve_conflict(self.link, self._slot, keep)
+        return self.link.resolve_conflict(self._slot, keep)
