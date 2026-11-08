@@ -1096,6 +1096,13 @@ class Channel(Bridge, inherits="integrate.Integration"):
             return cast(timedelta, capability.delivery_visibility_delay())
         return self.get_backend_class_impl().delivery_visibility_delay
 
+    def outbound_sender(self) -> tuple[str, str]:
+        """Return this connected channel's backend-owned default email sender."""
+
+        if self.lifecycle != self.Lifecycle.CONNECTED:
+            raise ValidationError("Select a connected email channel.")
+        return self.backend.outbound_sender()
+
     def validate_webform_answers(self, answers: dict[str, Any]) -> None:
         """Validate domain meaning after the public form's scalar validation.
 

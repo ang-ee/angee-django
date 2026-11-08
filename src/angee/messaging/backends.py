@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
@@ -243,6 +244,21 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     identified integration declares ``SourceKind.IMPORT``. A transport that only lands
     messages keeps ``None``: its channel asserts nothing and is refused as a source.
     """
+
+    @classmethod
+    def outbound_email_configured(cls) -> bool:
+        """Whether this backend currently offers configured outbound email delivery.
+
+        Read without constructing a transport, so a channel selection can admit
+        every backend that declares it.
+        """
+
+        return False
+
+    def outbound_sender(self) -> tuple[str, str]:
+        """Return this channel's validated default ``(name, address)`` email sender."""
+
+        raise ValidationError("Select a connected email channel.")
 
     @classmethod
     def reconciles_delivery(cls) -> bool:

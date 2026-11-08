@@ -248,6 +248,13 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
 
         return self.filter(backend_class=backend_class)
 
+    def outbound_email(self) -> Self:
+        """Connected channels whose declared backend currently offers configured outbound email."""
+
+        field = self.model.backend_class.field
+        keys = [key for key in field.registered_keys() if field.resolve_class(key).outbound_email_configured()]
+        return self.filter(backend_class__in=keys, lifecycle=IntegrationLifecycle.CONNECTED)
+
     def require_backend_target(self, public_id: str, *, backend_class: str) -> ChannelT:
         """Resolve an explicit import target, refusing a missing or other-backend channel uniformly.
 
