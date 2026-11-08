@@ -27,6 +27,7 @@ from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
+from jwt.algorithms import RSAAlgorithm
 from rebac import system_context
 from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
@@ -727,6 +728,30 @@ def test_jwks_fetch_uses_pinned_http_client(monkeypatch: pytest.MonkeyPatch) -> 
             oidc_protocol.HTTP_TIMEOUT_SECONDS,
         )
     ]
+
+
+def test_pinned_jwks_set_is_parsed_and_cached_by_pyjwt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PyJWT's JWK-set cache holds what the pinned transport fetched."""
+
+    public_key = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
+    public_jwk = {**RSAAlgorithm.to_jwk(public_key, as_dict=True), "kid": "signing-key", "use": "sig"}
+    fetches: list[str] = []
+
+    class FakeHttpClient:
+        def get(self, url: str, **kwargs: object) -> httpx2.Response:
+            del kwargs
+            fetches.append(url)
+            return httpx2.Response(200, json={"keys": [public_jwk]})
+
+    monkeypatch.setattr(oidc_protocol, "HttpClient", FakeHttpClient)
+    client = oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks")
+
+    first = client.get_jwk_set()
+    second = client.get_jwk_set()
+
+    assert [key.key_id for key in first.keys] == ["signing-key"]
+    assert second is first
+    assert fetches == ["https://issuer.example/jwks"]
 
 
 @pytest.mark.django_db(transaction=True)

@@ -5,7 +5,7 @@ name = "angee-iam-integrate-oidc"
 version = "3.0.0"
 description = "OIDC single sign-on — login and account linking over any OpenID Connect provider"
 keywords = ["oidc", "login", "sso"]
-dependencies = ["angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-parties>=3,<4", "angee-web>=3,<4", "pyjwt[crypto]>=2.12", "django-compose>=0.1.0.dev10,<0.2"]
+dependencies = ["angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-parties>=3,<4", "angee-web>=3,<4", "pyjwt[crypto]>=2.15", "django-compose>=0.1.0.dev10,<0.2"]
 dynamic = ["entry-points"]
 
 [tool.angee]
