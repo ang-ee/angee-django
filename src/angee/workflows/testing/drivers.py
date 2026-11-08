@@ -137,6 +137,7 @@ def run_until(run: Any, *, node: str | None = None, max_steps: int = 100) -> Any
     A waiting run with no ready row returns to the caller, which controls time
     and calls the production tick when appropriate. The worker delivers answered-
     decision wakes; tests replay captured sends with ``deliver_decision_wakes``.
+    It inspects the run elevated, including a run that ``start_run`` bound to its starter.
     """
 
     for _ in range(max_steps):
@@ -144,8 +145,8 @@ def run_until(run: Any, *, node: str | None = None, max_steps: int = 100) -> Any
             run.refresh_from_db()
         if run.is_terminal:
             return run
-        with system_context(reason="workflows.testing inspect ready rows"):
-            ready = list(run.step_runs.filter(status=StepRunStatus.READY).order_by("pk"))
+        steps = run.step_runs.system_context(reason="workflows.testing inspect ready rows")
+        ready = list(steps.filter(status=StepRunStatus.READY).order_by("pk"))
         if not ready or any(step_run.node_key == node for step_run in ready):
             return run
         for step_run in ready:
@@ -171,8 +172,7 @@ class RunFactory:
         self.workflow.published.definition.node(node)
         run = start_run(self.workflow, actor=self.actor, **kwargs)
         run_until(run, node=node)
-        with system_context(reason="workflows.testing inspect target"):
-            step_run = run.step_runs.get(node_key=node)
+        step_run = run.step_runs.system_context(reason="workflows.testing inspect target").get(node_key=node)
         if step_run.status != status and step_run.status == StepRunStatus.READY:
             runner.execute(step_run.pk)
             with system_context(reason="workflows.testing inspect settlement"):
