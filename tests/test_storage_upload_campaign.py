@@ -45,7 +45,12 @@ def test_ingest_bytes_bounds_source_filename_and_keeps_extension(drive: Any, exc
 
     limit = File._meta.get_field("filename").max_length
     name = "é" * (limit - 4 + excess) + ".png"
-    row = File.objects.ingest_bytes(PNG_BYTES, filename=name, drive_id=str(drive.sqid), owner_id=drive.alice.pk)
+    row, _created = File.objects.ingest_bytes(
+        PNG_BYTES,
+        filename=name,
+        drive_id=str(drive.sqid),
+        owner_id=drive.alice.pk,
+    )
     row.refresh_from_db()
     assert row.filename == "é" * (limit - 4) + ".png"
     assert row.content_hash == PNG_SHA256
@@ -158,8 +163,8 @@ def test_ingest_losing_to_inherited_winner_returns_winner_and_purges_reservation
         return loser
 
     monkeypatch.setattr(FileManager, "draft", reserve_then_publish)
-    result = File.objects.ingest_bytes(PNG_BYTES, filename="loser.png", drive_id=str(drive.sqid))
-    assert winner is not None and result.pk == winner.pk
+    result, created = File.objects.ingest_bytes(PNG_BYTES, filename="loser.png", drive_id=str(drive.sqid))
+    assert winner is not None and (result.pk, created) == (winner.pk, False)
     with system_context(reason="test.storage.race.inspect"):
         assert list(File.objects.values_list("pk", flat=True)) == [winner.pk]
     assert [p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()] == [winner.storage_path]
@@ -342,18 +347,23 @@ def test_two_ingest_writers_converge_without_losing_rows_or_objects(
         close_old_connections()
         try:
             with actor_context(drive.alice):
-                return File.objects.ingest_bytes(
-                    PNG_BYTES, filename=filename, drive_id=str(drive.sqid), owner_id=drive.alice.pk,
-                ).pk
+                row, created = File.objects.ingest_bytes(
+                    PNG_BYTES,
+                    filename=filename,
+                    drive_id=str(drive.sqid),
+                    owner_id=drive.alice.pk,
+                )
+                return row.pk, created
         finally:
             connections.close_all()
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(ingest, ("first.png", "second.png")))
-    assert results[0] == results[1]
+    assert results[0][0] == results[1][0]
+    assert sorted(created for _pk, created in results) == [False, True]
     with system_context(reason="test.storage.two-writers.inspect"):
         row = File.objects.get()
-    assert row.pk == results[0]
+    assert row.pk == results[0][0]
     assert row.upload_state == UploadState.READY
     assert {p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()} == {row.storage_path}
     assert (tmp_path / row.storage_path).read_bytes() == PNG_BYTES

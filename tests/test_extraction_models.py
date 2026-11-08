@@ -88,7 +88,7 @@ def evidence(drive, monkeypatch):
     monkeypatch.setattr(File, "rebac_grantable", AbstractFile.rebac_grantable)
     content = b"Note\nFirst line\nSecond line"
     with actor_context(drive.alice):
-        source = File.objects.ingest_bytes(content, filename="note.txt", drive_id=str(drive.sqid))
+        source, _created = File.objects.ingest_bytes(content, filename="note.txt", drive_id=str(drive.sqid))
     document_source = Source(0, source.content_hash, "text/plain", content, file=source)
     part = DocumentPart(
         0,
@@ -221,7 +221,11 @@ def test_lineage_compare_and_swap_rejects_a_stale_parent(evidence):
 
 def test_file_extraction_rejects_sources_outside_its_target(evidence):
     retain, values = evidence
-    other = File.objects.ingest_bytes(b"Another note", filename="other.txt", drive_id=str(values["target"].drive.sqid))
+    other, _created = File.objects.ingest_bytes(
+        b"Another note",
+        filename="other.txt",
+        drive_id=str(values["target"].drive.sqid),
+    )
     original = values["sources"][0]
     additional = Source(1, other.content_hash, "text/plain", b"Another note", file=other)
     with pytest.raises(ValidationError, match="belongs to the extraction target"):
@@ -401,7 +405,7 @@ def test_retention_requires_independent_source_and_target_read_access(evidence, 
             created_by=outsider,
             updated_by=outsider,
         )
-        other = File.objects.ingest_bytes(
+        other, _created = File.objects.ingest_bytes(
             b"Other evidence",
             filename="other.txt",
             drive_id=str(other_drive.sqid),

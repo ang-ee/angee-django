@@ -75,7 +75,7 @@ class PartCarrier(BaseModel):
     @classmethod
     def retain(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> PartCarrier:
         """Retain text and structured values under the storage owner's permissions."""
-        file = apps.get_model("storage.File").objects.ingest_bytes(
+        file, _created = apps.get_model("storage.File").objects.ingest_bytes(
             json.dumps(asdict(part), ensure_ascii=False).encode(),
             filename="extraction-part.json",
             owner_id=actor_user_id(to_subject_ref(actor)),
@@ -257,7 +257,7 @@ def _raster(
     image.thumbnail((maximum, maximum))
     output = io.BytesIO()
     image.convert("RGB").save(output, format="JPEG", quality=90)
-    carrier = apps.get_model("storage.File").objects.ingest_bytes(
+    carrier, _created = apps.get_model("storage.File").objects.ingest_bytes(
         output.getvalue(),
         filename=f"extraction-{position}-{number}.jpg",
         owner_id=actor_user_id(to_subject_ref(actor)),

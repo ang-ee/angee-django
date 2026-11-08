@@ -982,23 +982,24 @@ def test_dedup_restores_a_trashed_hit(drive: Any) -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_ingest_dedup_grants_read_reach_to_second_owner(drive: Any) -> None:
-    """A dedup hit grants the requested owner reach to the existing READY row."""
+    """A dedup hit reports no creation and grants the requested owner reach to the existing READY row."""
 
     bob = get_user_model().objects.create_user(username="storage-dedup-bob", email="dedup-bob@example.com")
     with system_context(reason="test storage dedup ingest"):
-        first = File.objects.ingest_bytes(
+        first, created = File.objects.ingest_bytes(
             PNG_BYTES,
             filename="first.png",
             owner_id=drive.alice.pk,
             drive_id=str(drive.sqid),
         )
-        second = File.objects.ingest_bytes(
+        second, created_again = File.objects.ingest_bytes(
             PNG_BYTES,
             filename="second.png",
             owner_id=bob.pk,
             drive_id=str(drive.sqid),
         )
 
+    assert (created, created_again) == (True, False)
     assert second.pk == first.pk
     with actor_context(bob):
         assert File.objects.filter(pk=first.pk).exists()
@@ -1098,7 +1099,7 @@ def test_every_signed_in_user_reads_an_image_and_nothing_else_the_drive_opens(im
 
     with system_context(reason="test storage image reach"):
         image = File.objects.ingest_image(PNG_BYTES)
-        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
+        private, _created = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
     stranger = get_user_model().objects.create_user(username="storage-bob", email="bob@example.com")
     with actor_context(stranger):
         assert list(File.objects.filter(pk__in=[image.pk, private.pk]).values_list("pk", flat=True)) == [image.pk]
@@ -1114,7 +1115,7 @@ def test_drive_and_file_listings_leave_out_the_image_drive(image_drive: Any) -> 
 
     with system_context(reason="test storage image listings"):
         image = File.objects.ingest_image(PNG_BYTES)
-        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
+        private, _created = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
     schema = addon_schema(storage_schema.schemas, "public")
     listed = result_data(execute_schema(schema, "{ drives { slug } files { id } }", user=image_drive.alice))
     assert [row["slug"] for row in listed["drives"]] == [image_drive.assets.slug]
@@ -1128,7 +1129,7 @@ def test_an_image_never_deduplicates_onto_a_users_file_with_the_same_bytes(image
     """Deduplication stays within the image drive, so an avatar never shares a row with a private upload."""
 
     with system_context(reason="test storage image isolation"):
-        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
+        private, _created = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
         image = File.objects.ingest_image(PNG_BYTES)
         again = File.objects.ingest_image(PNG_BYTES)
     assert image.pk != private.pk
@@ -1142,7 +1143,7 @@ def test_read_image_passes_on_only_an_image_the_image_rule_admits(image_drive: A
 
     with system_context(reason="test storage read image"):
         image = File.objects.ingest_image(PNG_BYTES)
-        script = File.objects.ingest_bytes(SVG_BYTES, filename="old.svg", owner_id=image_drive.alice.pk)
+        script, _created = File.objects.ingest_bytes(SVG_BYTES, filename="old.svg", owner_id=image_drive.alice.pk)
         assert image.read_image(expected_digest=image.content_hash) == PNG_BYTES
         with pytest.raises(exceptions.UploadTypeRefused):
             script.read_image()
@@ -1499,7 +1500,7 @@ def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
 
     digest = hashlib.sha256(b"same bytes").hexdigest()
     with system_context(reason="test storage stream ingest"):
-        first = File.objects.ingest_stream(
+        first, created = File.objects.ingest_stream(
             BytesIO(b"same bytes"),
             filename="first.bin",
             content_hash=digest,
@@ -1513,7 +1514,7 @@ def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
                 del size
                 raise AssertionError("dedup must not consume the reader")
 
-        duplicate = File.objects.ingest_stream(
+        duplicate, duplicate_created = File.objects.ingest_stream(
             UnreadableStream(b"same bytes"),
             filename="duplicate.bin",
             content_hash=digest,
@@ -1523,6 +1524,7 @@ def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
         )
 
     assert duplicate.pk == first.pk
+    assert (created, duplicate_created) == (True, False)
     assert File._base_manager.filter(drive=drive).count() == 1
 
 
@@ -1563,7 +1565,7 @@ def test_ingest_stream_reads_in_chunks_instead_of_materializing(drive: Any) -> N
             return super().read(size)
 
     with system_context(reason="test streaming ingest"):
-        row = File.objects.ingest_stream(
+        row, _created = File.objects.ingest_stream(
             ChunkOnlyStream(payload),
             filename="stream.bin",
             content_hash=hashlib.sha256(payload).hexdigest(),
@@ -1878,7 +1880,7 @@ def test_ingest_dedup_restores_and_merges_metadata(drive: Any) -> None:
     with system_context(reason="storage dedup setup"):
         row.delete()
     with system_context(reason="storage dedup"):
-        result = File.objects.ingest_stream(
+        result, created = File.objects.ingest_stream(
             BytesIO(PNG_BYTES),
             filename="same.png",
             content_hash=PNG_SHA256,
@@ -1888,7 +1890,7 @@ def test_ingest_dedup_restores_and_merges_metadata(drive: Any) -> None:
             metadata={"source": {"indexed": True}},
         )
     stored = File._base_manager.get(pk=row.pk)
-    assert result.pk == row.pk
+    assert (result.pk, created) == (row.pk, False)
     assert stored.is_trashed is False
     assert stored.metadata == {"source": {"indexed": True}}
 
@@ -2015,8 +2017,12 @@ def test_backend_cache_includes_selected_implementation(tmp_path: Path, drive: A
 
 def test_drive_local_file_path_uses_readable_live_file_and_native_location(drive, tmp_path):
     with system_context(reason="test local file location fixtures"):
-        file = File.objects.ingest_bytes(b"Manifest placeholder", filename="Manifest.db", owner_id=drive.alice.pk,
-                                        drive_id=drive.sqid)
+        file, _created = File.objects.ingest_bytes(
+            b"Manifest placeholder",
+            filename="Manifest.db",
+            owner_id=drive.alice.pk,
+            drive_id=drive.sqid,
+        )
     with actor_context(drive.alice):
         assert drive.with_actor(drive.alice).local_file_path("Manifest.db") == file.local_path()
         file.trash(reason="local file lookup excludes trash")

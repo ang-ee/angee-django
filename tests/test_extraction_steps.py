@@ -165,7 +165,7 @@ def step_evidence(execution, drive, monkeypatch):
     provider = make_integration("extraction-test", model=InferenceProvider, backend_class="manual", name="Test")
     with actor_context(actor):
         InferenceModel.objects.create(provider=provider, name="deterministic", model_use="multimodal")
-        file = File.objects.ingest_bytes(b"Retained note", filename="note.txt", drive_id=str(drive.sqid))
+        file, _created = File.objects.ingest_bytes(b"Retained note", filename="note.txt", drive_id=str(drive.sqid))
     return actor, file
 
 
@@ -402,7 +402,7 @@ def test_native_text_acquisition_drops_script_and_checks_digest(step_evidence):
     content = b"<p>Retained note</p><script>ignore</script>"
     with actor_context(actor):
         MimeType.objects.get_or_create(mime_type="text/html", defaults={"category": "document", "label": "HTML"})
-        row = File.objects.ingest_bytes(content, filename="note.html", drive_id=str(source.drive.sqid))
+        row, _created = File.objects.ingest_bytes(content, filename="note.html", drive_id=str(source.drive.sqid))
         prepared = prepare_pages(
             [row], [], profile=TextProfile(), config=ExtractionConfig(), actor=actor, heartbeat=lambda: None,
         )
@@ -512,7 +512,7 @@ def test_cross_target_original_source_is_rejected_before_inference(step_evidence
     original = Extraction.system_queryset().get(sqid=processed.output["extraction_id"])
     reader = get_user_model().objects.create_user(username="separate-target-owner")
     with actor_context(reader):
-        target = File.objects.ingest_bytes(
+        target, _created = File.objects.ingest_bytes(
             b"Separate target", filename="target.txt", owner_id=reader.pk, drive_id=str(source.drive.sqid)
         )
     with actor_context(admin), pytest.raises(ValidationError, match="belongs to the extraction target"):
@@ -537,7 +537,11 @@ def test_cross_target_original_source_is_rejected_before_inference(step_evidence
 def test_unsupported_source_retains_an_explicit_source_hold(step_evidence):
     actor, source = step_evidence
     with actor_context(actor):
-        file = File.objects.ingest_bytes(b"\x00opaque", filename="source.bin", drive_id=str(source.drive.sqid))
+        file, _created = File.objects.ingest_bytes(
+            b"\x00opaque",
+            filename="source.bin",
+            drive_id=str(source.drive.sqid),
+        )
         prepared = prepare_pages(
             [file], [], profile=TextProfile(), config=ExtractionConfig(), actor=actor,
             heartbeat=lambda: None,
@@ -628,7 +632,11 @@ def test_native_acquisition_retains_bounded_rasters(step_evidence, media_type):
         filename = "page.pdf"
     with actor_context(actor):
         MimeType.objects.get_or_create(mime_type=media_type, defaults={"category": "document", "label": media_type})
-        file = File.objects.ingest_bytes(content.getvalue(), filename=filename, drive_id=str(source.drive.sqid))
+        file, _created = File.objects.ingest_bytes(
+            content.getvalue(),
+            filename=filename,
+            drive_id=str(source.drive.sqid),
+        )
         prepared = prepare_pages(
             [file],
             [],

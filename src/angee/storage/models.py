@@ -853,17 +853,19 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         drive_id: str = "",
         drive_slug: str = "",
         folder_id: str = "",
-    ) -> FileT:
-        """Ingest bytes already in hand into a drive and return the READY File.
+    ) -> tuple[FileT, bool]:
+        """Ingest bytes already in hand into a drive and return ``(file, created)``, as ``get_or_create`` does.
 
         The server-side sibling of the proxy upload: the bytes are trusted (a
         sync fetched them), so this writes them to a unique reserved key and
         finalizes in one call instead of minting an upload token. Existing READY
-        bytes with inherited visibility return their row; a record-scoped
-        collision raises ``UploadConflict`` without identifying that row.
-        ``owner_id`` sets ``owner`` independently of attribution; the whole verb runs
-        elevated, so a sync needs no per-actor drive grant, and read access is
-        scoped afterwards by that owner.
+        bytes with inherited visibility return their row with ``created`` false;
+        a record-scoped collision raises ``UploadConflict`` without identifying
+        that row. ``created`` names the call whose insert became the READY row,
+        not exclusive use: an identical concurrent ingest resolves to the same
+        row. ``owner_id`` sets ``owner`` independently of attribution; the whole
+        verb runs elevated, so a sync needs no per-actor drive grant, and read
+        access is scoped afterwards by that owner.
         """
 
         digest = hashlib.sha256(content).hexdigest()
@@ -894,7 +896,12 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         drive = self.model.drive.field.related_model.objects.image_drive()
         if drive is None:
             raise exceptions.UploadTargetNotFound("The image drive needs a default drive to provision it.")
-        return self.ingest_bytes(content, filename=f"image{attachment_extension(mime)}", drive_slug=drive.slug)
+        image, _created = self.ingest_bytes(
+            content,
+            filename=f"image{attachment_extension(mime)}",
+            drive_slug=drive.slug,
+        )
+        return image
 
     def ingest_stream(
         self,
@@ -908,10 +915,11 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         drive_id: str = "",
         drive_slug: str = "",
         folder_id: str = "",
-    ) -> FileT:
-        """Ingest a pre-hashed stream without materializing it in memory.
+    ) -> tuple[FileT, bool]:
+        """Ingest a pre-hashed stream without materializing it in memory; return ``(file, created)``.
 
-        The caller hashes outside this write path. An inherited READY hit returns
+        ``created`` is as in :meth:`ingest_bytes`. The caller hashes outside this
+        write path. An inherited READY hit returns
         before the reader is consumed; otherwise the bytes stream through the
         selected Django storage backend and the normal finalize contract
         verifies the declared digest and size. Source filenames are display text,
@@ -936,7 +944,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             if row.upload_state == UploadState.READY:
                 row._grant_dedup_reach(owner_id)
                 row.merge_metadata(metadata)
-                return row  # content-addressed dedup hit — the bytes already exist
+                return row, False  # content-addressed dedup hit — the bytes already exist
             storage = row.storage
             saved_path = storage.save(row.storage_path, DjangoFile(reader, name=row.storage_path))
             if saved_path and saved_path != row.storage_path:
@@ -964,7 +972,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                 else:
                     raise
             result.merge_metadata(metadata)
-            return result
+            return result, result.pk == row.pk
 
     def index_external(
         self,
