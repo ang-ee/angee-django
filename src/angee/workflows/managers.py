@@ -741,7 +741,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             decisions = apps.get_model("decisions", "Decision").objects
             with system_context(reason="workflows.terminal.withdraw"):
                 for decision in decisions.filter(requesting_steps__run=run).open().order_by("pk"):
-                    decisions.withdraw(decision, actor=actor or run.run_as)
+                    decision.withdraw(actor=actor or run.run_as)
             if (subject := self._lock_subject(run, required=False)) is not None:
                 subject.settle_run(self.get(pk=run.pk), status)
             if status != RunStatus.CANCELED:

@@ -175,8 +175,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             decision = Decision.objects.get(requesting_steps=step_run)
             self.assertEqual(decision.requester_id, self.owner.pk)
             self.assertEqual(list(decision.assignees.values_list("pk", flat=True)), [self.reviewer.pk])
-        answered = Decision.objects.decide(
-            decision.pk,
+        answered = decision.decide(
             actor=self.reviewer,
             revision=decision.revision,
             chosen=[action],
@@ -324,9 +323,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
                 [decision.records.get().record_public_id for decision in decisions],
                 [note.sqid for note in notes],
             )
-        Decision.objects.decide(
-            decisions[0].pk, actor=self.reviewer, revision=decisions[0].revision, chosen=["approve"]
-        )
+        decisions[0].decide(actor=self.reviewer, revision=decisions[0].revision, chosen=["approve"])
         self.assertEqual(deliver_decision_wakes(self.sent, decisions[0].pk), [1])
         run_until(run)
         with system_context(reason="mapped note review partial settlement assertions"):
@@ -335,7 +332,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.assertEqual((parent.map_total, parent.map_settled), (2, 1))
             self.assertTrue(decisions[1].is_open)
             self.assertFalse(StepRun.objects.filter(run=run, node_key="summarize").exists())
-        Decision.objects.decide(decisions[1].pk, actor=self.reviewer, revision=decisions[1].revision, chosen=["reject"])
+        decisions[1].decide(actor=self.reviewer, revision=decisions[1].revision, chosen=["reject"])
         self.assertEqual(deliver_decision_wakes(self.sent, decisions[1].pk), [1])
         run_until(run)
         self.assertEqual(run.status, RunStatus.SUCCEEDED)

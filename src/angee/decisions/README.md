@@ -41,7 +41,7 @@ a method with required parameters (a strict `cancel(reason)`) is a valid call
 when the proposal names them and refused when it does not. `delete` is
 never permitted. JSON null values are retained.
 
-`Decision.objects.decide(decision, actor=actor, chosen=keys, revision=revision)`
+`decision.decide(actor=actor, chosen=keys, revision=revision)`
 validates distinct offered keys and the single/multiple choice rule, stores the
 verdict in authored order, increments the optimistic revision and emits
 `decision_answered` under the answerer's actor inside the answer transaction.

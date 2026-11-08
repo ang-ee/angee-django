@@ -500,7 +500,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
 
         if decision_id is not None:
             with system_context(reason="intake.need.replace_access_question"):
-                apps.get_model("decisions", "Decision").objects.withdraw(decision_id, actor=actor)
+                apps.get_model("decisions", "Decision").objects.get(pk=decision_id).withdraw(actor=actor)
 
     def _new_access_decision(self) -> Any:
         """Ask one question assigned to the target's current sharers."""

@@ -105,7 +105,7 @@ def test_decide_returns_one_optimized_reader_projection(inbox):
 
 def test_record_answer_history_returns_only_answered_decisions_for_the_readable_record(inbox):
     requester, reviewer, _, subject, answered = inbox
-    Decision.objects.decide(answered, actor=reviewer, chosen=["accept"])
+    answered.decide(actor=reviewer, chosen=["accept"])
     open_question = Decision.objects.ask(
         DecisionRequest(
             kind="second_review",
