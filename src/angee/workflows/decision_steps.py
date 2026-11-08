@@ -1,6 +1,5 @@
 """Ask-and-continue support over independent decisions."""
 
-from copy import copy
 from typing import Any
 
 from django.apps import apps
@@ -42,13 +41,9 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                 record = targets.get()
                 try:
                     if isinstance(record, PersistenceMixin):
-                        candidate = copy(record)
                         proposed = actions.resolve(record, context={"actor": actor},
                                                    values=(decision.verdict_values or {}).get(identity))
-                        for name, value in proposed.items():
-                            if not record._meta.get_field(name).many_to_many:
-                                setattr(candidate, name, value)
-                        candidate.lock_subject()
+                        record.prepare_lock_subject(proposed).lock_subject()
                         record = targets.get()
                     else:
                         record = targets.select_for_update(of=row_lock_paths(target_model)).get()

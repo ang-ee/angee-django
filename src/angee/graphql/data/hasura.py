@@ -263,10 +263,7 @@ class AngeeHasuraWriteBackend:
         targets = self.write_target_queryset()
         instance = require_instance_for_id(self.model, pk, queryset=targets)
         if isinstance(instance, PersistenceMixin):
-            candidate = copy(instance)
-            for name, value in _column_values(self.model, values).items():
-                setattr(candidate, name, value)
-            candidate.lock_subject()
+            instance.prepare_lock_subject(values).lock_subject()
             instance = require_instance_for_id(self.model, pk, queryset=targets)
         else:
             instance = require_instance_for_id(
