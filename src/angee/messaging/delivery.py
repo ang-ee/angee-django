@@ -24,13 +24,9 @@ from angee.base.locks import record_lock_key, task_lock
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.jobs.enqueue import celery_app, enqueue_task
 from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain
-from angee.messaging.constants import DELIVER_MESSAGE_TASK
+from angee.messaging.constants import DELIVER_MESSAGE_TASK, DELIVERY_TASK_EXPIRES
 
 logger = logging.getLogger(__name__)
-DELIVERY_TASK_EXPIRES = 300
-MAX_DELIVERY_ATTEMPTS = 4
-MAX_RECONCILE_ATTEMPTS = 5
-RECONCILE_BACKOFF = timedelta(minutes=1)
 
 
 def queue_message_delivery(message: Any) -> bool:

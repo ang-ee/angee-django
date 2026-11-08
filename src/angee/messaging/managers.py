@@ -80,7 +80,7 @@ from angee.integrate.models import IntegrationLifecycle, IntegrationManager, Int
 from angee.integrate.net import AddressNotAllowedError
 from angee.jobs.timeouts import task_claim_lease
 from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedPart
-from angee.messaging.delivery import (
+from angee.messaging.constants import (
     DELIVERY_TASK_EXPIRES,
     MAX_DELIVERY_ATTEMPTS,
     MAX_RECONCILE_ATTEMPTS,
