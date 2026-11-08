@@ -28,7 +28,6 @@ from angee.graphql.sdl import PUBLISHERS_ARTIFACT
 
 _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
 
-_publisher_model_labels: frozenset[str] = frozenset()
 _publisher_fields: dict[type[models.Model], ReadableFields] = {}
 """Declared feeds and the fields their partial-update payloads may carry."""
 
@@ -46,7 +45,6 @@ def connect_change_publishers(metadata: Mapping[str, list[str]] | None = None) -
     always verifies the native receipt; a missing or altered artifact is fatal.
     """
 
-    global _publisher_model_labels
     if metadata is None:
         from django_compose.serving import artifact_path
 
@@ -70,7 +68,6 @@ def connect_change_publishers(metadata: Mapping[str, list[str]] | None = None) -
         resolved[model] = frozenset(fields)
     for model, readable_fields in resolved.items():
         connect_publishers(model, readable_fields=readable_fields)
-    _publisher_model_labels = frozenset(model._meta.label_lower for model in resolved)
     return tuple(resolved)
 
 
@@ -164,10 +161,9 @@ def broadcast_related_records(records: Iterable[models.Model]) -> None:
     subscriber read policy applies; private source models gain no feed.
     """
 
-    feeds = _publisher_model_labels
     for reference in record_view_refs(*(RecordRef.from_instance(record) for record in records)):
         model = apps.get_model(reference.model_label)
-        if model._meta.label_lower not in feeds:
+        if model not in _publisher_fields:
             continue
         payload = ChangePayload.from_instance(
             model(pk=reference.object_id), action="update", update_fields=None, broadcasts=False,

@@ -619,7 +619,6 @@ def test_prebuilt_publishers_do_not_build_schemas_on_first_partial_save(
     payloads: list[dict[str, Any]] = []
 
     with model_tables((ReadyPublished,)):
-        monkeypatch.setattr(publishing, "_publisher_model_labels", publishing._publisher_model_labels)
         projection = schemas.render_publishers()
         monkeypatch.setattr(schemas, "build", lambda *args: pytest.fail("write rebuilt schema"))
         monkeypatch.setattr(publishing, "_broadcast", lambda model, event: payloads.append(event))
@@ -753,7 +752,6 @@ def test_alias_imported_changes_declaration_connects_publisher(
         monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
         from angee.graphql.apps import GraphQLConfig
 
-        monkeypatch.setattr(publishing, "_publisher_model_labels", publishing._publisher_model_labels)
         GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
         assert schemas._builds == {}
         publishing.connect_change_publishers(schemas.render_publishers())

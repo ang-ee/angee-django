@@ -108,7 +108,6 @@ def source_change_publishers() -> Iterator[None]:
     finally:
         for model in connected:
             disconnect_publishers(model)
-        connect_change_publishers({})
 
 
 @pytest.fixture

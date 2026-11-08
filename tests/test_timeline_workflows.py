@@ -223,9 +223,7 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
             ))
 
     register_step(Question)
-    monkeypatch.setattr(
-        publishing, "_publisher_model_labels", frozenset({MtiChild._meta.label_lower}),
-    )
+    monkeypatch.setitem(publishing._publisher_fields, MtiChild, frozenset())
     snapshots = []
 
     def broadcast(model, payload):
