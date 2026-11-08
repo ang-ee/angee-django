@@ -367,6 +367,28 @@ def test_ollama_backend_owns_protocol_details_and_provider_identity() -> None:
     }
 
 
+@pytest.mark.parametrize("generation_limit", [2048, "2048", 2048.0])
+def test_ollama_backend_accepts_exact_integral_generation_limits(generation_limit: object) -> None:
+    backend = OllamaInferenceBackend(
+        SimpleNamespace(credential=None, base_url="", config={"generation_limit": generation_limit})
+    )
+
+    assert backend.request_settings(None)["max_tokens"] == 2048
+
+
+def test_ollama_backend_extends_the_native_provider_profile() -> None:
+    """Models bind pydantic-ai's Ollama provider; the backend adds only its output envelope."""
+
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="", config={}))
+    model = backend._build_model("qwen3:8b", AsyncOpenAI(api_key="not-required", base_url=backend.default_base_url))
+
+    assert model.system == "ollama"
+    assert model.profile["supports_json_schema_output"] is True
+    assert model.profile["openai_supports_strict_tool_definition"] is False
+    assert model.profile["native_output_requires_schema_in_instructions"] is True
+    assert model.profile["default_structured_output_mode"] == "native"
+
+
 def test_openai_model_filtering_keeps_its_existing_prefix_policy() -> None:
     """Lifting the prefix data onto the class does not broaden OpenAI's catalogue."""
 
@@ -1135,7 +1157,7 @@ def test_ollama_backend_does_not_repeat_failed_native_requests(monkeypatch, fail
     assert backend.is_transient_error(error.value)
 
 
-@pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded"])
+@pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded", 1.5, "1.5", float("inf"), float("nan")])
 def test_ollama_backend_rejects_invalid_generation_limits(generation_limit: object) -> None:
     backend = OllamaInferenceBackend(
         SimpleNamespace(credential=None, base_url="", config={"generation_limit": generation_limit})

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlsplit
 
@@ -26,10 +27,12 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
     """OpenAI-compatible inference served by a configured Ollama endpoint.
 
     ``keep_alive`` is provider deployment policy and rides the native request
-    body. ``generation_limit`` supplies the OpenAI-compatible ``max_tokens``
-    setting when a caller does not specify one. Context allocation is deliberately
-    absent: configure ``num_ctx`` in the model's Ollama Modelfile so discovery and
-    every runtime agree on the deployed context window. SDK retries are disabled:
+    body. ``generation_limit``, an exact positive integer, supplies the
+    OpenAI-compatible ``max_tokens`` setting when a caller does not specify one.
+    Context allocation is deliberately absent: configure ``num_ctx`` in the model's
+    Ollama Modelfile so discovery and every runtime agree on the deployed context
+    window. Models bind through pydantic-ai's native ``OllamaProvider``, whose
+    per-family profile this backend only extends. SDK retries are disabled:
     callers own retries within their execution budget, rather than duplicating
     queued work after a local inference timeout.
     """
@@ -125,12 +128,7 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
         result = dict(super().request_settings(cast(ModelSettings, requested)) or {})
         raw_limit = self._config_value("generation_limit")
         if raw_limit is not None:
-            try:
-                generation_limit = int(raw_limit)
-            except (TypeError, ValueError) as error:
-                raise ValueError("Ollama generation_limit must be a positive integer.") from error
-            if isinstance(raw_limit, bool) or generation_limit <= 0:
-                raise ValueError("Ollama generation_limit must be a positive integer.")
+            generation_limit = self._generation_limit(raw_limit)
             if "max_tokens" not in result:
                 result["max_tokens"] = generation_limit
 
@@ -145,6 +143,23 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
             raise ValueError("Ollama keep_alive is owned by the inference provider deployment.")
         result["extra_body"] = {"keep_alive": keep_alive}
         return cast(ModelSettings, result)
+
+    @staticmethod
+    def _generation_limit(raw: Any) -> int:
+        """Return a configured limit that is exactly a positive integer, never a truncation.
+
+        The decimal text form refuses booleans, fractions, infinities and NaN
+        alike, while integral spellings such as ``"2048"`` or ``2048.0`` pass.
+        """
+
+        try:
+            exact = Decimal(str(raw))
+            limit = int(exact)
+        except (ArithmeticError, ValueError) as error:
+            raise ValueError("Ollama generation_limit must be a positive integer.") from error
+        if limit <= 0 or exact != limit:
+            raise ValueError("Ollama generation_limit must be a positive integer.")
+        return limit
 
     def _model_discovery(self, client: Any, model_id: str) -> dict[str, Any]:
         """Read native capabilities and architecture; absent facts preserve curated rows."""
@@ -248,19 +263,18 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
             return client.system_one(state=state, questions=questions, model=self._provider_model(handle))
 
     def _build_model(self, handle: str, client: Any) -> OpenAIChatModel:
-        """Declare Ollama's OpenAI-compatible native JSON-schema envelope."""
+        """Bind the native Ollama provider and extend its profile with the schema-in-instructions envelope."""
 
         # The SDK adapter loads with the model it binds, not with the catalogue.
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.profiles.openai import OpenAIModelProfile
-        from pydantic_ai.providers.openai import OpenAIProvider
+        from pydantic_ai.providers.ollama import OllamaProvider
 
         return OpenAIChatModel(
             handle,
-            provider=OpenAIProvider(openai_client=client),
+            provider=OllamaProvider(openai_client=client),
             profile=OpenAIModelProfile(
                 supports_thinking=True,
-                supports_json_schema_output=True,
                 native_output_requires_schema_in_instructions=True,
                 default_structured_output_mode="native",
                 openai_chat_supports_max_completion_tokens=(self._max_tokens_param() == "max_completion_tokens"),
