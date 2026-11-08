@@ -191,6 +191,7 @@ def test_backend_binds_ollama_without_a_credential(monkeypatch: Any) -> None:
         {
             "api_key": "not-required",
             "base_url": "http://localhost:11434/v1",
+            "max_retries": 0,
         }
     ]
 

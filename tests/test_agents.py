@@ -1044,13 +1044,43 @@ def test_ollama_backend_disables_environment_proxies_for_both_sdk_clients(
     monkeypatch.setattr("openai.DefaultAsyncHttpxClient", lambda **kwargs: calls.append(("async", kwargs)) or object())
     backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="https://ollama.internal/v1", config={}))
 
-    backend._client_kwargs()
-    backend._async_client_kwargs()
+    assert backend._client_kwargs()["max_retries"] == 0
+    assert backend._async_client_kwargs()["max_retries"] == 0
 
     assert calls == [
         ("sync", {"trust_env": False, "follow_redirects": False}),
         ("async", {"trust_env": False, "follow_redirects": False}),
     ]
+
+
+@pytest.mark.parametrize("failure", ["timeout", "unavailable"])
+def test_ollama_backend_does_not_repeat_failed_native_requests(monkeypatch, failure):
+    """A bounded call reaches the local runner once, even for SDK-retryable errors."""
+
+    requests = []
+
+    async def respond(self, request):
+        transport_http = httpx2 if isinstance(request, httpx2.Request) else httpx
+        requests.append(request)
+        if failure == "timeout":
+            raise transport_http.ReadTimeout("local runner is busy", request=request)
+        return transport_http.Response(
+            503, json={"error": {"message": "local runner is busy", "type": "test"}}, request=request,
+        )
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", respond)
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="", config={}))
+
+    with pytest.raises(ModelAPIError) as error:
+        backend.chat(
+            "local-model", [ModelRequest(parts=[UserPromptPart("Synthetic bounded request")])],
+            model_settings={"timeout": 30},
+        )
+
+    assert len(requests) == 1
+    assert requests[0].extensions["timeout"]["read"] == 30
+    assert backend.is_transient_error(error.value)
 
 
 @pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded"])
