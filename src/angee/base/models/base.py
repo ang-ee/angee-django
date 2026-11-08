@@ -280,6 +280,31 @@ class AngeeModel(
         subset of the declared share surface.
         """
 
+        declaration, selected = self._declared_record_access(relations)
+        self.validate_record_access_target()
+        for permission in sorted({declaration[relation] for relation in selected}):
+            self.require_access(permission)
+        return self._stored_record_access(selected)
+
+    def system_direct_record_access(self, relations: Sequence[str] | None = None) -> tuple[DirectRecordAccess, ...]:
+        """Return the stored direct tuples for a framework flow its owner already authorized.
+
+        The read counterpart of :meth:`system_grant_record_access`: it requires an
+        explicit system scope and does not consult the ambient actor, because the
+        flow's own policy (for example a drive's shape check) is the authorization.
+        """
+
+        if not is_sudo():
+            raise PermissionDenied("A system record access read requires an explicit system scope.")
+        _declaration, selected = self._declared_record_access(relations)
+        self.validate_record_access_target()
+        return self._stored_record_access(selected)
+
+    def _declared_record_access(
+        self, relations: Sequence[str] | None,
+    ) -> tuple[Mapping[str, str], tuple[str, ...]]:
+        """The model's share declaration and the requested subset of its relations."""
+
         declaration = type(self).get_rebac_grantable()
         if not declaration:
             raise ValueError(f"{type(self)._meta.label} declares no grantable relations.")
@@ -287,9 +312,10 @@ class AngeeModel(
         unknown = tuple(relation for relation in selected if relation not in declaration)
         if unknown:
             raise ValueError(f"{type(self)._meta.label} does not declare grantable relation {unknown[0]!r}.")
-        self.validate_record_access_target()
-        for permission in sorted({declaration[relation] for relation in selected}):
-            self.require_access(permission)
+        return declaration, selected
+
+    def _stored_record_access(self, selected: tuple[str, ...]) -> tuple[DirectRecordAccess, ...]:
+        """Read the stored relationship rows of the selected declared relations."""
 
         resource = to_object_ref(self)
         rows = (
