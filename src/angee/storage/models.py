@@ -234,6 +234,11 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
 class DriveQuerySet[DriveT: Drive](OwnerQuerySet[DriveT], StorageMasterQuerySet[DriveT]):
     """Archive reads and protected ownership writes for storage volumes."""
 
+    def browsable(self) -> Self:
+        """Return the drives listings offer: all but the image drive, as with ``File.objects.browsable``."""
+
+        return self.exclude(slug=settings.ANGEE_STORAGE_IMAGE_DRIVE)
+
 
 _DriveManagerBase = AngeeHistoryManager.from_queryset(DriveQuerySet)
 
@@ -265,11 +270,6 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
         except IntegrityError as error:
             raise ValidationError({"slug": "This drive slug or key namespace is already in use."}) from error
         return drive
-
-    def browsable(self) -> DriveQuerySet[DriveT]:
-        """Return the drives listings offer: all but the image drive, as with ``File.objects.browsable``."""
-
-        return self.exclude(slug=settings.ANGEE_STORAGE_IMAGE_DRIVE)
 
     def image_drive(self) -> DriveT | None:
         """Return the image drive (``ANGEE_STORAGE_IMAGE_DRIVE``), creating it at first use.

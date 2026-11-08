@@ -1158,6 +1158,9 @@ def test_drive_and_file_listings_leave_out_the_image_drive(image_drive: Any) -> 
     assert [row["id"] for row in listed["files"]] == [public_id_of(private)]
     with actor_context(image_drive.alice):
         assert File.objects.filter(pk=image.pk).exists()
+        assert list(Drive.objects.filter(pk__in=[image_drive.pk, image_drive.assets.pk]).browsable()) == [
+            image_drive.assets
+        ]
 
 
 @pytest.mark.django_db(transaction=True)
