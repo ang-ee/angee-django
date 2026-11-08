@@ -19,6 +19,7 @@ from typing import Any, NoReturn
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.integrate.constants import SESSION_PROCESS_STOP_SECONDS
+from angee.integrate.errors import IntegrationError
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +27,15 @@ PROCESS_REAP_SECONDS = 5.0
 """Final bound for reaping a terminated child."""
 
 
-class SessionProcessError(RuntimeError):
-    """A reaped session child exited without completing its session job."""
+class SessionProcessError(IntegrationError):
+    """A reaped session child exited without completing its session job.
+
+    A native crash is a host failure, not evidence that the account needs fresh
+    credentials, so the session is retried; the exit code is framework-owned and
+    safe to show the operator.
+    """
+
+    transient = True
 
     def __init__(self, exitcode: int | None) -> None:
         self.exitcode = exitcode
