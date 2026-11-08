@@ -76,11 +76,13 @@ class BaseConfig(AppConfig):
 
         # Model-owned checks require completed app population.
         from angee.base.checks import (
+            check_database_routers,
             check_ownership,
             check_rebac_caveats,
         )
 
         checks.register(check_settings, checks.Tags.models)
+        checks.register(check_database_routers, checks.Tags.models)
 
         checks.register(check_ownership, checks.Tags.models)
         checks.register(check_rebac_caveats, checks.Tags.models)

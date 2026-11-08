@@ -65,8 +65,10 @@ are historical upgrade assets only; retire them after the supported upgrade cuto
 and preserve Python imports still required by retained migration history.
 
 [`tests/test_layering.py`](../tests/test_layering.py) guards framework import
-boundaries and optional state-field declarations. See the
-[Database routing rule](backend/guidelines.md#rules) for persistence checks.
+boundaries and optional state-field declarations. The
+[Database routing rule](backend/guidelines.md#rules) is a system check: base's
+`angee.E050` refuses any `DATABASE_ROUTERS`
+([`tests/test_base_checks.py`](../tests/test_base_checks.py)).
 
 The PostgreSQL lane in [reusable checks](../.github/workflows/reusable-checks.yml)
 covers workflow definition, publication, execution,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 
 from django.apps import AppConfig, apps
+from django.conf import settings
 from django.core import checks
 from rebac.resources import model_resource_type
 from rebac.schema import FieldBinding, PermExpr, Schema
@@ -12,6 +13,28 @@ from rebac.schema.parser import parse_zed
 
 from angee.base.models.ownership import OwnerMixin
 from angee.base.permissions import declared_rebac_definition, declared_rebac_schema, declared_schema_path
+
+
+def check_database_routers(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Refuse a database router: Angee runs on one database.
+
+    Owners open bare transactions and commit hooks on ``default``; a router
+    would place rows outside them, or permission reads on a replica.
+    """
+
+    del app_configs, kwargs
+    if not settings.DATABASE_ROUTERS:
+        return []
+    return [
+        checks.Error(
+            f"settings.DATABASE_ROUTERS must be empty; found {settings.DATABASE_ROUTERS!r}.",
+            hint="Angee runs on one database, Django's default; remove the router.",
+            id="angee.E050",
+        )
+    ]
 
 
 def check_rebac_caveats(
