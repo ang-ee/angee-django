@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from copy import copy
 from typing import Any, ClassVar, Self, TypeVar
 
 from django.core import checks
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django_compose.models import Composable
 from rebac import (
@@ -14,6 +15,7 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     delete_relationship,
+    system_context,
     to_object_ref,
     write_relationships,
 )
@@ -24,10 +26,13 @@ from rebac.managers import RebacManager
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
+from angee.base.fields.ordering import FractionalRankField
 from angee.base.managers import AngeeManager, AngeeUnscopedManager
-from angee.base.models.identity import PublicIdentity, SqidMixin
+from angee.base.models.identity import PublicIdentity, SqidMixin, public_id_of
 from angee.base.models.inputs import InputExtensionsMixin
+from angee.base.models.locks import RowLockMixin
 from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
+from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.transitions import StateTransitionsMixin
 from angee.base.permissions import DirectRecordAccess, declared_grants, declared_rebac_definition, instance_actor
@@ -53,6 +58,115 @@ class AngeeModel(
 
     _angee_base: ClassVar[models.Manager[Self]] = AngeeUnscopedManager()
     """Unfiltered tracked writes for Django's relation and base-manager paths."""
+
+    def replace_lines(
+        self,
+        field: str,
+        rows: Iterable[tuple[str | None, Mapping[str, Any]]],
+        *,
+        position_field: str = "position",
+        replace: bool = True,
+    ) -> None:
+        """Make this row's owned lines match ``rows``, writing them as the requesting user.
+
+        ``field`` names a reverse foreign key whose rows exist only as parts of
+        this row. Each entry is ``(public id, values)``: a public id addresses a
+        stored line to update, ``None`` creates one, and with ``replace`` every
+        stored line no entry keeps is deleted; ``replace=False`` only adds, for the
+        creation that just authorized this row. Values are native model values:
+        a foreign key by primary key under its ``attname``, a many-to-many field
+        as its complete related set, and a name no field owns as an input-extension
+        value for the line's :meth:`apply_input_extensions`.
+
+        Replacing requires ``write`` on this row. The line writes then run
+        elevated, authorized by that check, yet each still meets the line's own
+        guards: ``full_clean``, its persisted :class:`RowLockMixin` lock (every
+        removal is checked before any write) and its manager's ``create``. This
+        row's lock serializes the desired set, and a :class:`FractionalRankField`
+        position is staged first so a reorder never collides with itself.
+        """
+
+        relation = self._meta.get_field(field)
+        if not isinstance(relation, models.ManyToOneRel) or relation.one_to_one:
+            raise ImproperlyConfigured(f"{self._meta.label}.{field} is not a to-many line relation.")
+        line_model = relation.related_model
+        parent_link = relation.field
+        desired = [(public_id, dict(values)) for public_id, values in rows]
+        if replace:
+            self.require_access("write")
+        with transaction.atomic(), system_context(reason="base.replace_lines"):
+            if isinstance(self, PersistenceMixin):
+                self.lock_subject()
+            else:
+                type(self)._default_manager.select_for_update(of=row_lock_paths(type(self))).filter(pk=self.pk).first()
+            lines = line_model._base_manager.filter(**{parent_link.name: self})
+            existing = lines.in_bulk()
+            by_public_id = {public_id_of(line): line for line in existing.values()}
+            unknown = sorted({pid for pid, _values in desired if pid is not None and pid not in by_public_id})
+            if unknown:
+                raise ValidationError(
+                    f"{line_model._meta.object_name} lines {unknown!r} are not part of "
+                    f"{self._meta.object_name} {public_id_of(self)!r}; reload and retry."
+                )
+            kept = {by_public_id[pid].pk for pid, _values in desired if pid is not None}
+            removed = sorted(set(existing) - kept) if replace else []
+            for pk in removed:
+                if isinstance(line := existing[pk], RowLockMixin):
+                    line.validate_row_delete()
+            if removed:
+                # Removals free their unique values (a name) for the lines that follow.
+                try:
+                    lines.filter(pk__in=removed).delete()
+                except (models.ProtectedError, models.RestrictedError) as error:
+                    raise ValidationError(_line_removal_refusal(line_model, error)) from error
+            try:
+                position = line_model._meta.get_field(position_field)
+            except FieldDoesNotExist:
+                position = None
+            if isinstance(position, FractionalRankField):
+                moving = [
+                    by_public_id[pid] for pid, values in desired
+                    if pid is not None and values.get(position.name) is not None
+                    and position.to_python(values[position.name]) != getattr(by_public_id[pid], position.attname)
+                ]
+                if moving:
+                    # Immediate uniqueness forbids cyclic swaps: stage the moving
+                    # lines on free ranks, then save their exact final values below.
+                    temporary = position.get_temporary_ranks(
+                        moving, (values.get(position.name) for _pid, values in desired), using=lines.db,
+                    )
+                    staged = [copy(line) for line in moving]
+                    for line, rank in zip(staged, temporary, strict=True):
+                        setattr(line, position.attname, rank)
+                    lines.bulk_update(staged, [position.name])
+            for pid, values in desired:
+                extensions = {name: values.pop(name) for name in [n for n in values if not _model_field(line_model, n)]}
+                if pid is not None:
+                    line = by_public_id[pid]
+                    previous = line.row_lock() if isinstance(line, RowLockMixin) else None
+                    related = _assign_line_values(line, values)
+                    if isinstance(line, RowLockMixin):
+                        line.validate_row_lock(previous)
+                    line.full_clean()
+                    line.save()
+                else:
+                    values[parent_link.attname] = self.pk
+                    candidate = line_model()
+                    related = _assign_line_values(candidate, values)
+                    if isinstance(candidate, RowLockMixin):
+                        candidate.validate_row_lock(None)
+                    candidate.full_clean()
+                    # Created through the manager, so its factory invariants still apply.
+                    line = line_model._default_manager.create(
+                        **{name: value for name, value in values.items() if name not in dict(related)},
+                    )
+                for name, value in related:
+                    if value is not None:
+                        getattr(line, name).set(value)
+                if extensions:
+                    if not isinstance(line, InputExtensionsMixin):
+                        raise ImproperlyConfigured(f"{line_model._meta.label} does not support input extensions.")
+                    line.apply_input_extensions(**extensions)
 
     def retained(self) -> bool:
         """Whether a live or historical reference, or a stored grant, names this row.
@@ -474,3 +588,48 @@ def _relationship_subject(value: Any) -> SubjectRef:
         pass
     ref = to_object_ref(value)
     return SubjectRef.of(ref.resource_type, ref.resource_id)
+
+
+def _model_field(model: type[models.Model], name: str) -> bool:
+    """Whether ``name`` (a field name or attname) names one of ``model``'s fields."""
+
+    try:
+        model._meta.get_field(name)
+    except FieldDoesNotExist:
+        return False
+    return True
+
+
+def _assign_line_values(line: models.Model, values: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """Set a line's column values natively; return its many-to-many sets, applied after the save."""
+
+    related: list[tuple[str, Any]] = []
+    for name, value in values.items():
+        field = line._meta.get_field(name)
+        if isinstance(field, models.ManyToManyField):
+            related.append((name, value))
+        elif not isinstance(field, models.Field) or not field.concrete:
+            raise ImproperlyConfigured(f"{line._meta.label}.{name} is not a writable line column.")
+        elif name == field.attname != field.name:
+            setattr(line, name, value)
+        else:
+            field.save_form_data(line, value)
+    return related
+
+
+def _line_removal_refusal(
+    line_model: type[models.Model],
+    error: models.ProtectedError | models.RestrictedError,
+) -> str:
+    """Say which kinds of record still use removed lines, counted, never naming the rows."""
+
+    blockers = error.protected_objects if isinstance(error, models.ProtectedError) else error.restricted_objects
+    counts: dict[str, int] = {}
+    for row in blockers:
+        name = str(type(row)._meta.verbose_name_plural)
+        counts[name] = counts.get(name, 0) + 1
+    used_by = ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
+    return (
+        f"Some {line_model._meta.verbose_name_plural} cannot be removed: other records use them "
+        f"({used_by}). Keep them, or remove what uses them first."
+    )

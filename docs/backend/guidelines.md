@@ -1524,15 +1524,18 @@ open fresh evaluator scopes for authorization and change-feed reads.
   present in the final schema.
 - **Lines are owned parts, written as the user.** Declare `HasuraLines` only for
   rows that exist as part of their parent and save with it; associated records
-  stay their own resource. The child writes run elevated because the parent
-  write authorizes them, which never makes them system work. A child whose
+  stay their own resource. The parent owns the write:
+  [`AngeeModel.replace_lines`](../../src/angee/base/models/base.py) requires the
+  parent's `write`, then runs the line writes natively and elevated because that
+  check authorizes them, which never makes them system work; the Hasura backend
+  only decodes the line input. A child whose
   invariants separate users from system writers composes
   [`RowLockMixin`](../../src/angee/base/models/locks.py): `locked_fields()` names what its
   state locks, user writes may not change those fields, delete the row or create
   one. Its default manager composes `RowLockQuerySet` so native collection
   writes enforce the same owner rule; the declared base manager retains that
   guard. A collector may remove locked children only through the model's explicit
-  owning-parent cascade contract. `HasuraLines` checks the same lock before each
+  owning-parent cascade contract. `replace_lines` checks the same lock before each
   intentionally elevated child write. Its node projects `locked_fields`, advertised as the lines' `lock_field`. Never
   guard a child on `is_sudo()` alone; [`Stage`](../../src/angee/work/models.py)
   is the reference. A nested insert only inserts beside children the parent's own
@@ -1694,7 +1697,7 @@ open fresh evaluator scopes for authorization and change-feed reads.
 
 ### Record write locking
 
-Generic proposal and Hasura writes delegate to
+Generic proposal and Hasura writes, and `AngeeModel.replace_lines`, delegate to
 [`PersistenceMixin.lock_subject`](../../src/angee/base/models/persistence.py)
 before acquiring subject rows. Domain overrides acquire prerequisite rows in
 stable order and return the persisted subject. `prepare_lock_subject` hydrates

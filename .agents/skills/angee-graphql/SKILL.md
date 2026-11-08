@@ -133,7 +133,7 @@ Run `angee-design` first for the owner map; `angee-models` and
    ```
 
    If the child exists only as part of its parent and saves with it → lines; an associated record stays its own resource. A child whose state locks fields composes `RowLockMixin` and projects `locked_fields` on its node. A writable child relation needs `public_id_fields`.
-   **Owner rule:** lines are the user's writes elevated by the parent's authorization; the child's own guards still run ([GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **Lines are owned parts, written as the user**).
+   **Owner rule:** lines are the user's writes elevated by the parent's authorization (`replace_lines` in `src/angee/base/models/base.py`); the child's own guards still run ([GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **Lines are owned parts, written as the user**).
 
 6. **Stream changes from the schema declaration only.**
 

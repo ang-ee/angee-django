@@ -8,7 +8,6 @@ import json
 import operator
 import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
-from copy import copy
 from dataclasses import dataclass
 from functools import cache, partial, reduce
 from typing import TYPE_CHECKING, Any, cast
@@ -24,7 +23,7 @@ from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
 from django.utils.module_loading import import_string
-from rebac import PermissionDenied, RebacMixin, system_context
+from rebac import PermissionDenied, RebacMixin
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
 from strawberry.extensions import FieldExtension
@@ -56,11 +55,10 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
-from angee.base.fields.ordering import FractionalRankField
 from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.base import AngeeModel
-from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for, public_id_of
+from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.refs import RecordRefMixin
@@ -141,13 +139,11 @@ class HasuraLines:
     maintains it).
 
     Lines are owned parts: rows that exist only as part of their parent and are
-    saved with it. Their writes are the user's writes, elevated only because the
-    parent write authorizes them, so they never bypass the child's own guards. A
-    child composing :class:`~angee.base.models.locks.RowLockMixin` has each row checked
-    against its persisted lock before the elevated write: a line may not change a
-    locked field, delete a system row, or create or turn into one. Its node must
-    project the same fact as ``locked_fields``, which the metadata advertises as
-    the lines' ``lock_field`` so the composer keeps those rows in place.
+    saved with it, by the parent's :meth:`~angee.base.models.base.AngeeModel.replace_lines`
+    (authorization, elevation, the child's guards and row locks). A child composing
+    :class:`~angee.base.models.locks.RowLockMixin` must project the same fact as
+    ``locked_fields`` on its node, which the metadata advertises as the lines'
+    ``lock_field`` so the composer keeps those rows in place.
 
     Completeness contract: ``<res>_save(lines=…)`` takes the **full desired child
     set** — deletion is by omission, so an id absent from the set is deleted. The
@@ -237,10 +233,11 @@ class AngeeHasuraWriteBackend:
         self.public_id_fields = _public_id_field_models(model, public_id_fields or ())
         self.lines = lines
         if lines is not None:
-            self._line_back_fk = _child_back_fk(model, lines.field)
+            if not issubclass(model, AngeeModel):
+                raise ImproperlyConfigured(f"{model._meta.label} must be an AngeeModel to own editable lines.")
+            _child_back_fk(model, lines.field)
             self._line_public_id_fields = _public_id_field_models(lines.model, lines.public_id_fields)
         else:
-            self._line_back_fk = ""
             self._line_public_id_fields = {}
 
     def write_target_queryset(self) -> models.QuerySet[Any]:
@@ -287,7 +284,7 @@ class AngeeHasuraWriteBackend:
         with transaction.atomic():
             instance = self._create_row(info, data)
             if line_rows is not None:
-                self._apply_line_diff(info, instance, line_rows, replace=False)
+                self._replace_lines(instance, line_rows, replace=False)
             if extensions:
                 instance.apply_input_extensions(**extensions)
         return instance
@@ -321,12 +318,11 @@ class AngeeHasuraWriteBackend:
         the parent still resolves the row — the explicit ``has_access("write")``
         gate below is what denies them. That gate must run even when ``patch`` is
         empty: a lines-only edit (``patch={}``, the FormView shape) skips the
-        update resolver's write signal, so without the preflight the §3.4 child
-        elevation would run unauthorized. Only after the parent write is verified
-        do the children ride the elevation — created, updated, and deleted under
-        ``system_context``, authorized by the parent write, not per child row.
-        ``line_rows`` is the full desired child set: ``None`` leaves the lines
-        untouched (a parent-only save), an empty list clears them.
+        update resolver's write signal. The parent owns its lines
+        (:meth:`AngeeModel.replace_lines`): it authorizes their writes by its own
+        ``write`` and elevates them. ``line_rows`` is the full desired child set:
+        ``None`` leaves the lines untouched (a parent-only save), an empty list
+        clears them.
         """
 
         if self.lines is None:
@@ -344,7 +340,7 @@ class AngeeHasuraWriteBackend:
                 # A document's revision covers its child set and extension values as well as its columns.
                 instance.save(update_fields={instance.REVISION_FIELD})
             if line_rows is not None:
-                self._apply_line_diff(info, instance, line_rows)
+                self._replace_lines(instance, line_rows)
             if extensions:
                 instance.apply_input_extensions(**extensions)
             return instance
@@ -371,133 +367,42 @@ class AngeeHasuraWriteBackend:
         rows = envelope.get("data", []) if isinstance(envelope, Mapping) else envelope
         return [dict(row) for row in rows]
 
-    def _apply_line_diff(
-        self,
-        info: strawberry.Info,
-        parent: models.Model,
-        rows: list[dict[str, Any]],
-        *,
-        replace: bool = True,
-    ) -> None:
-        """Create/update/delete child lines to match ``rows`` under elevation.
+    def _replace_lines(self, parent: Any, rows: list[dict[str, Any]], *, replace: bool = True) -> None:
+        """Hand the decoded desired line set to the parent that owns it.
 
-        A row with an ``id`` addresses an existing child (update); a row without
-        one is a new child (create). With ``replace`` (``<res>_save``) an existing
-        child no row keeps is deleted; a nested insert passes ``replace=False``
-        and only inserts. The child FK back to the parent is set here, never sent
-        by the client.
-
-        Two phases with two authorities. Relation public ids on the incoming
-        rows are decoded first, under the **caller's** actor, so a referenced row
-        the caller cannot see is rejected (never resolved by the elevation that
-        follows). Only then do the child writes run under ``system_context`` —
-        the parent write is their gate (§3.4), including for each child's
-        input-extension values, applied after its write. The elevation authorizes;
-        it does not make the writes system work, so a row-locked child's lock is
-        checked before each write (removals before any write). Reached by both
-        ``save`` and the nested ``create`` path; the parent row is locked before its
-        child set is read so concurrent saves cannot cross-delete each other's lines.
+        Relation public ids are decoded here, under the caller's actor, so a
+        referenced row the caller cannot see is rejected before the parent
+        elevates the line writes.
         """
 
         assert self.lines is not None
-        child_model = self.lines.model
-        back_fk_id = f"{self._line_back_fk}_id"
-        # Phase 1 — decode line relation ids under the caller's actor, before any
-        # elevation. Each entry is ``(public id | None, decoded child payload)``.
-        prepared = self._prepare_line_rows(rows)
-        # Phase 2 — child writes elevated, under a parent-row lock.
-        with system_context(reason="graphql.hasura.save.lines"):
-            if isinstance(parent, PersistenceMixin):
-                parent.lock_subject()
-            else:
-                self.model._default_manager.using(parent._state.db).select_for_update(
-                    of=row_lock_paths(self.model),
-                ).filter(pk=parent.pk).first()
-            children = child_model._base_manager.using(parent._state.db).filter(**{self._line_back_fk: parent})
-            existing = children.in_bulk()
-            by_public_id = {public_id_of(child): child for child in existing.values()}
-            unknown = sorted({pid for pid, _ in prepared if pid is not None and pid not in by_public_id})
-            if unknown:
-                raise ValidationError(
-                    f"{child_model._meta.object_name} lines {unknown!r} are not part of "
-                    f"{self.model._meta.object_name} {public_id_of(parent)!r}; reload and retry."
-                )
-            kept_pks = {by_public_id[public_id].pk for public_id, _ in prepared if public_id is not None}
-            removed = sorted(set(existing) - kept_pks) if replace else []
-            for pk in removed:
-                child = existing[pk]
-                if isinstance(child, RowLockMixin):
-                    child.validate_row_delete()
-            if removed:
-                # Removals free their unique values (a name) for the rows that follow.
-                try:
-                    children.filter(pk__in=removed).delete()
-                except (models.ProtectedError, models.RestrictedError) as error:
-                    raise ValidationError(_line_removal_refusal(child_model, error)) from error
-            try:
-                position = child_model._meta.get_field(self.lines.position_field)
-            except FieldDoesNotExist:
-                position = None
-            if isinstance(position, FractionalRankField):
-                moving = [
-                    by_public_id[public_id]
-                    for public_id, decoded in prepared
-                    if public_id is not None and decoded.get(position.name) is not None
-                    and position.to_python(decoded[position.name]) != getattr(by_public_id[public_id], position.attname)
-                ]
-                temporary = position.get_temporary_ranks(
-                    moving, (decoded.get(position.name) for _public_id, decoded in prepared), using=children.db,
-                )
-                if moving:
-                    # Immediate uniqueness forbids cyclic swaps. Stage through
-                    # the native guarded/captured queryset, then save exact final
-                    # values through the unchanged model resolver below.
-                    staged = [copy(child) for child in moving]
-                    for child, rank in zip(staged, temporary, strict=True):
-                        setattr(child, position.attname, rank)
-                    children.bulk_update(staged, [position.name])
-            for public_id, decoded in prepared:
-                extensions = _pop_input_extensions(child_model, decoded)
-                if public_id is not None:
-                    child = by_public_id[public_id]
-                    mutation_resolvers.update(
-                        info,
-                        child,
-                        decoded,
-                        key_attr=PUBLIC_ID_FIELD_NAME,
-                        full_clean=True,
-                        pre_save_hook=_row_lock_check(child.row_lock()) if isinstance(child, RowLockMixin) else None,
-                    )
-                else:
-                    values = {**decoded, back_fk_id: parent.pk}
-                    if issubclass(child_model, RowLockMixin):
-                        child_model(**_column_values(child_model, values)).validate_row_lock(None)
-                    # Created through the manager, so its factory invariants still apply.
-                    child = mutation_resolvers.create(
-                        info,
-                        child_model,
-                        values,
-                        key_attr=PUBLIC_ID_FIELD_NAME,
-                        full_clean=True,
-                    )
-                if extensions:
-                    if not isinstance(child, AngeeModel):
-                        raise ImproperlyConfigured(f"{child_model._meta.label} does not support input extensions.")
-                    child.apply_input_extensions(**extensions)
+        parent.replace_lines(
+            self.lines.field, self._prepare_line_rows(rows), position_field=self.lines.position_field, replace=replace,
+        )
 
     def _prepare_line_rows(self, rows: list[dict[str, Any]]) -> list[tuple[str | None, dict[str, Any]]]:
-        """Decode line payloads under the caller for both fingerprinting and writes."""
+        """Decode line payloads under the caller into native values, for fingerprinting and writes.
 
+        Declared relation public ids resolve through the actor-scoped write
+        owner; any other foreign key is written by primary key under its attname.
+        """
+
+        assert self.lines is not None
+        line_model = self.lines.model
         prepared = []
         for row in rows:
             payload = dict(row)
             public_id = payload.pop("id", None)
-            prepared.append(
-                (
-                    str(public_id) if public_id else None,
-                    self._decode_public_id_fields(payload, self._line_public_id_fields),
-                )
-            )
+            values = {}
+            for name, value in self._decode_public_id_fields(payload, self._line_public_id_fields).items():
+                try:
+                    field = line_model._meta.get_field(name)
+                except FieldDoesNotExist:
+                    field = None
+                if isinstance(field, models.ForeignKey) and name == field.name:
+                    name = field.attname
+                values[name] = value
+            prepared.append((str(public_id) if public_id else None, values))
         return prepared
 
     def update(
@@ -585,24 +490,6 @@ class AngeeHasuraWriteBackend:
         return out
 
 
-def _line_removal_refusal(
-    child_model: type[models.Model],
-    error: models.ProtectedError | models.RestrictedError,
-) -> str:
-    """Say which kinds of record still use removed lines, counted, never naming the rows."""
-
-    blockers = error.protected_objects if isinstance(error, models.ProtectedError) else error.restricted_objects
-    counts: dict[str, int] = {}
-    for row in blockers:
-        name = str(type(row)._meta.verbose_name_plural)
-        counts[name] = counts.get(name, 0) + 1
-    used_by = ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
-    return (
-        f"Some {child_model._meta.verbose_name_plural} cannot be removed: other records use them "
-        f"({used_by}). Keep them, or remove what uses them first."
-    )
-
-
 def _pop_input_extensions(model: type[models.Model], data: dict[str, Any]) -> dict[str, Any]:
     """Pop write values whose input field names no field of ``model``.
 
@@ -619,24 +506,6 @@ def _pop_input_extensions(model: type[models.Model], data: dict[str, Any]) -> di
         return True
 
     return {name: data.pop(name) for name in [name for name in data if not is_model_field(name)]}
-
-
-def _row_lock_check(previous: Mapping[str, Any]) -> Callable[[models.Model], None]:
-    """Return the pre-save check of an elevated line update against its persisted lock."""
-
-    def validate(instance: models.Model) -> None:
-        if not isinstance(instance, RowLockMixin):
-            raise ImproperlyConfigured(f"{instance._meta.label} does not support row locks.")
-        instance.validate_row_lock(previous)
-
-    return validate
-
-
-def _column_values(model: type[models.Model], values: Mapping[str, Any]) -> dict[str, Any]:
-    """Select decoded concrete values for a model-owned lock check."""
-
-    columns = {name for field in model._meta.concrete_fields for name in (field.name, field.attname)}
-    return {name: value for name, value in values.items() if name in columns}
 
 
 def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:

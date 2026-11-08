@@ -184,11 +184,11 @@ class RowLockMixin(models.Model):
     resource loads under ``system_context``) own system rows and are not
     checked. The default manager composes ``RowLockQuerySet``; the base manager
     and native collector retain the same invariant. An elevation that only
-    authorizes a user's write still checks:
-    editable lines write their children elevated under the parent's write
-    permission, so :class:`~angee.graphql.data.hasura.HasuraLines` calls
+    authorizes a user's write still checks: a parent writes its owned lines
+    elevated under its own write permission, so
+    :meth:`~angee.base.models.base.AngeeModel.replace_lines` calls
     :meth:`validate_row_lock` and :meth:`validate_row_delete` itself before each
-    child write. Child nodes project the same fact as ``locked_fields``.
+    line write. Child nodes project the same fact as ``locked_fields``.
     """
 
     _angee_base: ClassVar[models.Manager[Self]] = _RowLockBaseManager()
