@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 from threading import Barrier
@@ -23,6 +24,7 @@ from django.db import close_old_connections, connection, connections, models, tr
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from django.test import Client, RequestFactory
+from django.utils import timezone
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -1801,6 +1803,94 @@ def test_trash_missing_external_only_trashes_absent_live_paths(drive: Any) -> No
     assert not rows["keep.txt"].is_trashed
     assert rows["gone.txt"].is_trashed
     assert rows["old.txt"].is_trashed
+
+
+def _expired_trash(drive: Any, *contents: bytes) -> list[Any]:
+    """Ingest, trash and backdate rows so the trash TTL has lapsed for each."""
+
+    rows = []
+    with system_context(reason="test storage expired trash"):
+        for index, content in enumerate(contents):
+            row, _created = File.objects.ingest_bytes(content, filename=f"{index}.txt", drive_id=str(drive.sqid))
+            row.delete()
+            rows.append(row)
+        File._base_manager.filter(pk__in=[row.pk for row in rows]).update(
+            trashed_at=timezone.now() - timedelta(days=365),
+        )
+    return rows
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_purge_reports_a_failing_row_and_purges_the_rest(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One row's failure goes to ``on_error``; the selection's other rows are still purged."""
+
+    rows = _expired_trash(drive, b"first", b"broken", b"last")
+    purge = File.purge
+
+    def refuse_one(self: Any) -> None:
+        if self.pk == rows[1].pk:
+            raise RuntimeError("backend refused")
+        purge(self)
+
+    monkeypatch.setattr(File, "purge", refuse_one)
+    failures: list[tuple[Any, str]] = []
+    with system_context(reason="test storage selected purge"):
+        purged = File.objects.expired_trash(timezone.now()).purge(
+            chunk_size=1,
+            on_error=lambda pk, error: failures.append((pk, str(error))),
+        )
+    assert purged == 2
+    assert failures == [(rows[1].pk, "backend refused")]
+    assert list(File._base_manager.filter(drive=drive).values_list("pk", flat=True)) == [rows[1].pk]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_purge_rereads_each_row_under_its_lock(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row restored after the selection was listed no longer matches it and survives."""
+
+    (row,) = _expired_trash(drive, b"restored")
+    queryset = type(File.objects.all())
+    lock = queryset.lock_if_supported
+
+    def restore_then_lock(self: Any, **kwargs: Any) -> Any:
+        File._base_manager.get(pk=row.pk).restore()
+        return lock(self, **kwargs)
+
+    with system_context(reason="test storage selected purge recheck"):
+        selection = File.objects.expired_trash(timezone.now())
+        monkeypatch.setattr(queryset, "lock_if_supported", restore_then_lock)
+        assert selection.purge() == 0
+    assert not File._base_manager.get(pk=row.pk).is_trashed
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL selected file purge row-lock contract")
+def test_file_purge_against_a_concurrent_restore_skips_the_row(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Another connection restores the listed row before the purge locks it; the purge leaves it."""
+
+    (row,) = _expired_trash(drive, b"contested")
+    queryset = type(File.objects.all())
+    lock = queryset.lock_if_supported
+
+    def restore() -> None:
+        close_old_connections()
+        try:
+            with system_context(reason="test storage concurrent restore"):
+                File._base_manager.get(pk=row.pk).restore()
+        finally:
+            connections.close_all()
+
+    def restore_elsewhere_then_lock(self: Any, **kwargs: Any) -> Any:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(restore).result(timeout=10)
+        return lock(self, **kwargs)
+
+    with system_context(reason="test storage concurrent selected purge"):
+        selection = File.objects.expired_trash(timezone.now())
+        monkeypatch.setattr(queryset, "lock_if_supported", restore_elsewhere_then_lock)
+        assert selection.purge() == 0
+    monkeypatch.undo()
+    assert not File._base_manager.get(pk=row.pk).is_trashed
 
 
 @pytest.mark.django_db(transaction=True)

@@ -31,7 +31,7 @@ import posixpath
 import re
 import secrets
 from collections import OrderedDict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import datetime
 from io import Reader
 from pathlib import Path
@@ -698,6 +698,32 @@ class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], Ange
                 return 0
             return int(self.filter(pk__in=missing).trash())
 
+    def purge(self, *, chunk_size: int = 500, on_error: Callable[[Any, Exception], None] | None = None) -> int:
+        """Purge each row still selected, one row per transaction, and return how many went.
+
+        Each row is reread under its lock against this selection's predicate just
+        before :meth:`File.purge`, so a row that left the selection meanwhile
+        (finalized, restored) is skipped. A row that fails is reported to
+        ``on_error``, or logged without one, and the rest continue.
+        """
+
+        purged = 0
+        for pk in self.values_list("pk", flat=True).iterator(chunk_size=max(1, chunk_size)):
+            try:
+                with transaction.atomic():
+                    row = self.filter(pk=pk).lock_if_supported().first()
+                    if row is None:
+                        continue
+                    row.purge()
+            except Exception as error:
+                if on_error is None:
+                    logger.exception("storage.file.purge failed for pk=%s", pk)
+                else:
+                    on_error(pk, error)
+                continue
+            purged += 1
+        return purged
+
     def stale_drafts(self, cutoff: datetime) -> Self:
         """Return unfinished DRAFT/FAILED rows reserved before ``cutoff``."""
 
@@ -726,11 +752,11 @@ class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], Ange
         """Refuse bulk delete: it bypasses soft-trash and orphans backend bytes.
 
         ``QuerySet.delete()`` issues SQL without calling :meth:`File.delete`, so
-        callers must iterate and soft-delete, or :meth:`File.purge` to hard-delete.
+        callers must iterate and soft-delete, or :meth:`purge` to hard-delete.
         """
 
         raise NotImplementedError(
-            "Bulk File delete is disabled; call File.delete() per row to trash, or File.purge() to hard-delete."
+            "Bulk File delete is disabled; call File.delete() per row to trash, or purge() to hard-delete."
         )
 
 

@@ -18,9 +18,10 @@ DEFAULT_CHUNK_SIZE = 500
 class Command(BaseCommand):
     """Purge files whose upload or trash TTL has lapsed.
 
-    The row-set predicates live on ``FileQuerySet`` (``stale_drafts`` /
-    ``expired_trash``); this command parses arguments and dispatches. Run
-    from cron or a worker; consumers own the schedule.
+    The row-set predicates and the purge live on ``FileQuerySet``
+    (``stale_drafts`` / ``expired_trash`` / ``purge``); this command parses
+    arguments, dispatches and reports. Run from cron or a worker; consumers own
+    the schedule.
     """
 
     help = "Purge stale DRAFT/FAILED uploads and expired trashed files."
@@ -41,7 +42,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
-        """Run both purge passes, re-checking each row before it is purged."""
+        """Run both purge passes and report the count and each failed row."""
 
         del args
         file_model = apps.get_model("storage", "File")
@@ -58,27 +59,11 @@ class Command(BaseCommand):
             if options["dry_run"]:
                 return
             chunk_size = max(1, int(options["chunk_size"]))
-            purged = self._purge(stale_drafts, chunk_size=chunk_size)
-            purged += self._purge(expired_trash, chunk_size=chunk_size)
+            purged = stale_drafts.purge(chunk_size=chunk_size, on_error=self._report_purge_failure)
+            purged += expired_trash.purge(chunk_size=chunk_size, on_error=self._report_purge_failure)
         self.stdout.write(f"storage_prune: purged={purged}")
 
-    def _purge(self, queryset: Any, *, chunk_size: int) -> int:
-        """Purge every row still matching ``queryset`` and return the count.
+    def _report_purge_failure(self, pk: Any, error: Exception) -> None:
+        """Report one row the file queryset could not purge."""
 
-        Each row is re-fetched against the queryset predicate immediately
-        before purging, so a row that flipped state (e.g. finalized or
-        restored) after the pass started is left alone.
-        """
-
-        purged = 0
-        for pk in queryset.values_list("pk", flat=True).iterator(chunk_size=chunk_size):
-            row = queryset.filter(pk=pk).first()
-            if row is None:
-                continue
-            try:
-                row.purge()
-            except Exception as error:
-                self.stderr.write(f"storage_prune: purge failed for pk={pk}: {error}")
-                continue
-            purged += 1
-        return purged
+        self.stderr.write(f"storage_prune: purge failed for pk={pk}: {error}")
