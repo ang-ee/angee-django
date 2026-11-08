@@ -21,6 +21,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
+import yaml
 from asgiref.sync import async_to_sync
 from django.apps import apps
 from django.conf import settings
@@ -51,7 +52,6 @@ from angee.agents.reader_role import sync_resource_reader_role
 from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
-from angee.agents.skills import parse_skill_meta
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
@@ -666,7 +666,7 @@ class SkillManager(VcsOutputManager, AngeeHistoryManager):
 
         repository: Any = source.repository
         vcs_bridge = repository.vcs_bridge
-        descriptors = vcs_bridge.discover(source, marker="SKILL.md", parse=parse_skill_meta)
+        descriptors = vcs_bridge.discover(source, marker="SKILL.md", parse=self.model.parse_manifest)
         seen: set[Any] = set()
         with system_context(reason="agents.skill.sync"), transaction.atomic():
             for descriptor in descriptors:
@@ -704,6 +704,32 @@ class Skill(VcsOutput, AuditMixin, AngeeDataModel, concrete=True):
     metadata = models.JSONField(default=dict, blank=True)
 
     objects = SkillManager()
+
+    @staticmethod
+    def parse_manifest(blob: bytes) -> dict[str, Any]:
+        """Return a skill descriptor from one ``SKILL.md`` blob's YAML frontmatter.
+
+        The frontmatter is the block fenced by ``---`` lines and declares the skill's
+        ``name`` and ``description`` (the Agent Skills convention); ``VcsBridge.discover``
+        supplies the bearing directory as the ``path``. Leftover keys land in
+        ``metadata``, coerced JSON-safe: YAML turns an unquoted ``key: 2024-01-15`` into
+        a ``date``, which ``JSONField`` cannot store, and one such value would abort the
+        whole source sync.
+        """
+
+        text = blob.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        closing = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
+        front_matter = "\n".join(lines[1:closing]) if text.startswith("---") and closing is not None else ""
+        values = yaml.safe_load(front_matter) if front_matter else {}
+        if not isinstance(values, dict):
+            values = {}
+        metadata = {str(key): value for key, value in values.items() if key not in {"name", "description"}}
+        return {
+            "name": str(values.get("name", "")),
+            "description": str(values.get("description", "")),
+            "metadata": json.loads(json.dumps(metadata, default=str)),
+        }
 
     class Meta:
         """Django model options for discovered skills."""
