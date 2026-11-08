@@ -47,7 +47,7 @@ from angee.spaces.managers import GroupManager
 if TYPE_CHECKING:
     from angee.iam.models import User
     from angee.projects.models import Project
-    from angee.spaces.models import Membership
+    from angee.spaces.models import Group, Membership
 
 
 class QueueManager[QueueT: Queue](GroupManager[QueueT]):
@@ -134,36 +134,10 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
         party_model = apps.get_model("parties", "Party")
         membership_model = apps.get_model("spaces", "Membership")
         person = party_model.objects.db_manager(queue._state.db).for_user(user)
-        membership = membership_model._base_manager.using(queue._state.db).filter(
-            group_id=queue.pk,
-            party_id=person.pk,
-        ).first()
-        if membership is None:
-            membership = membership_model(
-                group_id=queue.pk,
-                party_id=person.pk,
-                role=membership_model.MembershipRole.OWNER,
-                confidence=1.0,
-                is_confirmed=True,
-                is_dismissed=False,
-                created_by_id=user.pk,
-                updated_by_id=user.pk,
-            )
-            membership.save(using=queue._state.db)
-            return
-        changed = False
-        desired = {
-            "role": membership_model.MembershipRole.OWNER,
-            "confidence": 1.0,
-            "is_confirmed": True,
-            "is_dismissed": False,
-        }
-        for name, value in desired.items():
-            if getattr(membership, name) != value:
-                setattr(membership, name, value)
-                changed = True
-        if changed:
-            membership.save(using=queue._state.db, update_fields=(*desired, "updated_at"))
+        # The queue is a materialized child row of its inherited Group roster.
+        membership_model.objects.provision_confirmed(
+            group=cast("Group", queue), party=person, role=membership_model.MembershipRole.OWNER, provisioned_by=user
+        )
 
 
 class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits="spaces.Group"):

@@ -418,6 +418,40 @@ def test_person_user_change_changes_the_live_roster_holder(spaces_tables: None) 
     assert _role_relations(group, new_user) == {"moderator"}
 
 
+def test_provisioned_seat_requires_system_context_and_is_idempotent(spaces_tables: None) -> None:
+    """System provisioning confirms one attributed seat and repeats as a no-op."""
+
+    del spaces_tables
+    holder, person = _person_for("spaces-provisioned-holder")
+    with system_context(reason="spaces provisioned seat group"):
+        group = Group.objects.create(name="Provisioned", slug="provisioned")
+        suggestion = Membership.objects.create(group=group, party=person, is_dismissed=True)
+    with actor_context(holder), pytest.raises(PermissionDenied):
+        Membership.objects.provision_confirmed(
+            group=group, party=person, role=Membership.MembershipRole.OWNER, provisioned_by=holder
+        )
+    with system_context(reason="spaces provisioned seat"):
+        seat = Membership.objects.provision_confirmed(
+            group=group, party=person, role=Membership.MembershipRole.OWNER, provisioned_by=holder
+        )
+        assert seat.pk == suggestion.pk
+        confirmed = Membership._base_manager.get(pk=seat.pk)
+        assert (confirmed.role, confirmed.is_confirmed, confirmed.is_dismissed, confirmed.confidence) == (
+            Membership.MembershipRole.OWNER, True, False, 1.0
+        )
+        again = Membership.objects.provision_confirmed(
+            group=group, party=person, role=Membership.MembershipRole.OWNER, provisioned_by=holder
+        )
+    assert again.pk == seat.pk
+    assert Membership._base_manager.get(pk=seat.pk).updated_at == confirmed.updated_at
+    with system_context(reason="spaces provisioned new seat"):
+        _newcomer, newcomer_person = _person_for("spaces-provisioned-newcomer")
+        created = Membership.objects.provision_confirmed(
+            group=group, party=newcomer_person, role="member", provisioned_by=holder
+        )
+    assert (created.created_by_id, created.updated_by_id, created.is_confirmed) == (holder.pk, holder.pk, True)
+
+
 def test_moderator_can_confirm_membership_but_outsider_cannot(spaces_tables: None) -> None:
     """Membership decisions are actor-gated by the containing group's write policy."""
 
