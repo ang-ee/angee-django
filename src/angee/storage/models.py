@@ -246,6 +246,20 @@ _DriveManagerBase = AngeeHistoryManager.from_queryset(DriveQuerySet)
 class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
     """Provision independent volumes on the configured default backend."""
 
+    def configured_default(self) -> DriveT | None:
+        """Return the drive ``ANGEE_STORAGE_DEFAULT_DRIVE`` names, with its backend, or ``None`` while absent.
+
+        The infrastructure read is elevated; it grants the caller nothing for
+        what it then creates.
+        """
+
+        return (
+            self.model.system_queryset()
+            .filter(slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE)
+            .select_related("backend")
+            .first()
+        )
+
     def create_on_default_backend(self, *, slug: str, name: str, owns_items: bool = False) -> DriveT:
         """Create an ownerless drive with its own key namespace.
 
@@ -254,7 +268,7 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
         permissions and attribution.
         """
 
-        default = self.model.system_queryset().filter(slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE).first()
+        default = self.configured_default()
         if default is None:
             raise ValidationError({"drive": "Configure an existing default drive before creating a volume."})
         drive = self.model(

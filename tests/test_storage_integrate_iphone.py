@@ -32,7 +32,7 @@ from tests.test_integrate_iphone import (
     build_iphone_backup,
 )
 
-storage_integrate_connect = importlib.import_module("angee.storage_integrate.connect")
+storage_integrate_models = importlib.import_module("angee.storage_integrate.models")
 storage_integrate_iphone_schema = importlib.import_module(
     "angee.storage_integrate_iphone.schema"
 )
@@ -104,7 +104,7 @@ def queued_mounts(monkeypatch: pytest.MonkeyPatch) -> list[Mount]:
 
     queued: list[Mount] = []
     monkeypatch.setattr(
-        storage_integrate_connect,
+        storage_integrate_models,
         "queue_bridge_sync",
         lambda mount, **_kwargs: queued.append(mount),
     )

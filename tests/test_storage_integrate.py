@@ -38,7 +38,7 @@ from tests.conftest import (
     make_mount,
 )
 
-storage_integrate_connect = importlib.import_module("angee.storage_integrate.connect")
+storage_integrate_models = importlib.import_module("angee.storage_integrate.models")
 storage_integrate_schema = importlib.import_module("angee.storage_integrate.schema")
 
 BASE_MTIME_NS = 1_700_000_000_000_000_000
@@ -96,7 +96,7 @@ def queued_mounts(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 
     queued: list[Any] = []
     monkeypatch.setattr(
-        storage_integrate_connect,
+        storage_integrate_models,
         "queue_bridge_sync",
         lambda mount, **kwargs: queued.append((mount, kwargs)),
     )
