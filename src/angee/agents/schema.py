@@ -10,6 +10,7 @@ this addon owns only the discovered :class:`Skill` rows.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, cast
 
 import strawberry
@@ -607,6 +608,16 @@ attach_delete_preview_metadata(
 )
 
 
+def _provisioning_result(verb: Callable[[Any], str], id: PublicID, *, reason: str) -> ActionResult:
+    """Run one provisioning verb on the addressed agent and format its outcome in band."""
+
+    agent = resolve_action_target(Agent, id, reason=reason)
+    try:
+        return ActionResult(ok=True, message=verb(agent))
+    except provisioning.ProvisioningError as error:
+        return ActionResult(ok=False, message=str(error))
+
+
 @strawberry.type
 class AgentActionMutation:
     """GraphQL action bridge for agent runtime operations."""
@@ -615,25 +626,25 @@ class AgentActionMutation:
     def provision_agent(self, id: PublicID) -> ActionResult:
         """Render the agent into an operator workspace and service."""
 
-        return provisioning.provision_agent(id)
+        return _provisioning_result(provisioning.provision_agent, id, reason="agents.graphql.provision_agent")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def reprovision_agent(self, id: PublicID) -> ActionResult:
         """Recreate the agent service over its existing workspace."""
 
-        return provisioning.reprovision_agent(id)
+        return _provisioning_result(provisioning.reprovision_agent, id, reason="agents.graphql.reprovision_agent")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def adopt_agent(self, id: PublicID) -> ActionResult:
         """Record the conflicting instance as the agent's own, keeping its container as it is."""
 
-        return provisioning.adopt_agent(id)
+        return _provisioning_result(provisioning.adopt_agent, id, reason="agents.graphql.adopt_agent")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def replace_agent(self, id: PublicID) -> ActionResult:
         """Destroy the conflicting instance, then provision the agent afresh."""
 
-        return provisioning.replace_agent(id)
+        return _provisioning_result(provisioning.replace_agent, id, reason="agents.graphql.replace_agent")
 
     @strawberry.mutation(permission_classes=[AgentChatEndpointPermission])
     def agent_chat_endpoint(self, info: strawberry.Info, id: PublicID) -> AgentChatEndpoint:
@@ -660,7 +671,7 @@ class AgentActionMutation:
     def deprovision_agent(self, id: PublicID) -> ActionResult:
         """Tear down the agent's operator workspace and service."""
 
-        return provisioning.deprovision_agent(id)
+        return _provisioning_result(provisioning.deprovision_agent, id, reason="agents.graphql.deprovision_agent")
 
 
 _CONSOLE_TYPES: list[object] = [

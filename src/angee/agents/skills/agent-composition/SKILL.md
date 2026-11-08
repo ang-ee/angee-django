@@ -29,7 +29,7 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 | `src/angee/agents/models.py`; `grants.py`, `permissions.zed`; `agents_runtime_pydantic/toolsets.py` | `MCPServerManager.builtin`, `MCPToolManager.sync_builtin`, `MCPToolManager.authorization_ids`; `tool_grant_ref`, `sync_resource_reader_grants`; `agents/agent`, `agents/toolrole`, `agents/tool_grant` definitions; `ToolGrantAccess`, `toolsets_for_session` | docstrings, zed comments |
 | `src/angee/agents/skills.py`; `models.py` | `parse_skill_meta`; `SkillManager.sync_from_source` | docstrings |
 | `src/angee/agents/runners.py`, `sessions.py`, `tasks.py`, `acp_server.py`, `protocol.py` | `SessionRunner`, `TurnOutcome`; `run_next_turn`; `run_session`; ACP mappings; `ACP_PATH` | docstrings |
-| `src/angee/agents/provisioning.py` | `provision_agent`, `adopt_agent`, `replace_agent`, `reprovision_agent`, `deprovision_agent` | module docstring |
+| `src/angee/agents/provisioning.py` | `provision_agent`, `adopt_agent`, `replace_agent`, `reprovision_agent`, `deprovision_agent`, `ProvisioningError` | module docstring |
 | `src/angee/agents/testing/` | concrete `Agent`, `InferenceProvider`, `InferenceModel`, `Skill`, … (`models.py`); `FakeRunner`, `runner` fixture (`drivers.py`) | the `tests/test_agents.py` module docstring |
 
 ## Reuse first
@@ -109,7 +109,8 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
    catalogue and grants; tool bodies are authored with [mcp-tools](../../../mcp/skills/mcp-tools/SKILL.md).
 
 7. **Provision through the verbs.** `provision_agent`, `adopt_agent`, `replace_agent`, `reprovision_agent`, `deprovision_agent`
-   are the GraphQL actions; `Agent.provision_blocker()` says why one may not start; `lifecycle` moves through
+   take a saved `Agent`, return the outcome message and raise `ProvisioningError` on refusal; the GraphQL actions resolve
+   the agent and format `ActionResult`. `Agent.provision_blocker()` says why one may not start; `lifecycle` moves through
    `StateTransitions`; secrets reach containers as `operator_secret_ref` placeholders, never values. **Owner rule:** the
    operator daemon owns instances, `provisioning.py` the orchestration (module docstring); stack operations are `angee-runtime`.
 

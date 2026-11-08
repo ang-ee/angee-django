@@ -547,8 +547,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
         ).get_tools
     )(_native_context())
 
-    result = provisioning.provision_agent(agent.sqid)
-    assert result.ok is True
+    assert provisioning.provision_agent(agent) == "Provisioned in process."
     native = AngeeToolset(
         session,
         ToolGrantAccess(agent.principal_subject()),

@@ -35,7 +35,7 @@ from rebac.roles import grant as grant_role
 from rebac.roles import revoke as revoke_role
 
 from angee.agents.context import record_view_context
-from angee.agents.provisioning import provision_agent
+from angee.agents.provisioning import ProvisioningError, provision_agent
 from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.runners import TurnOutcome
 from angee.agents.sessions import run_next_turn
@@ -757,10 +757,9 @@ class CommentReplyTests(TransactionTestCase):
                 else:
                     other = MCPServer.objects.create(name="Other server")
                     ledger.objects.filter(source_addon="angee.agents", xref="mcp_angee").update(target_id=other.sqid)
-                with actor_context(self.admin):
-                    result = provision_agent(self.agent.sqid)
-                self.assertFalse(result.ok)
-                self.assertIn("external server" if failure == "external_server" else "another record", result.message)
+                expected = "external server" if failure == "external_server" else "another record"
+                with actor_context(self.admin), self.assertRaisesRegex(ProvisioningError, expected):
+                    provision_agent(self.agent)
                 after = Agent.system_queryset().get(pk=self.agent.pk)
                 self.assertEqual(
                     (after.lifecycle, after.runtime_status, after.last_error, after.updated_at),
@@ -982,7 +981,7 @@ class CommentReplyTests(TransactionTestCase):
         with actor_context(self.admin):
             self.agent.with_actor(self.admin).resource_reader = False
             self.agent.save(update_fields=("resource_reader", "updated_at"))
-            self.assertTrue(provision_agent(self.agent.sqid).ok)
+            self.assertEqual(provision_agent(self.agent), "Provisioned in process.")
             MCPTool.objects.sync_builtin()
         run, session = self.waiting_run()
         toolset = AngeeToolset(session, ToolGrantAccess(self.agent.principal_subject()), str(self.server.sqid))
@@ -1007,7 +1006,7 @@ class CommentReplyTests(TransactionTestCase):
                 instance=self.agent,
                 source="reader-policy",
             )
-            self.assertTrue(provision_agent(self.agent.sqid).ok)
+            self.assertEqual(provision_agent(self.agent), "Provisioned in process.")
             self.assertIn(RESOURCE_READER_ROLE, set(containers_of(self.agent.user)))
             resource.import_data(rows, dry_run=False, raise_errors=True, use_transactions=True, actor=self.admin)
             self.agent.refresh_from_db()

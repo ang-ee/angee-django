@@ -531,11 +531,10 @@ def test_start_requires_an_available_in_process_runtime(
 def test_deprovision_closes_sessions(session: AgentSession) -> None:
     turn = session.post("Open during deprovision")
     session.claim_turn()
-    result = provisioning.deprovision_agent(session.agent.sqid)
+    assert provisioning.deprovision_agent(session.agent) == "Deprovisioned."
     session.refresh_from_db()
     turn.refresh_from_db()
     session.agent.refresh_from_db()
-    assert result.ok
     assert session.status == SessionStatus.CLOSED
     assert turn.status == TurnStatus.CANCELED
 
@@ -544,8 +543,7 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
     """A stale ready instance cannot open a session after teardown closed them."""
 
     stale_agent = Agent.objects.get(pk=session.agent_id)
-    result = provisioning.deprovision_agent(stale_agent.sqid)
-    assert result.ok
+    assert provisioning.deprovision_agent(stale_agent) == "Deprovisioned."
     assert stale_agent.can_chat
 
     with pytest.raises(ValidationError, match="Agent is not running"):
@@ -554,6 +552,13 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
     session.refresh_from_db()
     assert session.status == SessionStatus.CLOSED
     assert AgentSession.objects.filter(agent=stale_agent).count() == 1
+
+
+def test_provisioning_refuses_an_unsaved_agent() -> None:
+    """Verbs take a saved agent; an unsaved row is refused before any lock or daemon call."""
+
+    with pytest.raises(provisioning.ProvisioningError, match="saved agent"):
+        provisioning.deprovision_agent(Agent(name="Unsaved agent"))
 
 
 def test_stream_updates_do_no_database_work_before_the_flush_interval(
@@ -779,9 +784,7 @@ def test_deprovision_closes_sessions_of_another_person(session: AgentSession) ->
     with system_context(reason="test historical session user"):
         AgentSession.objects.filter(pk=session.pk).update(user=other)
 
-    result = provisioning.deprovision_agent(session.agent.sqid)
-
-    assert result.ok
+    assert provisioning.deprovision_agent(session.agent) == "Deprovisioned."
     with system_context(reason="test deprovisioned session"):
         session.refresh_from_db()
     assert session.status == SessionStatus.CLOSED
