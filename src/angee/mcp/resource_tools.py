@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from django.core import checks
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from fastmcp import FastMCP
@@ -217,7 +217,7 @@ def _is_safe_scalar(resource: DataResourceMetadata, field: DataResourceFieldMeta
     model = resource.model
     if model is None:
         return True
-    model_field = _model_field(model, field.name)
+    model_field = _model_field(model, field)
     if model_field is None:
         return True
     return model_field.null or not is_gated_read_axis(model, model_field.name, definition_for=declared_rebac_definition)
@@ -229,7 +229,7 @@ def _is_summary_field(resource: DataResourceMetadata, field: DataResourceFieldMe
     model = resource.model
     if model is None:
         return field.scalar != "JSON"
-    model_field = _model_field(model, field.name)
+    model_field = _model_field(model, field)
     return not isinstance(model_field, models.TextField)
 
 
@@ -240,13 +240,17 @@ def _with_public_id(resource: DataResourceMetadata, fields: tuple[str, ...]) -> 
     return projected if "sqid" in projected else ("sqid", *projected)
 
 
-def _model_field(model: type[models.Model], name: str) -> models.Field[Any, Any] | ForeignObjectRel | None:
-    """Resolve metadata's wire field to its owning Django field when one exists."""
+def _model_field(
+    model: type[models.Model],
+    field: DataResourceFieldMetadata,
+) -> models.Field[Any, Any] | ForeignObjectRel | None:
+    """Return the Django field the resource metadata resolved behind a wire field, if any.
 
-    try:
-        return model._meta.get_field(name)
-    except FieldDoesNotExist:
-        return None
+    The metadata finalizes ``model_field_name`` for aliased wire names and leaves
+    it empty for a field no model column backs, so this never re-decodes the name.
+    """
+
+    return None if field.model_field_name is None else model._meta.get_field(field.model_field_name)
 
 
 def _resource_description(resource: DataResourceMetadata) -> str:

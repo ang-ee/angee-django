@@ -51,6 +51,7 @@ from angee.mcp.graphql import (
 )
 from angee.mcp.resource_tools import (
     RESOURCE_READER_TOOL_TAG,
+    _resource_projections,
     check_resource_tool_specs,
     register_resource_tools,
     resource_tool_specs,
@@ -102,22 +103,15 @@ class _FakeSchemas:
 def _resource(name: str) -> DataResourceMetadata:
     """Return one resource declaration whose roots are named by ``name``."""
 
-    fields = (
-        DataResourceFieldMetadata(name="id", kind="scalar", scalar="ID", readable=True),
+    fields = tuple(
         DataResourceFieldMetadata(
-            name="title",
+            name=column,
+            model_field_name=column,
             kind="scalar",
-            scalar="String",
+            scalar="ID" if column == "id" else "String",
             readable=True,
-        ),
-        DataResourceFieldMetadata(
-            name="body",
-            kind="scalar",
-            scalar="String",
-            readable=True,
-        ),
-        DataResourceFieldMetadata(name="secret", kind="scalar", scalar="String", readable=True),
-        DataResourceFieldMetadata(name="optional_secret", kind="scalar", scalar="String", readable=True),
+        )
+        for column in ("id", "title", "body", "secret", "optional_secret")
     )
     return DataResourceMetadata(
         model=ResourceToolProbe,
@@ -205,6 +199,26 @@ def test_generated_resource_names_projections_and_order(monkeypatch: pytest.Monk
     assert specs[0].search_fields == ("title", "body")
     assert all("secret" not in spec.fields for spec in specs)
     assert all(spec.tags == frozenset({RESOURCE_READER_TOOL_TAG}) for spec in specs)
+
+
+def test_projection_reads_the_backing_field_of_an_aliased_wire_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A wire alias keeps its model field's summary and redaction policy; an unbacked field is a plain leaf."""
+
+    aliases = {"body": "content", "secret": "credential", "optional_secret": "optional_credential"}
+    resource = _resource("probes")
+    resource = replace(
+        resource,
+        fields=(
+            *(replace(field, name=aliases.get(field.name, field.name)) for field in resource.fields),
+            DataResourceFieldMetadata(name="computed", kind="scalar", scalar="String", readable=True),
+        ),
+    )
+    monkeypatch.setattr("angee.mcp.resource_tools.declared_rebac_definition", lambda model: PROBE_DECLARATION)
+
+    summary, detail, _search = _resource_projections(resource)
+
+    assert summary == ("sqid", "title", "optional_credential", "computed")
+    assert detail == ("sqid", "title", "content", "optional_credential", "computed")
 
 
 def test_generated_query_limits_and_search_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
