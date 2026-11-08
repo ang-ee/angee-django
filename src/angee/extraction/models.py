@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any
+from typing import Any, ClassVar
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -330,18 +330,20 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
             for row in self.parts.select_related("source", "carrier_file").order_by("position")
         )
 
-    def authority_carrier_positions(self, current: Extraction) -> dict[int, int]:
+    def authority_carrier_positions(self, current_parts: Iterable[Any]) -> dict[int, int]:
         """Map uniquely matched physical carriers; absent or ambiguous matches are omitted.
 
+        ``current_parts`` are the other revision's parts, read by the caller in its own scope.
         Required non-retired claims fail in ``preserve_authority`` when their
         position is absent. Source ordering and acquisition telemetry are not identity.
         """
         positions: dict[tuple[Any, ...], list[int]] = {}
-        for part in current.parts.order_by("position"):
+        for part in current_parts:
             positions.setdefault(part.carrier_identity, []).append(part.position)
+        related = self.parts.model.carrier_identity_related
         return {
             part.position: matches[0]
-            for part in self.parts.order_by("position")
+            for part in self.parts.select_related(*related).order_by("position")
             if len(matches := positions.get(part.carrier_identity, [])) == 1
         }
 
@@ -494,6 +496,8 @@ class ExtractionPart(RetainedEvidence, AngeeDataModel, concrete=True):
     metadata = models.JSONField(default=dict, editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
     objects = EvidenceManager()
+    carrier_identity_related: ClassVar[tuple[str, ...]] = ("source__file", "source__message_part")
+    """The relations :attr:`carrier_identity` reads, for ``select_related`` on a part row set."""
 
     def document_part(self) -> DocumentPart:
         """Recover the exact part from its retained, digest-bound file."""

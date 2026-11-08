@@ -373,6 +373,10 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
             if base is not None and (previous is None or previous.pk != base.pk):
                 raise StaleExtraction("The extraction base is no longer current.")
             authority: Extraction | None = previous
+            base_parts = [] if base is None else list(
+                base.parts.system_context(reason="retain authorized extraction snapshot")
+                .select_related(*base.parts.model.carrier_identity_related).order_by("position")
+            )
             if (
                 previous is not None
                 and previous.outcome["kind"] != ExtractionStatus.SUCCEEDED
@@ -406,19 +410,16 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 and authority is not None
                 and values["outcome"]["kind"] == ExtractionStatus.SUCCEEDED
             ):
-                self._preserve_authority(values, parts, authority, base, document_map, retirement)
+                self._preserve_authority(values, parts, authority, base_parts, document_map, retirement)
             if values["outcome"]["kind"] == ExtractionStatus.SUCCEEDED:
                 try:
                     validate(values["schema"], values["result"])
                 except ValidationError:
                     raise ValidationError("Extraction output does not match its retained schema.") from None
             if base is not None:
-                retained_parts = list(
-                    base.parts.system_context(reason="retain authorized extraction snapshot").order_by("position")
-                )
-                if len(retained_parts) != len(parts):
+                if len(base_parts) != len(parts):
                     raise ValidationError("The retained base has different evidence parts.")
-                for part, retained in zip(parts, retained_parts, strict=True):
+                for part, retained in zip(parts, base_parts, strict=True):
                     part["carrier_file_id"] = retained.carrier_file_id
                     part["carrier_digest"] = retained.carrier_digest
             else:
@@ -461,13 +462,13 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
         values: dict[str, Any],
         parts: list[dict[str, Any]],
         authority: Any,
-        base: Any,
+        base_parts: Sequence[Any],
         document_map: list[dict[str, Any]],
         retirement: Mapping[str, str] | None,
     ) -> None:
         """Compose fact authority with validated identities and unchanged carriers."""
         retained_parts = tuple(DocumentPart(**part) for part in parts)
-        positions = authority.authority_carrier_positions(base)
+        positions = authority.authority_carrier_positions(base_parts)
         mapping = {
             ref["selector"]: ref["identity"] for document in document_map for ref in (document, *document["lines"])
         }
@@ -512,7 +513,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                     "provider_metadata": row.provider_metadata,
                     "carrier_file_id": row.carrier_file_id,
                 }
-                for row in base_pages.order_by("position")
+                for row in base_pages.select_related("source").order_by("position")
             ]
         for name, rows in (("ExtractionPage", pages), ("ExtractionPart", parts)):
             child_model = registry.get_model("extraction", name)
