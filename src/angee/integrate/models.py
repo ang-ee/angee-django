@@ -2219,6 +2219,19 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         credential = self._credential_health()
         return "" if credential is None else str(credential.status)
 
+    def load_connection_credential(self) -> Credential | None:
+        """Load the attached credential with its OAuth client in one query, keeping Django's relation cache."""
+
+        field = self._meta.get_field("credential")
+        if not field.is_cached(self):
+            if self.credential_id is None:
+                return None
+            field.set_cached_value(
+                self,
+                field.related_model._base_manager.select_related("oauth_client").get(pk=self.credential_id),
+            )
+        return cast(Credential | None, self.credential)
+
     def fresh_credential(self) -> Credential | None:
         """Reload the attached credential, including changes to its FK or material."""
 

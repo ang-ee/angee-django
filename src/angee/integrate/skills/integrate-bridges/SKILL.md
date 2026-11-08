@@ -41,8 +41,8 @@ source addon contributes one adapter class, its registry key and its tests. Refe
   and parallelism; an adapter extracts and applies only.
 - `Bridge.run_sync`, `claim_sync`, `record_sync_error`, `update_live_state`, `claim_live_account`
   (`src/angee/integrate/models.py`) own lifecycle, telemetry and locks.
-- `Credential.auth_headers`, `ensure_fresh`, `Integration.fresh_credential` (`src/angee/integrate/models.py`)
-  own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin.
+- `Credential.auth_headers`, `ensure_fresh`, `Integration.fresh_credential` and `load_connection_credential`
+  (`src/angee/integrate/models.py`) own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin.
 - `IntegrationError(public_message, transient=, retry_after=)` (`src/angee/integrate/errors.py`) is the only
   exception an operator sees; `RequestNotSentError` marks safe retries.
 - `LiveSession` (`src/angee/integrate/session.py`) owns the wake loop, QR reporting and cooperative stop;
