@@ -20,7 +20,20 @@ from typing import Any
 import httpx
 import httpx2
 import pytest
-from anthropic.types import Message, TextBlock, Usage
+from anthropic.types import (
+    Message,
+    MessageDeltaUsage,
+    RawContentBlockDeltaEvent,
+    RawContentBlockStartEvent,
+    RawContentBlockStopEvent,
+    RawMessageDeltaEvent,
+    RawMessageStartEvent,
+    RawMessageStopEvent,
+    RawMessageStreamEvent,
+    TextBlock,
+    TextDelta,
+    Usage,
+)
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
@@ -28,7 +41,17 @@ from openai import AsyncOpenAI, DefaultHttpxClient
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.exceptions import (
+    ModelAPIError,
+    ModelConnectionError,
+    ModelHTTPError,
+    ModelOverloadedError,
+    ModelQuotaExceededError,
+    ModelRateLimitError,
+    ModelRequestRejectedError,
+    ModelServerError,
+    ModelTimeoutError,
+)
 from pydantic_ai.messages import (
     BinaryContent,
     ModelRequest,
@@ -515,6 +538,36 @@ class _FakeAnthropicMessages:
             stop_sequence=None,
             usage=Usage(input_tokens=3, output_tokens=1),
         )
+
+
+def _anthropic_event_stream(message: Message) -> bytes:
+    """Encode an SDK message as the server-sent events of a streamed Messages response."""
+
+    events: list[RawMessageStreamEvent] = [
+        RawMessageStartEvent(type="message_start", message=message.model_copy(update={"content": []})),
+    ]
+    for index, block in enumerate(message.content):
+        assert isinstance(block, TextBlock)
+        events += [
+            RawContentBlockStartEvent(
+                type="content_block_start", index=index, content_block=TextBlock(type="text", text="")
+            ),
+            RawContentBlockDeltaEvent(
+                type="content_block_delta", index=index, delta=TextDelta(type="text_delta", text=block.text)
+            ),
+            RawContentBlockStopEvent(type="content_block_stop", index=index),
+        ]
+    events += [
+        RawMessageDeltaEvent.model_validate(
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": message.stop_reason, "stop_sequence": message.stop_sequence},
+                "usage": MessageDeltaUsage(output_tokens=message.usage.output_tokens),
+            }
+        ),
+        RawMessageStopEvent(type="message_stop"),
+    ]
+    return b"".join(f"event: {event.type}\ndata: {event.model_dump_json()}\n\n".encode() for event in events)
 
 
 class _FakeAnthropicClient:
@@ -1071,15 +1124,14 @@ def inference_http(monkeypatch, request):
     clients = []
 
     async def respond(self, request):
-        transport_http = httpx2 if isinstance(request, httpx2.Request) else httpx
         content = b"".join([chunk async for chunk in request.stream])
-        requests.append(transport_http.Request(request.method, request.url, headers=request.headers, content=content))
+        requests.append(httpx2.Request(request.method, request.url, headers=request.headers, content=content))
         if isinstance(scenario, int):
-            return transport_http.Response(
+            return httpx2.Response(
                 scenario, json={"error": {"message": "provider rejected request", "type": "test"}}, request=request
             )
         if scenario == "tool":
-            return transport_http.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "id": "call-response",
@@ -1107,21 +1159,25 @@ def inference_http(monkeypatch, request):
                 },
                 request=request,
             )
-        response = (
-            _FakeAnthropicMessages(None).create()
-            if request.url.path.endswith("/messages")
-            else _FakeOpenAICompletions(None).create()
-        )
+        if request.url.path.endswith("/messages"):
+            message = _FakeAnthropicMessages(None).create()
+            if json.loads(content).get("stream"):
+                return httpx2.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=_anthropic_event_stream(message),
+                    request=request,
+                )
+            return httpx2.Response(200, json=message.model_dump(mode="json"), request=request)
+        response = _FakeOpenAICompletions(None).create()
         if scenario == "structured":
             response.choices[0].message.content = '{"text":"pong"}'
-        return transport_http.Response(200, json=response.model_dump(mode="json"), request=request)
+        return httpx2.Response(200, json=response.model_dump(mode="json"), request=request)
 
     def client_class(path):
         cls = import_string(path)
 
         def build(**kwargs):
-            if "http_client" not in kwargs:
-                kwargs["http_client"] = httpx.AsyncClient()
             kwargs.setdefault("base_url", "https://provider.invalid/v1")
             kwargs["max_retries"] = 0
             client = cls(**kwargs)
@@ -1130,7 +1186,6 @@ def inference_http(monkeypatch, request):
 
         return build
 
-    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
     monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", respond)
     monkeypatch.setattr("angee.agents.sdk_backends.import_string", client_class)
     return requests, clients
@@ -1257,6 +1312,26 @@ def test_inference_backend_classifies_transport_exception_types(error, wrapped):
         wrapper.__cause__ = error
         error = wrapper
     assert InferenceBackend(SimpleNamespace()).is_transient_error(error)
+
+
+@pytest.mark.parametrize(
+    ("error_type", "retryable"),
+    [
+        (ModelConnectionError, True),
+        (ModelTimeoutError, True),
+        (ModelRateLimitError, True),
+        (ModelOverloadedError, True),
+        (ModelServerError, True),
+        (ModelQuotaExceededError, False),
+        (ModelRequestRejectedError, False),
+    ],
+)
+def test_inference_backend_classifies_typed_provider_failures(error_type, retryable):
+    """The SDK's typed failures decide retry policy, whatever transport raised them (httpx2 included)."""
+
+    error = error_type("test-model", "provider failure")
+    error.__cause__ = httpx2.ReadTimeout("stream stalled")
+    assert InferenceBackend(SimpleNamespace()).is_transient_error(error) is retryable
 
 
 @pytest.mark.parametrize("message", ["timeout", "rate limit", "temporarily unavailable", "try again"])

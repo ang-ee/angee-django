@@ -17,7 +17,15 @@ from asgiref.sync import async_to_sync
 from django.utils.module_loading import import_string
 from httpx import NetworkError, Timeout, TimeoutException
 from pydantic_ai.direct import model_request
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
+from pydantic_ai.exceptions import (
+    ModelAPIError,
+    ModelConnectionError,
+    ModelHTTPError,
+    ModelRateLimitError,
+    ModelServerError,
+    ModelUnavailableError,
+    UnexpectedModelBehavior,
+)
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
@@ -113,9 +121,21 @@ class InferenceBackend(ImplBase):
 
         return str(self.provider.base_url or self.default_base_url).strip().rstrip("/")
 
+    TRANSIENT_MODEL_ERRORS: ClassVar[tuple[type[ModelAPIError], ...]] = (
+        ModelConnectionError,
+        ModelRateLimitError,
+        ModelServerError,
+        ModelUnavailableError,
+    )
+    """pydantic-ai's typed provider failures a retry can outlive: connection loss and
+    timeouts, rate limits, overload and server errors. Quota exhaustion and rejected
+    requests are not among them."""
+
     def is_transient_error(self, error: Exception) -> bool:
         """Classify native provider failures; vendor adapters extend transport types."""
 
+        if isinstance(error, self.TRANSIENT_MODEL_ERRORS):
+            return True
         if isinstance(error, ModelHTTPError):
             return error.status_code == 429 or 500 <= error.status_code < 600
         cause = error.__cause__ if isinstance(error, ModelAPIError) else error

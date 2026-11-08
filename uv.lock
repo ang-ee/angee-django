@@ -716,7 +716,7 @@ requires-dist = [
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev10,<0.2" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15" },
 ]
 
 [[package]]
