@@ -14,10 +14,12 @@ from angee.base.fields.state import enum_member_for
 from angee.base.managers import AngeeManager
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.querysets import AngeeQuerySet
+from angee.messaging.managers import ThreadManager, ThreadQuerySet
 
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
+    from angee.messaging.models import Thread
     from angee.spaces.models import Group, Membership
 
 
@@ -139,3 +141,19 @@ class MembershipManager[MembershipT: Membership](_MembershipManagerBase[Membersh
             if actor is not None:
                 membership.with_actor(actor)
             return membership
+
+
+class ThreadSpaceQuerySet[ThreadT: Thread](ThreadQuerySet[ThreadT]):
+    """Thread selections Spaces contributes through its group audience."""
+
+    def bound_to_groups(self) -> Self:
+        """Select group conversations bound to at least one governed group audience."""
+
+        return self.filter(modality=self.model.Modality.GROUP, groups__isnull=False).distinct()
+
+
+_ThreadSpaceManagerBase = ThreadManager.from_queryset(ThreadSpaceQuerySet)
+
+
+class ThreadSpaceManager[ThreadT: Thread](_ThreadSpaceManagerBase[ThreadT]):
+    """Spaces' thread manager, composed onto ``messaging.Thread`` as ``Thread.spaces``."""

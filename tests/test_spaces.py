@@ -604,6 +604,30 @@ def test_group_member_and_viewer_read_bound_group_thread_but_outsider_cannot(
         assert not Thread.objects.filter(pk=thread.pk).exists()
 
 
+def test_spaces_thread_manager_selects_readable_group_bound_threads(spaces_tables: None) -> None:
+    """``Thread.spaces`` keeps the actor scope and the caller's filters; ``objects`` stays the default manager."""
+
+    del spaces_tables
+    member, person = _person_for("spaces-bound-member")
+    with system_context(reason="spaces bound thread seed"):
+        group = Group.objects.create(name="Bound", slug="bound")
+        Membership.objects.create(group=group, party=person).confirm()
+        other = Group.objects.create(name="Other", slug="other")
+        bound = Thread.objects.create(modality=Thread.Modality.GROUP)
+        bound.groups.add(group)
+        twice = Thread.objects.create(modality=Thread.Modality.GROUP)
+        twice.groups.add(group, other)
+        unreadable = Thread.objects.create(modality=Thread.Modality.GROUP)
+        unreadable.groups.add(other)
+        Thread.objects.create(modality=Thread.Modality.GROUP)
+        Thread.objects.create(modality=Thread.Modality.DIRECT).groups.add(group)
+
+    assert Thread._default_manager.name == "objects"
+    with actor_context(member):
+        assert sorted(Thread.spaces.bound_to_groups().values_list("pk", flat=True)) == sorted([bound.pk, twice.pk])
+        assert list(Thread.spaces.filter(pk=twice.pk).bound_to_groups().values_list("pk", flat=True)) == [twice.pk]
+
+
 def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
     spaces_tables: None,
 ) -> None:
