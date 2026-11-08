@@ -941,7 +941,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
         if actor is None or StatementSourceMixin.source_kind_for(actor) != SourceKind.PERSON:
             super().save(*args, **kwargs)
             return
-        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
+        using = kwargs.get("using") or type(self)._base_manager.db_manager(hints={"instance": self}).db
         update_fields = kwargs.get("update_fields")
         saved_fields = (
             None
@@ -952,7 +952,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                 if field.name in update_fields or field.attname in update_fields
             }
         )
-        with actor_context(actor), transaction.atomic():
+        with actor_context(actor), transaction.atomic(using=using):
             previous = type(self)._base_manager.using(using).filter(pk=self.pk).first() if self.pk else None
             super().save(*args, **kwargs)
             resolved_fields: set[str] = set()

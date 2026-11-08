@@ -165,10 +165,12 @@ Use these owners instead of maintaining another contract in an addon:
 - **Database routing:** Angee runs on one database, Django's `default`. It
   ships no router in `DATABASE_ROUTERS` and selects no database per operation.
   Owners open bare `transaction.atomic()` and register bare
-  `transaction.on_commit()`, overrides of native writes included. Pass
-  Django- and library-supplied aliases (signal `using`, `Collector`,
-  `save(using=...)` in an override, a hook's `using` argument) through unchanged;
-  do not thread aliases through Angee helpers, managers, hooks or tasks. Use
+  `transaction.on_commit()`. An alias Django or a library hands in (signal
+  `using`, `Collector`, a hook's `using` argument, the `using` of an overridden
+  `save()` or `save_base()`, the `db` of an overridden queryset `update()`,
+  `delete()` or `bulk_create()`) passes through unchanged, to `super()` and to
+  the transaction that override opens, as Django's own implementations do; do
+  not thread aliases through Angee helpers, managers, hooks or tasks. Use
   native relation access, `refresh_from_db` when deferred or stale fields need
   reloading, and preserve locks and batching. A declared read-only external
   import source may select its database explicitly. REBAC-managed models and

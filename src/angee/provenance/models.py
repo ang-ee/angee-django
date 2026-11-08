@@ -278,7 +278,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
         recording = inserting and current_changeset() is self
         with (
-            transaction.atomic(),
+            transaction.atomic(using=alias),
             system_context(reason="changeset.record") if recording else nullcontext(),
         ):
             kwargs["using"] = alias

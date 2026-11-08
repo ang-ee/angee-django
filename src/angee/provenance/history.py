@@ -490,7 +490,7 @@ class HistoryMixin(models.Model):
         """Validate attribution before SQL and scope native save dispatch to one group."""
 
         alias = using or router.db_for_write(type(self), instance=self)
-        with transaction.atomic(savepoint=not raw), write_group():
+        with transaction.atomic(using=alias, savepoint=not raw), write_group():
             if not raw and not hasattr(self, "skip_history_when_saving"):
                 history = model_history(type(self))
                 if history is not None and history.capture_enabled:

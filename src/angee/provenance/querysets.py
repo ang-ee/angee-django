@@ -73,12 +73,12 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
             return super().update(**kwargs)
         self._for_write = True
         selection = self.capture_queryset()
-        with transaction.atomic():
+        with transaction.atomic(using=self.db):
             keys = list(dict.fromkeys(selection.capture_keys()))
             if not keys:
                 return 0
             current_changeset(required=True, record=True)
-            with transaction.atomic(savepoint=False), write_group():
+            with transaction.atomic(using=self.db, savepoint=False), write_group():
                 count = sum(super(HistoryQuerySet, rows).update(**kwargs) for rows in self.capture_batches(keys))
                 history.bulk_history_create(history_model, keys, "~", using=self.db)
                 self._result_cache = None
@@ -125,7 +125,7 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
                 obj.pk is None for obj in candidates
             ):
                 raise NotSupportedError("History capture requires bulk-insert primary keys on this database.")
-        with transaction.atomic() if history is not None else nullcontext(), write_group():
+        with transaction.atomic(using=self.db) if history is not None else nullcontext(), write_group():
             if history is not None and candidates:
                 current_changeset(required=True, record=True)
             rows = super().bulk_create(
@@ -159,12 +159,12 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
             return super().delete()
         self._for_write = True
         selection = self.capture_queryset()
-        with transaction.atomic():
+        with transaction.atomic(using=self.db):
             keys = list(dict.fromkeys(selection.capture_keys()))
             if not keys:
                 return 0, {}
             current_changeset(required=True, record=True)
-            with transaction.atomic(savepoint=False), write_group():
+            with transaction.atomic(using=self.db, savepoint=False), write_group():
                 history.bulk_history_create(history_model, keys, "-", using=self.db)
                 counts: dict[str, int] = {}
                 for rows in self.capture_batches(keys):

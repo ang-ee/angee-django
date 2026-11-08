@@ -280,7 +280,7 @@ class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits
         kwargs["using"] = using
         try:
             self.key = self.key.strip().upper()
-            with transaction.atomic():
+            with transaction.atomic(using=using):
                 self._validate_default_stage()
                 self._validate_estimate_settings()
                 super().save(*args, **kwargs)
@@ -1191,7 +1191,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         self._state.db = using
         kwargs["using"] = using
         try:
-            with transaction.atomic():
+            with transaction.atomic(using=using):
                 defaulted = self._apply_queue_and_stage_defaults(provision=True)
                 defaulted.update(self._validate_estimate(update_fields=update_fields))
                 if not stage_written:

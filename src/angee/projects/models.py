@@ -1525,7 +1525,7 @@ class Task(
             update_fields = kwargs.get("update_fields")
             structure_fields = {"project", "project_id", "milestone", "milestone_id", "parent", "parent_id"}
             if self._state.adding or update_fields is None or structure_fields.intersection(update_fields):
-                with transaction.atomic():
+                with transaction.atomic(using=using):
                     self._validate_structure()
                     super().save(*args, **kwargs)
                     # The persisted candidate lets REBAC evaluate every composed share arm.
