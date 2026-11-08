@@ -239,12 +239,17 @@ class Mount(Bridge, inherits="integrate.Integration"):
         return super()._next_sync_at(now=now)
 
     def sync(self) -> int:
-        """Reconcile the external source into this mount's storage drive."""
+        """Reconcile the external source into this mount's storage drive, then close the backend's readers."""
 
         drive = self.drive
         if drive is None:
             raise ValidationError({"drive": "The mount requires a storage drive."})
-        backend = self.backend
+        with contextlib.closing(self.backend) as backend:
+            return self._reconcile(backend, drive)
+
+    def _reconcile(self, backend: MountBackend, drive: Any) -> int:
+        """Mirror the source tree and files into ``drive`` and return the changed-file count."""
+
         backend.check_source()
         file_model = apps.get_model("storage", "File")
         folder_model = apps.get_model("storage", "Folder")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import sqlite3
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -308,3 +309,22 @@ def test_connect_iphone_backup_graphql_denies_non_admin(
 
     assert result.errors is not None
     assert queued_mounts == []
+
+
+def test_iphone_backend_close_releases_the_manifest_reader(tmp_path: Path, settings: Any) -> None:
+    """Closing the cycle's backend closes the manifest connection and forgets its blob paths; twice is harmless."""
+
+    root = build_iphone_backup(tmp_path / "backup")
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    settings.ANGEE_DATA_DIR = str(tmp_path / "data")
+    backend = IphoneBackupMountBackend(Mount(config={"root": str(root)}))
+    reader = backend.backup
+    assert list(backend.iter_entries())
+    assert backend._blob_by_path
+
+    backend.close()
+    assert backend._backup_reader is None
+    assert backend._blob_by_path == {}
+    with pytest.raises(sqlite3.ProgrammingError):
+        reader._manifest.execute("SELECT 1")
+    backend.close()

@@ -53,6 +53,17 @@ class IphoneBackupMountBackend(LocalFolderMountBackend):
         self._backup_reader: IosBackup | None = None
         self._blob_by_path: dict[str, Path] = {}
 
+    def close(self) -> None:
+        """Close the manifest reader and forget the blob paths read from it; closing twice is harmless."""
+
+        try:
+            if self._backup_reader is not None:
+                self._backup_reader.close()
+        finally:
+            self._backup_reader = None
+            self._blob_by_path.clear()
+            super().close()
+
     @property
     def backup(self) -> IosBackup:
         """Return the one manifest reader shared by this backend instance."""

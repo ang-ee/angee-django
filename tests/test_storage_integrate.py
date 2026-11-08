@@ -890,3 +890,29 @@ def test_failed_directory_enumeration_never_becomes_a_missing_file_inventory(
     with pytest.raises(PermissionError):
         _run_sync(mount)
     assert not _file_map(mount.drive)["kept.txt"].is_trashed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_mount_sync_closes_its_backend_after_success_and_failure(
+    mount_env: SimpleNamespace,
+    queued_mounts: list[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sync owns the backend it opened for the cycle and releases it however the cycle ends."""
+
+    root = mount_env.tmp_path / "closed-source"
+    root.mkdir()
+    _write(root / "kept.txt", b"keep", mtime_ns=BASE_MTIME_NS)
+    mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Closed source")
+    closed: list[Any] = []
+    monkeypatch.setattr(LocalFolderMountBackend, "close", lambda self: closed.append(self))
+    assert _run_sync(mount) == 1
+    assert len(closed) == 1
+
+    def refuse(self: Any) -> Any:
+        raise PermissionError("source unavailable")
+
+    monkeypatch.setattr(LocalFolderMountBackend, "iter_directories", refuse)
+    with pytest.raises(PermissionError):
+        _run_sync(mount)
+    assert len(closed) == 2
