@@ -54,6 +54,7 @@ from angee.agents.skills import parse_skill_meta
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
+from angee.base.locks import LockKey, record_lock_key
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.implementations import ImplDefaultsMixin
@@ -61,12 +62,11 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor, require_rebac_queryset
-from angee.graphql.events import ChangeRelatedRecord
+from angee.base.refs import RecordRef
 from angee.iam.service_users import sync_service_user
 from angee.integrate.models import IntegrationCreateMode
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.jobs.enqueue import enqueue_task
-from angee.base.locks import LockKey, record_lock_key
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -2340,11 +2340,11 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
                 self.updates = locked.updates
             return locked.status == TurnStatus.RUNNING
 
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+    def change_related_records(self) -> tuple[RecordRef, ...]:
         """Name the session without loading its guarded relation, including on delete."""
 
         model = type(self).session.field.related_model
-        return (ChangeRelatedRecord(model._meta.label, model.public_id_from_pk(self.session_id)),)
+        return (RecordRef.from_model(model, self.session_id),)
 
     def delete_blocker(self) -> str | None:
         """Refuse deletion of claimed work, including work parked on approval."""

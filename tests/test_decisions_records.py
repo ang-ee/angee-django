@@ -230,15 +230,14 @@ def test_empty_concerns_are_rejected(records):
 
 
 def test_change_concerns_deduplicate_before_querying_child_models(composed_tables):
-    from angee.base.refs import RecordRef
-    from angee.graphql.events import ChangeRelatedRecord
+    from angee.base.refs import RecordRef, record_view_refs
     from tests.mtidemo.models import MtiChild, MtiParent
 
     with system_context(reason="test.batch_concerns"):
         children = [MtiChild.objects.create(title=str(index)) for index in range(3)]
         refs = [RecordRef.from_instance(MtiParent.objects.get(pk=child.pk)) for child in children]
         with CaptureQueriesContext(connection) as captured:
-            result = ChangeRelatedRecord.for_records(*refs, *refs)
+            result = record_view_refs(*refs, *refs)
     assert len(result) == 6
     assert len(captured) == 1
 
@@ -259,7 +258,7 @@ def test_relation_without_actor_scoping_is_a_contract_value_error():
 @pytest.mark.django_db(transaction=True)
 def test_admission_publishes_once_with_its_concern_records(records, monkeypatch):
     events = []
-    monkeypatch.setattr("angee.graphql.publishing._send_change", lambda model, payload: events.append(payload))
+    monkeypatch.setattr("angee.graphql.publishing._queue_transport", lambda model, payload: events.append(payload))
     already_wired = disconnect_publishers(Decision)
     connect_publishers(Decision)
     try:

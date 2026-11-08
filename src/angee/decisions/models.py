@@ -12,8 +12,8 @@ from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.derived import DerivedFrom
 from angee.base.models.locks import OptimisticLockMixin
+from angee.base.refs import RecordRef, record_view_refs
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
-from angee.graphql.events import ChangeRelatedRecord
 
 
 class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=True):
@@ -45,11 +45,11 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         for rows in type(self).requester_querysets():
             yield from rows.using(self._state.db).filter(_decision_id=self.pk).order_by("pk").distinct()
 
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
-        """Publish the question's retained concern identities with its verdict."""
+    def change_related_records(self) -> tuple[RecordRef, ...]:
+        """Publish the question's retained concern identities and their inherited views with its verdict."""
         with system_context(reason="decisions.change_concerns"):
             links = self.records.model.system_queryset().filter(decision_id=self.pk).select_related("content_type")
-            return ChangeRelatedRecord.for_records(*(link.record_ref for link in links))
+            return record_view_refs(*(link.record_ref for link in links))
 
     class Meta:
         abstract = True

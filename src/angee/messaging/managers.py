@@ -72,8 +72,8 @@ from angee.base.prefetch import InstancePrefetch, ReaderMemo
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
+from angee.base.signals import mute_changes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
-from angee.graphql.publishing import mute_changes
 from angee.integrate.errors import IntegrationError, doubling_backoff, safe_integration_failure
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
@@ -1037,7 +1037,7 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
         teardown paths; ``channel`` is a Channel (an MTI child of Integration whose pk is
         the Integration pk), so :meth:`MessageQuerySet.for_channel` /
         :meth:`ThreadQuerySet.for_channel` resolve against the shared FK. Both deletes run
-        under :func:`~angee.graphql.publishing.mute_changes`: each Message/Thread declares
+        under :func:`~angee.base.signals.mute_changes`: each Message/Thread declares
         ``changes()``, so without muting the ``post_delete`` publisher would fire once per
         row — an ``exists()`` thread probe plus a buffered ``group_send`` for every purged
         row — turning a 90k-message purge into ~180k queries and 90k broadcasts. The single

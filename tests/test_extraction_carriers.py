@@ -7,8 +7,8 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 
+from angee.base.signals import mute_changes
 from angee.extraction.contracts import DocumentPart, ExtractionPartKind, Source
-from angee.graphql.publishing import mute_changes
 from angee.messaging.testing.models import Part
 from tests.conftest import create_platform_admin
 from tests.test_extraction_models import evidence as evidence

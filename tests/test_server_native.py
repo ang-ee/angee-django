@@ -203,6 +203,7 @@ import django
 django.setup()
 from django.contrib.auth.models import Group
 from django.db import connection, transaction
+from angee.base.signals import change_published
 from angee.graphql import publishing
 assert 'angee.graphql.schema' not in sys.modules
 assert 'publisher_probe.schema' not in sys.modules
@@ -211,7 +212,7 @@ with connection.schema_editor() as editor:
 observed = []
 def observe(sender, payload, **kwargs):
     observed.append(payload)
-publishing.change_published.connect(observe, weak=False)
+change_published.connect(observe, weak=False)
 with transaction.atomic():
     row = Group.objects.create(name='before')
     row.name = 'after'

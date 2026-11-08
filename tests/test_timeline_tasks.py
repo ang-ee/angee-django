@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from rebac import actor_context
 
-from angee.graphql.publishing import mute_changes
+from angee.base.signals import mute_changes
 from angee.projects.testing.models import ActivityType, Task
 from angee.projects.timeline import TaskKind
 from tests.messaging_campaign import comment_record as comment_record  # noqa: F401 - shared actor/record fixture

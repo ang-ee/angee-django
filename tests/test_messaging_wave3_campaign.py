@@ -17,7 +17,7 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.graphql.publishing import mute_changes
+from angee.base.signals import mute_changes
 from angee.messaging.testing.models import Message, ThreadAttachment, ThreadNotification
 from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import grant

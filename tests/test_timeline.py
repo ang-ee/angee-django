@@ -14,7 +14,7 @@ from rebac import actor_context
 
 from angee.base.models.identity import public_id_of
 from angee.base.pagination import KeysetOrder, keyset_signer
-from angee.graphql.publishing import mute_changes
+from angee.base.signals import mute_changes
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.timeline import CommentKind
 from angee.provenance.context import changeset as open_changeset

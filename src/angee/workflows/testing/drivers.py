@@ -13,7 +13,7 @@ from django.apps import apps
 from django.conf import settings
 from rebac import system_context
 
-from angee.graphql.publishing import change_published
+from angee.base.signals import change_published
 from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks
 from angee.workflows.runner import runner

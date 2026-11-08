@@ -20,9 +20,9 @@ from angee.base.models.identity import public_id_of
 from angee.base.permissions import actor_user_id, require_rebac_queryset
 from angee.base.querysets import AngeeQuerySet
 from angee.base.refs import generic_pointer_model
+from angee.base.signals import mute_changes, publish_change
 from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.signals import decision_answered
-from angee.graphql.publishing import mute_changes, publish_change
 from angee.provenance.evidence import readable_records
 
 if TYPE_CHECKING:
