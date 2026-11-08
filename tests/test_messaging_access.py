@@ -11,16 +11,87 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import override_settings
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
 from angee.base.build import extension_source_map
 from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
+from angee.tags.testing.models import Tag, TagAssignment
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import File, Vendor
 from tests.test_messaging import _storage_drive
+
+
+def test_channel_annotator_tags_readable_conversations_only(messaging_access_schema: str) -> None:
+    """Tag access requires read and never lends content or transport control."""
+
+    del messaging_access_schema
+    with system_context(reason="tests.messaging.annotation_setup"):
+        users = apps.get_model("iam", "User").objects
+        owner = users.create_user(username="annotation-owner")
+        annotator = users.create_user(username="annotation-worker", kind="service")
+        outsider = users.create_user(username="annotation-outsider")
+        vendor = Vendor.objects.create(slug="annotation-access", display_name="Annotation access")
+        channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
+        other_channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
+        thread = Thread.objects.create(channel=channel)
+        direct = Message.objects.create(channel=channel)
+        indirect = Message.objects.create(thread=thread)
+        hidden = Message.objects.create(channel=channel, is_trashed=True)
+        unrelated = Message.objects.create(channel=other_channel)
+        tag = Tag.objects.create(name="Review needed")
+
+    channel.with_actor(owner).grant_record_access("reader", annotator)
+    with actor_context(annotator), pytest.raises(PermissionDenied):
+        TagAssignment.objects.attach("messaging/message", direct.sqid, [tag.sqid])
+    channel.with_actor(owner).grant_record_access("annotator", annotator)
+    for row in (thread, direct, indirect):
+        resource_type = row._meta.rebac_resource_type
+        assert row.with_actor(annotator).has_access("annotate")
+        assert type(row).objects.with_actor(annotator).with_action("annotate").filter(pk=row.pk).exists()
+        assert not row.with_actor(annotator).has_access("write")
+        assert not row.with_actor(annotator).has_access("delete")
+        assert not row.with_actor(outsider).has_access("annotate")
+        with actor_context(annotator):
+            edges = TagAssignment.objects.attach(resource_type, row.sqid, [tag.sqid])
+            assert len(edges) == 1
+            assert TagAssignment.objects.detach(resource_type, row.sqid, [tag.sqid]) == 1
+    for action in ("reply", "write", "delete"):
+        assert not channel.with_actor(annotator).has_access(action)
+    for row in (hidden, unrelated):
+        assert not row.with_actor(annotator).has_access("annotate")
+        assert not Message.objects.with_actor(annotator).with_action("annotate").filter(pk=row.pk).exists()
+        with actor_context(annotator), pytest.raises(ValueError):
+            TagAssignment.objects.attach("messaging/message", row.sqid, [tag.sqid])
+
+    channel.with_actor(owner).revoke_record_access("reader", annotator)
+    assert not direct.with_actor(annotator).has_access("read")
+    assert not direct.with_actor(annotator).has_access("annotate")
+    for row in (direct, indirect):
+        row.with_actor(owner).grant_record_access("reader", annotator)
+        assert row.with_actor(annotator).has_access("annotate")
+        assert Message.objects.with_actor(annotator).with_action("annotate").filter(pk=row.pk).exists()
+        with actor_context(annotator):
+            assert len(TagAssignment.objects.attach("messaging/message", row.sqid, [tag.sqid])) == 1
+            assert TagAssignment.objects.detach("messaging/message", row.sqid, [tag.sqid]) == 1
+        row.with_actor(owner).revoke_record_access("reader", annotator)
+    assert not thread.with_actor(annotator).has_access("read")
+    assert not thread.with_actor(annotator).has_access("annotate")
+    channel.with_actor(owner).grant_record_access("reader", annotator)
+    channel.with_actor(owner).revoke_record_access("annotator", annotator)
+    assert not direct.with_actor(annotator).has_access("annotate")
+    with actor_context(annotator), pytest.raises(PermissionDenied):
+        TagAssignment.objects.attach("messaging/message", direct.sqid, [tag.sqid])
 
 
 @pytest.fixture(params=("denormalized", "registry"))

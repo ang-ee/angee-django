@@ -1848,10 +1848,10 @@ class IntegrationActionMutation:
             now = timezone.now()
             for model in models_with(base=Bridge):
                 for bridge in model._default_manager.of_concrete_type().filter(pk=integration.pk).order_by("pk"):
-                    queue_bridge_sync(bridge, now=now)
-                    queued += 1
+                    if queue_bridge_sync(bridge, now=now):
+                        queued += 1
         if queued == 0:
-            return ActionResult(ok=True, message="No bridges to sync.")
+            return ActionResult(ok=True, message="No bridges need a new sync.")
         return ActionResult(ok=True, message=f"Queued {queued} bridge sync(s).")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)

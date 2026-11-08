@@ -3199,23 +3199,25 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         self.next_sync_at = row.next_sync_at
         return True
 
-    def mark_sync_queued(self, *, now: datetime) -> None:
-        """Persist that a worker task has been queued for this bridge."""
+    def mark_sync_queued(self, *, now: datetime) -> bool:
+        """Admit a queued task unless a live worker or retained run owns this sync."""
 
         with system_context(reason="integrate.bridge.queue"), transaction.atomic():
             row = self.lock_capability()
             if not row.discovery_ready:
                 raise IntegrationError("Connection discovery must finish before syncing.")
-            if not row.sync_is_dispatched:
-                row.sync_stage = self.SyncStage.QUEUED
-                row.sync_error = ""
-                row.sync_run_id = None
-                row.sync_progress = row._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
-                row.save(
-                    update_fields=["sync_error", "sync_run_id", "sync_progress", "sync_stage", "updated_at"],
-                )
+            if row.sync_is_dispatched or row.is_syncing:
+                return False
+            row.sync_stage = self.SyncStage.QUEUED
+            row.sync_error = ""
+            row.sync_run_id = None
+            row.sync_progress = row._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
+            row.save(
+                update_fields=["sync_error", "sync_run_id", "sync_progress", "sync_stage", "updated_at"],
+            )
         self.sync_stage, self.sync_error, self.sync_progress = row.sync_stage, row.sync_error, row.sync_progress
         self.sync_run_id = row.sync_run_id
+        return True
 
     def reset_sync_queue(self, *, now: datetime) -> None:
         """Make a failed queue dispatch due again for the next scheduler pass."""

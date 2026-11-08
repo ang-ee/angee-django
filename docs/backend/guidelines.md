@@ -669,8 +669,10 @@ data through REBAC, never a queryset bypass.
   field in its web fragment. The native prefetch hint batches every row's
   readable edges and tags once per page under the actor's scope. Adding or
   removing a tag, through the record's save or the `tag`/`untag` verbs, needs
-  write on the record; tag administrators curate only the vocabulary. An edge is
-  read by whoever reads both the tag and the record. `TagAssignment.check`
+  the record owner's declared tag authority, usually `write`; messaging uses
+  `annotate` to permit tags without content edits. Tag administrators curate
+  only the vocabulary. An edge is read by whoever reads both the tag and the
+  record. `TagAssignment.check`
   fails startup when the taggable models and the declared relations differ. The
   tags addon names no other addon's model.
 - **Raise through the model's access owner.** `require_access(permission, actor=None)`

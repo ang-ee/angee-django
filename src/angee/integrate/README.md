@@ -14,6 +14,11 @@ domain adapters own protocol parsing and ingest policy.
 | Adapter contract and bounded execution | [BridgeImpl](impl.py) and [stream driver](streams.py) |
 | Operator actions and inspection | [Console schema](schema.py), [Streams views](web/src/IntegrationStreams.tsx) and [Integration permissions](permissions.zed) |
 
+Manual requests and scheduled polls share `Bridge.mark_sync_queued` admission.
+A live sync lock or retained workflow run keeps its progress and declines a new
+task. A stale syncing marker without either owner remains recoverable. Callers
+use `queue_bridge_sync`'s result to report whether they queued work.
+
 Event feeds are append-only and compose their domain's idempotent ingest verb.
 They create no replica links. Their unlinked failures belong to the stream's
 `inbound` state; closed slots retain evidence without a stream history table.
@@ -26,7 +31,7 @@ their protected `applied_base`, a snapshot in the link's own native history.
 Observation never advances that base. Remote-only changes apply locally;
 local-only changes may write back with a remote version fence. Divergent edits
 and remote deletion against a local edit require an explicit choice. Identical
-edits converge, as accepted by the commit 8 review ruling. Adapters revalidate
+edits converge. Adapters revalidate
 their local projection under domain locks before applying.
 
 A conditional write returns authoritative source evidence and version, retained

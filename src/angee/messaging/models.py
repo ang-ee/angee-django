@@ -1039,7 +1039,7 @@ class Channel(Bridge, inherits="integrate.Integration"):
     own backend and overlay.
     """
 
-    rebac_grantable = {"reader": "write", "replier": "write"}
+    rebac_grantable = {"reader": "write", "replier": "write", "annotator": "write"}
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
     live_impl_field: ClassVar[str | None] = "backend_class"
 
