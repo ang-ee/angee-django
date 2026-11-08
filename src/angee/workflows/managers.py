@@ -984,7 +984,7 @@ class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
                 target = generic_target(record)
             except ValueError:
                 return  # Unsaved or untyped records cannot have watches.
-            with transaction.atomic(using=record._state.db), system_context(reason="workflows.watch_capture"):
+            with transaction.atomic(), system_context(reason="workflows.watch_capture"):
                 model = target.content_type.model_class()
                 assert model is not None
                 rows = model._default_manager.filter(pk=target.object_id)
@@ -1003,7 +1003,7 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
     def _write_transition(self, **values: Any) -> int:
         """Publish affected targets after a conditional state write, retaining its fence."""
 
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             keys = list(self.lock_if_supported().order_by("pk").values_list("pk", flat=True))
             changed = sum(batch.update(**values) for batch in by_key(self, keys))
             if changed and not changes_muted():

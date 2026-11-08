@@ -13,7 +13,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import DatabaseError, router, transaction
+from django.db import DatabaseError, transaction
 from django.db.models import F, Model, Q
 from django.db.models.functions import Now
 from django.db.models.signals import post_save
@@ -305,7 +305,7 @@ class TriggerSource(ImplBase):
         else:
             records = (record,)
         try:
-            with transaction.atomic(using=record._state.db), system_context(reason="workflows.source_dispatch"):
+            with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
                 cls.validate_model(model)
                 targets = [(item, generic_target(item)) for item in records]
                 groups: dict[type[Model], set[Hashable]] = {}
@@ -487,8 +487,7 @@ class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
             return
         for record in records:
             try:
-                using = router.db_for_write(self.model, instance=record)
-                with transaction.atomic(using=using), system_context(reason="workflows.capture"):
+                with transaction.atomic(), system_context(reason="workflows.capture"):
                     for trigger in implementation.matching_triggers(queryset, record).order_by("pk"):
                         self.model.system_queryset().update_or_create(
                             trigger=trigger, record_content_type=content_type, record_object_id=record.pk,
