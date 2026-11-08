@@ -109,6 +109,7 @@ if TYPE_CHECKING:
         Message,
         MessageEdge,
         MessageStar,
+        MessageSubtype,
         NotificationPolicy,
         Part,
         Reaction,
@@ -2384,48 +2385,45 @@ def _normalise_user_ids(user_ids: tuple[Any, ...]) -> tuple[Any, ...]:
     return tuple(unique)
 
 
-def _file_mime_type(file: Any) -> str:
-    """Return the MIME type string for a storage file part."""
-
-    mime = file.mime_type
-    value = getattr(mime, "mime_type", "")
-    return value or "application/octet-stream"
-
-
-def _message_subtype(
-    *,
-    subtype_key: str,
-    model_label: str = "",
-    created_by_id: Any = None,
-    using: str | None = None,
-) -> Any | None:
-    """Return/create the subtype row that classifies a chatter message."""
-
-    subtype_key = strip_null_bytes(subtype_key or "").strip()
-    if not subtype_key:
-        return None
-    model_label = _subtype_scope_label(model_label)
-    subtype_model = apps.get_model("messaging", "MessageSubtype")
-    name, description = subtype_model.builtin_default(subtype_key) or (
-        _humanize_key(subtype_key),
-        _humanize_key(subtype_key),
-    )
-    subtype, _created = subtype_model.objects.db_manager(using).get_or_create(
-        model_label=model_label,
-        key=subtype_key,
-        defaults={
-            "name": name,
-            "description": description,
-            "created_by_id": created_by_id,
-        },
-    )
-    return subtype
-
-
 def _humanize_key(value: str) -> str:
     """Return a human label from a subtype key."""
 
     return value.replace("_", " ").replace("-", " ").strip().capitalize() or "Message"
+
+
+class MessageSubtypeManager[MessageSubtypeT: MessageSubtype](AngeeManager[MessageSubtypeT]):
+    """Resolve chatter subtypes by catalogue identity, creating a missing one once."""
+
+    def resolve(
+        self,
+        key: str,
+        *,
+        model_label: str = "",
+        name: str | None = None,
+        description: str | None = None,
+        internal: bool = False,
+        created_by_id: Any = None,
+    ) -> MessageSubtypeT | None:
+        """Return the ``(model_label, key)`` subtype, creating it from the catalogue when missing.
+
+        A built-in key takes its shipped name and description; another key takes
+        the supplied labels, else a humanized key. An existing row keeps the
+        metadata it was first declared with. A blank key classifies nothing.
+        """
+
+        key = strip_null_bytes(key or "").strip()
+        if not key:
+            return None
+        label, detail = self.model.builtin_default(key) or (
+            _humanize_key(key) if name is None else name,
+            _humanize_key(key) if description is None else description,
+        )
+        subtype, _created = self.get_or_create(
+            model_label=_subtype_scope_label(model_label),
+            key=key,
+            defaults={"name": label, "description": detail, "internal": internal, "created_by_id": created_by_id},
+        )
+        return subtype
 
 
 class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
@@ -3620,10 +3618,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     if message.is_trashed:
                         raise ValidationError("This idempotency key belongs to a discarded message.")
                     return message
-            subtype = _message_subtype(
-                subtype_key=subtype_key,
-                model_label=subtype_model_label,
-                created_by_id=created_by_id, using=using,
+            subtype = apps.get_model("messaging", "MessageSubtype").objects.resolve(
+                subtype_key, model_label=subtype_model_label, created_by_id=created_by_id,
             )
 
             sender = None
@@ -3661,15 +3657,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 )
                 position += 1
             for file in attachments:
-                part_model.objects.db_manager(using).create(
-                    message_id=message.pk,
-                    position=position,
-                    type=_file_mime_type(file),
-                    disposition=part_model.Disposition.ATTACHMENT,
-                    role=part_model.PartRole.BODY,
-                    name=getattr(file, "filename", "") or "attachment",
-                    file_id=file.pk if file is not None else None,
-                    created_by_id=created_by_id,
+                part_model.objects.attach_file(
+                    message, file, position=position, name=file.filename or "attachment", created_by_id=created_by_id,
                 )
                 position += 1
             notification_model.objects.db_manager(using).fanout_for_message(
@@ -4664,6 +4653,44 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
     Incomplete caches fall back to that single joined read. Prefetch the relation with
     those joins for repeated queries without SQL; no separate tree cache is kept.
     """
+
+    def attach_file(
+        self,
+        message: Message,
+        file: Any,
+        *,
+        position: int | None = None,
+        name: str | None = None,
+        created_by_id: Any = None,
+    ) -> PartT:
+        """Return ``file``'s attachment part on ``message``, appending it once under the message lock.
+
+        The caller owns admission and source membership. An explicit ``position``
+        or ``name`` preserves a protocol's envelope; otherwise the part appends
+        after the last one and takes the file's name. Absent MIME metadata is
+        ``application/octet-stream``; attribution defaults to the message's author.
+        """
+
+        with transaction.atomic():
+            type(message).system_queryset(lock=("self",)).get(pk=message.pk)
+            existing = self.model._base_manager.filter(message=message, file=file).first()
+            if existing is not None:
+                return existing
+            if position is None:
+                last = self.model._base_manager.filter(message=message).aggregate(value=models.Max("position"))["value"]
+                position = 1 if last is None else last + 1
+            file = type(file)._base_manager.select_related("mime_type").get(pk=file.pk)
+            mime = file.mime_type
+            return self.create(
+                message=message,
+                file=file,
+                position=position,
+                type=mime.mime_type if mime is not None else "application/octet-stream",
+                name=(file.filename or file.title or "attachment") if name is None else name,
+                disposition=self.model.Disposition.ATTACHMENT,
+                role=self.model.PartRole.BODY,
+                created_by_id=message.created_by_id if created_by_id is None else created_by_id,
+            )
 
     BODY_SEPARATOR = "\n\n"
 
