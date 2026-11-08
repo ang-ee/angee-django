@@ -29,7 +29,9 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
     body. ``generation_limit`` supplies the OpenAI-compatible ``max_tokens``
     setting when a caller does not specify one. Context allocation is deliberately
     absent: configure ``num_ctx`` in the model's Ollama Modelfile so discovery and
-    every runtime agree on the deployed context window.
+    every runtime agree on the deployed context window. SDK retries are disabled:
+    callers own retries within their execution budget, rather than duplicating
+    queued work after a local inference timeout.
     """
 
     key = "ollama"
@@ -80,6 +82,7 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
 
         client_class = DefaultAsyncHttpxClient if asynchronous else DefaultHttpxClient
         kwargs["http_client"] = client_class(trust_env=False, follow_redirects=False)
+        kwargs["max_retries"] = 0
         return kwargs
 
     @staticmethod
