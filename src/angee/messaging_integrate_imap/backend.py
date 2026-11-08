@@ -435,6 +435,10 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             names = sorted(self._select_mailboxes(client))
             return tuple(self._mailbox_stream(name) for name in names)
         except _DeadlineReached:
+            self._report_progress(
+                "syncing", "IMAP mailbox discovery unfinished; resuming next run after its time budget",
+                budget_exhausted=True,
+            )
             self.close()
             return ()
 

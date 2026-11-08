@@ -1664,9 +1664,15 @@ def test_expired_imap_budget_does_not_connect_or_advance(monkeypatch: pytest.Mon
     account = FakeImapAccount({"INBOX": _folder(_eml())})
     backend = _backend(monkeypatch, account)
     monkeypatch.setattr(imap_backend, "monotonic", lambda: 10.0)
+    reports: list[tuple[str, dict[str, Any]]] = []
+    reporter = SimpleNamespace(report=lambda stage, **values: reports.append((stage, values)))
+    monkeypatch.setattr(imap_backend, "current_bridge_progress", lambda: reporter)
     stream = SimpleNamespace(partition="INBOX", generation=1, cursor={"uidvalidity": 100, "last_uid": 0})
 
     assert backend.streams(deadline=10) == ()
+    assert reports[0][0] == "syncing"
+    assert reports[0][1]["details"]["budget_exhausted"] is True
+    assert "discovery unfinished" in reports[0][1]["message"]
     page = backend.extract(stream, 10, deadline=10)
 
     assert not page.records and not page.exhausted
