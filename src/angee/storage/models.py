@@ -406,6 +406,64 @@ class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel, concre
 class FolderQuerySet[FolderT: Folder](HierarchyQuerySet[FolderT], AngeeHistoryQuerySet[FolderT]):
     """Actor-scoped folder trees with paths maintained by HierarchyMixin."""
 
+    def prune_missing(self, drive: Any, present: Collection[Sequence[str]]) -> int:
+        """Delete this selection's real folders whose source directory vanished and that hold no rows.
+
+        The folder mirror of ``File.objects.trash_missing_external``: a
+        directory removed from an external source must not linger in the tree.
+        Only an empty leaf goes: a folder that parents a file (live, or trashed
+        and kept for history) or a surviving subfolder stays, so the reconcile
+        never orphans a row. ``File.folder`` is ``SET_NULL``, so deleting a
+        folder that parents a file would silently detach it; each candidate is
+        therefore rechecked under its own row lock, one folder per transaction,
+        deepest first. Source paths come from the native hierarchy
+        (:meth:`ancestors_of`), so a narrowed selection still names its folders
+        by their full path. ``present`` is the set of drive-relative directory
+        paths the current sync mirrored.
+        """
+
+        present_paths = {tuple(parts) for parts in present}
+        file_model = self.model._meta.get_field("files").related_model
+        assert file_model is not None
+        with system_context(reason="storage.folder.prune_missing"):
+            candidates = self.filter(drive=drive, is_virtual=False)
+            folders = list(candidates.only("pk", "parent_id", "name", "path"))
+            ancestors = self.model.objects.ancestors_of(folders).only("path", "name")
+            names = {folder.path: folder.name for folder in (*ancestors, *folders)}
+            selected = [folder.pk for folder in folders]
+            child_counts = dict(
+                self.model._base_manager.filter(parent_id__in=selected)
+                .order_by()
+                .values("parent_id")
+                .annotate(count=models.Count("pk"))
+                .values_list("parent_id", "count")
+            )
+            folders_with_files = set(
+                file_model._base_manager.filter(folder_id__in=selected)
+                .order_by()  # a distinct values_list must clear Meta.ordering
+                .values_list("folder_id", flat=True)
+                .distinct()
+            )
+            pruned = 0
+            for folder in sorted(folders, key=lambda row: len(row.ancestor_paths()), reverse=True):
+                if tuple(names[path] for path in (*folder.ancestor_paths(), folder.path)) in present_paths:
+                    continue
+                if folder.pk in folders_with_files or child_counts.get(folder.pk, 0):
+                    continue
+                with transaction.atomic():
+                    current = candidates.filter(pk=folder.pk, path=folder.path, name=folder.name)
+                    if (
+                        current.lock_if_supported().first() is None
+                        or self.model._base_manager.filter(parent_id=folder.pk).exists()
+                        or file_model._base_manager.filter(folder_id=folder.pk).exists()
+                    ):
+                        continue
+                    current.delete()
+                pruned += 1
+                if folder.parent_id is not None:
+                    child_counts[folder.parent_id] = child_counts.get(folder.parent_id, 1) - 1
+            return pruned
+
 
 _FolderManagerBase = AngeeHistoryManager.from_queryset(FolderQuerySet)
 
@@ -481,62 +539,6 @@ class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
                 )
                 prefixes[prefix] = parent
         return parent
-
-    def prune_missing(self, drive: Any, present: Collection[Sequence[str]]) -> int:
-        """Delete real folders whose source directory vanished and hold no rows.
-
-        The folder mirror of :meth:`FileManager.trash_missing_external`: a
-        directory removed from an external source must not linger in the tree.
-        Only a truly empty leaf is removed — a folder that still parents a file
-        (a live one, or a soft-trashed one kept for history) or a surviving
-        subfolder is retained, so the reconcile never orphans a row and needs no
-        recursion. The ``folders_with_files`` guard is load-bearing precisely
-        because ``File.folder`` is ``SET_NULL`` (not ``PROTECT``): deleting a
-        folder that still parents a file would silently null the file's folder
-        rather than being blocked, so the guard — not the FK constraint — is what
-        keeps a live sync from detaching a row. Deepest paths are removed first,
-        so the ``parent`` PROTECT constraint always holds. ``present`` is the set
-        of drive-relative directory paths the current sync mirrored.
-        """
-
-        present_paths = {tuple(parts) for parts in present}
-        file_model = self.model._meta.get_field("files").related_model
-        assert file_model is not None and issubclass(file_model, File)
-        with system_context(reason="storage.folder.prune_missing"):
-            rows = list(self.filter(drive=drive, is_virtual=False).values_list("pk", "parent_id", "name"))
-            parents: dict[Any, tuple[Any, str]] = {pk: (parent_id, name) for pk, parent_id, name in rows}
-            child_counts: dict[Any, int] = {}
-            for _pk, parent_id, _name in rows:
-                if parent_id is not None:
-                    child_counts[parent_id] = child_counts.get(parent_id, 0) + 1
-            folders_with_files = set(
-                file_model._default_manager.filter(drive=drive, folder__isnull=False)
-                .order_by()  # a distinct values_list must clear Meta.ordering
-                .values_list("folder_id", flat=True)
-                .distinct()
-            )
-
-            def path_of(pk: Any) -> tuple[str, ...]:
-                names: list[str] = []
-                cursor: Any = pk
-                while cursor is not None:
-                    parent_id, name = parents[cursor]
-                    names.append(name)
-                    cursor = parent_id
-                return tuple(reversed(names))
-
-            pruned = 0
-            for pk in sorted(parents, key=lambda folder_pk: len(path_of(folder_pk)), reverse=True):
-                parent_id, _name = parents[pk]
-                if path_of(pk) in present_paths:
-                    continue
-                if pk in folders_with_files or child_counts.get(pk, 0) > 0:
-                    continue
-                self.filter(pk=pk).delete()
-                pruned += 1
-                if parent_id is not None:
-                    child_counts[parent_id] = child_counts.get(parent_id, 1) - 1
-            return pruned
 
 
 class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):

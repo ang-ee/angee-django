@@ -1804,6 +1804,97 @@ def test_trash_missing_external_only_trashes_absent_live_paths(drive: Any) -> No
 
 
 @pytest.mark.django_db(transaction=True)
+def test_folder_prune_names_a_narrowed_selection_by_its_full_path(drive: Any) -> None:
+    """Native ancestry names the selected folders; only the selection is ever deleted, deepest first."""
+
+    with system_context(reason="test storage scoped folder prune"):
+        parent = Folder.objects.ensure_path(drive, ("parent",))
+        child = Folder.objects.ensure_path(drive, ("parent", "child"))
+        assert Folder.objects.filter(pk=parent.pk).prune_missing(drive, ()) == 0
+        assert Folder.objects.filter(pk=child.pk).prune_missing(drive, (("parent", "child"),)) == 0
+        assert Folder.objects.filter(pk=child.pk).prune_missing(drive, ()) == 1
+        assert Folder.objects.filter(pk=parent.pk).exists()
+        assert Folder.objects.prune_missing(drive, ()) == 1
+        assert not Folder.objects.filter(drive=drive, is_virtual=False).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_folder_prune_keeps_the_parent_of_a_trashed_file(drive: Any) -> None:
+    """A trashed file still names its folder, so pruning never detaches it."""
+
+    with system_context(reason="test storage retained folder"):
+        folder = Folder.objects.ensure_path(drive, ("retained",))
+        file, _created = File.objects.ingest_bytes(
+            b"retained file",
+            filename="retained.txt",
+            drive_id=str(drive.sqid),
+            folder_id=str(folder.sqid),
+        )
+        file.delete()
+        assert Folder.objects.prune_missing(drive, ()) == 0
+        file.refresh_from_db()
+    assert file.is_trashed and file.folder_id == folder.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_folder_prune_rechecks_an_empty_candidate_under_its_lock(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file placed after the inventory keeps its folder: the locked recheck decides, not the snapshot."""
+
+    queryset = type(Folder.objects.all())
+    lock = queryset.lock_if_supported
+
+    def file_arrives_then_lock(self: Any, **kwargs: Any) -> Any:
+        File.objects.ingest_bytes(b"late", filename="late.txt", drive_id=str(drive.sqid), folder_id=str(folder.sqid))
+        return lock(self, **kwargs)
+
+    with system_context(reason="test storage folder prune recheck"):
+        folder = Folder.objects.ensure_path(drive, ("late",))
+        monkeypatch.setattr(queryset, "lock_if_supported", file_arrives_then_lock)
+        assert Folder.objects.prune_missing(drive, ()) == 0
+        monkeypatch.undo()
+        assert File.objects.get(filename="late.txt").folder_id == folder.pk
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL folder prune row-lock contract")
+def test_folder_prune_against_a_concurrent_file_create_keeps_the_folder(
+    drive: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Another connection commits a file into the empty candidate before the prune locks it; the folder stays."""
+
+    queryset = type(Folder.objects.all())
+    lock = queryset.lock_if_supported
+
+    def place(folder_id: str) -> None:
+        close_old_connections()
+        try:
+            with system_context(reason="test storage concurrent file create"):
+                File.objects.ingest_bytes(
+                    b"concurrent",
+                    filename="concurrent.txt",
+                    drive_id=str(drive.sqid),
+                    folder_id=folder_id,
+                )
+        finally:
+            connections.close_all()
+
+    def commit_elsewhere_then_lock(self: Any, **kwargs: Any) -> Any:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(place, str(folder.sqid)).result(timeout=10)
+        return lock(self, **kwargs)
+
+    with system_context(reason="test storage concurrent folder prune"):
+        folder = Folder.objects.ensure_path(drive, ("contested",))
+    monkeypatch.setattr(queryset, "lock_if_supported", commit_elsewhere_then_lock)
+    with system_context(reason="test storage concurrent folder prune"):
+        assert Folder.objects.prune_missing(drive, ()) == 0
+    monkeypatch.undo()
+    with system_context(reason="test storage concurrent folder prune inspect"):
+        assert File.objects.get(filename="concurrent.txt").folder_id == folder.pk
+
+
+@pytest.mark.django_db(transaction=True)
 def test_ensure_path_is_idempotent_and_reuses_the_prefix_cache(drive: Any) -> None:
     """One caller-owned cache shares ancestors across neighboring paths."""
 
