@@ -37,7 +37,7 @@ def _records(row: Any, *, update_fields: Iterable[str] | None = None) -> list[mo
         if not kind.relevant(type(row), update_fields):
             continue
         try:
-            with transaction.atomic(using=using), system_context(reason="timeline.invalidate"):
+            with transaction.atomic(), system_context(reason="timeline.invalidate"):
                 grouped: dict[type[models.Model], set[int]] = {}
                 for target in kind.targets(row):
                     for model, pk in kind.records(target):
