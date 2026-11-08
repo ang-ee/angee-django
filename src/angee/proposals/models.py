@@ -1539,12 +1539,21 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         round: Round,
         party: Party | None = None,
     ) -> T:
-        """Interpret one reply atomically and submit only after all rows succeed."""
+        """Interpret one reply atomically and submit only after all rows succeed.
+
+        Capture requires write on the round, and read on the message and on an
+        explicit party, for the round's explicit, pinned or ambient actor; an
+        omitted party resolves from the sender. A trusted system context admits
+        an actorless capture.
+        """
 
         if message.pk is None or round.pk is None:
             raise ValidationError("A saved message and round are required for capture.")
-        actor = current_actor()
-        with transaction.atomic():
+        actor = round.require_access("write")
+        message.require_access("read", actor=actor)
+        if party is not None:
+            party.require_access("read", actor=actor)
+        with transaction.atomic(), actor_context(actor) if actor is not None else nullcontext():
             locked_round = (
                 type(round).objects.sudo(reason="proposals.capture.round").lock_if_supported().get(pk=round.pk)
             )
@@ -1560,22 +1569,21 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
             payload_hash = self._payload_hash(locked_message)
             proposal = self._locked_capture_proposal(message=locked_message, round=locked_round, party=resolved_party)
             if proposal.state != ProposalState.DRAFT:
-                if (
+                if not (
                     proposal.state == ProposalState.SUBMITTED
                     and proposal.capture_payload_hash == payload_hash
                     and proposal.capture_parser_version == self.CAPTURE_PARSER_VERSION
                 ):
-                    if actor is not None:
-                        proposal.with_actor(actor)
-                    return proposal
-                raise ValidationError("Captured proposal does not match the replayed interpretation.")
-
-            self._apply_interpretation(
-                proposal, message=locked_message, interpretation=interpretation, payload_hash=payload_hash
-            )
-            proposal._submit_locked(fallback_user_id=locked_message.created_by_id or locked_round.facilitator_id)
+                    raise ValidationError("Captured proposal does not match the replayed interpretation.")
+            else:
+                self._apply_interpretation(
+                    proposal, message=locked_message, interpretation=interpretation, payload_hash=payload_hash
+                )
+                proposal._submit_locked(fallback_user_id=locked_message.created_by_id or locked_round.facilitator_id)
         if actor is not None:
             proposal.with_actor(actor)
+        else:
+            proposal.unsudo()
         return proposal
 
     def _locked_capture_proposal(
@@ -2121,11 +2129,13 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         return self
 
     def identify_party(self, party: Party) -> Self:
-        """Set the external identity once under Round-first row locks."""
+        """Set a readable external identity once, after proposal write admission, under Round-first row locks."""
 
         if self.pk is None or party.pk is None:
             raise ValidationError("A saved proposal and party are required.")
-        with transaction.atomic():
+        actor = self.require_access("write")
+        party.require_access("read", actor=actor)
+        with transaction.atomic(), actor_context(actor) if actor is not None else nullcontext():
             round_model = apps.get_model("proposals", "Round")
             locked_round = (
                 round_model.objects.sudo(reason="proposals.proposal.identify.round")
