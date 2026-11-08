@@ -448,7 +448,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         """Own validation, uniqueness, persistence and the transactional event."""
 
         using = self._db or router.db_for_write(self.model)
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             if self.db_manager(using)._person_email_matches(email).exists():
                 raise AccountExists
             user = self.model(
@@ -464,7 +464,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             user._state.db = using
             user.set_password(password)
             try:
-                with transaction.atomic(using=using):
+                with transaction.atomic():
                     with system_context(reason="iam.person.validate"):
                         user.full_clean()
                     user.sudo(reason=reason).save(using=using)
@@ -523,9 +523,8 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
     ) -> tuple[UserT, bool]:
         """Atomically create or promote the initial admin and grant its platform role.
 
-        Uses this manager's database for the account, REBAC schema, membership
-        and audit writes. Existing usable passwords and non-empty emails survive
-        repeated provisioning. A new account requires a password; an existing
+        Existing usable passwords and non-empty emails survive repeated
+        provisioning. A new account requires a password; an existing
         passwordless account receives one only when supplied.
         """
 
@@ -536,7 +535,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             raise ValueError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
         using = self._db or router.db_for_write(self.model)
         manager = self.db_manager(using)
-        with system_context(reason="iam.bootstrap_admin"), transaction.atomic(using=using):
+        with system_context(reason="iam.bootstrap_admin"), transaction.atomic():
             try:
                 user = manager.system_context(reason="iam.bootstrap_admin").get(
                     **{self.model.USERNAME_FIELD: username},
