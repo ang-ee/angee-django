@@ -111,7 +111,7 @@ from angee.messaging.managers import (
 )
 from angee.messaging.resources import MessageResource
 from angee.messaging.source_copies import SourceCopyMixin
-from angee.messaging.webforms import WebformSpec, default_webform_schema
+from angee.messaging.webforms import WebformChanged, WebformSpec, WebformUnavailable, default_webform_schema
 from angee.parties.models import Handle
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
@@ -1328,6 +1328,26 @@ class ChannelWebform(Composable, extends="messaging.Channel"):
             raise ValidationError(errors)
         if is_webform:
             self.webform_spec()
+
+    def submit_webform(self, parsed: Any) -> None:
+        """Ingest one validated submission only while this observed form is still current.
+
+        The published row is re-read under its lock, so an unpublish or a
+        configuration change committed after the caller validated the answers
+        refuses the submission instead of landing it against a stale form.
+        """
+
+        with system_context(reason=f"public form {self.slug}"), transaction.atomic():
+            locked = (
+                type(self).objects.published_webforms(self.slug).filter(pk=self.pk).lock_if_supported().first()
+            )
+            if locked is None:
+                raise WebformUnavailable
+            if any(getattr(locked, name) != getattr(self, name) for name in (
+                "form_schema_version", "form_schema", "max_body_bytes", "max_field_bytes",
+            )):
+                raise WebformChanged
+            apps.get_model("messaging", "Message").objects.ingest([parsed], channel=locked, quote_edges=False)
 
     def webform_spec(self) -> WebformSpec:
         """Return this row's server-validated versioned form spec."""
