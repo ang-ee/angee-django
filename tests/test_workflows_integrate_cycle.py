@@ -87,6 +87,9 @@ def test_scheduler_dispatches_once_and_request_replay_keeps_the_original_input(
     assert len(deliveries) == 1
     assert run_bridge_sync_job(**deliveries[0], require_queue_token=True)["dispatched"] is True
     assert run_bridge_sync_job(**deliveries[0], require_queue_token=True)["stale"] is True
+    bridge.refresh_from_db()
+    assert bridge.sync_queue_occurrence == now.isoformat()
+    assert not bridge.sync_queue_token_matches(now)
     assert scheduler.enqueue_due_bridges(now=now + timedelta(minutes=10)) == {"enqueued": 0, "skipped": 0}
 
     bridge.refresh_from_db()
@@ -104,6 +107,19 @@ def test_scheduler_dispatches_once_and_request_replay_keeps_the_original_input(
     run.refresh_from_db()
     assert run.input == {"value": 7}
     assert bridge.sync_is_dispatched and bridge.next_sync_at is None
+
+
+@pytest.mark.parametrize("marker", [{}, {"queued_at": ""}, {"queued_at": 0}])
+def test_cycle_admission_refuses_a_bridge_without_a_queued_token(cycle_factory, marker):
+    """Only a queued occurrence names a cycle; an absent or empty token is refused."""
+    _workflow, bridge = cycle_factory()
+    with system_context(reason="test empty queue marker"):
+        bridge.sync_progress = marker
+        bridge.save(update_fields=["sync_progress"])
+    assert bridge.sync_queue_occurrence is None
+    with pytest.raises(ValidationError, match="Queue the Bridge before dispatching a cycle"):
+        bridge.sync()
+    assert not WorkflowRun.system_queryset().for_subject(bridge).exists()
 
 
 @pytest.mark.parametrize("terminal", [False, True])

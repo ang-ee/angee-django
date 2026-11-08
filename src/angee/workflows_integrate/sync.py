@@ -60,7 +60,7 @@ class SyncCycleBridge(RunSubject):
         with system_context(reason="workflows_integrate.sync"), transaction.atomic():
             self.lock_sync_scope()
             bridge.refresh_from_db()
-            queued_at = bridge.sync_progress.get("queued_at")
+            queued_at = bridge.sync_queue_occurrence
             if not queued_at:
                 raise ValidationError("Queue the Bridge before dispatching a cycle.")
             owner = self._sync_owner()

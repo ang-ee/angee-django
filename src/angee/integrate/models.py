@@ -3584,12 +3584,19 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         with transaction.atomic():
             self.save(update_fields=["next_sync_at", "sync_progress", "sync_stage", "updated_at"])
 
+    @property
+    def sync_queue_occurrence(self) -> str | None:
+        """Return the queued timestamp token; a dispatched run keeps it for replay."""
+
+        if not isinstance(self.sync_progress, Mapping):
+            return None
+        token = self.sync_progress.get("queued_at")
+        return token if isinstance(token, str) and token else None
+
     def sync_queue_token_matches(self, timestamp: datetime) -> bool:
         """Return whether a queued task payload still matches this bridge row."""
 
-        if self.sync_stage != self.SyncStage.QUEUED or not isinstance(self.sync_progress, Mapping):
-            return False
-        return self.sync_progress.get("queued_at") == timestamp.isoformat()
+        return self.sync_stage == self.SyncStage.QUEUED and self.sync_queue_occurrence == timestamp.isoformat()
 
     def release_sync_queue(self, *, now: datetime) -> bool:
         """Release a queue claim this run declined; return whether it was still ours.
