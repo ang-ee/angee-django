@@ -2566,6 +2566,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
     ]
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_chatter_follow_toggle(composed_tables: None) -> None:
     """The custom record follower mutation mirrors Odoo's follow/unfollow contract."""
 

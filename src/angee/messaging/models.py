@@ -1890,9 +1890,6 @@ class MessageSubtype(AuditMixin, AngeeDataModel, concrete=True):
         ("note", "Note", "Internal note"),
         ("record_created", "Record created", "Record created"),
         ("record_updated", "Record updated", "Record updated"),
-        # Named debt: the key names a done record task (projects' completion post).
-        # Renaming it means migrating stored subtypes and follower choices.
-        ("activity_done", "Activity done", "Activity done"),
     )
 
     sqid_prefix = "mst_"

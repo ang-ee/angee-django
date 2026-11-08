@@ -1297,8 +1297,9 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   [upgrade cutoff](#migration-history) must preflight
   unknown/colliding subtype labels before canonicalizing them on its
   pre-refactor snapshot, preserving IDs/keys and global blank semantics. Those
-  completed transition bodies are absent from current source. The persisted subtype business key `activity_done` remains current;
-  renaming it requires mapping subtype rows, follower choices and callers together.
+  completed transition bodies are absent from current source. Projects declares its completion subtype `activity_done` as a
+  master resource row adopted by `(model_label, key)`, so existing rows keep their identity; renaming the key requires
+  mapping subtype rows, follower choices and callers together.
   Never replace these rules with a database trigger or function.
 - **Row locks must keep the SQLite floor.** Call the Angee queryset/manager
   `lock_if_supported()` method to name lock intent, delegating `of`,
