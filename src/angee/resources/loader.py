@@ -17,7 +17,7 @@ from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
 from import_export.utils import get_related_model
 
-from angee.base.models.identity import instances_from_public_ids, public_id_of
+from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
@@ -135,27 +135,6 @@ class AngeeResource(resources.ModelResource):
         self._row_hashes[xref] = self._row_content_hash(row)
         super().before_import_row(row, **kwargs)
 
-    def bind_instance(self, xref: str, instance: models.Model, *, replace: bool = False) -> None:
-        """Ledger an owner-created identity; retarget only through an explicit owner verb."""
-
-        xref = self.entry.normalize_xref(xref, 0)
-        identity = str(public_id_of(instance))
-        defaults = self._ledger_defaults(instance, self._row_content_hash({"identity": identity}))
-        manager = self.ledger_model._default_manager.db_manager(self.get_db_connection_name())
-        if replace:
-            ledger, _created = manager.update_or_create(
-                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
-            )
-        else:
-            ledger, _created = manager.get_or_create(
-                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
-            )
-        self._check_ledger_target(xref, ledger)
-        if ledger.target_id != identity:
-            raise ResourceLoadError(f"{self.entry.addon.name}.{xref} already identifies another record.")
-        self._existing_ledgers[xref] = ledger
-        self._instances[xref] = instance
-
     @functools.cached_property
     def _transition_state_fields(self) -> tuple[fields.Field, ...]:
         """Project model-owned state names onto native import fields."""
@@ -216,10 +195,12 @@ class AngeeResource(resources.ModelResource):
 
         xref = self.entry.normalize_xref(row.get("_xref"), kwargs["row_number"])
         self._restore_auto_fields(instance, row)
-        self._upsert_ledger(
+        self._existing_ledgers[xref] = self.ledger_model.objects.upsert_target(
+            entry=self.entry,
             xref=xref,
             instance=instance,
-            row_hash=self._row_hashes[xref],
+            model=self._meta.model,
+            content_hash=self._row_hashes[xref],
         )
         self._instances[xref] = instance
 
@@ -358,7 +339,8 @@ class AngeeResource(resources.ModelResource):
             for xref, ledger in resource._existing_ledgers.items():
                 target = targets.get((addon, xref))
                 try:
-                    resource._check_ledger_target(xref, ledger)
+                    if ledger is not None:
+                        ledger.require_target_model(resource._meta.model)
                 except ResourceLoadError:
                     # Import reports collisions with the source-row context.
                     continue
@@ -420,27 +402,9 @@ class AngeeResource(resources.ModelResource):
                 .first()
             )
             self._existing_ledgers[xref] = cast("Resource | None", ledger)
-        self._check_ledger_target(xref, ledger)
+        if ledger is not None:
+            ledger.require_target_model(self._meta.model)
         return ledger
-
-    def _check_ledger_target(
-        self,
-        xref: str,
-        ledger: Resource | None,
-    ) -> None:
-        """Raise when an existing xref belongs to another target model."""
-
-        if ledger is None:
-            return
-        model = self._meta.model
-        expected = model._meta.label
-        # A row moved onto a multi-table child keeps its parent's ledger until saved.
-        parents = {parent._meta.label for parent in model._meta.get_parent_list()}
-        if ledger.target_model != expected and ledger.target_model not in parents:
-            raise ResourceLoadError(
-                f"xref collision in {self.entry.addon.name}: {xref!r} "
-                f"already targets {ledger.target_model}, not {expected}"
-            )
 
     def _declared_instance(self, instance: models.Model | None) -> models.Model | None:
         """Return the entry model's row for a ledger target recorded as its concrete parent.
@@ -453,33 +417,6 @@ class AngeeResource(resources.ModelResource):
         if instance is None or isinstance(instance, model):
             return instance
         return model._base_manager.using(self.get_db_connection_name()).filter(pk=instance.pk).first()
-
-    def _upsert_ledger(
-        self,
-        *,
-        xref: str,
-        instance: models.Model,
-        row_hash: str,
-    ) -> None:
-        """Create or update the ledger row for an imported object."""
-
-        ledger, _ = self.ledger_model._default_manager.db_manager(self.get_db_connection_name()).update_or_create(
-            source_addon=self.entry.addon.name,
-            xref=xref,
-            defaults=self._ledger_defaults(instance, row_hash),
-        )
-        self._existing_ledgers[xref] = ledger
-
-    def _ledger_defaults(self, instance: models.Model, row_hash: str) -> dict[str, Any]:
-        """Project ledger metadata once for file imports and owner-created identities."""
-
-        return {
-            "source_path": self.entry.source,
-            "target_model": self._meta.model._meta.label,
-            "content_hash": row_hash,
-            "target_id": public_id_of(instance),
-            "tier": self.entry.tier,
-        }
 
     def _ledger_resolution_is_stale(
         self,

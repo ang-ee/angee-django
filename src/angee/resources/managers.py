@@ -24,6 +24,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin, public_id_of
 from angee.base.querysets import AngeeQuerySet
 from angee.base.schemas.forms import relation_positions
+from angee.base.serialization import ASCII_JSON, canonical_json_sha256
 from angee.resources.entries import (
     GRANT_KIND,
     ROW_KIND,
@@ -171,19 +172,51 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         target = self.resolve(value, model=ModelLabelField.get_model(relation["resource"]))
         return str(public_id_of(target))
 
+    def upsert_target(
+        self, *, entry: ResourceEntry, xref: str, instance: models.Model, model: type[models.Model], content_hash: str,
+    ) -> LedgerT:
+        """Record ``instance`` as the target of ``entry``'s ``xref`` and return the ledger row."""
+
+        values = self._target_values(instance, entry=entry, model=model, content_hash=content_hash)
+        ledger, _created = self.update_or_create(source_addon=entry.addon.name, xref=xref, defaults=values)
+        return ledger
+
     def bind_instance(
         self, *, addon: Any, xref: str, instance: models.Model, source: str, replace: bool = False,
     ) -> None:
-        """Use the import ledger for owner-created installation identities."""
+        """Ledger an owner-created installation identity; only ``replace`` retargets a bound xref."""
+
+        entry = ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source)
+        xref = entry.normalize_xref(xref, 0)
+        values = self._target_values(instance, entry=entry, model=type(instance), content_hash="")
+        identity = str(values["target_id"])
+        values["content_hash"] = f"sha256:{canonical_json_sha256(chunks=(ASCII_JSON.encode({'identity': identity}),))}"
+        with transaction.atomic():
+            write = self.update_or_create if replace else self.get_or_create
+            ledger, _created = write(source_addon=addon.name, xref=xref, defaults=values)
+            ledger.require_target_model(type(instance))
+            if str(ledger.target_id) != identity:
+                raise ResourceLoadError(f"{addon.name}.{xref} already identifies another record.")
+
+    @staticmethod
+    def _target_values(
+        instance: models.Model,
+        *,
+        entry: ResourceEntry,
+        model: type[models.Model],
+        content_hash: str,
+    ) -> dict[str, Any]:
+        """Project one saved target's ledger columns for an import row or an owner-bound identity."""
 
         if instance.pk is None:
             raise ResourceLoadError("Installation identities require a saved target.")
-        with transaction.atomic():
-            resource = build_resource(
-                type(instance), ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source),
-                ledger_model=self.model, addon_aliases=self._addon_aliases(apps.get_app_configs()), using=self.db,
-            )
-            resource.bind_instance(xref, instance, replace=replace)
+        return {
+            "source_path": entry.source,
+            "target_model": model._meta.label,
+            "content_hash": content_hash,
+            "target_id": public_id_of(instance),
+            "tier": entry.tier,
+        }
 
     def validate_addons(
         self,
