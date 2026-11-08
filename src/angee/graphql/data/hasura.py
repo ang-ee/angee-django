@@ -2023,9 +2023,10 @@ def _nested_inserts(lines: HasuraLines) -> list[NestedInsert]:
     """Return the upstream nested-insert declaration for a lines relation.
 
     ``public_id_columns`` names the child relation columns exposed as public ids
-    (typed ``ID`` in the generated child input); decoding them to write values
-    stays this backend's concern (:meth:`AngeeHasuraWriteBackend._apply_line_diff`),
-    exactly like the parent write path. ``id_column`` is Angee's public-id column
+    (typed ``ID`` in the generated child input); the backend decodes them to
+    native values before the parent writes its lines
+    (:meth:`~angee.base.models.base.AngeeModel.replace_lines`), exactly like the
+    parent write path. ``id_column`` is Angee's public-id column
     so the child's own sqid is excluded from the writable set, mirroring the
     parent resource's ``id_column``.
     """

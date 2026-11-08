@@ -33,6 +33,7 @@ from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.relationships import delete_relationship, write_relationships
 from rebac.resources import model_for_resource_type
+from rebac.roles import is_role_type
 from rebac.schema import FieldBinding
 
 from angee.base.exceptions import exception_text
@@ -123,7 +124,7 @@ class TriggerGrantTarget:
         if actor is not None and (label := self.readable_target_label(actor)) is not None:
             return label
         kind = self.target_kind()
-        if self.resource.resource_type.endswith("/role"):
+        if is_role_type(self.resource.resource_type):
             return f"{str(self.resource.resource_id).replace('_', ' ')} ({kind})"
         return kind
 
