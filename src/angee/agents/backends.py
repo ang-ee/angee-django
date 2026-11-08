@@ -7,11 +7,11 @@ built-in manual backend has no client and leaves the catalogue hand-curated.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from math import isfinite
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from asgiref.sync import async_to_sync
 from django.utils.module_loading import import_string
@@ -24,6 +24,9 @@ from pydantic_ai.settings import ModelSettings
 
 from angee.base.implementations import ImplBase
 from angee.integrate.errors import IntegrationError
+
+if TYPE_CHECKING:
+    from typesafe_sdk import Content, Question, SystemOneResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +191,19 @@ class InferenceBackend(ImplBase):
             for value in values
         ):
             raise ValueError("Inference timeout must be positive and finite, or None.")
+
+    def decide(
+        self,
+        handle: str,
+        state: Content,
+        questions: Mapping[str, Question],
+        *,
+        timeout: float | None = None,
+        credential: Any | None = None,
+    ) -> SystemOneResponse:
+        """Answer typed questions through a backend's native decision protocol."""
+
+        raise NotImplementedError(f"{self.label} does not support decision inference.")
 
     def chat(
         self,

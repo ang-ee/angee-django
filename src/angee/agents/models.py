@@ -74,6 +74,8 @@ from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
+    from typesafe_sdk import Content, Question, SystemOneResponse
+
     from angee.integrate.models import Credential
 
 
@@ -86,6 +88,7 @@ class InferenceModelUse(models.TextChoices):
     MULTIMODAL = "multimodal", "Multimodal"
     GENERATION = "generation", "Generation"
     IMAGE = "image", "Image"
+    DECISION = "decision", "Decision"
 
 
 TEXT_INFERENCE_MODEL_USES = frozenset((InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL))
@@ -370,6 +373,19 @@ class InferenceProvider(ImplDefaultsMixin, Composable, metaclass=RebacModelBase,
         model = apps.get_model("agents", "InferenceModel")
         return int(model.objects.sync_from_provider(self))
 
+    def decide(
+        self,
+        *,
+        model: str,
+        state: Content,
+        questions: Mapping[str, Question],
+        timeout: float | None = None,
+        credential: Any | None = None,
+    ) -> SystemOneResponse:
+        """Dispatch typed questions through the selected decision backend."""
+
+        return self.backend.decide(model, state, questions, timeout=timeout, credential=credential)
+
     def chat(
         self,
         *,
@@ -577,6 +593,30 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
             model_settings=model_settings,
             model_request_parameters=model_request_parameters,
             credential=credential,
+        )
+
+    def decide(
+        self,
+        state: Content,
+        questions: Mapping[str, Question],
+        *,
+        actor: Any,
+        role: str,
+        timeout: float | None = None,
+        credential: Any | None = None,
+    ) -> SystemOneResponse:
+        """Answer typed questions after read, deployment and capability admission.
+
+        Native answers retain their probabilities and token usage. A decision
+        score is evidence for its caller, never a human approval or calibrated
+        probability of correctness.
+        """
+
+        self.require_usable(actor, role, uses={InferenceModelUse.DECISION})
+        provider: Any = self.provider
+        return provider.decide(
+            model=self.provider_model_name, state=state, questions=questions,
+            timeout=timeout, credential=credential,
         )
 
     def infer(

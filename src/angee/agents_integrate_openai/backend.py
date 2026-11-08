@@ -23,7 +23,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     label = "OpenAI"
     icon = "openai"
     api_key_env: ClassVar[tuple[str, ...]] = ("OPENAI_API_KEY",)
-    transient_error_paths = ("openai.APIConnectionError",)
+    transient_error_paths: ClassVar[tuple[str, ...]] = ("openai.APIConnectionError",)
     defaults = {
         "vendor": "openai",
         "name": "OpenAI",

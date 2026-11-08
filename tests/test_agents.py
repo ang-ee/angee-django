@@ -40,6 +40,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import system_context
+from typesafe_sdk import Choice as DecisionChoice
+from typesafe_sdk import SystemOneResponse
 
 from angee.agents.backends import InferenceBackend
 from angee.agents.models import (
@@ -1423,3 +1425,82 @@ def test_usable_models_filter_access_policy_capability_and_order_defaults(compos
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"mapping": ["malformed"]}
     with pytest.raises(ValueError, match="policy is invalid"):
         InferenceModel.objects.usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT})
+
+
+@pytest.mark.parametrize("base_url", ["", "https://models.example.invalid/ollama/v1"])
+def test_ollama_decision_uses_native_sdk_and_explicit_deployment(monkeypatch, base_url):
+    requests = []
+    transport_options = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx2.Response(200, json={
+            "model": "kev-test", "answers": {"kind": {
+                "type": "choice", "choice": "invoice", "confidence": 0.8,
+                "probabilities": {"invoice": 0.9, "other": 0.1},
+            }}, "usage": {"input_tokens": 41, "output_tokens": 1},
+        })
+
+    client_class = httpx2.Client
+
+    def client(**kwargs):
+        transport_options.append(kwargs)
+        return client_class(**kwargs, transport=httpx2.MockTransport(handle))
+
+    monkeypatch.setattr(httpx2, "Client", client)
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://unapproved.invalid")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "environment-secret")
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url=base_url, config={}))
+    response = backend.decide(
+        "ollama/kev-test", "Synthetic invoice", {
+            "kind": DecisionChoice(criteria={"invoice": "An invoice", "other": "Other"}),
+        }, timeout=17,
+    )
+    assert isinstance(response, SystemOneResponse)
+    assert response.choices["kind"].choice == "invoice"
+    assert response.usage.input_tokens == 41
+    assert response.choices["kind"].probabilities == {"invoice": 0.9, "other": 0.1}
+    assert len(requests) == 1
+    assert str(requests[0].url) == f"{base_url or backend.default_base_url}/systemone"
+    assert requests[0].headers["authorization"] == "Bearer not-required"
+    assert json.loads(requests[0].content)["model"] == "kev-test"
+    assert transport_options == [{"timeout": 17, "trust_env": False, "follow_redirects": False}]
+
+
+def test_ollama_discovers_decision_without_reclassifying_it_as_chat():
+    client = SimpleNamespace(with_options=lambda **kwargs: SimpleNamespace(post=lambda *args, **kwargs: {
+        "capabilities": ["decision"], "parameters": "num_ctx 16384", "model_info": {"gemma.context_length": 262144},
+    }))
+    backend = OllamaInferenceBackend(SimpleNamespace())
+    found = backend._model_discovery(client, "kev-test")
+    assert found["model_use"] == InferenceModelUse.DECISION
+    assert found["config"]["ollama_num_ctx"] == 16384
+    assert InferenceModelUse.DECISION not in TEXT_INFERENCE_MODEL_USES | IMAGE_INFERENCE_MODEL_USES
+
+
+@pytest.mark.django_db(transaction=True)
+def test_model_decision_rechecks_actor_role_and_capability_before_transport(composed_tables, settings, monkeypatch):
+    provider = _provider("decision-ollama", backend_class="ollama")
+    with system_context(reason="test.agents.decision.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="kev-test", model_use=InferenceModelUse.DECISION)
+        stranger = get_user_model().objects.create_user(username="decision-no-read")
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"classification": [model.deployment_identity()]}
+    calls = []
+    response = SystemOneResponse.model_validate({
+        "model": "kev-test", "answers": {}, "usage": {"input_tokens": 1, "output_tokens": 0},
+    })
+    monkeypatch.setattr(
+        OllamaInferenceBackend, "decide", lambda *args, **kwargs: calls.append((args, kwargs)) or response,
+    )
+    questions = {"kind": DecisionChoice(criteria={"invoice": "An invoice", "other": "Other"})}
+    with pytest.raises(PermissionDenied, match="cannot read"):
+        model.decide("document", questions, actor=stranger, role="classification")
+    with pytest.raises(PermissionDenied, match="not approved"):
+        model.decide("document", questions, actor=provider.owner, role="mapping")
+    assert not calls
+    assert model.decide("document", questions, actor=provider.owner, role="classification") is response
+    assert len(calls) == 1
+    model.model_use = InferenceModelUse.CHAT
+    with pytest.raises(ValueError, match="uses"):
+        model.decide("document", questions, actor=provider.owner, role="classification")
+    assert len(calls) == 1
