@@ -2,20 +2,25 @@
 
 from contextlib import contextmanager
 from datetime import timedelta
+from unittest.mock import patch
+from uuid import uuid4
 
 import psycopg.errors
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
+from celery.worker.request import Request
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.management import call_command
 from django.db import DataError, IntegrityError, OperationalError, transaction
 from django.db.models.functions import Now
+from kombu.message import Message
 from pydantic import BaseModel, Field, field_serializer, field_validator
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.roles import grant as grant_role
 
 from angee.base.models.locks import StaleRevisionError
+from angee.jobs.enqueue import celery_app
 from angee.workflows import managers as managers_module
 from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid
@@ -428,6 +433,55 @@ def test_unrouted_failure_preserves_pending_branches(execution):
     assert StepRun.system_queryset().get(run=run, node_key="other").status == StepRunStatus.READY
     assert WorkflowRun.system_queryset().get(pk=run.pk).error == ""
     assert StepAttempt.system_queryset().get(step_run__run=run, step_run__node_key="bad").error
+
+
+def test_expired_delivery_retains_ready_step_for_native_recovery(execution, monkeypatch):
+    """Deferred publication cannot renew expiry; the durable step still recovers once."""
+    actor, sent = execution
+    workflow = load_workflow(document("entry"), key="delivery_expiry", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    step_run = StepRun.system_queryset().get(run=run)
+    sent.clear()
+    recovery = timedelta(seconds=managers_module.DISPATCH_RECOVERY_SECONDS)
+    with transaction.atomic(), system_context(reason="test.deferred_delivery"):
+        StepRun.objects.filter(pk=step_run.pk).dispatch()
+        dispatched_at = StepRun.objects.get(pk=step_run.pk).dispatched_at
+        assert sent == []
+    assert len(sent) == 1
+    name, options = sent[0]
+    # A slow outer commit publishes after the database timestamp's recovery age.
+    published_at = dispatched_at + timedelta(minutes=5)
+    envelope = celery_app.amqp.create_task_message(str(uuid4()), name, now=published_at, **options)
+    request = Request(
+        Message(body=envelope.body, headers=envelope.headers, properties=envelope.properties),
+        app=celery_app, decoded=True,
+    )
+    monkeypatch.setattr("celery.worker.request.revoked_tasks", set())
+    assert request.expires == dispatched_at + recovery
+    with patch("celery.worker.request.datetime") as clock:
+        clock.now.return_value = published_at
+        assert request.maybe_expire() is True
+    assert StepRun.system_queryset().get(pk=step_run.pk).status == StepRunStatus.READY
+    assert not StepAttempt.system_queryset().filter(step_run=step_run).exists()
+    assert runner.redispatch() == 0
+
+    with system_context(reason="test.expired_transport_delivery"):
+        StepRun.objects.filter(pk=step_run.pk).update(dispatched_at=Now() - recovery - timedelta(seconds=1))
+    assert runner.redispatch() == 1
+    assert len(sent) == 2
+    retained = StepRun.system_queryset().get(pk=step_run.pk)
+    assert sent[-1][1]["expires"] == retained.dispatched_at + recovery
+    replacement = celery_app.amqp.create_task_message(str(uuid4()), sent[-1][0], **sent[-1][1])
+    fresh = Request(
+        Message(body=replacement.body, headers=replacement.headers, properties=replacement.properties),
+        app=celery_app, decoded=True,
+    )
+    assert not fresh.maybe_expire()
+    assert runner.redispatch() == 0
+    assert runner.execute(step_run.pk)
+    assert not runner.execute(step_run.pk)
+    assert StepAttempt.system_queryset().filter(step_run=step_run).count() == 1
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
 def test_dispatch_counter_and_exhaustion(execution, settings):

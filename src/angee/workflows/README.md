@@ -155,7 +155,12 @@ fenced by the attempt counter and deadline. IO timeouts leave a settlement windo
 below the worker's soft and hard limits; [`Step`](steps.py) owns those bounds.
 Heartbeats retain that reserve against the current attempt's absolute lifetime.
 The shared-worker tick wakes due waits, reaps
-expired claims and redispatches undelivered ready rows. An uncertain external
+expired claims and redispatches undelivered ready rows. Execution messages use
+Celery expiry derived from the stored database dispatch time and recovery
+interval. Deferred publication cannot extend a message past replacement admission;
+stale messages are refused before database execution while the ready row remains
+recoverable. Message expiry is separate from a claimed attempt's execution deadline.
+An uncertain external
 effect requires operator acknowledgement unless the step declares
 `effect_idempotent`. A recorded effect takes precedence over `Retryable`;
 retries and time waits retain every attempt's effect marker for the current page.
