@@ -2135,7 +2135,7 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
             if not locked.title:
                 locked.title = prompt[:200]
                 locked.save(update_fields=["title", "updated_at"])
-            enqueue_task("agents.run_session", kwargs={"session_id": self.pk}, expires=dispatch_expires)
+            self.enqueue_execution(expires=dispatch_expires)
             self.refresh_from_db()
         return turn
 
@@ -2274,7 +2274,16 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
 
         turns = self.turns.system_context(reason="agents.session.enqueue")
         if self.status != SessionStatus.CLOSED and turns.filter(status=TurnStatus.PENDING).exists():
-            enqueue_task("agents.run_session", kwargs={"session_id": self.pk}, robust=True)
+            self.enqueue_execution(robust=True)
+
+    def enqueue_execution(self, *, expires: datetime | None = None, robust: bool = False) -> None:
+        """Send this session's execution task after the producing transaction commits.
+
+        ``expires`` bounds delivery for a caller recovering lost dispatch; ``robust``
+        logs a broker failure instead of raising it from the committing transaction.
+        """
+
+        enqueue_task("agents.run_session", kwargs={"session_id": self.pk}, expires=expires, robust=robust)
 
     @transition(
         status,

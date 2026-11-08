@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Iterator
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -14,6 +15,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.db.models.deletion import Collector
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import actor_context, current_actor, system_context
 from rebac.models import PermissionAuditEvent
 
@@ -783,6 +785,25 @@ def test_deprovision_closes_sessions_of_another_person(session: AgentSession) ->
     with system_context(reason="test deprovisioned session"):
         session.refresh_from_db()
     assert session.status == SessionStatus.CLOSED
+
+
+def test_session_execution_dispatch_carries_the_callers_delivery_bound(
+    session: AgentSession,
+    capture_tasks: list[Any],
+) -> None:
+    """The session owns its execution task; a caller supplies only expiry and broker-error policy."""
+
+    expires = timezone.now() + timedelta(minutes=5)
+    capture_tasks.clear()
+
+    session.enqueue_execution(expires=expires)
+
+    assert capture_tasks == [
+        ("agents.run_session", {"kwargs": {"session_id": session.pk}, "queue": None, "expires": expires}),
+    ]
+    with capture_task_sends(error=RuntimeError("broker down")) as failed, transaction.atomic():
+        session.enqueue_execution(robust=True)
+    assert [name for name, _options in failed] == ["agents.run_session"]
 
 
 def test_selected_session_close_keeps_sessions_outside_the_selection_open(session: AgentSession) -> None:
