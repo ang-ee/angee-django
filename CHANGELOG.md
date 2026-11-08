@@ -10,7 +10,7 @@ live in code docstrings.
 
 ## Unreleased — django-zed-rebac 0.31
 
-- The base addon requires `django-zed-rebac>=0.31.4,<0.32` (GraphQL its
+- The base addon requires `django-zed-rebac>=0.31.5,<0.32` (GraphQL its
   `strawberry-django` extra, the dev group its `caveats` extra); the engine now
   requires `django-cte>=5,<6`.
 - The library ships only its local backend: `rebac.Backend`, `SpiceDBBackend`,
@@ -25,17 +25,21 @@ live in code docstrings.
   permission over the fetched ids.
 - Inside a request's evaluator scope, a witness statement decides whether the
   actor holds a permission's constant arms (`admin->member`). An administrator
-  then reads a statement of those arms alone, decided again at each read
-  because this host's user type has a field-backed relation and so keeps no
-  witness; a member pays one witness per distinct arm per request beside the
-  full policy. On the composed test host the admin transcript is 59 statements
-  and 200 KB (0.30: 35 and 85 KB), the member's 32 and 2,648 KB (0.30: 250 and
-  2,505 KB). The console ceilings and the statement pins are re-measured.
+  then reads a statement of those arms alone. The answer is kept per request and
+  database alias for a type none of whose decisions reads a model column, as the
+  compiler's dependency graph decides; a type whose policy follows an arrow or
+  subject set to a model-backed relation (here the field-backed
+  `auth/user#person`) is decided again at each read. Each actor pays one witness
+  per distinct arm per request on the console reads, and a member's statement
+  leaves out the arms it does not hold. On the composed test host the admin
+  transcript is 32 statements and 129 KB (0.30: 35 and 85 KB), the member's 32
+  and 2,593 KB (0.30: 250 and 2,505 KB). The console ceilings and the statement
+  pins are re-measured.
 - Known limit: a statement materializes the id sets it reaches without the
-  outer row restriction, and a member's keeps the constant arms' every-row
-  branches, so on SQLite a member's parts read of one message scans the
-  `messaging/part` table beside its seek on that message's parts; an
-  administrator's read seeks only them.
+  outer row restriction, so on SQLite a member's parts read of one message
+  scans the thread, message, channel and integration tables beside its index
+  seek on that message's parts; an administrator's read, of the constant arms
+  alone, seeks only them.
 - A related manager reads with its source instance's pinned actor (never its
   sudo pin) instead of the ambient actor, and `iterator()` streams chunk by
   chunk. A row list loaded for one actor and reused under another actor's
@@ -49,8 +53,20 @@ live in code docstrings.
   admission inside a system block still sees that actor's own rights;
   `permission_expression(queryset, name)` follows the queryset's relation actor
   and projects nothing there unless the queryset is pinned.
-- An embedded `sudo()` or `system_context()` queryset is audited when its
-  enclosing statement executes, so its audit row follows that statement.
+- A queryset `sudo()` or `system_context()` entry writes its audit row at least
+  once per actor and evaluator scope, however many querysets derive from it; a
+  row in a transaction that rolls back does not count. An embedded one is
+  audited when its enclosing statement executes, so its audit row follows that
+  statement.
+- Follow-up for REBAC 0.31.6: a `<related>.system_context(reason=...)` entry
+  opened inside a `system_context()` block with the same reason is an entry of
+  its own, so `Runner.advance` writes two `workflows.advance` rows and the map
+  concurrency test bounds the settling item at 101 statements; the library is to
+  fold it into the block's row. A queryset built inside a block and embedded
+  twice in one statement (two `Subquery` uses) writes two rows; the release is
+  to derive that capture entry from the block, so one block gives one entry.
+  Outside an evaluator scope an entry is audited once per actor for its life;
+  the same release is to audit it once per top-level operation there.
 - GraphQL permission projections (`permissions_field`, `held_permissions`,
   `permission_expression` filter expressions) and `Membership.with_can_read`
   compose REBAC's native `permission_expression` instead of a correlated scoped
