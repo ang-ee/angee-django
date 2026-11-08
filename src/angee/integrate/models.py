@@ -4334,6 +4334,28 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
 class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLinkT]):
     """Load comparison evidence for a bounded collection of replica identities."""
 
+    def absence_eligible(self) -> Self:
+        """Roots, and children whose parent has absence evidence, may accumulate absence."""
+
+        parents = self.model.objects.filter(absence_count__gt=0)
+        return self.filter(Q(parent__isnull=True) | Q(parent_id__in=parents.values("pk"))).exclude(
+            status=LinkStatus.TOMBSTONE,
+        )
+
+    def unseen_since(self, started: datetime) -> Self:
+        """Rows a sweep's enumeration did not observe since it started."""
+
+        return self.filter(Q(last_seen_at__isnull=True) | Q(last_seen_at__lt=started))
+
+    def absence_candidates(self, *, started: datetime, children: bool) -> Self:
+        """Select a sweep's unseen roots, or the children of the roots it found missing."""
+
+        rows = self.absence_eligible()
+        if not children:
+            return rows.filter(parent__isnull=True).unseen_since(started)
+        parents = self.filter(parent__isnull=True, absence_count__gt=0).unseen_since(started)
+        return rows.filter(parent_id__in=parents.values("pk"))
+
     def with_sync_evidence(self) -> Self:
         """Load the protected application projection; state is already on the link."""
         return self.select_related("applied_base", "parent", "stream").defer(
@@ -4618,10 +4640,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             stream = type(stream).objects.lock_current(stream)
             rows = (
                 self.filter(stream=stream, external_key__in=tuple(keys))
-                .filter(Q(parent__isnull=True) | Q(parent_id__in=self.filter(absence_count__gt=0).values("pk")))
-                .exclude(
-                    status=LinkStatus.TOMBSTONE,
-                )
+                .absence_eligible()
                 .order_by("pk")
                 .lock_if_supported()
             )

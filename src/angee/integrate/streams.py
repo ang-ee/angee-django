@@ -23,7 +23,6 @@ from urllib.parse import urlsplit
 from deepdiff import DeepDiff
 from django.core.exceptions import ValidationError
 from django.db import DataError, close_old_connections, connection, connections, transaction
-from django.db.models import Q
 from django.utils import timezone
 from pydantic import ConfigDict, JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
@@ -893,16 +892,10 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                 locked = manager.lock_current(locked, fenced_to=locked)
                 links = locked.links.model.objects
                 started = datetime.fromisoformat(state["started_at"])
-                rows = links.filter(stream=locked).exclude(status=LinkStatus.TOMBSTONE)
-                if state["phase"] == "roots":
-                    rows = rows.filter(parent__isnull=True).filter(
-                        Q(last_seen_at__isnull=True) | Q(last_seen_at__lt=started)
-                    )
-                else:
-                    missing_parents = links.filter(stream=locked, parent__isnull=True, absence_count__gt=0).filter(
-                        Q(last_seen_at__isnull=True) | Q(last_seen_at__lt=started)
-                    )
-                    rows = rows.filter(parent_id__in=missing_parents.values("pk"))
+                rows = links.filter(stream=locked).absence_candidates(
+                    started=started,
+                    children=state["phase"] != "roots",
+                )
                 if state["after"] is not None:
                     rows = rows.filter(pk__gt=state["after"])
                 batch = tuple(rows.order_by("pk").lock_if_supported()[:page_bound])
