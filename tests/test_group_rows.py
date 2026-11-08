@@ -385,7 +385,10 @@ def test_a_boolean_bucket_is_never_the_number_it_hashes_as() -> None:
         ),
     ],
 )
-def test_group_rows_read_every_column_through_its_own_field(group_by: str, key: str, expected: Any) -> None:
+@pytest.mark.parametrize("ordering", ["name", "parent__name"])
+def test_group_rows_read_every_column_through_its_own_field(
+    group_by: str, key: str, expected: Any, ordering: str,
+) -> None:
     """A partition key equal to a selected column never shifts the row's values onto another field's converter."""
 
     @strawberry_django.type(StatusGroupThing)
@@ -401,7 +404,7 @@ def test_group_rows_read_every_column_through_its_own_field(group_by: str, key: 
         sortable=["name", "status"],
         aggregatable=["id"],
         groupable=["status", "name", "parent"],
-        get_queryset=lambda info: StatusGroupThing.objects.all(),
+        get_queryset=lambda info: StatusGroupThing.objects.order_by(ordering, "name"),
         insert=False,
         update=False,
         delete=False,
@@ -418,7 +421,7 @@ def test_group_rows_read_every_column_through_its_own_field(group_by: str, key: 
             data = result_data(execute_schema(schema, """
                 query { status_group_things_groups(group_by: %s) {
                   key { %s }
-                  rows(limit: 5, order_by: [{name: asc}]) { name status }
+                  rows(limit: 5) { name status }
                 } }
             """ % (group_by, key)))
     assert {
