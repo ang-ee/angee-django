@@ -37,6 +37,28 @@ class PersistenceMixin(models.Model):
         del record, lookup
         return False
 
+    def prepare_lock_subject(self, values: Mapping[str, Any]) -> Self:
+        """Hydrate pending concrete values solely for this model's lock selection.
+
+        Native construction permits guarded state hydration without invoking a
+        transition or mutating the saved row. Deferred fields stay deferred;
+        relation names use Django's object descriptor and attnames carry IDs.
+        Callers must reload and authorize the persisted row after locking.
+        """
+
+        columns = {}
+        for field in self._meta.concrete_fields:
+            if field.name in values:
+                columns[field.name] = values[field.name]
+            elif field.attname in values:
+                columns[field.attname] = values[field.attname]
+            else:
+                columns[field.attname] = self.__dict__.get(field.attname, models.DEFERRED)
+        candidate = type(self)(**columns)
+        candidate._state.db = self._state.db
+        candidate._state.adding = self._state.adding
+        return candidate
+
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
         """Lock and reload this subject through its row-bound base manager."""
 

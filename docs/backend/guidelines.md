@@ -1706,8 +1706,10 @@ open fresh evaluator scopes for authorization and change-feed reads.
 Generic proposal and Hasura writes delegate to
 [`PersistenceMixin.lock_subject`](../../src/angee/base/models/persistence.py)
 before acquiring subject rows. Domain overrides acquire prerequisite rows in
-stable order and return the persisted subject. The candidate carries decoded
-pending column values, so owners can lock both current and proposed scopes.
+stable order and return the persisted subject. `prepare_lock_subject` hydrates
+only decoded concrete values through native Django construction, so owners can
+lock both current and proposed scopes without invoking guarded transitions.
+This candidate is only for lock selection; it never becomes the write target.
 Callers reload through their original actor and surface scope and recheck write
 permission after waiting. Statement-member identity remains the hook's optional
 `members` argument. Plain Django models retain native row locking.
