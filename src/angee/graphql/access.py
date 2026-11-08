@@ -11,7 +11,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from rebac import ObjectRef, SubjectRef, current_actor
 from rebac.backends import backend
-from rebac.field_visibility import check_field_access, gated_read_fields
+from rebac.field_visibility import check_field_access, gated_read_fields, visible_id_sets
 from rebac.resources import model_resource_type
 from rebac.schema import Definition
 from rebac.schema.walker import field_gated_actions
@@ -192,25 +192,29 @@ class ChangeReadGate:
         """Return ``payload`` with unreadable field-gated values removed.
 
         The resource-level ``read`` check already decided whether the actor may
-        receive this delivery. Changed field-gated values then ask the same
-        upstream ``read__<field>`` owner used by ordinary query redaction, so a
-        row-readable actor keeps fields it may read and loses only denied ones.
+        receive this delivery. Changed field-gated values are then decided
+        together by the upstream batch that redacts ordinary query rows: one
+        statement per distinct ``read__<field>`` permission, so a row-readable
+        actor keeps fields it may read and loses only denied ones.
+
+        The batch returns definite holds only, so a conditional answer redacts the
+        field. Query rows agree only under REBAC's default
+        ``REBAC_FIELD_READ_FAIL_CLOSED_ON_CONDITIONAL = True``; ``angee.E024``
+        refuses caveated relations, so no field decision here is conditional.
         """
 
         if not self.gated_fields or payload.changed_fields is None:
             return payload
 
-        denied: set[str] = set()
-        for field_name in set(payload.changed_fields) & set(self.gated_fields):
-            result = check_field_access(
-                self.active_backend,
-                subject=self.actor,
-                action=f"read__{field_name}",
-                resource=resource,
-            )
-            if not result.allowed:
-                denied.add(field_name)
-        return payload.redacted(denied)
+        fields = frozenset(payload.changed_fields) & self.gated_fields
+        visible = visible_id_sets(
+            model=self.model,
+            actor=self.actor,
+            fields=fields,
+            resource_ids=(resource.resource_id,),
+            active_backend=self.active_backend,
+        )
+        return payload.redacted({name for name in fields if resource.resource_id not in visible[name]})
 
 
 class ActorSelfChangeReadGate(ChangeReadGate):

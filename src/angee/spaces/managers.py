@@ -6,14 +6,13 @@ from typing import TYPE_CHECKING, Any, Self, TypedDict
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from rebac import PermissionDenied, SubjectRef, check_new, current_actor, to_subject_ref
+from rebac import PermissionDenied, SubjectRef, check_new, current_actor, permission_expression, to_subject_ref
 from rebac.errors import MissingActorError
 from rebac.resources import model_resource_type
 
 from angee.base.fields.state import enum_member_for
 from angee.base.managers import AngeeManager
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.permissions import require_rebac_queryset
 from angee.base.querysets import AngeeQuerySet
 
 if TYPE_CHECKING:
@@ -52,8 +51,10 @@ class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
         only; a seat's id and its holder's subject stay with ``can_read`` rows.
         """
 
-        readers = require_rebac_queryset(self.model, actor=current_actor()).scoped_for_aggregate()
-        return self.annotate(can_read=models.Exists(readers.filter(pk=models.OuterRef("pk"))))
+        actor = current_actor()
+        if actor is None:
+            return self.annotate(can_read=models.Value(False))
+        return self.annotate(can_read=permission_expression(self.model, "read", actor=actor))
 
 
 _MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)

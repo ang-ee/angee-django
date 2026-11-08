@@ -413,7 +413,9 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 except ValidationError:
                     raise ValidationError("Extraction output does not match its retained schema.") from None
             if base is not None:
-                retained_parts = list(base.parts.order_by("position"))
+                retained_parts = list(
+                    base.parts.system_context(reason="retain authorized extraction snapshot").order_by("position")
+                )
                 if len(retained_parts) != len(parts):
                     raise ValidationError("The retained base has different evidence parts.")
                 for part, retained in zip(parts, retained_parts, strict=True):

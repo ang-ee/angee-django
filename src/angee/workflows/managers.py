@@ -657,7 +657,9 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             if request_key is not None and (existing := self.filter(request_key=request_key).first()) is not None:
                 return replay(existing)
             if parent is not None and (
-                parent.is_terminal or not parent.step_runs.fenced(parent_step).lock_if_supported(no_key=True).exists()
+                parent.is_terminal
+                or not parent.step_runs.system_context(reason="workflows.start").fenced(parent_step)
+                .lock_if_supported(no_key=True).exists()
             ):
                 raise Superseded("The parent attempt cannot admit a child.")
             version = version or workflow.published
@@ -1286,14 +1288,18 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
             actor = run.require_access("write", actor)
             if accept_duplicate and actor is None:
                 raise PermissionDenied("A duplicate-effect acknowledgement requires an actor.")
+            # The authorized run keeps the requester's pin, which its related manager
+            # keeps inside system_context; the step rows are read and written elevated,
+            # as reopening advances them.
             with system_context(reason="workflows.retry_step"):
-                current = run.step_runs.filter(pk=step_run.pk).lock_if_supported(no_key=True).get()
+                steps = run.step_runs.system_context(reason="workflows.retry_step")
+                current = steps.filter(pk=step_run.pk).lock_if_supported(no_key=True).get()
                 current.run = run
                 if blocker := current.retry_blocker:
                     raise ValidationError(blocker)
                 if current.requires_duplicate_acknowledgement and not accept_duplicate:
                     raise ValidationError("Retry requires accepting a possible duplicate effect.")
-                run.step_runs.filter(pk=current.pk).to_ready(
+                steps.filter(pk=current.pk).to_ready(
                     acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,
                     reset_dispatches=True,
                 )

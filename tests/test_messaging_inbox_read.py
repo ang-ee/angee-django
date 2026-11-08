@@ -365,7 +365,7 @@ def test_inbox_reads_follow_the_pinned_actor_and_fail_closed(campaign_access: An
 
 
 def _statements(rows: Callable[[], Any]) -> tuple[int, int]:
-    """Count one warm evaluation's statements and SQL bytes, policy seed reads included."""
+    """Count one warm evaluation's statements and SQL bytes, REBAC's own reads included."""
 
     with evaluator_scope():
         list(rows().values_list("pk", flat=True))

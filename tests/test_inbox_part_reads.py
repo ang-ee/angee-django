@@ -259,12 +259,13 @@ def test_inbox_parts_compile_the_message_graph_once() -> None:
             assert len(list(scoped.order_by("pk")[:25])) == 25
         population = captured.captured_queries[-1]["sql"]
     one, many = reads[1][-1], reads[25][-1]
-    # Measured on SQLite through ``message->read_inbox``: 9 statements and 26,680
-    # bytes, against 15 statements and 57,720 bytes for the generic part read
-    # inside the scoped eligible messages.
-    assert len(reads[1]) == len(reads[25]) == 9
+    # Measured on SQLite through ``message->read_inbox``: 1 statement of 39,613 bytes,
+    # against 85,607 bytes for the generic part read inside the scoped eligible messages.
+    # 0.31 (9 statements, 27 KB -> 1, 39 KB): the actor sets and arrow sources 0.30 read
+    # before the statement are its predicates.
+    assert len(reads[1]) == len(reads[25]) == 1
     assert abs(len(one) - len(many)) <= 2
-    assert len(many) <= 27 * 1024
+    assert len(many) <= 39 * 1024
     # One actor scope: the part's read carries the message graph, and eligibility
     # joins the message without a second, separately scoped message subquery.
     assert many.count("rebac_schemageneration") <= 1

@@ -2030,7 +2030,8 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         """Cancel open turns after the caller locks and authorizes this session."""
 
         with system_context(reason="agents.session.close"):
-            for turn in self.turns.lock_if_supported().open().order_by("index"):
+            turns = self.turns.system_context(reason="agents.session.close")
+            for turn in turns.lock_if_supported().open().order_by("index"):
                 turn.mark_canceled()
             if self.status != SessionStatus.CLOSED:
                 self.mark_closed()
@@ -2052,7 +2053,8 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
                     reason="agents.session.cancel_turn",
                 ),
             ):
-                current = locked.turns.lock_if_supported().get(pk=turn.pk)
+                turns = locked.turns.system_context(reason="agents.session.cancel_turn")
+                current = turns.lock_if_supported().get(pk=turn.pk)
                 if current.status in OPEN_TURN_STATUSES:
                     active = current.status in ACTIVE_TURN_STATUSES
                     current.mark_canceled()
