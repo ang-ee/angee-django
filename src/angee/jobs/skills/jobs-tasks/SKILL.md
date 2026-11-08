@@ -78,12 +78,13 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
    "Task locks are advisory, row locks are authoritative":
    the verb owns persistence policy; the task owns only dispatch and the optional advisory lock.
 
-3. **Dispatch with `enqueue_task`** (messaging; abbreviated from `queue_message_delivery` in `src/angee/messaging/delivery.py`):
+3. **Dispatch with `enqueue_task`** (messaging; `queue_message_delivery` in `src/angee/messaging/delivery.py`):
 
    ```python
-   with system_context(reason="messaging.delivery.queue"), transaction.atomic():
-       row = type(message).objects.sudo(reason="messaging.delivery.queue").lock_if_supported().get(pk=message.pk)
-       ...  # the manager decides eligibility and marks the row
+   with transaction.atomic():
+       row = message.reserve_delivery()  # the row locks itself, decides eligibility and marks the lease
+       if row is None:
+           return False
        enqueue_task(DELIVER_MESSAGE_TASK,
                     kwargs={"model_label": row._meta.label_lower, "pk": row.pk, "external_id": row.external_id},
                     queue=celery_app.conf.task_default_queue, expires=DELIVERY_TASK_EXPIRES, robust=True)
@@ -122,10 +123,10 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
 
 6. **Make it idempotent.** A redelivered or duplicated task must converge: the verb locks the row
    (`lock_if_supported`), revalidates its state, and returns without writing when already done
-   (`queue_message_delivery` in `src/angee/messaging/delivery.py`). Advisory `task_lock` is process-local on SQLite; derive liveness
+   (`Message.reserve_delivery` in `src/angee/messaging/models.py`). Advisory `task_lock` is process-local on SQLite; derive liveness
    from it only when `task_locks_are_cross_process()` (`src/angee/base/locks.py`). **Owner rule:**
    [Put behavior on the owning object](../../../../../docs/guidelines.md#put-behavior-on-the-owning-object): the
-   manager owns convergence, the task owns none.
+   owning row or manager owns convergence, the task owns none.
 
 7. **Attribution is inherited.** With provenance installed the app base is `angee.provenance.tasks:Task`
    (`SETTINGS` in `src/angee/provenance/autoconfig.py`), which opens a fresh `changeset(activity="system",

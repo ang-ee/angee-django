@@ -26,7 +26,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -81,6 +81,7 @@ from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
+from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
     ChannelManager,
@@ -2475,6 +2476,56 @@ class Message(
         )
         fragment = title_part.fragment if title_part is not None else None
         return fragment.text if fragment is not None else ""
+
+    def reserve_delivery(self) -> Self | None:
+        """Reserve a due draft/queue or eligible uncertain recovery under its row lock.
+
+        Returns the locked row stamped with a bounded dispatch lease, or ``None``
+        when nothing is due. FAILED rows require the explicit operator retry verb.
+        Uncertain rows retain their status and revision; recovery reserves only a
+        possibly accepted send. This reservation fences broker submission; the
+        worker's ``MessageManager.claim_delivery`` is the separate effect claim.
+        """
+
+        if self.pk is None:
+            raise ValidationError("Cannot deliver an unsaved message.")
+        with system_context(reason="messaging.delivery.queue"), transaction.atomic():
+            row = type(self).objects.sudo(reason="messaging.delivery.queue").lock_if_supported().get(pk=self.pk)
+            if row.status != row.MessageStatus.UNCERTAIN:
+                row.validate_delivery()
+            now = timezone.now()
+            if (
+                row.status not in (row.MessageStatus.DRAFT, row.MessageStatus.QUEUED, row.MessageStatus.UNCERTAIN)
+                or row.delivery_blocked or row.delivery_held
+                or (row.status == row.MessageStatus.QUEUED and row.delivery_claim is not None)
+                or (row.scheduled_at is None and row.delivery_lease_until is not None
+                    and row.delivery_lease_until > now)
+            ):
+                return None
+            if row.status == row.MessageStatus.UNCERTAIN:
+                if row.delivery_operator_only or not row.delivery_possibly_accepted:
+                    return None
+                if row.scheduled_at is not None and row.scheduled_at > now:
+                    return None
+                if row.delivery_lease_until is not None and row.delivery_lease_until > now:
+                    return None
+                # scheduled_at retains the due recovery horizon until a worker claims
+                # it; a lease alongside it fences a still-pending broker submission.
+                row.scheduled_at = row.scheduled_at or now
+                row.delivery_lease_until = now + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+                type(row)._base_manager.filter(pk=row.pk).update(
+                    scheduled_at=row.scheduled_at, delivery_lease_until=row.delivery_lease_until,
+                )
+            else:
+                row.status = row.MessageStatus.QUEUED
+                row.scheduled_at = None
+                row.delivery_lease_until = now + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+                row.save(update_fields=("status", "scheduled_at", "delivery_lease_until", "updated_at"))
+        self.status = row.status
+        self.scheduled_at = row.scheduled_at
+        self.delivery_lease_until = row.delivery_lease_until
+        self.revision = row.revision
+        return row
 
     def deliver(self) -> bool:
         """Queue this outbound message through messaging's fenced delivery owner.
