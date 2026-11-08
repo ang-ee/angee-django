@@ -63,6 +63,7 @@ from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
+from angee.proposals.validators import normalize_topic_key
 from angee.provenance.context import changeset, changeset_model, require_changeset
 
 if TYPE_CHECKING:
@@ -1497,20 +1498,24 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         return self.name
 
+    def normalize_key(self) -> None:
+        """Normalize and require this topic's stable machine key."""
+
+        try:
+            self.key = normalize_topic_key(str(self.key or ""))
+        except ValueError as error:
+            raise ValidationError({"key": str(error)}) from error
+
     def clean(self) -> None:
         """Normalize the immutable machine key."""
 
-        self.key = str(self.key or "").strip().lower()
-        if not self.key:
-            raise ValidationError({"key": "Topic key is required."})
+        self.normalize_key()
         super().clean()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the normalized stable key."""
 
-        self.key = str(self.key or "").strip().lower()
-        if not self.key:
-            raise ValidationError({"key": "Topic key is required."})
+        self.normalize_key()
         super().save(*args, **kwargs)
 
 
