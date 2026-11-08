@@ -370,7 +370,7 @@ class RoundManager[T: Round](_RoundManagerBase[T]):
         if project_id is None:
             return None
         return (
-            self.model.system_queryset(lock=("self",) if lock else None).using(self._db)
+            self.model.system_queryset(lock=("self",) if lock else None)
             .filter(proposals__track_id=project_id).order_by("pk").first()
         )
 
@@ -1958,11 +1958,11 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 self.disclosed_at = timezone.now()
             super().save(*args, **kwargs)
 
-    def lock_for_record_access(self, *, using: str) -> Self:
+    def lock_for_record_access(self) -> Self:
         """Serialize shell grants with requester changes before locking the shell."""
 
-        apps.get_model("proposals", "Round").system_queryset(lock=("self",)).using(using).get(pk=self.round_id)
-        return super().lock_for_record_access(using=using)
+        apps.get_model("proposals", "Round").system_queryset(lock=("self",)).get(pk=self.round_id)
+        return super().lock_for_record_access()
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Apply the round's holder invariant to shells and explicit shares."""
@@ -2392,11 +2392,11 @@ class ProjectProposalAccess(Composable, extends="projects.Project"):
             passed_on=passed_on,
         )
 
-    def lock_for_record_access(self, *, using: str) -> Self:
+    def lock_for_record_access(self) -> Self:
         """A track's round precedes its project row in the grant/ownership lock order."""
 
-        apps.get_model("proposals", "Round").objects.db_manager(using).for_track(self.pk, lock=True)
-        return super().lock_for_record_access(using=using)
+        apps.get_model("proposals", "Round").objects.for_track(self.pk, lock=True)
+        return super().lock_for_record_access()
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Keep the requester's ceiling on track projects."""
@@ -2635,12 +2635,12 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
                 raise ClarificationWidenBlocked()
             return super()._message_post(body, **kwargs)
 
-    def lock_for_record_access(self, *, using: str) -> Self:
+    def lock_for_record_access(self) -> Self:
         """Lock the current track's round before its task, refusing a concurrent reparent."""
 
-        project_id = type(self).system_queryset().using(using).values_list("project_id", flat=True).get(pk=self.pk)
-        apps.get_model("proposals", "Round").objects.db_manager(using).for_track(project_id, lock=True)
-        locked = super().lock_for_record_access(using=using)
+        project_id = type(self).system_queryset().values_list("project_id", flat=True).get(pk=self.pk)
+        apps.get_model("proposals", "Round").objects.for_track(project_id, lock=True)
+        locked = super().lock_for_record_access()
         if locked.project_id != project_id:
             raise ValidationError({"project": "The task moved; reload it before granting access."})
         return locked
@@ -2796,22 +2796,22 @@ class DriveProposalAccess(Composable, extends="storage.Drive"):
     class Meta:
         abstract = True
 
-    def _proposal_rounds(self, *, using: str | None = None) -> models.QuerySet:
+    def _proposal_rounds(self) -> models.QuerySet:
         """The rounds whose retained track binding makes this drive build content."""
 
         model = apps.get_model("proposals", "Round")
-        bindings = model.system_queryset().using(using or self._state.db).filter(
+        bindings = model.system_queryset().filter(
             proposals__track__resource_bindings__content_type=generic_target(self).content_type,
             proposals__track__resource_bindings__object_id=self.pk,
         )
-        return model.system_queryset().using(using or self._state.db).filter(pk__in=bindings.values("pk"))
+        return model.system_queryset().filter(pk__in=bindings.values("pk"))
 
-    def lock_for_record_access(self, *, using: str) -> Self:
+    def lock_for_record_access(self) -> Self:
         """Acquire all bound rounds deterministically before locking this drive."""
 
-        for _round in self._proposal_rounds(using=using).order_by("pk").select_for_update():
+        for _round in self._proposal_rounds().order_by("pk").select_for_update():
             pass
-        return super().lock_for_record_access(using=using)
+        return super().lock_for_record_access()
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Ask every bound track's round before granting this drive."""
@@ -2829,13 +2829,13 @@ class FileProposalAccess(Composable, extends="storage.File"):
     class Meta:
         abstract = True
 
-    def lock_for_record_access(self, *, using: str) -> Self:
+    def lock_for_record_access(self) -> Self:
         """Lock the current drive's rounds before its file, refusing a concurrent move."""
 
-        drive_id = type(self).system_queryset().using(using).values_list("drive_id", flat=True).get(pk=self.pk)
-        drive = apps.get_model("storage", "Drive").system_queryset().using(using).get(pk=drive_id)
-        drive.lock_for_record_access(using=using)
-        locked = super().lock_for_record_access(using=using)
+        drive_id = type(self).system_queryset().values_list("drive_id", flat=True).get(pk=self.pk)
+        drive = apps.get_model("storage", "Drive").system_queryset().get(pk=drive_id)
+        drive.lock_for_record_access()
+        locked = super().lock_for_record_access()
         if locked.drive_id != drive_id:
             raise ValidationError({"drive": "The file moved; reload it before granting access."})
         return locked
@@ -2872,12 +2872,12 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
     visibility = StateField(choices_enum=AnswerVisibility, default=AnswerVisibility.ROUND)
     shared_with_responders = models.BooleanField(default=False, editable=False)
 
-    def lock_for_record_access(self, *, using: str) -> Self:
+    def lock_for_record_access(self) -> Self:
         """Answer grants share the proposal's round-first lock order."""
 
-        proposal = apps.get_model("proposals", "Proposal").system_queryset().using(using).get(pk=self.proposal_id)
-        proposal.lock_for_record_access(using=using)
-        return super().lock_for_record_access(using=using)
+        proposal = apps.get_model("proposals", "Proposal").system_queryset().get(pk=self.proposal_id)
+        proposal.lock_for_record_access()
+        return super().lock_for_record_access()
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Apply the same requester ceiling as the proposal."""

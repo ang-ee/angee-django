@@ -21,9 +21,9 @@ being named by messaging.
 """
 
 
-def end_unreadable_follows(*, instance: ThreadedModelMixin, using: str, **_kwargs: object) -> None:
+def end_unreadable_follows(*, instance: ThreadedModelMixin, **_kwargs: object) -> None:
     """End record follows synchronously after the access owner revokes a grant."""
 
-    apps.get_model("messaging", "ThreadFollower").objects.db_manager(using).end_unreadable_for_record(
+    apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(
         instance, role=apps.get_model("messaging", "ThreadAttachment").AttachmentRole.CHATTER,
     )

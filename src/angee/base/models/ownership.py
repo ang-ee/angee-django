@@ -279,7 +279,7 @@ class OwnerMixin(AuditMixin, PersistenceMixin):
             raise ImproperlyConfigured("Ownership transfer requires AngeeModel's record-access contract.")
 
         with transaction.atomic(using=using):
-            locked = self.lock_for_record_access(using=using)
+            locked = self.lock_for_record_access()
             locked.with_actor(actor)
             owner_model = locked._meta.get_field("owner").model
             target: OwnerMixin = locked
