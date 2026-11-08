@@ -935,7 +935,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             )
             if row.upload_state == UploadState.READY:
                 self._grant_dedup_reach(row, owner_id)
-                self._merge_row_metadata(row, metadata)
+                row.merge_metadata(metadata)
                 return row  # content-addressed dedup hit — the bytes already exist
             storage = row.storage
             saved_path = storage.save(row.storage_path, DjangoFile(reader, name=row.storage_path))
@@ -963,7 +963,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                     result = winner
                 else:
                     raise
-            self._merge_row_metadata(result, metadata)
+            result.merge_metadata(metadata)
             return result
 
     def index_external(
@@ -1023,7 +1023,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                     size_bytes=max(int(size_bytes), 0),
                     mime_type_id=mime.pk if mime is not None else None,
                     storage_path=path,
-                    metadata=self._merged_metadata({}, metadata_patch),
+                    metadata=self.model.merged_metadata({}, metadata_patch),
                     upload_state=UploadState.READY,
                     owner_id=owner_id,
                 )
@@ -1071,7 +1071,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                 **self.model.UNTRASHED_VALUES,
             }
             if metadata_patch:
-                values["metadata"] = self._merged_metadata(row.metadata, metadata_patch)
+                values["metadata"] = self.model.merged_metadata(row.metadata, metadata_patch)
             for field, value in values.items():
                 if getattr(row, field) != value:
                     setattr(row, field, value)
@@ -1129,40 +1129,6 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         if cache is not None:
             cache[key] = row
         return row
-
-    def _merge_row_metadata(self, row: Any, metadata: dict[str, Any] | None) -> None:
-        """Merge caller-owned metadata into ``row`` without dropping other owners."""
-
-        if not metadata:
-            return
-        merged = self._merged_metadata(row.metadata, metadata)
-        if merged == row.metadata:
-            return
-        row.metadata = merged
-        row.save(update_fields=["metadata", "updated_at"])
-
-    def _merged_metadata(
-        self,
-        current: Any,
-        updates: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Return ``current`` recursively merged with ``updates``.
-
-        A nested :class:`~collections.abc.Mapping` under any key is merged
-        recursively, so a caller updating one owner's sub-dict keeps every other
-        owner's facts; a non-mapping value (or a value replacing a non-mapping)
-        overwrites outright. The metadata schema is opaque to storage — an owner
-        namespaces its own keys and this merge names none of them.
-        """
-
-        merged = dict(current) if isinstance(current, Mapping) else {}
-        for key, value in updates.items():
-            existing = merged.get(key)
-            if isinstance(existing, Mapping) and isinstance(value, Mapping):
-                merged[key] = self._merged_metadata(existing, dict(value))
-            else:
-                merged[key] = value
-        return merged
 
     def _raise_external_duplicate(
         self,
@@ -1397,6 +1363,49 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
                 locked.sudo(reason="storage.file.set_visibility").save(update_fields=["visibility"])
             self.visibility = locked.visibility
         return self
+
+    def merge_metadata(self, metadata: Mapping[str, Any] | None) -> None:
+        """Merge caller-owned ``metadata`` into the stored row without dropping other owners' keys.
+
+        The merge reads the committed metadata under the row lock, so concurrent
+        owners each keep their keys (:meth:`merged_metadata`). Unless the row's
+        own authority is elevated (:meth:`effective_actor`), its actor needs
+        ``write``, as the row's save would. This instance takes the stored result.
+        """
+
+        if not metadata:
+            return
+        actor, elevated = self.effective_actor()
+        if not elevated:
+            self.require_access("write", actor)
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            merged = type(self).merged_metadata(locked.metadata, metadata)
+            if merged != locked.metadata:
+                locked.metadata = merged
+                locked.save(update_fields=["metadata", "updated_at"])
+        self.metadata = locked.metadata
+        self.updated_at = locked.updated_at
+
+    @staticmethod
+    def merged_metadata(current: Any, updates: Mapping[str, Any]) -> dict[str, Any]:
+        """Return ``current`` recursively merged with ``updates``.
+
+        A nested :class:`~collections.abc.Mapping` under any key is merged
+        recursively, so a caller updating one owner's sub-dict keeps every other
+        owner's facts; a non-mapping value (or a value replacing a non-mapping)
+        overwrites outright. The metadata schema is opaque to storage — an owner
+        namespaces its own keys and this merge names none of them.
+        """
+
+        merged = dict(current) if isinstance(current, Mapping) else {}
+        for key, value in updates.items():
+            existing = merged.get(key)
+            if isinstance(existing, Mapping) and isinstance(value, Mapping):
+                merged[key] = File.merged_metadata(existing, value)
+            else:
+                merged[key] = value
+        return merged
 
     @property
     def storage(self) -> StorageBackend:

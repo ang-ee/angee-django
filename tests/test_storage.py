@@ -8,6 +8,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 from unittest.mock import patch
 
@@ -1546,6 +1547,57 @@ def test_ingest_stream_reads_in_chunks_instead_of_materializing(drive: Any) -> N
     assert row.upload_state == UploadState.READY
     assert len(read_sizes) >= 3
     assert set(read_sizes) == {64 * 1024}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_metadata_merge_keeps_the_keys_a_stale_writer_never_read(drive: Any) -> None:
+    """Each merge reads the stored metadata under the row lock, so an older instance drops no other owner's keys."""
+
+    file = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="test storage metadata merge"):
+        stale = File.objects.get(pk=file.pk)
+        file.merge_metadata({"first": {"a": 1}})
+        stale.merge_metadata({"second": {"b": 2}})
+        file.merge_metadata({"first": {"c": 3}})
+        stored = File._base_manager.get(pk=file.pk).metadata
+    assert stored == {"first": {"a": 1, "c": 3}, "second": {"b": 2}}
+    assert file.metadata == stored
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_metadata_merge_requires_write_on_the_file(drive: Any) -> None:
+    """Outside a system scope the merge is the actor's own file write."""
+
+    file = _proxy_upload(drive, PNG_BYTES)
+    outsider = get_user_model().objects.create_user(username="storage-metadata-outsider")
+    with actor_context(outsider), pytest.raises(PermissionDenied):
+        File._base_manager.get(pk=file.pk).merge_metadata({"outsider": True})
+    with actor_context(drive.alice):
+        File._base_manager.get(pk=file.pk).merge_metadata({"owner": True})
+    assert File._base_manager.get(pk=file.pk).metadata == {"owner": True}
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL file metadata row-lock contract")
+def test_concurrent_file_metadata_merges_keep_both_writers_keys(drive: Any) -> None:
+    """Two writers that read the same row both land: the row lock orders their merges."""
+
+    file = _proxy_upload(drive, PNG_BYTES)
+    barrier = Barrier(2, timeout=5)
+
+    def merge(key: str) -> None:
+        close_old_connections()
+        try:
+            with system_context(reason="test storage concurrent metadata merge"):
+                row = File.objects.get(pk=file.pk)
+                barrier.wait()
+                row.merge_metadata({key: {"seen": True}})
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(merge, ("first", "second")))
+    assert File._base_manager.get(pk=file.pk).metadata == {"first": {"seen": True}, "second": {"seen": True}}
 
 
 @pytest.mark.django_db(transaction=True)
