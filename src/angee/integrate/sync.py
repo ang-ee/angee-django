@@ -1,8 +1,8 @@
-"""Bridge sync context and progress helpers."""
+"""Bridge sync dispatch and progress helpers."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from enum import StrEnum
@@ -10,21 +10,11 @@ from typing import Any
 
 from django.db import transaction
 
-from angee.base.signals import publication_ingestion_context
-
 
 class SyncDispatch(StrEnum):
     """A durable execution owner will report this sync's terminal result later."""
 
     DISPATCHED = "dispatched"
-
-
-@contextmanager
-def bridge_sync_context() -> Iterator[None]:
-    """Mark a bridge sync and annotate the changes it publishes."""
-
-    with publication_ingestion_context():
-        yield
 
 
 _current_bridge_progress: ContextVar[BridgeProgressReporter | None] = ContextVar(
@@ -106,6 +96,5 @@ __all__ = [
     "BridgeProgressReporter",
     "SyncDispatch",
     "bridge_progress_context",
-    "bridge_sync_context",
     "current_bridge_progress",
 ]

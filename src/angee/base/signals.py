@@ -156,9 +156,6 @@ class ModelChange:
     changed_values: Mapping[str, Any] | None = None
     """Concrete field values of ``changed_fields``, captured before any receiver runs."""
 
-    during_ingestion: bool = False
-    """Whether the write happened inside :func:`publication_ingestion_context`."""
-
     broadcasts: bool = True
     """Whether the owner requests transport; each adapter still applies its own policy."""
 
@@ -182,7 +179,6 @@ delivery with ``transaction.on_commit(..., robust=True)``.
 """
 
 _mute_depth: ContextVar[int] = ContextVar("angee_change_mute_depth", default=0)
-_ingestion_depth: ContextVar[int] = ContextVar("angee_change_ingestion_depth", default=0)
 
 
 def changes_muted() -> bool:
@@ -209,23 +205,6 @@ def mute_changes() -> Iterator[None]:
         _mute_depth.reset(token)
 
 
-@contextmanager
-def publication_ingestion_context() -> Iterator[None]:
-    """Mark writes in this block as ingestion without suppressing their observation."""
-
-    token = _ingestion_depth.set(_ingestion_depth.get() + 1)
-    try:
-        yield
-    finally:
-        _ingestion_depth.reset(token)
-
-
-def publication_ingestion_active() -> bool:
-    """Return the ingestion mark a write captured in this context carries."""
-
-    return _ingestion_depth.get() > 0
-
-
 def publish_change(
     instance: Model, *, action: str, update_fields: Iterable[str] | None, broadcast: bool = True,
 ) -> None:
@@ -245,8 +224,7 @@ def publish_change(
         })
     payload = ModelChange(
         model=instance._meta.label, id=public_id_of(instance), action=action, occurrence_id=uuid4().hex,
-        changed_fields=fields, instance=instance, changed_values=values,
-        during_ingestion=publication_ingestion_active(), broadcasts=broadcast,
+        changed_fields=fields, instance=instance, changed_values=values, broadcasts=broadcast,
     )
     for receiver, response in change_published.send_robust(sender=type(instance), payload=payload):
         if isinstance(response, Exception):

@@ -32,7 +32,7 @@ from angee.base.models.identity import public_id_for
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.refs import RecordRef
 from angee.base.serialization import json_safe
-from angee.base.signals import publication_ingestion_context, send_created_batch
+from angee.base.signals import send_created_batch
 from angee.base.testing.packages import write_addon_distribution
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
@@ -455,36 +455,6 @@ def test_publish_change_keeps_silent_rows_local(
     assert len(payloads) == 1
     assert payloads[0].instance == row
     assert broadcasts == []
-
-
-def test_publish_change_marks_sync_ingestion_and_still_broadcasts(
-    monkeypatch: pytest.MonkeyPatch, group_feed: Any,
-) -> None:
-    """Rows saved inside sync ingestion still broadcast with an internal flag."""
-
-    payloads: list[signals.ModelChange] = []
-    broadcasts: list[dict[str, Any]] = []
-
-    def receiver(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
-        del sender, kwargs
-        payloads.append(payload)
-
-    monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append(event))
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    group_feed()
-    signals.change_published.connect(
-        receiver,
-        dispatch_uid="tests.publish_change_suppresses_sync_ingestion",
-    )
-    try:
-        with publication_ingestion_context():
-            signals.publish_change(Group(id=9, name="backfill"), action="update", update_fields=("name",))
-    finally:
-        signals.change_published.disconnect(dispatch_uid="tests.publish_change_suppresses_sync_ingestion")
-
-    assert [payload.during_ingestion for payload in payloads] == [True]
-    assert len(broadcasts) == 1
-    assert "during_ingestion" not in broadcasts[0]
 
 
 @pytest.mark.django_db

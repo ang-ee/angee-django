@@ -107,7 +107,7 @@ from angee.integrate.states import (
     SyncFailureStatus,
 )
 from angee.integrate.streams import sync_bridge
-from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
+from angee.integrate.sync import SyncDispatch, bridge_progress_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.context import current_changeset
@@ -3514,7 +3514,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         if not self.mark_sync_started(now=now):
             raise IntegrationError("Connection discovery must finish before syncing.")
         try:
-            with bridge_sync_context(), bridge_progress_context(self):
+            with bridge_progress_context(self):
                 result = self.sync()
             if result is SyncDispatch.DISPATCHED:
                 return result
