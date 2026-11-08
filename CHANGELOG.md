@@ -8,6 +8,60 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — django-zed-rebac 0.31
+
+- The base addon requires `django-zed-rebac>=0.31.4,<0.32` (GraphQL its
+  `strawberry-django` extra, the dev group its `caveats` extra); the engine now
+  requires `django-cte>=5,<6`.
+- The library ships only its local backend: `rebac.Backend`, `SpiceDBBackend`,
+  the `REBAC_SPICEDB_*` settings, `PermissionEvaluator.accessible()` and
+  `RebacManager.raw()` are gone (`LocalBackend.accessible()` and the queryset's
+  `raw()` stay). Base autoconfig no longer sets `REBAC_BACKEND`; the library's
+  default selects the local backend.
+- An actor-scoped read compiles to one actor-independent statement: arrows,
+  subject sets and memberships are predicates (each id set one CTE), not reads
+  decided beforehand. A scoped read is its revision witness plus one statement,
+  and a fetched page adds one decision of its gated fields per distinct
+  permission over the fetched ids.
+- Inside a request's evaluator scope, a witness statement decides whether the
+  actor holds a permission's constant arms (`admin->member`). An administrator
+  then reads a statement of those arms alone, decided again at each read
+  because this host's user type has a field-backed relation and so keeps no
+  witness; a member pays one witness per distinct arm per request beside the
+  full policy. On the composed test host the admin transcript is 59 statements
+  and 200 KB (0.30: 35 and 85 KB), the member's 32 and 2,648 KB (0.30: 250 and
+  2,505 KB). The console ceilings and the statement pins are re-measured.
+- Known limit: a statement materializes the id sets it reaches without the
+  outer row restriction, and a member's keeps the constant arms' every-row
+  branches, so on SQLite a member's parts read of one message scans the
+  `messaging/part` table beside its seek on that message's parts; an
+  administrator's read seeks only them.
+- A related manager reads with its source instance's pinned actor (never its
+  sudo pin) instead of the ambient actor, and `iterator()` streams chunk by
+  chunk. A row list loaded for one actor and reused under another actor's
+  context returns the first actor's relations; load the rows for that actor.
+  That actor survives `system_context()`, so system work on an actor-bound row
+  reads its relations through `<related>.system_context(reason=...)`, as
+  workflow advancement and operator step retry do.
+- REBAC's `relation_actor()` answers no actor inside `system_context()`, where
+  0.30 answered the ambient actor. `held_permissions`, `permission_annotations`
+  and `permissions_field` decide for the ambient actor they stamp, so a verb's
+  admission inside a system block still sees that actor's own rights;
+  `permission_expression(queryset, name)` follows the queryset's relation actor
+  and projects nothing there unless the queryset is pinned.
+- An embedded `sudo()` or `system_context()` queryset is audited when its
+  enclosing statement executes, so its audit row follows that statement.
+- GraphQL permission projections (`permissions_field`, `held_permissions`,
+  `permission_expression` filter expressions) and `Membership.with_can_read`
+  compose REBAC's native `permission_expression` instead of a correlated scoped
+  `EXISTS`. Verb eligibility projections that combine a permission with row
+  blockers keep their aggregate-scoped subquery, so hidden blocker facts stay
+  inside it.
+- Change-subscription payloads decide their changed gated fields through
+  REBAC's batched field visibility: one statement per distinct
+  `read__<field>` permission instead of one point check per field. A
+  depth-uncertain field is redacted instead of raising.
+
 ## Unreleased — scalar foreign-key public ids
 
 - `public_id_field("relation", nullable=False)` (`angee.graphql.ids`) projects a

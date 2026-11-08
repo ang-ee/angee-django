@@ -200,12 +200,6 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
             assert resource_type is not None
             for action in ("read", "read_private") if model != Tie else ("read",):
                 scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
-                # Each fresh scope reads the schema revision and expands the actor's
-                # memberships (2). Read then prepares 23 arrow sources (a filed task
-                # reaches each of its declared subject types' direct holders, its
-                # removal authority's project write and its subject task's owner);
-                # Tie prepares one Party source. Private reads need only the final row SELECT.
-                expected_queries = 4 if model == Tie else 26 if action == "read" else 3
                 counts = []
                 for size in (2, 50):
                     ids = [row.pk for row in rows[:size]] if model != Tie else [tie.pk]
@@ -216,20 +210,18 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         f"{sql}\n-- parameters: {parameters!r}\n",
                         encoding="utf-8",
                     )
-                    # A fresh scope per measurement: one scope keeps the rows it decided,
-                    # so a repeated statement would skip its arrow sources.
                     with evaluator_scope(), CaptureQueriesContext(connection) as captured:
                         result = set(query)
                     counts.append(len(captured))
-                    assert len(captured) == expected_queries, captured.captured_queries
-                    # The application row SELECT, and, for a party read, the arrow source of a
-                    # record task about a party.
+                    # 0.31 compiles the scope inline (Tie 4, read 26, read_private 3 -> 2): the revision
+                    # witness and the one row SELECT; memberships and arrow sources are its predicates.
+                    assert len(captured) == 2, captured.captured_queries
                     assert (
                         sum(
                             query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
                             for query in captured.captured_queries
                         )
-                        == (2 if model is Party and action == "read" else 1)
+                        == 1
                     )
                     assert result == (set(ids) if action == "read" and model != Tie else set())
                 assert counts[0] == counts[1]
