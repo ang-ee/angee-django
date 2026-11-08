@@ -4267,6 +4267,33 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         return type(self).unscoped_objects.filter(pk=self.pk, phase=StreamPhase.DELTA).exists()
 
+    def adopts_baseline(self) -> bool:
+        """Two-way replicas adopt unbased identities until this generation completes its baseline."""
+
+        return (
+            self.kind == StreamKind.RECORD_REPLICA
+            and self.direction == StreamDirection.BIDIRECTIONAL
+            and not self.has_completed_baseline()
+        )
+
+    def save_reconcile(self, state: dict[str, Any] | None) -> None:
+        """Persist a locked sweep checkpoint; ``None`` stamps the sweep's completion."""
+
+        if state is None:
+            self.last_reconciled_at = timezone.now()
+        self.reconcile_state = state or {}
+        self.save(update_fields=["reconcile_state", "last_reconciled_at", "updated_at"])
+
+    def resolve_applied(self, record: Any) -> None:
+        """Resolve an applied replica record's refusals; event feeds keep theirs.
+
+        Event feeds retain stream-level refusals: only their domain owner knows
+        event identity, so a healthy event cannot resolve another event's failure.
+        """
+
+        if self.kind == StreamKind.RECORD_REPLICA:
+            self.links.model.objects.get(stream=self, external_key=record.external_key).resolve_applied()
+
     @property
     def failure_stream(self) -> SyncStream:
         return self
@@ -4843,6 +4870,13 @@ class RecordLink(
             locked.outbox_retry_at = datetime.fromisoformat(data["retry_at"]) if data["retry_at"] else None
             self.on_sync_state_saved(locked)
             return SyncFailure.from_state(self, None, data)
+
+    def resolve_applied(self) -> None:
+        """Successful application resolves refusals while retaining explicit conflicts."""
+
+        for failure in self.failures(open_only=True):
+            if failure.kind != SyncFailureKind.CONFLICT:
+                failure.resolve()
 
     def _transition_failure(self, slot: int | None, *, retry: bool, conflict: bool = False) -> SyncFailure:
         if slot is not None:

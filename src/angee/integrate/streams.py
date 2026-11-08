@@ -303,17 +303,6 @@ class PageResult:
         return self.progress, resets
 
 
-def _resolve_applied(stream: Any, record: Any) -> None:
-    # Event feeds retain stream-level refusals; only their domain owner knows
-    # event identity. A healthy event cannot resolve another event's failure.
-    if stream.kind != StreamKind.RECORD_REPLICA:
-        return
-    link = stream.links.model.objects.get(stream=stream, external_key=record.external_key)
-    for failure in link.failures(open_only=True):
-        if failure.kind != SyncFailureKind.CONFLICT:
-            failure.resolve()
-
-
 def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = None, record_key: str = "") -> Any:
     """Quarantine one record; an event adapter's record key keeps distinct events apart."""
 
@@ -341,15 +330,6 @@ def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:
     manager = type(stream).objects
     stream = manager.bump_generation(stream, cursor=cursor)
     return PageResult(stream, reset=True)
-
-
-def _baseline_adoption(stream: Any) -> bool:
-    """Two-way replicas adopt unbased identities until this generation completes its baseline."""
-    return (
-        stream.kind == StreamKind.RECORD_REPLICA
-        and stream.direction == StreamDirection.BIDIRECTIONAL
-        and not stream.has_completed_baseline()
-    )
 
 
 def _decision(record: RecordChange, *, base: Any, adopting: bool) -> ChangeKind:
@@ -484,7 +464,7 @@ def _apply_page(
     reapply = reapply or {}
 
     page = replace(page, cursor=_validated_cursor(page.cursor))
-    adopting = _baseline_adoption(stream)
+    adopting = stream.adopts_baseline()
     links = stream.links.model.objects
     evidence_rows = None
     if stream.kind == StreamKind.RECORD_REPLICA:
@@ -594,7 +574,7 @@ def _apply_page(
                             else:
                                 links.revalidate(link, target=record.target if record.target is not None else UNSET)
                                 adapter.on_revalidated(locked, (link,))
-                            _resolve_applied(locked, record)
+                            locked.resolve_applied(record)
                             continue
                         if decision == ChangeKind.WRITE_BACK:
                             if not locked.writes_back:
@@ -615,7 +595,7 @@ def _apply_page(
                             if isinstance(result, SemanticError):
                                 raise result
                             _reflect_write(link, record, result)
-                            _resolve_applied(locked, record)
+                            locked.resolve_applied(record)
                             count += 1
                             continue
                     application_base = link.applied_base_id if link is not None else None
@@ -630,7 +610,7 @@ def _apply_page(
                         if outcome.mapped_payload is UNSET:
                             raise AdapterContractError("Replica ApplyResult must include its applied mapped_payload.")
                         _promote(link, record, outcome, origin="remote")
-                    _resolve_applied(locked, record)
+                    locked.resolve_applied(record)
                 applied.append(outcome)
                 count += outcome.count
             except (SemanticError, ValidationError, DataError) as error:
@@ -701,7 +681,7 @@ def push_stream(
     failures: list[str] = []
     with changeset(fresh=True, activity="push", origin=stream), system_context(reason="integrate.stream.push"):
         stream.refresh_from_db()
-        if not stream.writes_back or _baseline_adoption(stream):
+        if not stream.writes_back or stream.adopts_baseline():
             return PageResult(stream, exhausted=True)
         links = stream.links.model.objects
         candidates: set[str] = set()
@@ -741,7 +721,7 @@ def push_stream(
                 _check_write_precondition(locked, bases)
                 _reflect_write(locked, record, result)
                 # The write the remote once refused has now landed.
-                _resolve_applied(locked_stream, record)
+                locked_stream.resolve_applied(record)
             count += 1
         if external_keys is None:
             # A due refusal whose record has nothing left to write (deleted or
@@ -776,7 +756,7 @@ def preview_push(stream: Any, adapter: BridgeImpl) -> PushPreview:
     """Return the keys :func:`push_stream` would write now, without writing anything."""
 
     with system_context(reason="integrate.stream.preview_push"):
-        if not stream.writes_back or _baseline_adoption(stream):
+        if not stream.writes_back or stream.adopts_baseline():
             return PushPreview()
         writes: list[str] = []
         held: list[str] = []
@@ -904,13 +884,6 @@ def resolve_conflict(link: Any, slot: int | None, keep: ConflictKeep) -> Any:
             adapter.close()
 
 
-def _save_reconcile(stream: Any, state: dict[str, Any] | None) -> None:
-    if state is None:
-        stream.last_reconciled_at = timezone.now()
-    stream.reconcile_state = state or {}
-    stream.save(update_fields=["reconcile_state", "last_reconciled_at", "updated_at"])
-
-
 def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100, deadline: float | None = None) -> int:
     """Commit one bounded sweep pulse, returning the number of absence observations.
 
@@ -945,7 +918,7 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                     "phase": "enumerate" if identity_reads else "extract",
                     "after": None,
                 }
-                _save_reconcile(locked, state)
+                locked.save_reconcile(state)
             original_cursor = _validated_cursor(locked.cursor)
         if state["phase"] == "extract":
             baseline = copy(locked)
@@ -992,7 +965,7 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                         if not links.filter(stream=locked, external_key=key).exists():
                             raise AdapterContractError("The extraction baseline omitted an enumerated identity.")
                         links.observe(locked, key)
-                    _save_reconcile(locked, next_state)
+                    locked.save_reconcile(next_state)
         else:
             with transaction.atomic():
                 locked = manager.lock_current(locked, fenced_to=locked)
@@ -1022,11 +995,11 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                 if transitions:
                     adapter.on_absent(locked, transitions)
                 if batch:
-                    _save_reconcile(locked, {**state, "after": batch[-1].pk})
+                    locked.save_reconcile({**state, "after": batch[-1].pk})
                 elif state["phase"] == "roots":
-                    _save_reconcile(locked, {**state, "phase": "children", "after": None})
+                    locked.save_reconcile({**state, "phase": "children", "after": None})
                 else:
-                    _save_reconcile(locked, None)
+                    locked.save_reconcile(None)
                 stream.reconcile_state, stream.last_reconciled_at = locked.reconcile_state, locked.last_reconciled_at
                 return changed
         stream.reconcile_state, stream.last_reconciled_at = locked.reconcile_state, locked.last_reconciled_at
