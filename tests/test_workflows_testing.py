@@ -20,7 +20,7 @@ from angee.graphql.publishing import change_published
 from angee.jobs.enqueue import celery_app
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.testing.models import Resource
-from angee.workflows.states import StepRunStatus
+from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Step, resolve_step
 from angee.workflows.testing import drivers
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowVersion
@@ -186,8 +186,8 @@ def test_registered_local_step_runs_through_the_production_driver(execution, reg
     assert [name for name, _payload in sent] == ["workflows.execute", "workflows.wake_run"]
 
 
-def test_run_until_drives_a_run_bound_to_a_reader_without_step_access(execution):
-    """The driver inspects the steps elevated, whichever reader the caller bound the run to."""
+def test_run_until_drives_a_run_bound_to_an_actor_who_cannot_read_it(execution):
+    """The driver inspects the steps elevated, whichever actor the caller bound the run to."""
 
     actor, _sent = execution
     workflow = drivers.load_workflow(document("first", "second"), actor=actor)
@@ -195,7 +195,7 @@ def test_run_until_drives_a_run_bound_to_a_reader_without_step_access(execution)
 
     drivers.run_until(run.with_actor(create_user("driver-outsider")))
 
-    assert run.output == {"value": 3}
+    assert (run.status, run.output) == (RunStatus.SUCCEEDED, {"value": 3})
 
 
 @pytest.mark.parametrize("status", [StepRunStatus.READY, StepRunStatus.SUCCEEDED])

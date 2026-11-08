@@ -41,9 +41,8 @@ live in code docstrings.
   chunk. A row list loaded for one actor and reused under another actor's
   context returns the first actor's relations; load the rows for that actor.
   That actor survives `system_context()`, so system work on an actor-bound row
-  reads its relations through `<related>.system_context(reason=...)`, as
-  workflow advancement, operator step retry, a run's failure reason and change
-  concerns, a step's effect marker and the workflows test drivers do.
+  reads its relations through `<related>.system_context(reason=...)`;
+  `Runner.advance` is the reference.
 - REBAC's `relation_actor()` answers no actor inside `system_context()`, where
   0.30 answered the ambient actor. `held_permissions`, `permission_annotations`
   and `permissions_field` decide for the ambient actor they stamp, so a verb's

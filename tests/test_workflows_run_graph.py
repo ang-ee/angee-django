@@ -329,7 +329,7 @@ def test_failure_routed_error_edge_is_taken(schema, execution):
 def test_run_failure_reason_prefers_output_then_first_retained_failed_error(execution, register_step):
     """Reader diagnostics have one deterministic precedence and require an error outcome.
 
-    The failed steps are read elevated, whichever reader the run is bound to.
+    The failed steps are read elevated, whichever actor the run is bound to.
     """
     actor, _ = execution
 
