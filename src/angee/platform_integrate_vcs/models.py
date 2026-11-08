@@ -87,7 +87,7 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
             claims = {descriptor["name"]: descriptor["path"] for descriptor in descriptors}
             available = available_addons()
             seen: set[str] = set()
-            with transaction.atomic(using=using):
+            with transaction.atomic():
                 current_source = (
                     type(source)._base_manager.db_manager(using).select_related("repository")
                     .select_for_update().get(pk=source.pk)
