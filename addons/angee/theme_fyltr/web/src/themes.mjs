@@ -1,11 +1,11 @@
-import { defineTheme } from "@angee/ui/theme-runtime";
+import { createThemeCustomizationOptions, defineTheme } from "@angee/ui/theme-runtime";
 
 export const themes = [defineTheme({
   contractVersion: 1,
   id: "angee.fyltr",
   labelKey: "fyltr.label",
   descriptionKey: "fyltr.description",
-  revision: 1,
+  revision: 2,
   tokens: {
     shared: {
       "--font-family-sans": "Inter, SF Pro Display, system-ui, sans-serif",
@@ -104,4 +104,13 @@ export const themes = [defineTheme({
       "--ring-danger": "0 0 0 3px rgb(255 107 107 / 35%)",
     },
   },
+  options: createThemeCustomizationOptions({
+    brand: "#00c853",
+    accent: "#008f78",
+    neutral: "#60717b",
+    font: "theme",
+    radius: "theme",
+    density: "theme",
+    elevation: "theme",
+  }),
 })];

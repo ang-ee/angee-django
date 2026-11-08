@@ -14,8 +14,9 @@ The framework identity catalogue includes two product themes. **Angee**
 (`angee.theme_angee`, theme ID `angee.angee`) uses the `angee.ai` graphite and
 gold identity; **Fyltr** (`angee.theme_fyltr`, theme ID `angee.fyltr`) uses the
 `fyltr.ai` charcoal, cool-white and green identity. Each is one selectable
-theme with light and dark token layers. The full project profile installs both;
-the default profile remains Default plus Appearance.
+theme with light and dark token layers. Default, Angee and Fyltr all accept the
+shared bounded customization described below. The full project profile installs
+both product themes; the default profile remains Default plus Appearance.
 
 ## Host and user precedence
 
@@ -40,8 +41,16 @@ independently. The stored document contains stable IDs and versioned inputs:
   "themeId": "angee.brand",
   "colorScheme": "system",
   "options": {
-    "version": 1,
-    "value": { "brand": "#5b5bd6", "accent": "#0d9488", "radius": "6px" }
+    "version": 2,
+    "value": {
+      "brand": "#5b5bd6",
+      "accent": "#0d9488",
+      "neutral": "#6b7280",
+      "font": "theme",
+      "radius": "soft",
+      "density": "theme",
+      "elevation": "theme"
+    }
   }
 }
 ```
@@ -55,6 +64,55 @@ the selection.
 The DOM uses `data-theme-id` for implementation identity and
 `data-color-scheme="light|dark"` for the resolved scheme. `data-theme` mirrors
 the scheme for one compatibility cycle.
+
+## Customizing a base theme
+
+Selecting a theme chooses the authored base design. A customizable theme then
+accepts seven bounded inputs: brand, accent and neutral colors plus approved
+typography, corner, control-density and elevation choices. The generator derives
+semantic tokens for light and dark together, including readable foregrounds and
+interaction states. Appearance stores the inputs in the user's preference and
+rebuilds the token overrides whenever the generator changes.
+
+An unchanged field emits no override. This keeps the selected addon's authored
+tokens authoritative and makes **Restore theme defaults** exact. Customizing
+while following the app default pins the current base theme in the user's
+preference so a later host-default change cannot reinterpret those options.
+
+Theme authors opt into the shared customization contract from the pure headless
+entry and attach the matching shared editor in the browser contribution:
+
+```js
+import {
+  createThemeCustomizationOptions,
+  defineTheme,
+} from "@angee/ui/theme-runtime";
+
+export const themes = [defineTheme({
+  // identity and token layers omitted
+  options: createThemeCustomizationOptions({
+    brand: "#315c52",
+    accent: "#8b5cf6",
+    neutral: "#777064",
+    font: "theme",
+    radius: "theme",
+    density: "theme",
+    elevation: "theme",
+  }),
+})];
+```
+
+```tsx
+import {
+  defineThemeContribution,
+  ThemeCustomizationEditor,
+} from "@angee/ui/theme";
+
+defineThemeContribution({
+  definition: themes[0],
+  optionsEditor: ThemeCustomizationEditor,
+});
+```
 
 ## Authoring a theme addon
 
@@ -133,7 +191,10 @@ Options declare one current version, defaults, a strict parser and a resolver
 that returns token layers. Inputs must be a closed, bounded set such as approved
 enums, numeric ranges or six-digit hex colors. User-provided CSS, URLs, classes
 and module paths are outside the contract. An optional React `optionsEditor`
-edits an envelope and applies it through the shared Appearance action.
+edits an envelope and applies it through the shared Appearance action. Use
+`createThemeCustomizationOptions` with `ThemeCustomizationEditor` for the
+standard palette/type/shape controls; define theme-specific options only when
+their inputs have different meaning.
 
 The complete consumer example is
 [`examples/addons/example/theme`](../../examples/addons/example/theme). The

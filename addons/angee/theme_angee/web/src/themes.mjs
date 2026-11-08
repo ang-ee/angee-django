@@ -1,11 +1,11 @@
-import { defineTheme } from "@angee/ui/theme-runtime";
+import { createThemeCustomizationOptions, defineTheme } from "@angee/ui/theme-runtime";
 
 export const themes = [defineTheme({
   contractVersion: 1,
   id: "angee.angee",
   labelKey: "angee.label",
   descriptionKey: "angee.description",
-  revision: 1,
+  revision: 2,
   tokens: {
     shared: {
       "--font-family-sans": "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
@@ -104,4 +104,13 @@ export const themes = [defineTheme({
       "--ring-danger": "0 0 0 3px rgb(248 113 113 / 35%)",
     },
   },
+  options: createThemeCustomizationOptions({
+    brand: "#e7b008",
+    accent: "#6366f1",
+    neutral: "#71717a",
+    font: "theme",
+    radius: "theme",
+    density: "theme",
+    elevation: "theme",
+  }),
 })];

@@ -126,6 +126,9 @@ importers:
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
+      '@angee/theme-brand':
+        specifier: workspace:*
+        version: link:../../theme_brand/web
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
