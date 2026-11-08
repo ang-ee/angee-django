@@ -90,20 +90,20 @@ class SyncCycleBridge(RunSubject):
             raise ValidationError("The Bridge dispatch changed during admission.")
 
     def settle_run(self, run: Any, status: str) -> None:
-        """Project the first terminal transition through the Bridge compare-and-set."""
-        settle_cycle(cast(Bridge, self), run, status)
+        """Project the first terminal transition through the Bridge compare-and-set.
 
-
-def settle_cycle(bridge: Bridge, run: Any, status: str) -> None:
-    """Sum successful stream outputs, or report a safe terminal failure reason."""
-    if status == RunStatus.SUCCEEDED:
-        definition = run.policy_version.definition
-        keys = [key for key, _, _ in definition.declarations() if issubclass(definition.step(key), StreamStage)]
-        outputs = run.step_runs.filter(node_key__in=keys, status=StepRunStatus.SUCCEEDED).values_list(
-            "output", flat=True,
-        )
-        items = sum(StreamStageOutput.model_validate(output).counts["cycle_items"] for output in outputs)
-        bridge.settle_dispatch(run.pk, result=items)
-    else:
-        message = "Sync workflow was canceled." if status == RunStatus.CANCELED else "Sync workflow failed."
-        bridge.settle_dispatch(run.pk, error=IntegrationError(message))
+        A succeeded run settles the sum of its stream stages' cycle items; any
+        other terminal status settles a safe failure reason.
+        """
+        bridge = cast(Bridge, self)
+        if status == RunStatus.SUCCEEDED:
+            definition = run.policy_version.definition
+            keys = [key for key, _, _ in definition.declarations() if issubclass(definition.step(key), StreamStage)]
+            outputs = run.step_runs.filter(node_key__in=keys, status=StepRunStatus.SUCCEEDED).values_list(
+                "output", flat=True,
+            )
+            items = sum(StreamStageOutput.model_validate(output).counts["cycle_items"] for output in outputs)
+            bridge.settle_dispatch(run.pk, result=items)
+        else:
+            message = "Sync workflow was canceled." if status == RunStatus.CANCELED else "Sync workflow failed."
+            bridge.settle_dispatch(run.pk, error=IntegrationError(message))
