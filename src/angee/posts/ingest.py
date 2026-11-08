@@ -9,12 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.db import transaction
-from rebac import system_context
 
 if TYPE_CHECKING:
     from angee.posts.backends import ParsedPost
-
-PROVIDER_TRASH_REASON = "Hidden by the source."
 
 
 def land_posts(
@@ -38,20 +35,7 @@ def land_posts(
         def overlay(message: Any) -> None:
             post = by_id[message.external_id]
             _overlay_engagement([post], [message], owner_id=owner_id)
-            with system_context(reason="posts.ingest.moderation"):
-                local = message.local_metadata
-                if post.hidden and not message.is_trashed:
-                    message.trash(reason=PROVIDER_TRASH_REASON)
-                    local = message.local_metadata
-                    local["provider_hidden"] = message.trashed_at.isoformat()
-                elif not post.hidden and message.provider_hidden:
-                    message.restore()
-                    local = message.local_metadata
-                if not post.hidden:
-                    local.pop("provider_hidden", None)
-                if local != message.local_metadata:
-                    message.metadata = {**(message.metadata or {}), "local": local}
-                    message.save(update_fields=("metadata", "updated_at"))
+            message.apply_provider_visibility(hidden=post.hidden)
         with transaction.atomic():
             messages.extend(message_model.objects.ingest(
                 [replace(post.message, metadata={**post.message.metadata, "tags": list(post.tags)}) for post in chunk],
@@ -75,7 +59,7 @@ def _overlay_engagement(posts: list[ParsedPost], messages: list[Any], *, owner_i
     landed, _ = _pair_landed(posts, messages)
 
     for message, post in landed:
-        _write_public_payload(message, post)
+        message.apply_public_post(post)
         if post.metrics is not None:
             metrics_model.objects.upsert(message=message, metrics=post.metrics, created_by_id=owner_id)
 
@@ -154,17 +138,3 @@ def _resolve_relation_targets(landed: list[Any], by_key: dict, *, channel_id: An
             targets[(platform, row.external_id)] = row
     return targets
 
-
-def _write_public_payload(message: Any, post: ParsedPost) -> None:
-    """Fold parsed public-post fields onto the shared message/thread rows."""
-
-    if message.is_original_post != post.is_original_post:
-        message.is_original_post = post.is_original_post
-        message.save(update_fields=("is_original_post", "updated_at"))
-    thread = message.thread
-    if thread is None or not post.is_original_post or not post.subject_url:
-        return
-    subject_url = post.subject_url
-    if thread.subject_url != subject_url:
-        thread.subject_url = subject_url
-        thread.save(update_fields=("subject_url", "updated_at"))

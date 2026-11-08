@@ -14,6 +14,7 @@ table) and feed backend live in ``tests.conftest``.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -453,6 +454,29 @@ def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None) -> No
     assert message.thread.modality == Thread.Modality.PUBLIC_THREAD
     assert message.thread.visibility == Thread.Visibility.PUBLIC
     assert message.is_original_post is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_provider_visibility_restores_only_provider_stamped_trash(posts_tables: None) -> None:
+    """A provider unhide restores the trash it stamped, never an operator's later removal."""
+
+    del posts_tables
+    feed = _feed("provider-moderation")
+    with system_context(reason="test provider moderation"):
+        land_posts(feed, [replace(_post("moderated"), hidden=True)], owner_id=feed.owner_id)
+        message = Message._base_manager.get(external_id="moderated")
+        assert message.is_trashed and message.provider_hidden
+        assert message.trash_reason == Message.PROVIDER_TRASH_REASON
+
+        message.apply_provider_visibility(hidden=False)
+        message.refresh_from_db()
+        assert not message.is_trashed
+        assert "provider_hidden" not in message.local_metadata
+
+        message.trash(reason="Removed by an operator")
+        message.apply_provider_visibility(hidden=False)
+        message.refresh_from_db()
+        assert message.is_trashed and not message.provider_hidden
 
 
 def test_thread_public_extension_has_no_json_tags_column() -> None:
