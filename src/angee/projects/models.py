@@ -12,7 +12,7 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connections, models, router, transaction
+from django.db import IntegrityError, connection, models, router, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from django_compose.models import Composable
@@ -459,7 +459,7 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         kinds = self.model.activity_type.field.related_model
         tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
         using = tasks.db
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             self.model.validate_target(record)
             task = self.model(
                 title=title,
@@ -493,8 +493,7 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         if len(title) > length:
             title, rest = title[: length - 1] + "…", note
         tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
-        using = tasks.db
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             task = tasks.schedule(
                 record,
                 title=title,
@@ -1137,8 +1136,7 @@ class Task(
             *(f"project:{project}" for project in projects),
             *(f"parent:{parent}" for parent in parents),
         })
-        with transaction.atomic(using=using):
-            connection = connections[using]
+        with transaction.atomic():
             if connection.vendor == "postgresql":
                 with connection.cursor() as cursor:
                     for scope in scopes:
@@ -1527,7 +1525,7 @@ class Task(
             update_fields = kwargs.get("update_fields")
             structure_fields = {"project", "project_id", "milestone", "milestone_id", "parent", "parent_id"}
             if self._state.adding or update_fields is None or structure_fields.intersection(update_fields):
-                with transaction.atomic(using=using):
+                with transaction.atomic():
                     self._validate_structure()
                     super().save(*args, **kwargs)
                     # The persisted candidate lets REBAC evaluate every composed share arm.
@@ -1598,7 +1596,7 @@ class Task(
         A record task announces the completion, with ``feedback``, on its record.
         """
 
-        with transaction.atomic(using=self._state.db):
+        with transaction.atomic():
             self._lock_lifecycle()
             if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
                 return self
