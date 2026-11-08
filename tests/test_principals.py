@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_subject_ref
@@ -115,10 +116,10 @@ def test_agent_create_rolls_back_when_service_user_sync_fails(
 
     owner = User.objects.create_user(username="principal-owner-rollback", email="principal-rollback@example.com")
 
-    def fail_sync(agent: object, *, prefix: str) -> object:
+    def fail_sync(agent: object) -> object:
         raise RuntimeError("sync failed")
 
-    monkeypatch.setattr("angee.agents.models.sync_service_user", fail_sync)
+    monkeypatch.setattr(Agent, "sync_service_user", fail_sync)
 
     with pytest.raises(RuntimeError, match="sync failed"):
         with system_context(reason="test.agent.service_user.rollback"):
@@ -191,3 +192,56 @@ def test_agent_bulk_delete_deactivates_service_user(composed_tables: None) -> No
 
     with system_context(reason="test.agent.service_user.assert_bulk"):
         assert User.objects.get(pk=user_id).is_active is False
+
+
+def test_service_user_sync_adopts_and_relabels_its_stable_username(composed_tables: None) -> None:
+    """A saved row without a link adopts the user its stable username names, relabelled as a service."""
+
+    owner = User.objects.create_user(username="principal-owner-adopt", email="principal-adopt@example.com")
+    with system_context(reason="test.agent.service_user.adopt"):
+        agent = Agent.objects.create(name="Adopting", owner=owner)
+        previous = agent.user_id
+        Agent._base_manager.filter(pk=agent.pk).update(user_id=None)
+        agent.refresh_from_db()
+        User._base_manager.filter(pk=previous).update(first_name="Stale", email="stale@example.com")
+        user = agent.sync_service_user()
+
+    assert user.pk == previous
+    assert Agent._base_manager.get(pk=agent.pk).user_id == previous
+    with system_context(reason="test.agent.service_user.assert_adopt"):
+        adopted = User.objects.get(pk=previous)
+    assert (adopted.username, adopted.first_name, adopted.email, adopted.kind) == (
+        f"agent-{agent.sqid}", "Adopting", "", "service",
+    )
+    assert not adopted.has_usable_password()
+
+
+def test_service_user_deactivation_refuses_a_person_account(composed_tables: None) -> None:
+    """Only a service principal is deactivated by the deletion of its owner."""
+
+    person = User.objects.create_user(username="principal-person", email="principal-person@example.com")
+    with system_context(reason="test.service_user.person"), pytest.raises(ValidationError):
+        person.deactivate_service()
+    assert User._base_manager.get(pk=person.pk).is_active is True
+
+
+def test_service_user_relations_keep_their_stored_shape() -> None:
+    """Each participant declares its own relation, so composing the mixin alters no stored schema."""
+
+    from django.db.migrations.state import ModelState
+
+    from angee.iam.models import ServiceUserMixin
+    from angee.workflows.testing.models import Workflow
+
+    assert issubclass(Agent, ServiceUserMixin) and issubclass(Workflow, ServiceUserMixin)
+    shapes = {
+        model._meta.label: {
+            key: value for key, value in ModelState.from_model(model).fields["user"].deconstruct()[3].items()
+            if key in {"related_name", "editable", "null", "blank"}
+        }
+        for model in (Agent, Workflow)
+    }
+    assert shapes == {
+        "agents.Agent": {"related_name": "agent", "null": True, "blank": True},
+        "workflows.Workflow": {"related_name": "workflow_principal", "editable": False, "null": True, "blank": True},
+    }

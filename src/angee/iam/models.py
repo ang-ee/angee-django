@@ -16,8 +16,9 @@ import logging
 import secrets
 from collections.abc import Mapping
 from copy import copy
-from typing import Any, Self, cast
+from typing import Any, ClassVar, Self, cast
 
+from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.validators import UnicodeUsernameValidator
@@ -50,7 +51,7 @@ from angee.base.fields.state import StateField
 from angee.base.identity import canonical_subject_ref
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeDataModel
-from angee.base.models.identity import instance_from_public_id
+from angee.base.models.identity import PublicIdentity, instance_from_public_id
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.roles import role_anchor
 from angee.base.querysets import AngeeQuerySet
@@ -514,6 +515,26 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         return self._create_user(username, email, password, **extra_fields)
 
+    def ensure_service_user(self, *, username: str, name: str, user_id: Any = None) -> UserT:
+        """Create or relabel a saved owner's stable, non-login principal.
+
+        The owner calls this after its own write admission and keeps its
+        foreign key and stable username; this factory owns every user write.
+        """
+
+        with system_context(reason="iam.service_user.sync"), transaction.atomic():
+            rows = self.get_queryset().lock_if_supported(no_key=True)
+            if user_id is None:
+                user, created = rows.get_or_create(
+                    username=username, defaults=self.model.service_identity_values(username=username, name=name),
+                )
+                if created:
+                    return user
+            else:
+                user = rows.get(pk=user_id)
+            user.update_service_identity(username=username, name=name)
+            return user
+
     def ensure_bootstrap_admin(
         self,
         username: str,
@@ -951,6 +972,31 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         if update_fields:
             self.save(update_fields=[*sorted(update_fields), "updated_at"], expected_revision=expected_revision)
 
+    @staticmethod
+    def service_identity_values(*, username: str, name: str) -> dict[str, Any]:
+        """Return the user facts a service owner's identity and label determine."""
+
+        return {"username": username, "first_name": name, "last_name": "", "email": "", "kind": UserKind.SERVICE}
+
+    def update_service_identity(self, *, username: str, name: str) -> None:
+        """Save only the service identity facts that changed."""
+
+        values = self.service_identity_values(username=username, name=name)
+        changed = {field for field, value in values.items() if getattr(self, field) != value}
+        for field in changed:
+            setattr(self, field, values[field])
+        if changed:
+            self.save(update_fields=changed)
+
+    def deactivate_service(self) -> None:
+        """Keep a deleted service owner's principal for attribution while it can no longer act."""
+
+        if self.kind != UserKind.SERVICE:
+            raise ValidationError("Only service accounts are deactivated by their service owner.")
+        if self.is_active:
+            self.is_active = False
+            self.save(update_fields={"is_active"})
+
     def update_preferences(self, preferences: Mapping[str, Any]) -> None:
         """Replace this user's private UI preference object."""
 
@@ -975,3 +1021,45 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """Return the user's short display name."""
 
         return self.first_name
+
+
+class ServiceUserMixin(PublicIdentity, models.Model):
+    """A row that acts through its own stable, non-login user.
+
+    The row declares ``service_user_prefix`` and its ``user`` relation: a
+    nullable, protected one-to-one to the user model whose reverse name the row
+    chooses (a mixin-owned relation would deconstruct a templated reverse name
+    and alter every stored schema). Its user is named ``<prefix>-<public id>``
+    and labelled with the row's ``str()``. Call :meth:`sync_service_user` after
+    the row's own write and :meth:`deactivate_service_user` from its delete
+    receivers.
+    """
+
+    service_user_prefix: ClassVar[str]
+
+    class Meta:
+        abstract = True
+
+    def sync_service_user(self) -> Any:
+        """Create or relabel this saved row's user and link it."""
+
+        if self.pk is None:
+            raise ValueError("The service owner must be saved before syncing its user.")
+        owner: Any = self  # The participant declares the ``user`` relation.
+        with transaction.atomic():
+            user = get_user_model().objects.ensure_service_user(
+                username=f"{self.service_user_prefix}-{self.public_id}", name=str(self), user_id=owner.user_id,
+            )
+            if owner.user_id != user.pk:
+                type(owner)._base_manager.filter(pk=self.pk).update(user_id=user.pk)
+            owner.user = user
+        return user
+
+    def deactivate_service_user(self) -> None:
+        """Keep this deleted row's user for attribution while it can no longer act."""
+
+        owner: Any = self  # The participant declares the ``user`` relation.
+        if owner.user_id is None:
+            return
+        with system_context(reason="iam.service_user.deactivate"):
+            get_user_model()._base_manager.get(pk=owner.user_id).deactivate_service()

@@ -63,7 +63,7 @@ from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor, require_rebac_queryset
 from angee.base.refs import RecordRef
-from angee.iam.service_users import sync_service_user
+from angee.iam.models import ServiceUserMixin
 from angee.integrate.models import IntegrationCreateMode
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.jobs.enqueue import enqueue_task
@@ -927,7 +927,7 @@ class AgentManager[AgentT: Agent](AngeeHistoryManager[AgentT]):
             return next((agent for agent in candidates if agent.can_chat), None)
 
 
-class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
@@ -949,6 +949,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concret
     resource_class = AgentResource
 
     sqid_prefix = "agt_"
+    service_user_prefix = "agent"
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     is_template = models.BooleanField(default=False, db_index=True)
@@ -1115,7 +1116,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concret
                     kwargs["update_fields"] = {*_update_field_names(update_fields), "conflict_kind", "conflict_name"}
             super().save(*args, **kwargs)
             if creating or renamed:
-                sync_service_user(self, prefix="agent")
+                self.sync_service_user()
             # Explicit policy writes always reconcile; a full save only when it changed the policy.
             explicit = names is not None and bool({*_READER_POLICY_FIELDS, "user"} & names)
             if not (creating or explicit) and names is None and persisted is not None:
