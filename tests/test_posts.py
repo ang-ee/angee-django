@@ -457,6 +457,32 @@ def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None) -> No
 
 
 @pytest.mark.django_db(transaction=True)
+def test_reply_counts_report_measured_posts_of_one_channel_and_omit_unmeasured_ones(posts_tables: None) -> None:
+    """A measured zero is reported; a post without metrics and another channel's post are absent."""
+
+    del posts_tables
+    feed = _feed("reply-counts")
+    other = _feed("reply-counts-other")
+    with system_context(reason="test reply counts"):
+        land_posts(
+            feed,
+            [
+                _post("measured", metrics=ParsedMetrics(reply_count=3)),
+                _post("zero", metrics=ParsedMetrics(reply_count=0)),
+                _post("unmeasured"),
+            ],
+            owner_id=feed.owner_id,
+        )
+        land_posts(other, [_post("elsewhere", metrics=ParsedMetrics(reply_count=9))], owner_id=other.owner_id)
+        counts = PostMetrics.objects.reply_counts(
+            channel=feed,
+            platform="youtube",
+            external_ids=["measured", "zero", "unmeasured", "elsewhere"],
+        )
+    assert counts == {"measured": 3, "zero": 0}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_provider_visibility_restores_only_provider_stamped_trash(posts_tables: None) -> None:
     """A provider unhide restores the trash it stamped, never an operator's later removal."""
 
