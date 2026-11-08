@@ -366,6 +366,11 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
         if self.target != target:
             raise ValidationError("The extraction names a different target.")
 
+    def require_request_digest(self, digest: str) -> None:
+        """Refuse a request key reused for different retained evidence."""
+        if self.outcome.get("request_digest") != digest:
+            raise ValidationError("This request key already owns different evidence.")
+
     @property
     def used_model_roles(self) -> tuple[ExtractionRole, ...]:
         """Return model roles recorded during acquisition and interpretation."""

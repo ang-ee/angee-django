@@ -127,7 +127,7 @@ class DeterministicExtraction:
                 )
             ],
             pages=[PageCarrier(source_position=0, page_position=0)],
-            parts=[PartCarrier.retain(part, actor=actor, drive_id=str(file.drive.sqid))],
+            parts=[PartCarrier.retain(part, actor=actor, drive_id=str(file.drive.sqid))[0]],
         )
 
     def recognize(self, page, file, model, *, config):

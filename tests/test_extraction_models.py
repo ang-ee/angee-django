@@ -20,17 +20,18 @@ from rebac import actor_context, generic_target, system_context
 
 from angee.base.fields.state import StateField
 from angee.base.models.derived import DerivedFrom
-from angee.extraction.acquisition import PageCarrier
+from angee.extraction.acquisition import PageCarrier, PartCarrier
 from angee.extraction.contracts import (
     DocumentPart,
     ExtractionPartKind,
     Result,
     Source,
 )
-from angee.extraction.managers import StaleExtraction
+from angee.extraction.managers import ExtractionManager, StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
 from angee.provenance.evidence import FactAuthority
 from angee.storage.models import File as AbstractFile
+from angee.storage.models import FileManager
 from angee.workflows_extraction.steps import InferEvidenceInput, InferEvidenceStep
 from tests.conftest import Drive, File, create_platform_admin
 from tests.extraction_models import Extraction, ExtractionLineage, ExtractionPage, ExtractionPart, ExtractionSource
@@ -205,6 +206,80 @@ def test_exact_retry_reuses_revision_and_conflicting_request_is_rejected(evidenc
     with pytest.raises(ValidationError):
         retain(result=replace(values["result"], value=changed))
     assert Extraction.objects.count() == 1
+
+
+def test_carrier_storage_writes_and_reads_precede_the_lineage_transaction(evidence, monkeypatch):
+    retain, _values = evidence
+    ingest, read = FileManager.ingest_bytes, File.read_verified
+    calls = []
+
+    def ingest_outside(self, *args, **kwargs):
+        assert not connection.in_atomic_block
+        calls.append("write")
+        return ingest(self, *args, **kwargs)
+
+    def read_outside(self, *args, **kwargs):
+        assert not connection.in_atomic_block
+        calls.append("read")
+        return read(self, *args, **kwargs)
+
+    monkeypatch.setattr(FileManager, "ingest_bytes", ingest_outside)
+    monkeypatch.setattr(File, "read_verified", read_outside)
+    row = retain()
+    assert calls == ["write", "read"]
+    assert row.parts.count() == 1
+
+
+def test_failed_allocation_discards_only_the_carrier_it_created(evidence, monkeypatch):
+    retain, _values = evidence
+    with system_context(reason="test extraction carrier inventory"):
+        before = set(File.objects.values_list("pk", flat=True))
+
+    def refuse(*args, **kwargs):
+        raise ValidationError("allocation refused")
+
+    monkeypatch.setattr(ExtractionManager, "_retain_prepared", refuse)
+    with pytest.raises(ValidationError, match="allocation refused"):
+        retain()
+    with system_context(reason="test extraction carrier cleanup"):
+        assert set(File.objects.values_list("pk", flat=True)) == before
+
+
+def test_failed_allocation_keeps_a_carrier_a_retained_revision_holds(evidence, monkeypatch):
+    retain, _values = evidence
+    allocate = ExtractionManager._retain_prepared
+    retained = []
+
+    def allocate_then_refuse(self, *args, **kwargs):
+        retained.append(allocate(self, *args, **kwargs))
+        raise ValidationError("the caller refused after allocation")
+
+    monkeypatch.setattr(ExtractionManager, "_retain_prepared", allocate_then_refuse)
+    with pytest.raises(ValidationError, match="refused after allocation"):
+        retain()
+    with system_context(reason="test extraction held carrier"):
+        carrier = retained[0].parts.get().carrier_file
+        assert File.objects.filter(pk=carrier.pk).exists()
+        assert not carrier.purge_if_unretained()
+
+
+def test_allocation_rechecks_the_source_identity_after_carrier_preparation(evidence, monkeypatch):
+    retain, values = evidence
+    read = PartCarrier.read
+    with system_context(reason="test extraction carrier inventory"):
+        before = set(File.objects.values_list("pk", flat=True))
+
+    def change_source(self, file):
+        part = read(self, file)
+        File._base_manager.filter(pk=values["target"].pk).update(content_hash="b" * 64)
+        return part
+
+    monkeypatch.setattr(PartCarrier, "read", change_source)
+    with pytest.raises(ValidationError, match="source changed during carrier preparation"):
+        retain()
+    assert Extraction.objects.count() == 0
+    with system_context(reason="test extraction carrier cleanup"):
+        assert set(File.objects.values_list("pk", flat=True)) == before
 
 
 def test_lineage_compare_and_swap_rejects_a_stale_parent(evidence):

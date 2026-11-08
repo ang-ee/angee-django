@@ -168,7 +168,7 @@ class RecognizePageStep(_IOStep, Step[RecognizePageInput, RecognitionOutput, Inf
             duration_ms=response.duration_ms, metadata=response.provider_metadata,
         )
         ctx.heartbeat()
-        carrier = PartCarrier.retain(part, actor=ctx.actor, drive_id=str(file.drive.sqid))
+        carrier, _created = PartCarrier.retain(part, actor=ctx.actor, drive_id=str(file.drive.sqid))
         return ctx.done(RecognitionOutput(page=value.page, part=carrier), outcome="recognized")
 
 

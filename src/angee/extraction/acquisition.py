@@ -73,16 +73,26 @@ class PartCarrier(BaseModel):
     content_hash: str
 
     @classmethod
-    def retain(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> PartCarrier:
-        """Retain text and structured values under the storage owner's permissions."""
-        file, _created = apps.get_model("storage.File").objects.ingest_bytes(
+    def retain(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> tuple[PartCarrier, bool]:
+        """Retain text and structured values under the storage owner's permissions.
+
+        Returns the carrier and whether this call created its storage row, as
+        ``File.objects.ingest_bytes`` reports it.
+        """
+        file, created = apps.get_model("storage.File").objects.ingest_bytes(
             json.dumps(asdict(part), ensure_ascii=False).encode(),
             filename="extraction-part.json",
             owner_id=actor_user_id(to_subject_ref(actor)),
             drive_id=drive_id,
         )
-        return cls(source_position=part.source_position, source_page=part.source_page, kind=part.kind,
-                   file_id=str(file.sqid), content_hash=str(file.content_hash))
+        carrier = cls(
+            source_position=part.source_position,
+            source_page=part.source_page,
+            kind=part.kind,
+            file_id=str(file.sqid),
+            content_hash=str(file.content_hash),
+        )
+        return carrier, created
 
     def restore(self, ctx: Any) -> DocumentPart:
         """Read the envelope only after rechecking its file authority and digest."""
@@ -247,7 +257,7 @@ def prepare_pages(
     for part in parts:
         heartbeat()
         drive_id = str(files[part.source_position].drive.sqid) if part.source_position < len(files) else ""
-        carriers.append(PartCarrier.retain(part, actor=actor, drive_id=drive_id))
+        carriers.append(PartCarrier.retain(part, actor=actor, drive_id=drive_id)[0])
     return PreparedDocument(sources=snapshots, pages=pages, parts=carriers, hold_reasons=holds)
 
 
