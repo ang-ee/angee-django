@@ -1607,8 +1607,13 @@ open fresh evaluator scopes for authorization and change-feed reads.
   queryset. There is no event projection table or backfill requirement. Folding
   hides a child only when a readable parent target occurs on the same record;
   counts and attention use that same scope, independent of the page's filters.
-  [`publish_change` / `change_published`](../../src/angee/graphql/publishing.py)
-  delivers owner observations inside the transaction. The
+  [`publish_change` / `change_published`](../../src/angee/base/signals.py)
+  delivers owner observations inside the transaction; transport adapters such
+  as [GraphQL's change feeds](../../src/angee/graphql/publishing.py) project them
+  on `change_observed`, after every local observer, so local commit effects
+  precede transport. A model's `change_related_records()` returns `RecordRef`
+  values, widened to inherited views only where the model calls
+  `record_view_refs`. The
   [timeline observer](../../src/angee/timeline/events.py) captures affected
   record identities, including old membership before a save or delete, and
   uses the declared record feeds to invalidate reads after commit. Django's
