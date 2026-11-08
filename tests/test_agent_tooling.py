@@ -64,10 +64,9 @@ from angee.agents_runtime_pydantic.toolsets import (
     AngeeToolset,
     ToolGrantAccess,
     _accessible_tool_grant_ids,
-    _assert_in_process_compatible,
 )
 from angee.base.models.audit import AuditMixin
-from angee.mcp.graphql import _CompiledTool
+from angee.mcp.graphql import ACTOR_EXECUTION_META, _CompiledTool, actor_tool_read_only
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 
 User = get_user_model()
@@ -84,7 +83,7 @@ class AgentToolWriteProbe(AuditMixin, models.Model):
 
 
 def _registered_server(*functions: tuple[Any, bool]) -> FastMCP:
-    """Return a FastMCP registry whose functions declare read/write posture."""
+    """Return a FastMCP registry whose actor-only functions declare read/write posture."""
 
     server = FastMCP(name="agent-tooling-test")
     for function, read_only in functions:
@@ -92,6 +91,7 @@ def _registered_server(*functions: tuple[Any, bool]) -> FastMCP:
             Tool.from_function(
                 function,
                 annotations=ToolAnnotations(readOnlyHint=read_only),
+                meta=ACTOR_EXECUTION_META,
             )
         )
     return server
@@ -571,11 +571,11 @@ def test_tool_role_anchor_is_tableless() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_native_tool_error_mapping_ceiling_and_context_constraint(
+def test_native_tool_error_mapping_and_ceiling(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Direct Tool.run calls retry safely, bound output, and reject request-only context."""
+    """Direct Tool.run calls retry safely and bound their output."""
 
     del composed_tables
     owner = User.objects.create_user(username="native-errors-owner")
@@ -633,15 +633,34 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
             "typed_echo", {"value": "not-an-int"}, _native_context(), advertised["typed_echo"]
         )
 
+
+def test_builtin_tools_declare_actor_execution_and_missing_meta_fails_closed() -> None:
+    """In-process admission reads the native Tool.meta declaration, never the callable."""
+
     def request_bound(context: Context) -> str:
         return str(context)
 
-    request_tool = Tool.from_function(
-        request_bound,
-        annotations=ToolAnnotations(readOnlyHint=True),
+    def plain_read() -> str:
+        return "read"
+
+    read_hint = ToolAnnotations(readOnlyHint=True)
+    for undeclared in (
+        Tool.from_function(request_bound, annotations=read_hint),
+        Tool.from_function(plain_read, annotations=read_hint),
+        Tool.from_function(plain_read, annotations=read_hint, meta={"angee": {"execution_context": "request"}}),
+    ):
+        with pytest.raises(ImproperlyConfigured, match="actor-only execution"):
+            actor_tool_read_only(undeclared)
+
+    assert actor_tool_read_only(Tool.from_function(plain_read, annotations=read_hint, meta=ACTOR_EXECUTION_META))
+    write = Tool.from_function(
+        plain_read,
+        annotations=ToolAnnotations(readOnlyHint=False),
+        meta=ACTOR_EXECUTION_META,
     )
-    with pytest.raises(Exception, match="request-scoped FastMCP Context"):
-        _assert_in_process_compatible(request_tool)
+    assert actor_tool_read_only(write) is False
+    with pytest.raises(ImproperlyConfigured, match="readOnlyHint"):
+        actor_tool_read_only(Tool.from_function(plain_read, meta=ACTOR_EXECUTION_META))
 
 
 @pytest.mark.django_db(transaction=True)

@@ -25,7 +25,7 @@ from angee.base.permissions import declared_rebac_definition
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.data.contracts import DataResourceFieldMetadata, DataResourceMetadata
 from angee.graphql.schema import GraphQLSchemas
-from angee.mcp.graphql import GraphQLTool, register_graphql_tools
+from angee.mcp.graphql import ACTOR_EXECUTION_META, GraphQLTool, register_graphql_tools
 from mcp.types import ToolAnnotations
 
 RESOURCE_SCHEMA = "console"
@@ -57,6 +57,7 @@ def register_resource_tools(server: FastMCP) -> None:
             name="list_resources",
             description="List the data resources available through generated read tools.",
             annotations=ToolAnnotations(readOnlyHint=True),
+            meta=ACTOR_EXECUTION_META,
             tags={RESOURCE_READER_TOOL_TAG},
         )
     )
