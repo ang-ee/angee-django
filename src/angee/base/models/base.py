@@ -65,33 +65,36 @@ class AngeeModel(
         *,
         position_field: str = "position",
         replace: bool = True,
+        permission: str = "write",
     ) -> None:
         """Make this row's owned lines match ``rows``, writing them as the requesting user.
 
         ``field`` names a reverse foreign key whose rows exist only as parts of
         this row. Each entry is ``(public id, values)``: a public id addresses a
         stored line to update, ``None`` creates one, and with ``replace`` every
-        stored line no entry keeps is deleted; ``replace=False`` only adds, for the
-        creation that just authorized this row. Values are native model values:
-        a foreign key by primary key under its ``attname``, a many-to-many field
-        as its complete related set, and a name no field owns as an input-extension
-        value for the line's :meth:`apply_input_extensions`; :meth:`line_relation`
-        refuses any other name before anything is written.
+        stored line no entry keeps is deleted; ``replace=False`` only adds and
+        keeps the lines this row's own save provisioned. Values are native model
+        values: a foreign key by primary key under its ``attname``, a
+        many-to-many field as its complete related set, and a name no field owns
+        as an input-extension value for the line's :meth:`apply_input_extensions`;
+        :meth:`line_relation` refuses any other name before anything is written.
 
-        Replacing requires ``write`` on this row. The line writes then run
-        elevated, authorized by that check, yet each still meets the line's own
-        guards: ``full_clean``, its persisted :class:`RowLockMixin` lock (every
-        removal is checked before any write) and its manager's ``create``. This
-        row's lock serializes the desired set, and a :class:`FractionalRankField`
-        position is staged first so a reorder never collides with itself.
+        Either mode requires ``permission`` on this row from the requester:
+        ``write`` unless the caller names the admission that already covers the
+        lines (a creation that just admitted this row passes ``create``); no
+        mode implies it. The line writes then run elevated, authorized by
+        that check, yet each still meets the line's own guards: ``full_clean``,
+        its persisted :class:`RowLockMixin` lock (every removal is checked
+        before any write) and its manager's ``create``. This row's lock
+        serializes the desired set, and a :class:`FractionalRankField` position
+        is staged first so a reorder never collides with itself.
         """
 
         desired = [(public_id, dict(values)) for public_id, values in rows]
         relation = type(self).line_relation(field, {name for _pid, values in desired for name in values})
         line_model = relation.related_model
         parent_link = relation.field
-        if replace:
-            self.require_access("write")
+        self.require_access(permission)
         with transaction.atomic(), system_context(reason="base.replace_lines"):
             self.lock_subject()  # The row's own lock order: overrides take their domain locks first.
             lines = line_model._base_manager.filter(**{parent_link.name: self})

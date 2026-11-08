@@ -228,7 +228,7 @@ def test_nested_insert_writes_parent_and_lines_atomically(composed_tables):
 
 
 def test_nested_insert_does_not_return_an_unreadable_created_row(composed_tables):
-    """Create authority does not grant read authority over the persisted payload."""
+    """Create authority grants neither read nor write, yet the creation admits its nested lines."""
 
     actor = create_user("unreadable-author")
     result = execute_schema(
@@ -251,6 +251,8 @@ def test_nested_insert_does_not_return_an_unreadable_created_row(composed_tables
     with system_context(reason="test.lines.unreadable_create.verify"):
         document = Document.objects.get(title="Unreadable document")
         assert list(document.lines.values_list("label", flat=True)) == ["Private line"]
+    document.with_actor(actor)
+    assert not document.has_access("write")
 
 
 def test_nested_insert_rolls_back_parent_on_line_failure(composed_tables):

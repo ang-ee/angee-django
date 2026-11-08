@@ -271,8 +271,17 @@ class AngeeHasuraWriteBackend:
         line_rows = self._pop_line_rows(data) if self.lines is not None else None
         with transaction.atomic():
             instance = self._create_row(info, data)
-            if line_rows is not None:
-                self._replace_lines(instance, line_rows, replace=False)
+            if self.lines is not None and line_rows is not None:
+                lines = self._prepare_line_rows(line_rows)
+                # The caller's creation admitted this row and the lines created with it, even when
+                # the caller may not write the row afterwards: name that admission explicitly.
+                instance.replace_lines(
+                    self.lines.field,
+                    lines,
+                    position_field=self.lines.position_field,
+                    replace=False,
+                    permission="create",
+                )
             if extensions:
                 instance.apply_input_extensions(**extensions)
         return instance
@@ -326,7 +335,11 @@ class AngeeHasuraWriteBackend:
                 # A document's revision covers its child set and extension values as well as its columns.
                 instance.save(update_fields={instance.REVISION_FIELD})
             if line_rows is not None:
-                self._replace_lines(instance, line_rows)
+                instance.replace_lines(
+                    self.lines.field,
+                    self._prepare_line_rows(line_rows),
+                    position_field=self.lines.position_field,
+                )
             if extensions:
                 instance.apply_input_extensions(**extensions)
             return instance
@@ -366,24 +379,13 @@ class AngeeHasuraWriteBackend:
         rows = envelope.get("data", []) if isinstance(envelope, Mapping) else envelope
         return [dict(row) for row in rows]
 
-    def _replace_lines(self, parent: Any, rows: list[dict[str, Any]], *, replace: bool = True) -> None:
-        """Hand the decoded desired line set to the parent that owns it.
-
-        Relation public ids are decoded here, under the caller's actor, so a
-        referenced row the caller cannot see is rejected before the parent
-        elevates the line writes.
-        """
-
-        assert self.lines is not None
-        parent.replace_lines(
-            self.lines.field, self._prepare_line_rows(rows), position_field=self.lines.position_field, replace=replace,
-        )
-
     def _prepare_line_rows(self, rows: list[dict[str, Any]]) -> list[tuple[str | None, dict[str, Any]]]:
         """Decode line payloads under the caller into native values, for fingerprinting and writes.
 
         Declared relation public ids resolve through the actor-scoped write
-        owner; any other foreign key is written by primary key under its attname.
+        owner, so a referenced row the caller cannot see is rejected before the
+        parent elevates its line writes; any other foreign key is written by
+        primary key under its attname.
         """
 
         assert self.lines is not None

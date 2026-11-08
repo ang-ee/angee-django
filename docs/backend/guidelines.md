@@ -1523,9 +1523,12 @@ open fresh evaluator scopes for authorization and change-feed reads.
   rows that exist as part of their parent and save with it; associated records
   stay their own resource. The parent owns the write:
   [`AngeeModel.replace_lines`](../../src/angee/base/models/base.py) requires the
-  parent's `write`, then runs the line writes natively and elevated because that
-  check authorizes them, which never makes them system work; the Hasura backend
-  only decodes the line input. A child whose
+  parent's `write` in either mode, then runs the line writes natively and
+  elevated because that check authorizes them, which never makes them system
+  work; the Hasura backend only decodes the line input. A nested insert's
+  creation admits its own lines: since a creator may lack `write` on the row
+  it created, the backend names that admission explicitly
+  (`permission="create"`). A child whose
   invariants separate users from system writers composes
   [`RowLockMixin`](../../src/angee/base/models/locks.py): `locked_fields()` names what its
   state locks, user writes may not change those fields, delete the row or create

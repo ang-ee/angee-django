@@ -71,8 +71,23 @@ def test_replace_lines_writes_native_values(composed_tables: None) -> None:
         assert set(DocumentLine.objects.get(pk=keep.pk).tags.values_list("pk", flat=True)) == {t.pk for t in tags}
 
 
+def test_appending_lines_still_requires_the_parent_write(composed_tables: None) -> None:
+    """``replace=False`` is a diff mode, not an authorization: a reader cannot append lines."""
+
+    reader = create_user("lines-append-reader")
+    with system_context(reason="test.replace_lines.append_reader_seed"):
+        document = Document.objects.create(title="Document")
+    _grant(document, "reader", reader)
+    loaded = Document.objects.with_actor(reader).get(pk=document.pk)
+
+    with pytest.raises(PermissionDenied):
+        loaded.replace_lines("lines", [(None, {"label": "Injected", "quantity": 1, "position": 0})], replace=False)
+
+    assert _rows(document) == []
+
+
 def test_appending_lines_for_a_new_parent_keeps_provisioned_lines(composed_tables: None) -> None:
-    """``replace=False`` serves the creation that authorized the parent: it only adds."""
+    """``replace=False`` only adds, keeping the lines the parent's own save provisioned."""
 
     with system_context(reason="test.replace_lines.append_seed"):
         document = Document.objects.create(title="Document")
