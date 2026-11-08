@@ -8,6 +8,7 @@ from typing import Any, Self, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, ValidationError
 from django.db import connections, models
+from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Coalesce, RowNumber
 from rebac import current_actor
 from rebac.managers import RebacQuerySet, TrackedQuerySet
@@ -182,8 +183,8 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
 
     def first_per_group(
         self,
-        *partition_by: str | models.Expression | models.F,
-        order_by: Sequence[str | models.Expression | models.F],
+        *partition_by: str | BaseExpression | models.F,
+        order_by: Sequence[str | BaseExpression | models.F],
         limit: int,
     ) -> Self:
         """Keep the first ``limit`` rows of each group, ranked by one SQL window.
@@ -196,11 +197,11 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
         callers order the kept rows. Filters chained afterwards apply before the
         ranking, as Django wraps a window filter in an outer query.
 
-        The rank is a selected annotation (``_group_rank``), so that outer query reads
-        the ranked rows whole. A masked rank makes Django re-select the rows by one
-        column per distinct select expression: an annotation equal to a selected
-        column (a partition key over the model's own field) collapses into it, and
-        every later value is read through the previous field's converter.
+        The rank is a selected annotation (``_group_rank``). Callers that need
+        both model rows and duplicate column annotations should select ranked
+        identities in a subquery, then project the rows outside the window mask.
+        Django can add that mask for unselected ordering columns even when the
+        rank is selected, collapsing duplicate expressions and shifting converters.
         """
 
         if not partition_by:

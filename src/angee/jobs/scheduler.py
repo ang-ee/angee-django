@@ -4,13 +4,24 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from django.db import close_old_connections
 from django.db.utils import DatabaseError, InterfaceError
+from django.utils import timezone
 from django_celery_beat.schedulers import DatabaseScheduler as NativeDatabaseScheduler
 
 logger = logging.getLogger(__name__)
+
+
+def periodic_now(timestamp: int | None) -> datetime:
+    """Return the instant a periodic task runs for: the injected Unix ``timestamp``, else now.
+
+    Static beat ticks call without it; tests and scheduler backends may inject one.
+    """
+
+    return timezone.now() if timestamp is None else datetime.fromtimestamp(timestamp, tz=UTC)
 
 
 class DatabaseScheduler(NativeDatabaseScheduler):

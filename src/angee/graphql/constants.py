@@ -16,3 +16,12 @@ are the only group users today.
 
 CHANGE_GROUP_RENEW_SECONDS = 300
 """How often a live subscriber renews its change-group lease (well inside expiry)."""
+
+CHANNEL_LAYER_SOCKET_TIMEOUT_SECONDS = 15.0
+"""Redis socket read timeout for the channel layer's connections.
+
+A consumer waits for messages with a blocking ``BZPOPMIN`` of up to
+``RedisChannelLayer.brpop_timeout`` (5 s). redis-py 8 defaults every socket read
+to 5 s, which cuts that wait off at its own boundary and crashes the websocket
+consumer; the layer's reads must outlast the blocking pop.
+"""

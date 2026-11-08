@@ -233,16 +233,20 @@ test("single group read retains its last buckets with the refetch error", async 
   expect(f.onError).toHaveBeenCalledTimes(1);
 });
 
-test("a live event during initial group discovery restarts the native query and ignores its late stale response", async () => {
+test("a live event during initial group discovery lets that request commit, then refetches once it settles", async () => {
   let accept!: (value: ReturnType<typeof response>) => void;
   const pending = new Promise<ReturnType<typeof response>>((resolve) => { accept = resolve; });
   const f = fixture(vi.fn().mockReturnValueOnce(pending).mockResolvedValue(response(2)));
   const { result } = renderHook(() => useAngeeGroupByBatch(TARGET, SCOPES, { document: DOCUMENT }), { wrapper: f.wrapper });
   await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
   await act(async () => { f.change(); });
-  await waitFor(() => expect(result.current.get("channels")?.totalCount).toBe(2));
+  // Past the coalescing window the running request is still not restarted.
+  await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 400); }); });
+  expect(f.custom).toHaveBeenCalledTimes(1);
   await act(async () => { accept(response(1)); });
-  expect(result.current.get("channels")?.totalCount).toBe(2);
+  // It settles, so the change it may have missed refetches at once.
+  await waitFor(() => expect(result.current.get("channels")?.totalCount).toBe(2));
+  expect(f.custom).toHaveBeenCalledTimes(2);
 });
 
 test("group and general authored reads share one request and model invalidation", async () => {

@@ -74,7 +74,7 @@ from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
-from angee.integrate.errors import IntegrationError, safe_integration_failure
+from angee.integrate.errors import IntegrationError, doubling_backoff, safe_integration_failure
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
 from angee.integrate.net import AddressNotAllowedError
@@ -3134,7 +3134,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     row.delivery_possibly_accepted = False
                     row.delivery_claim = None
                     delay = (error.retry_after if error.retry_after is not None
-                             else timedelta(seconds=60 * 2 ** (attempts - 1)))
+                             else doubling_backoff(attempts, cap=timedelta(hours=1)))
                     row.scheduled_at = now + max(delay, timedelta(seconds=1))
                     row.delivery_lease_until = row.scheduled_at + timedelta(seconds=DELIVERY_TASK_EXPIRES)
                     local["delivery_error"] = safe_integration_failure(error).message

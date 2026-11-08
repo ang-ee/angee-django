@@ -692,6 +692,7 @@ def test_tool_search_activation_replays_from_persisted_history() -> None:
     ctx = RunContext(deps=None, model=TestModel(), usage=RunUsage(), max_retries=1)
     initial = async_to_sync(wrapped.get_tools)(ctx)
     assert initial["query_sessions"].tool_def.defer_loading is True
+    assert not ctx.is_tool_available(initial["query_sessions"].tool_def)
     assert "search_tools" in initial
 
     found = async_to_sync(wrapped.call_tool)(
@@ -715,8 +716,10 @@ def test_tool_search_activation_replays_from_persisted_history() -> None:
     next_ctx = dataclasses.replace(ctx, discovered_tool_names=parse_discovered_tools(replayed))
     activated = async_to_sync(wrapped.get_tools)(next_ctx)
 
+    # The authored `defer_loading` stays set; history-derived discovery owns current visibility.
     assert next_ctx.discovered_tool_names == {"query_sessions"}
-    assert activated["query_sessions"].tool_def.defer_loading is False
+    assert activated["query_sessions"].tool_def.defer_loading is True
+    assert next_ctx.is_tool_available(activated["query_sessions"].tool_def)
 
 
 def test_binary_tool_content_is_removed_before_replay_persistence() -> None:

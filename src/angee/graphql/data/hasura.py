@@ -1594,20 +1594,29 @@ def _first_rows_per_group(
 
     The order is the queryset's own, else its model's ``Meta.ordering``, ending
     on the primary key when neither already does, so a page is deterministic.
-    Rows of a bucket outside the groups page are read but belong to no group.
+    Rank only row identities in a subquery; load rows and bucket keys in the
+    outer read. Django's window mask deduplicates selected expressions when
+    ordering needs an unselected column, so projecting both a row's column and
+    its bucket alias inside that mask would shift the field converters.
     """
 
     if not isinstance(queryset, AngeeQuerySet):
         raise ImproperlyConfigured(f"{queryset.model._meta.label} group rows need an Angee queryset.")
     model = queryset.model
-    ordering = [*queryset.query.order_by] or [*model._meta.ordering]
+    ordering = cast(
+        list[str | models.Expression | models.F], [*queryset.query.order_by] or [*model._meta.ordering],
+    )
     if not any(_orders_by_pk(model, term) for term in ordering):
         ordering.append("pk")
     names = list(partition.keys)
-    kept = (
+    ranked = (
         queryset.filter(partition.predicate)
-        .annotate(**partition.keys)
         .first_per_group(*partition.partitions, order_by=ordering, limit=limit)
+        .values("pk")
+    )
+    kept = (
+        queryset.filter(pk__in=ranked)
+        .annotate(**partition.keys)
         .order_by(*ordering)
     )
     pages: list[list[Any]] = [[] for _ in range(groups)]

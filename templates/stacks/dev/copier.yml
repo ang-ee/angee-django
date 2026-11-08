@@ -114,7 +114,7 @@ _angee:
       help: Image used by Docker-mode frontend and Storybook services.
     playwright_image:
       type: str
-      default: "mcr.microsoft.com/playwright:v1.62.1-noble"
+      default: "mcr.microsoft.com/playwright:v1.65.0-noble"
       help: Playwright browser-server image pinned to the @angee/e2e lock version.
     playwright_mcp_image:
       type: str
@@ -324,7 +324,7 @@ node_image:
 
 playwright_image:
   type: str
-  default: "mcr.microsoft.com/playwright:v1.62.1-noble"
+  default: "mcr.microsoft.com/playwright:v1.65.0-noble"
   help: Playwright browser-server image pinned to the @angee/e2e lock version.
 
 playwright_mcp_image:

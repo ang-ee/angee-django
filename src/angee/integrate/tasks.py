@@ -10,6 +10,7 @@ from celery import shared_task
 from celery.signals import worker_shutting_down
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
+from django.db.models import Q
 from rebac import system_context
 
 from angee.integrate import scheduler
@@ -21,6 +22,7 @@ from angee.integrate.registry import models_with
 from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.sync_runner import run_bridge_sync_job
 from angee.jobs.locks import task_locks_are_cross_process
+from angee.jobs.scheduler import periodic_now
 
 logger = logging.getLogger(__name__)
 
@@ -86,14 +88,16 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
     """Reconcile every healthy connected live-capable bridge to a running session.
 
     Selection starts from lifecycle, the operator's declared intent, and runtime
-    health gates redispatch after a known failed handshake. The live desire is
+    health gates redispatch after a known failed handshake; a transient session
+    failure instead defers redispatch until ``live_retry_at``
+    (``Bridge.record_live_session_failure``). The live desire is
     reconciled only when the two axes disagree: ``start_live`` writes and
     publishes without a dirty check, so calling it on every settled tick would
     broadcast a no-op change per healthy bridge per minute and could force
     ``desired=LIVE`` back onto a row something else had just stopped.
     """
 
-    del timestamp
+    now = periodic_now(timestamp)
     dispatched = 0
     starved_by_queue: dict[str, int] = {}
     cross_process = task_locks_are_cross_process()
@@ -118,6 +122,7 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
             if not live_keys:
                 continue
             bridges = model._default_manager.of_concrete_type().ready_for_work().filter(
+                Q(live_retry_at__isnull=True) | Q(live_retry_at__lte=now),
                 **{f"{field.name}__in": live_keys},
                 lifecycle=model.Lifecycle.CONNECTED,
                 runtime_status=IntegrationRuntimeStatus.OK,

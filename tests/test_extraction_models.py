@@ -484,13 +484,14 @@ def test_read_only_target_access_cannot_retain_or_advance_lineage(evidence, exis
 
 
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
-def test_actor_scoped_carrier_reads_and_base_copy_do_not_join_guarded_sources(evidence):
+def test_actor_scoped_carrier_reads_do_not_join_guarded_sources_around_an_elevated_base_copy(evidence):
+    """The reader's carrier and page reads stay in its scope; retaining over its base copies the base as system work."""
     retain, values = evidence
     first = retain(pages=(PageCarrier(source_position=0, page_position=0, width=40, height=60, dpi=100),))
     scoped = Extraction.objects.with_actor(values["actor"]).get(pk=first.pk)
     assert scoped.document_parts()[0].value == values["result"].parts[0].value
     second = retain(base=scoped, request_key="scoped-copy")
-    assert scoped.authority_carrier_positions(second) == {0: 0}
+    assert scoped.authority_carrier_positions(second.parts.order_by("position")) == {0: 0}
     assert second.pages.get().source_page == 0
 
 

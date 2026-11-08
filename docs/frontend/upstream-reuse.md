@@ -68,9 +68,12 @@ queries also updates mounted identity and data consumers. Message-feed keys
 include the current actor; an unknown actor disables the request. The shared
 live provider revalidates interested reads on each WebSocket connection because
 the change stream has no replay cursor. Model interests name the actual change
-owners of selected relations. Invalidation cancels a matching pending first read
-before refetching; otherwise native Query could join its older snapshot and lose
-the change. Disabled and inactive entries remain invalidated without refetching.
+owners of selected relations. A caller's own write cancels a matching pending
+first read before refetching; otherwise native Query could join its older
+snapshot and lose the write. A live change from another writer instead lets a
+running read commit and refetches it once it settles (the
+[live coalescer](../../packages/refine/src/query-invalidation.ts)). Disabled and
+inactive entries remain invalidated without refetching.
 
 Query cancellation discards late results. The pinned Hasura provider ignores
 AbortSignal in custom request metadata, so physical HTTP abort is not promised;
