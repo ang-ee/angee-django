@@ -1701,6 +1701,17 @@ open fresh evaluator scopes for authorization and change-feed reads.
   the composed definition to optimizer consumers without mutating shared addon
   declarations, so a narrow list selection costs the same at any row count.
 
+### Record write locking
+
+Generic proposal and Hasura writes delegate to
+[`PersistenceMixin.lock_subject`](../../src/angee/base/models/persistence.py)
+before acquiring subject rows. Domain overrides acquire prerequisite rows in
+stable order and return the persisted subject. The candidate carries decoded
+pending column values, so owners can lock both current and proposed scopes.
+Callers reload through their original actor and surface scope and recheck write
+permission after waiting. Statement-member identity remains the hook's optional
+`members` argument. Plain Django models retain native row locking.
+
 ### Direct record access
 
 Direct grants and ownership transfers acquire their model's cooperative
