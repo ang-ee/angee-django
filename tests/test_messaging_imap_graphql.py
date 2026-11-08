@@ -218,6 +218,30 @@ def test_update_imap_channel_credential_refuses_blank_material(composed_tables: 
         assert saved.credential.reveal()["password"] == "mail-password"
 
 
+def test_update_imap_channel_credential_refuses_a_detached_credential(composed_tables: None) -> None:
+    """The channel row refuses a rotation when its credential was detached."""
+
+    admin = _platform_admin("msg-imap-rotate-detached-admin")
+    _seed_imap_vendor()
+    channel = _connect(admin, _CONNECT_VARIABLES)
+    with system_context(reason="test.messaging.imap.rotate.detached.seed"):
+        Channel._base_manager.filter(sqid=channel["id"]).update(credential=None)
+
+    result = execute_schema(
+        _schema(),
+        _UPDATE_CREDENTIAL_MUTATION,
+        {"id": channel["id"], "username": "ada@example.com", "password": "rotated"},
+        user=admin,
+    )
+
+    assert result.errors
+    assert result.errors[0].extensions == {
+        "code": "VALIDATION",
+        "validationErrors": {},
+        "formErrors": ["This channel has no credential; connect it again."],
+    }
+
+
 def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
     composed_tables: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

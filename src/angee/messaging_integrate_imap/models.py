@@ -10,6 +10,7 @@ from django.db import transaction
 from django_compose.models import Composable
 from rebac import actor_context, system_context
 
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.locks import bridge_advisory_lock
 from angee.messaging_integrate_imap.backend import (
     NEW_MAIL_DELIVERY_MODE,
@@ -37,6 +38,22 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
         if not isinstance(backend, ImapChannelBackend):
             raise ValidationError("Mailbox positioning is available for IMAP channels.")
         return backend
+
+    def update_imap_credential(self, *, username: str, password: str) -> None:
+        """Re-enter this IMAP channel's Basic-auth login in place.
+
+        The channel keeps its row, config, cursor and credential identity; only
+        the encrypted material is replaced, validated by the credential's own
+        kind handler. A channel whose credential was detached has nothing to
+        update and must be connected again.
+        """
+
+        credential = self.credential
+        if credential is None:
+            raise ValidationError("This channel has no credential; connect it again.")
+        if credential.kind != CredentialKind.BASIC_AUTH:
+            raise ValidationError("Only a username/password IMAP login can be re-entered here.")
+        credential.replace_material({"username": str(username).strip(), "password": str(password)})
 
     def prepare_imap_new_mail(self, *, actor: Any) -> tuple[int, bool]:
         """Atomically exclude the selected mailboxes' current contents from live sync.
