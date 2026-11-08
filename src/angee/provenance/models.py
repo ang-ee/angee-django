@@ -278,7 +278,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
         recording = inserting and current_changeset() is self
         with (
-            transaction.atomic(using=alias),
+            transaction.atomic(),
             system_context(reason="changeset.record") if recording else nullcontext(),
         ):
             kwargs["using"] = alias
@@ -383,7 +383,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
             raise ValidationError("Only a successfully closed changeset can be reverted.")
         with (
             actor_context(actor) if actor is not None else nullcontext(),
-            transaction.atomic(using=using),
+            transaction.atomic(),
             changeset(fresh=True, activity="revert", origin=self, using=using),
         ):
             histories = []

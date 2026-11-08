@@ -16,7 +16,7 @@ from typing import ClassVar, Protocol, cast
 from asgiref.sync import sync_to_async
 from django.apps import apps
 from django.conf import settings
-from django.db import connections, models, router, transaction
+from django.db import connection, models, router, transaction
 from django.db.models.base import ModelState
 from django.utils import timezone
 
@@ -152,7 +152,6 @@ class _ChangesetBoundary:
             row.attributed = True
         if record and not row.persisted:
             using = self.using or router.db_for_write(changeset_model(), instance=instance)
-            connection = connections[using]
             # Django removes callbacks on savepoint/transaction rollback and
             # retains them on savepoint release. The queue owns that distinction.
             if row.pending_commit is None or not any(
@@ -166,7 +165,7 @@ class _ChangesetBoundary:
                     row.persisted = True
 
                 row.pending_commit = mark_persisted
-                transaction.on_commit(mark_persisted, using=using)
+                transaction.on_commit(mark_persisted)
         return instance
 
     def discard(self, instance: ChangesetLike) -> None:
@@ -190,16 +189,15 @@ class _ChangesetBoundary:
     @staticmethod
     def _close_row(row: _ChangesetRow, outcome: str) -> None:
         instance = row.instance
-        using = instance._state.db or router.db_for_write(changeset_model(), instance=instance)
 
         def close_persisted() -> None:
             if not row.persisted:
                 return
-            with transaction.atomic(using=using):
+            with transaction.atomic():
                 instance.close(outcome)
 
-        if connections[using].in_atomic_block:
-            transaction.on_commit(close_persisted, using=using, robust=True)
+        if connection.in_atomic_block:
+            transaction.on_commit(close_persisted, robust=True)
         else:
             close_persisted()
 

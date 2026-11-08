@@ -324,7 +324,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
             natural_key = {"pk": self.instance.pk}
         if not natural_key:
             raise ValidationError("Statements require a subject natural key.")
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             subject = self.model.statement_subject_model._base_manager.using(self.db).get(**natural_key)
             subject = most_derived_concrete(subject).lock_subject(member_key)
             source, members, defaults = self._admit(
@@ -462,7 +462,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
                 affected.setdefault(subject_id, []).append(pk)
         count = 0
         for subject_id, subject_keys in sorted(affected.items()):
-            with transaction.atomic(using=self.db):
+            with transaction.atomic():
                 subject = self.model.statement_subject_model._base_manager.using(self.db).get(pk=subject_id)
                 subject = most_derived_concrete(subject).lock_subject()
                 subject.require_statement_write(source)
@@ -507,7 +507,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         if not is_sudo():
             subject.require_statement_write(actor)
         using = subject._state.db
-        with transaction.atomic(using=using), system_context(reason="statements.resolve"):
+        with transaction.atomic(), system_context(reason="statements.resolve"):
             subject = subject.lock_subject(members or {})
             rows = self.model._base_manager.using(using).filter(subject=subject, superseded__isnull=True)
             if aspect is not None:
@@ -660,7 +660,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
             if not visible.filter(pk=endpoint.pk).exists():
                 raise PermissionDenied("A pair requires read on both endpoints.")
         ordered = sorted((left, right), key=lambda endpoint: endpoint.pk)
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             for endpoint in ordered:
                 endpoint.lock_subject()
             pair, _ = self.model._base_manager.using(using).get_or_create(
@@ -952,7 +952,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                 if field.name in update_fields or field.attname in update_fields
             }
         )
-        with actor_context(actor), transaction.atomic(using=using):
+        with actor_context(actor), transaction.atomic():
             previous = type(self)._base_manager.using(using).filter(pk=self.pk).first() if self.pk else None
             super().save(*args, **kwargs)
             resolved_fields: set[str] = set()

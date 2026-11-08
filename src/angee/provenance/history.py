@@ -221,7 +221,7 @@ class ModelHistory(HistoricalRecords):
         context = current_changeset()
         return get_change_reason_from_object(instance) or (context.change_reason if context is not None else "")
 
-    def record_rows(self, model: type[models.Model], count: int, *, using: str) -> None:
+    def record_rows(self, model: type[models.Model], count: int) -> None:
         """Accumulate durable captures in memory; the boundary closes them once."""
 
         context = current_changeset()
@@ -233,7 +233,7 @@ class ModelHistory(HistoricalRecords):
             context.touched.append(label)
             context.counts[label] = context.counts.get(label, 0) + count
 
-        transaction.on_commit(committed, using=using)
+        transaction.on_commit(committed)
 
     def diff(self, first: Any, last: Any, *, previous: Any = _UNLOADED) -> Any:
         """Return the native field delta across one changeset boundary.
@@ -326,7 +326,7 @@ class ModelHistory(HistoricalRecords):
                 group.seen.update((model._meta.label_lower, snapshot.pk, history_type) for snapshot in snapshots)
                 for record, snapshot in zip(records, snapshots, strict=True):
                     self.create_historical_record_m2ms(record, snapshot)
-                self.record_rows(model, len(records), using=destination)
+                self.record_rows(model, len(records))
             for child in self.capture_children(model):
                 history = model_history(child)
                 if history is not None:
@@ -369,9 +369,7 @@ class ModelHistory(HistoricalRecords):
                 raise type(error)(f"Cannot capture missing {model._meta.label} row {instance.pk!r}.") from error
             _copy_history_metadata(instance, snapshot)
             super().create_historical_record(snapshot, history_type, using=alias)
-            history_manager = get_history_manager_for_model(model)
-            history_using = alias if self.use_base_model_db else router.db_for_write(history_manager.model)
-            self.record_rows(model, 1, using=history_using)
+            self.record_rows(model, 1)
 
     def pre_delete(self, instance: models.Model, **kwargs: Any) -> None:
         """Snapshot while stored values exist, inside Django's delete transaction."""
@@ -492,7 +490,7 @@ class HistoryMixin(models.Model):
         """Validate attribution before SQL and scope native save dispatch to one group."""
 
         alias = using or router.db_for_write(type(self), instance=self)
-        with transaction.atomic(using=alias, savepoint=not raw), write_group():
+        with transaction.atomic(savepoint=not raw), write_group():
             if not raw and not hasattr(self, "skip_history_when_saving"):
                 history = model_history(type(self))
                 if history is not None and history.capture_enabled:
