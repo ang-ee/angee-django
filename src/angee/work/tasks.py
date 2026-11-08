@@ -16,7 +16,7 @@ def wake_due_snoozes(timestamp: int | None = None) -> int:
 
     task_model = apps.get_model("projects", "Task")
     with system_context(reason="work.tasks.wake_due_snoozes"):
-        return int(task_model.wake_due_snoozes(now=periodic_now(timestamp)))
+        return task_model.work.wake_due_snoozes(now=periodic_now(timestamp))
 
 
 @shared_task(name="work.generate_cycles")

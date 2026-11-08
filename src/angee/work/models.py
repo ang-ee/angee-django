@@ -38,6 +38,8 @@ from angee.base.models.stages import Stage as StagePrimitive
 from angee.base.models.stages import StagedModelMixin
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import AngeeQuerySet
+from angee.projects.models import TaskManager as ProjectTaskManager
+from angee.projects.models import TaskQuerySet as ProjectTaskQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 from angee.sequence.models import PeriodReset
 from angee.spaces.managers import GroupManager
@@ -976,8 +978,93 @@ class MilestoneWork(Composable, extends="projects.Milestone"):
         stage_model._base_manager.get(pk=self.active_stage_id).validate_rule_stage(queue_id)
 
 
+class TaskWorkQuerySet[TaskT: TaskWork](ProjectTaskQuerySet[TaskT]):
+    """Work selections and snooze writes within the caller's task population."""
+
+    def removed_for(self, actor: Any, *, queue: Any = None, parent: Any = None) -> Self:
+        """Select shared trash the actor may restore, excluding merge redirects, latest removal first."""
+
+        rows = self.with_actor(actor).with_action("restore").scoped().trashed().filter(merged_into__isnull=True)
+        if queue is not None:
+            rows = rows.filter(queue=queue)
+        if parent is not None:
+            rows = rows.filter(parent=parent)
+        return rows.order_by("-trashed_at", "-pk")
+
+    def wake_due_snoozes(self, *, now: datetime | None = None) -> int:
+        """Clear the selected snoozes whose inclusive wake instant is at or before ``now``."""
+
+        now = now or timezone.now()
+        return self.filter(snoozed_until__isnull=False, snoozed_until__lte=now).update(
+            snoozed_until=None, snoozed_by=None, updated_at=now
+        )
+
+    def wake_from_chatter_thread(self, thread_id: Any) -> int:
+        """Clear the snooze on the selected task whose chatter thread is ``thread_id``."""
+
+        if thread_id is None:
+            return 0
+        chatter = (
+            apps.get_model("messaging", "ThreadAttachment")
+            ._base_manager.filter(
+                content_type=ContentType.objects.get_for_model(self.model), thread_id=thread_id, role="chatter"
+            )
+            .values("object_id")
+        )
+        snoozed = self.filter(pk__in=models.Subquery(chatter), snoozed_until__isnull=False)
+        if not snoozed.exists():
+            return 0
+        return snoozed.update(snoozed_until=None, snoozed_by=None, updated_at=timezone.now())
+
+
+_TaskWorkManagerBase = ProjectTaskManager.from_queryset(TaskWorkQuerySet)
+
+
+class TaskWorkManager[TaskT: TaskWork](_TaskWorkManagerBase[TaskT]):
+    """Work factories over the projects task manager; composed onto Task as ``Task.work``."""
+
+    def capture_triage(
+        self,
+        *,
+        queue: Queue,
+        title: str,
+        note: str,
+        project: Project | None = None,
+        created_by_id: Any = None,
+        values: dict[str, Any] | None = None,
+    ) -> TaskT:
+        """Capture one ownerless task into ``queue``'s triage stage; only a trusted system context may."""
+
+        if not self.effective_actor(strict=True)[1]:
+            raise PermissionDenied("System admission is required to capture ownerless triage work.")
+        triage = apps.get_model("work", "Stage")._base_manager.filter(queue_id=queue.pk, category="triage").first()
+        if triage is None:
+            raise ValidationError({"queue": "The intake queue has no triage stage."})
+        title_limit = self.model.title.field.max_length
+        assert title_limit is not None
+        task = self.model(
+            queue=queue,
+            stage=triage,
+            project=project,
+            title=" ".join(str(title or "").split())[:title_limit] or "Captured need",
+            note=str(note or ""),
+            created_by_id=created_by_id,
+            updated_by_id=created_by_id,
+            owner=None,
+            **(values or {}),
+        )
+        with transaction.atomic(), task._work_verb_write():
+            task.full_clean(validate_unique=False, validate_constraints=False)
+            task.sudo(reason="work.task.capture_triage").save(ownerless=True)
+        return task
+
+
 class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
-    """Same-row work contribution folded into ``projects.Task``."""
+    """Same-row work contribution folded into ``projects.Task``.
+
+    ``Task.work`` is the separately named manager carrying the work selections
+    and the triage factory; ``Task.objects`` stays the task's default manager.
+    """
 
     stage_container_field_name = "queue"
     thread_team_field: ClassVar[str | None] = "queue"
@@ -988,6 +1075,8 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         cycle_id: Any | None
         snoozed_by_id: Any | None
         dropped_at: datetime | None
+
+    work = TaskWorkManager()
 
     work_stage_projection = True
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
@@ -1415,20 +1504,6 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         super().restore()
         return self
 
-    @classmethod
-    def removed_for(cls, actor: Any, *, queue: Any = None, parent: Any = None) -> models.QuerySet[Any]:
-        """Return shared trash the actor may restore, excluding merge redirects."""
-
-        rows = (
-            cls._default_manager.with_actor(actor).with_action("restore").scoped()
-            .trashed().filter(merged_into__isnull=True)
-        )
-        if queue is not None:
-            rows = rows.filter(queue=queue)
-        if parent is not None:
-            rows = rows.filter(parent=parent)
-        return rows.order_by("-trashed_at", "-pk")
-
     @transaction.atomic
     def accept(self, stage: Stage | None = None, *, expected_revision: int | None = None) -> Any:
         """Leave triage for a same-queue, non-system stage, idempotently."""
@@ -1524,49 +1599,6 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         self.snoozed_by_id = user_id
         self.save(update_fields=("snoozed_until", "snoozed_by", "updated_at"))
         return self
-
-    @classmethod
-    def wake_due_snoozes(cls, *, now: datetime | None = None) -> int:
-        """Clear snoozes whose inclusive wake instant is at or before ``now``."""
-
-        now = now or timezone.now()
-        return int(
-            cls._base_manager.filter(
-                snoozed_until__isnull=False,
-                snoozed_until__lte=now,
-            ).update(
-                snoozed_until=None,
-                snoozed_by=None,
-                updated_at=now,
-            )
-        )
-
-    @classmethod
-    def wake_from_chatter_thread(cls, thread_id: Any) -> int:
-        """Clear snooze state on the task whose chatter owns ``thread_id``."""
-
-        if thread_id is None:
-            return 0
-        task_content_type = ContentType.objects.get_for_model(cls)
-        attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        task_ids = attachment_model._base_manager.filter(
-            content_type=task_content_type,
-            thread_id=thread_id,
-            role="chatter",
-        ).values("object_id")
-        snoozed_tasks = cls._base_manager.filter(
-            pk__in=models.Subquery(task_ids),
-            snoozed_until__isnull=False,
-        )
-        if not snoozed_tasks.exists():
-            return 0
-        return int(
-            snoozed_tasks.update(
-                snoozed_until=None,
-                snoozed_by=None,
-                updated_at=timezone.now(),
-            )
-        )
 
     def mark_duplicate(self, canonical: models.Model) -> Any:
         """Fold this triage task into its operational survivor through the shared owner."""

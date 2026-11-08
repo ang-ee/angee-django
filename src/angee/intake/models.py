@@ -254,7 +254,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             mapped = dict(channel.mapped_task_values(locked_message) if values is None else values)
             claimed_name = mapped.pop("claimed_name", "")
             submission = locked_message.webform_submission()
-            task = self._create_triage_task(
+            task = apps.get_model("projects", "Task").work.capture_triage(
                 queue=queue,
                 title=mapped.pop("title", self._message_title(locked_message)),
                 note=mapped.pop("note", str(locked_message.preview or "")),
@@ -294,42 +294,6 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             need.access_decision = need._new_access_decision()
             self.model.system_queryset().filter(pk=need.pk).update(access_decision=need.access_decision)
             return need
-
-    def _create_triage_task(
-        self,
-        *,
-        queue: Queue,
-        title: str,
-        note: str,
-        project: Project | None = None,
-        created_by_id: Any = None,
-        values: dict[str, Any] | None = None,
-    ) -> Task:
-        """Create one task in ``queue``'s system triage stage."""
-
-        stage_model = apps.get_model("work", "Stage")
-        triage = stage_model._base_manager.filter(queue_id=queue.pk, category="triage").first()
-        if triage is None:
-            raise ValidationError({"queue": "The intake queue has no triage stage."})
-        task_model = apps.get_model("projects", "Task")
-        title_limit = task_model.title.field.max_length
-        assert title_limit is not None
-        normalized_title = " ".join(str(title or "").split())[:title_limit]
-        task = task_model(
-            queue=queue,
-            stage=triage,
-            project=project,
-            title=normalized_title or "Captured need",
-            note=str(note or ""),
-            created_by_id=created_by_id,
-            updated_by_id=created_by_id,
-            owner=None,
-            **(values or {}),
-        )
-        with task._work_verb_write():
-            task.full_clean(validate_unique=False, validate_constraints=False)
-            task.sudo(reason="intake.need.create_triage_task").save(ownerless=True)
-        return task
 
     @staticmethod
     def _message_title(message: Message) -> str:
@@ -921,7 +885,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 task = locked.task
             else:
                 title = locked.body or getattr(locked.source_message, "preview", "")
-                task = type(self).objects._create_triage_task(
+                task = apps.get_model("projects", "Task").work.capture_triage(
                     queue=queue,
                     project=locked.project,
                     title=title,

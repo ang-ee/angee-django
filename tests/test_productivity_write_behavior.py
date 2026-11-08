@@ -38,7 +38,7 @@ from angee.projects.testing.models import Queue, Stage, Task
 from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
 from tests.composed_host import run_composed_tests
-from tests.conftest import SchemaAddon, create_platform_admin, standalone_relation
+from tests.conftest import SchemaAddon, create_platform_admin, create_user, standalone_relation
 from tests.tables import model_tables
 
 
@@ -80,17 +80,6 @@ class RoutingStageRecord(StagedModelMixin[RoutingPipelineStage], models.Model):
     stage_container_field_name = "container"
     container = models.ForeignKey(RoutingStageContainer, on_delete=models.CASCADE)
     stage = models.ForeignKey(RoutingPipelineStage, null=True, on_delete=models.SET_NULL)
-
-    class Meta:
-        app_label = "tests"
-
-
-class RoutingSnoozeRecord(models.Model):
-    """Minimal native columns needed by the work-owned bulk wake operation."""
-
-    snoozed_until = models.DateTimeField(null=True)
-    snoozed_by = models.IntegerField(null=True)
-    updated_at = models.DateTimeField()
 
     class Meta:
         app_label = "tests"
@@ -177,8 +166,8 @@ class CreateStageType(AngeeNode):
 
 @pytest.fixture
 def productivity_tables(transactional_db: None) -> Iterator[None]:
-    """Create native stage and snooze rows for behavior regressions."""
-    test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord, RoutingSnoozeRecord)
+    """Create native stage rows for behavior regressions."""
+    test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord)
     with model_tables(test_models):
         yield
 
@@ -355,10 +344,18 @@ def test_stage_scope_rejects_foreign_container(productivity_tables: None) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_bulk_snooze_wake_clears_snooze_fields(productivity_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bulk_snooze_wake_clears_only_the_selected_snoozes() -> None:
+    """The work queryset wakes the rows its caller selected, through the composed task."""
+
     now = timezone.now()
-    row = RoutingSnoozeRecord.objects.create(snoozed_until=now, snoozed_by=7, updated_at=now)
-    assert TaskWork.wake_due_snoozes.__func__(RoutingSnoozeRecord, now=now) == 1
-    row.refresh_from_db()
-    assert row.snoozed_until is None
-    assert row.snoozed_by is None
+    with system_context(reason="tests.productivity.wake"):
+        owner = create_user("productivity-wake-owner")
+        rows = []
+        for title in ("Selected", "Other"):
+            row = Task(title=title, snoozed_until=now, snoozed_by=owner)
+            row.sudo(reason="tests.productivity.wake.create").save(ownerless=True)
+            rows.append(row)
+        assert Task.work.filter(pk=rows[0].pk).wake_due_snoozes(now=now) == 1
+    selected, other = (Task._base_manager.get(pk=row.pk) for row in rows)
+    assert (selected.snoozed_until, selected.snoozed_by_id) == (None, None)
+    assert (other.snoozed_until, other.snoozed_by_id) == (now, owner.pk)
