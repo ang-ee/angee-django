@@ -500,6 +500,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
         )
         by_position = {row.position: row for row in retained}
         if base is not None:
+            base_pages = base.pages.system_context(reason="retain authorized extraction snapshot")
             pages = [
                 {
                     "source_position": row.source.position,
@@ -511,7 +512,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                     "provider_metadata": row.provider_metadata,
                     "carrier_file_id": row.carrier_file_id,
                 }
-                for row in base.pages.order_by("position")
+                for row in base_pages.order_by("position")
             ]
         for name, rows in (("ExtractionPage", pages), ("ExtractionPart", parts)):
             child_model = registry.get_model("extraction", name)
