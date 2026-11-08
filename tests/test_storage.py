@@ -395,6 +395,27 @@ def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> N
 
 
 @pytest.mark.django_db(transaction=True)
+def test_file_attachment_scopes_chain_on_a_narrowed_selection(drive: Any) -> None:
+    """Record and same-content scopes are queryset predicates, so a filtered selection keeps them."""
+
+    with system_context(reason="test storage attachment scopes"):
+        record = MtiChild.objects.create(title="Holder", detail="record")
+        other = MtiChild.objects.create(title="Other", detail="record")
+        live, _created = File.objects.ingest_bytes(b"live", filename="live.txt", drive_id=str(drive.sqid))
+        gone, _created = File.objects.ingest_bytes(b"gone", filename="gone.txt", drive_id=str(drive.sqid))
+        edges = {file.pk: FileAttachment.objects.attach(file, record, label=file.filename) for file in (live, gone)}
+        same = FileAttachment.objects.attach(live, other)
+        gone.delete()
+
+        assert list(FileAttachment.objects.for_record(record)) == [edges[live.pk]]
+        assert not FileAttachment.objects.filter(label="gone.txt").for_record(record).exists()
+        assert set(FileAttachment.objects.with_same_content(live, record)) == {edges[live.pk], same}
+        assert set(FileAttachment.objects.filter(pk=same.pk).with_same_content(live, record)) == {same}
+        draft = File(content_hash="", upload_state=UploadState.DRAFT)
+        assert not FileAttachment.objects.with_same_content(draft, record).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, drive: Any) -> None:
     """attach() keys the file edge on the canonical (topmost REBAC-typed) MTI target.
 

@@ -1883,7 +1883,34 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         )
 
 
-class FileAttachmentManager[AttachmentT: FileAttachment](AngeeHistoryManager[AttachmentT]):
+class FileAttachmentQuerySet[AttachmentT: FileAttachment](AngeeHistoryQuerySet[AttachmentT]):
+    """Actor-scoped file edges selected by their record or by their verified bytes."""
+
+    def for_record(self, record: models.Model) -> Self:
+        """Return the readable edges from a canonical record to its live files."""
+
+        return self.filter(
+            **generic_target(record).lookups(self.model, "target"),
+            file__is_trashed=False,
+        ).select_related("file")
+
+    def with_same_content(self, file: Any, record: models.Model) -> Self:
+        """Return readable edges of this record type carrying the same verified bytes."""
+
+        if not file.content_hash or file.upload_state != UploadState.READY:
+            return self.none()
+        return self.filter(
+            content_type=generic_target(record).content_type,
+            file__content_hash=file.content_hash,
+            file__upload_state=UploadState.READY,
+            file__is_trashed=False,
+        )
+
+
+_FileAttachmentManagerBase = AngeeHistoryManager.from_queryset(FileAttachmentQuerySet)
+
+
+class FileAttachmentManager[AttachmentT: FileAttachment](_FileAttachmentManagerBase[AttachmentT]):
     """Owns the polymorphic file edge, stored at :func:`rebac.generic_target`.
 
     A record and each of its REBAC-typed MTI ancestors share one attachment set.
@@ -1908,31 +1935,6 @@ class FileAttachmentManager[AttachmentT: FileAttachment](AngeeHistoryManager[Att
             self._lock_target(target)
             file = type(file).system_queryset(lock=("self",)).get(pk=file.pk)
             return self._attach(file, target, label=label)
-
-    def for_record(self, record: models.Model) -> AngeeHistoryQuerySet[AttachmentT]:
-        """Return actor-readable file edges for a canonical record."""
-
-        return (
-            self.get_queryset()
-            .filter(
-                **generic_target(record).lookups(self.model, "target"),
-                file__is_trashed=False,
-            )
-            .select_related("file")
-        )
-
-    def with_same_content(self, file: Any, record: models.Model) -> AngeeHistoryQuerySet[AttachmentT]:
-        """Readable edges of this record type carrying the same verified bytes."""
-        return (
-            self.get_queryset().filter(
-                content_type=generic_target(record).content_type,
-                file__content_hash=file.content_hash,
-                file__upload_state=UploadState.READY,
-                file__is_trashed=False,
-            )
-            if file.content_hash and file.upload_state == UploadState.READY
-            else self.none()
-        )
 
     def has_record_arm(self, target: GenericTarget) -> bool:
         """Whether record-scoped files read and write through this target type's attachments.
