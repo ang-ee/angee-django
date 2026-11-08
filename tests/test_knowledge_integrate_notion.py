@@ -398,11 +398,11 @@ def test_sync_action_requires_write_access(composed_tables, monkeypatch):
     schema = addon_schema(schemas, "console")
     queued = []
 
-    def queue(row):
+    def request_sync(row):
         queued.append(row)
         return True
 
-    monkeypatch.setattr("angee.knowledge_integrate_notion.schema.queue_bridge_sync", queue)
+    monkeypatch.setattr(NotionConnection, "request_sync", request_sync)
     mutation = "mutation Sync($id: ID!) { sync_notion_connection(id: $id) { ok } }"
     variables = {"id": str(connection.sqid)}
     for user in (AnonymousUser(), create_user("notion-outsider")):

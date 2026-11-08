@@ -3316,6 +3316,28 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         self.next_sync_at = row.next_sync_at
         return True
 
+    def request_sync(self, *, now: datetime | None = None, persist: bool = True) -> bool:
+        """Send one admitted sync task; return false when an execution already owns this sync.
+
+        ``persist=False`` sends the token a caller already admitted through
+        :meth:`mark_sync_queued` under its own row lock (the due scheduler).
+        """
+
+        if self.pk is None:
+            raise ValueError("Cannot queue an unsaved bridge.")
+        timestamp = now or timezone.now()
+        if persist and not self.mark_sync_queued(now=timestamp):
+            return False
+        enqueue_task(
+            "integrate.sync_bridge_now",
+            kwargs={
+                "model_label": self._meta.label_lower,
+                "pk": self.pk,
+                "timestamp": timestamp.isoformat(),
+            },
+        )
+        return True
+
     def mark_sync_queued(self, *, now: datetime) -> bool:
         """Admit a queued task unless a live worker or retained run owns this sync."""
 

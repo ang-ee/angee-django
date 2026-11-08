@@ -17,7 +17,6 @@ from rebac import actor_context, system_context
 from angee.integrate import scheduler
 from angee.integrate import sync_runner as integrate_sync_runner
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
-from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.sync import SyncDispatch
 from angee.integrate.sync_runner import run_bridge_sync_job
 from angee.workflows import tasks
@@ -60,7 +59,7 @@ def cycle_factory(execution):
 def dispatch(bridge):
     """Queue and deliver through integrate's public worker entrypoint."""
     now = timezone.now()
-    queue_bridge_sync(bridge, now=now)
+    bridge.request_sync(now=now)
     assert run_bridge_sync_job(
         bridge._meta.label_lower, bridge.pk, now, require_queue_token=True,
     ) == {"ok": True, "items": 0, "skipped": False, "dispatched": True}
@@ -112,7 +111,7 @@ def test_delayed_delivery_reads_the_current_cycle_under_its_row_lock(cycle_facto
     """A stale delivery preserves both an active dispatch and a completed cycle."""
     _workflow, bridge = cycle_factory()
     now = timezone.now()
-    queue_bridge_sync(bridge, now=now)
+    bridge.request_sync(now=now)
     bridge_model = integrate_sync_runner._bridge_model
     observed = {}
     fields = (
@@ -153,7 +152,7 @@ def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, 
     """The winner consumes its token under the row lock before a loser can clear it."""
     _workflow, bridge = cycle_factory()
     now = timezone.now()
-    queue_bridge_sync(bridge, now=now)
+    bridge.request_sync(now=now)
     acquired, release_winner = Event(), Event()
     advisory_lock = integrate_sync_runner.bridge_advisory_lock
 
@@ -381,7 +380,7 @@ def test_admission_refuses_a_second_active_cycle(cycle_factory):
 
 def test_connect_grants_the_regular_owner_start_access_before_dispatch(cycle_factory):
     workflow, bridge = cycle_factory(connect=False)
-    queue_bridge_sync(bridge)
+    bridge.request_sync()
     with pytest.raises(PermissionDenied):
         workflow.require_access("start", bridge.owner)
     with pytest.raises(PermissionDenied):

@@ -12,7 +12,6 @@ from django.db import transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.integrate import queue as integrate_queue
 from angee.integrate import scheduler as integrate_scheduler
 from angee.integrate import sync_runner as integrate_sync_runner
 from angee.integrate import tasks as integrate_tasks
@@ -93,9 +92,9 @@ def _enqueue_and_run_due(*, now: datetime) -> dict[str, int]:
 
     ran = 0
     errors = 0
-    original = integrate_scheduler.queue_bridge_sync
+    original = SchedulerBridge.request_sync
 
-    def run_queued(bridge: SchedulerBridge, *, now: datetime | None = None, persist: bool = True) -> None:
+    def run_queued(bridge: SchedulerBridge, *, now: datetime | None = None, persist: bool = True) -> bool:
         nonlocal ran, errors
         assert persist is False
         assert now is not None
@@ -112,12 +111,13 @@ def _enqueue_and_run_due(*, now: datetime) -> dict[str, int]:
         else:
             if not result.get("skipped"):
                 ran += 1
+        return True
 
-    integrate_scheduler.queue_bridge_sync = run_queued
+    SchedulerBridge.request_sync = run_queued
     try:
         enqueue_due_bridges(now=now)
     finally:
-        integrate_scheduler.queue_bridge_sync = original
+        SchedulerBridge.request_sync = original
     return {"ran": ran, "errors": errors}
 
 
@@ -647,7 +647,7 @@ def test_run_bridge_sync_job_holds_the_live_lock(transactional_db: None) -> None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_queue_bridge_sync_marks_queued_and_defers_task(
+def test_request_sync_marks_queued_and_defers_task(
     transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -661,11 +661,11 @@ def test_queue_bridge_sync_marks_queued_and_defers_task(
         assert options == {}
         enqueued.append((task_name, kwargs))
 
-    monkeypatch.setattr(integrate_queue, "enqueue_task", fake_enqueue_task)
+    monkeypatch.setattr("angee.integrate.models.enqueue_task", fake_enqueue_task)
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-bridge", model=SchedulerBridge)
 
-    integrate_queue.queue_bridge_sync(bridge, now=now)
+    assert bridge.request_sync(now=now) is True
 
     assert enqueued == [
         (
@@ -685,26 +685,25 @@ def test_queue_bridge_sync_marks_queued_and_defers_task(
 
 @pytest.mark.django_db(transaction=True)
 def test_active_sync_keeps_its_progress_when_another_sync_is_requested(
-    transactional_db: None, monkeypatch: pytest.MonkeyPatch,
+    transactional_db: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Manual requests and periodic scans cannot overwrite a long-running worker."""
 
     del transactional_db
     now = timezone.now()
     sent: list[dict[str, Any]] = []
-    monkeypatch.setattr(integrate_queue, "enqueue_task", lambda _name, **kwargs: sent.append(kwargs))
+    monkeypatch.setattr("angee.integrate.models.enqueue_task", lambda _name, **kwargs: sent.append(kwargs))
     with system_context(reason="test active sync setup"):
-        bridge = make_integration(
-            "active-sync", model=SchedulerBridge, next_sync_at=now - timedelta(minutes=10),
-        )
+        bridge = make_integration("active-sync", model=SchedulerBridge, next_sync_at=now - timedelta(minutes=10))
         bridge.mark_sync_started(now=now - timedelta(minutes=10))
-        BridgeProgressReporter(bridge).report("syncing", message="Fetching the next batch", details={"cursor": 100})
+        bridge.report_progress("syncing", message="Fetching the next batch", details={"cursor": 100})
         bridge.refresh_from_db()
         progress = bridge.sync_progress
 
     with bridge_advisory_lock(bridge) as acquired:
         assert acquired
-        assert integrate_queue.queue_bridge_sync(bridge, now=now) is False
+        assert bridge.request_sync(now=now) is False
         assert enqueue_due_bridges(now=now) == {"enqueued": 0, "skipped": 1}
         bridge.refresh_from_db()
         assert bridge.sync_stage == Bridge.SyncStage.SYNCING
@@ -712,15 +711,15 @@ def test_active_sync_keeps_its_progress_when_another_sync_is_requested(
         assert bridge.next_sync_at == now - timedelta(minutes=10)
         assert sent == []
 
-    # A dead worker's stale SYNCING marker does not strand the connection.
-    assert integrate_queue.queue_bridge_sync(bridge, now=now) is True
+    # A dead worker's stale syncing marker does not strand the connection.
+    assert bridge.request_sync(now=now) is True
     bridge.refresh_from_db()
     assert bridge.sync_stage == Bridge.SyncStage.QUEUED
     assert len(sent) == 1
 
 
 @pytest.mark.django_db(transaction=True)
-def test_queue_bridge_sync_can_enqueue_duplicate_requests(
+def test_request_sync_can_enqueue_duplicate_requests(
     transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -730,15 +729,14 @@ def test_queue_bridge_sync_can_enqueue_duplicate_requests(
     now = timezone.now()
     enqueued: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        integrate_queue,
-        "enqueue_task",
+        "angee.integrate.models.enqueue_task",
         lambda _task_name, *, kwargs, **_options: enqueued.append(kwargs),
     )
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-duplicate", model=SchedulerBridge)
 
-    integrate_queue.queue_bridge_sync(bridge, now=now)
-    integrate_queue.queue_bridge_sync(bridge, now=now)
+    bridge.request_sync(now=now)
+    bridge.request_sync(now=now)
 
     assert len(enqueued) == 2
     bridge.refresh_from_db()
@@ -757,15 +755,14 @@ def test_stale_bridge_sync_task_payload_is_skipped(
     first = timezone.now()
     second = first + timedelta(seconds=5)
     monkeypatch.setattr(
-        integrate_queue,
-        "enqueue_task",
+        "angee.integrate.models.enqueue_task",
         lambda _task_name, *, kwargs, **_options: None,
     )
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-stale", model=SchedulerBridge, config={"items": 9})
 
-    integrate_queue.queue_bridge_sync(bridge, now=first)
-    integrate_queue.queue_bridge_sync(bridge, now=second)
+    bridge.request_sync(now=first)
+    bridge.request_sync(now=second)
 
     stale = integrate_tasks.sync_bridge_now(SchedulerBridge._meta.label_lower, bridge.pk, first.isoformat())
 
@@ -777,7 +774,7 @@ def test_stale_bridge_sync_task_payload_is_skipped(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_queue_bridge_sync_inside_outer_transaction_preserves_caller(
+def test_request_sync_inside_outer_transaction_preserves_caller(
     transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -794,7 +791,7 @@ def test_queue_bridge_sync_inside_outer_transaction_preserves_caller(
         bridge = make_integration("queued-db-duplicate", model=SchedulerBridge)
 
     with transaction.atomic():
-        integrate_queue.queue_bridge_sync(bridge, now=now)
+        bridge.request_sync(now=now)
         assert SchedulerBridge._base_manager.filter(pk=bridge.pk).exists()
         assert enqueued == []
 
@@ -840,16 +837,17 @@ def test_enqueue_due_bridges_claims_and_queues_rows(
     now = timezone.now()
     enqueued: list[tuple[int, datetime | None]] = []
 
-    def fake_queue_bridge_sync(
+    def fake_request_sync(
         bridge: SchedulerBridge,
         *,
         now: datetime | None = None,
         persist: bool = True,
-    ) -> None:
+    ) -> bool:
         assert persist is False
         enqueued.append((bridge.pk, now))
+        return True
 
-    monkeypatch.setattr(integrate_scheduler, "queue_bridge_sync", fake_queue_bridge_sync)
+    monkeypatch.setattr(SchedulerBridge, "request_sync", fake_request_sync)
     with system_context(reason="test integrate scheduler setup"):
         due = make_integration(
             "queued-due",

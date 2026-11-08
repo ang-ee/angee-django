@@ -17,7 +17,7 @@ domain adapters own protocol parsing and ingest policy.
 Manual requests and scheduled polls share `Bridge.mark_sync_queued` admission.
 A live sync lock or retained workflow run keeps its progress and declines a new
 task. A stale syncing marker without either owner remains recoverable. Callers
-use `queue_bridge_sync`'s result to report whether they queued work.
+use `Bridge.request_sync`'s result to report whether they queued work.
 
 Event feeds are append-only and compose their domain's idempotent ingest verb.
 They create no replica links. Their unlinked failures belong to the stream's

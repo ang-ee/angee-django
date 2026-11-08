@@ -1,29 +1,5 @@
-"""Bridge sync queueing use-cases for the integrate addon."""
+"""Narrow compatibility alias for angee-odoo; remove when its companion moves to ``Bridge.request_sync``."""
 
-from __future__ import annotations
+from angee.integrate.models import Bridge
 
-from datetime import datetime
-from typing import Any
-
-from django.utils import timezone
-
-from angee.jobs.enqueue import enqueue_task
-
-
-def queue_bridge_sync(bridge: Any, *, now: datetime | None = None, persist: bool = True) -> bool:
-    """Send one admitted sync task; return false when an execution already owns it."""
-
-    if bridge.pk is None:
-        raise ValueError("Cannot queue an unsaved bridge.")
-    timestamp = now or timezone.now()
-    if persist and not bridge.mark_sync_queued(now=timestamp):
-        return False
-    enqueue_task(
-        "integrate.sync_bridge_now",
-        kwargs={
-            "model_label": bridge._meta.label_lower,
-            "pk": bridge.pk,
-            "timestamp": timestamp.isoformat(),
-        },
-    )
-    return True
+queue_bridge_sync = Bridge.request_sync

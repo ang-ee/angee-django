@@ -1447,7 +1447,6 @@ def test_sync_integration_queues_bridge_for_an_admin(
 
     monkeypatch.setattr(integrate_queue, "queue_bridge_sync", fake_queue_bridge_sync)
     monkeypatch.setattr("angee.integrate.schema.queue_bridge_sync", fake_queue_bridge_sync)
-    monkeypatch.setattr("angee.integrate_vcs.schema.queue_bridge_sync", fake_queue_bridge_sync)
 
     result = _data(
         execute_schema(
