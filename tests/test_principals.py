@@ -245,3 +245,27 @@ def test_service_user_relations_keep_their_stored_shape() -> None:
         "agents.Agent": {"related_name": "agent", "null": True, "blank": True},
         "workflows.Workflow": {"related_name": "workflow_principal", "editable": False, "null": True, "blank": True},
     }
+
+
+@pytest.mark.parametrize("relation", ["missing", "foreign_key", "one_to_one"])
+def test_service_user_participants_must_declare_their_user_one_to_one(relation: str) -> None:
+    """A participant without its ``user`` one-to-one fails the model check, not its first sync."""
+
+    from django.db import models
+    from django.test.utils import isolate_apps
+
+    from angee.iam.models import ServiceUserMixin
+    from angee.workflows.testing.models import Workflow
+
+    with isolate_apps("django.contrib.contenttypes"):
+        fields: dict[str, Any] = {"__module__": __name__, "Meta": type("Meta", (), {"app_label": "contenttypes"})}
+        if relation == "foreign_key":
+            fields["user"] = models.ForeignKey(get_user_model(), on_delete=models.PROTECT, related_name="+")
+        elif relation == "one_to_one":
+            fields["user"] = models.OneToOneField(get_user_model(), on_delete=models.PROTECT, related_name="+")
+        participant = type("ServiceParticipant", (ServiceUserMixin,), fields)
+        errors = [error for error in participant.check() if error.id == "angee.iam.E002"]
+
+    assert len(errors) == (0 if relation == "one_to_one" else 1)
+    assert all(error.obj is participant for error in errors)
+    assert not [error for model in (Agent, Workflow) for error in model.check() if error.id == "angee.iam.E002"]

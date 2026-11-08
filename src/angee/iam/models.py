@@ -19,10 +19,12 @@ from collections.abc import Mapping
 from copy import copy
 from typing import Any, ClassVar, Self, cast
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.validators import UnicodeUsernameValidator
+from django.core import checks
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, router, transaction
 from django.db.models import Exists, F, OuterRef, Q, TextField
@@ -1089,12 +1091,35 @@ class ServiceUserMixin(PublicIdentity, models.Model):
     class Meta:
         abstract = True
 
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Require the participant's ``user`` relation: a one-to-one to the user model."""
+
+        errors = super().check(**kwargs)
+        if cls._meta.abstract:
+            return errors
+        field = next((field for field in cls._meta.get_fields() if field.name == "user"), None)
+        related = getattr(getattr(field, "related_model", None), "_meta", None)
+        if isinstance(field, models.OneToOneField) and related is not None:
+            if related.label_lower == settings.AUTH_USER_MODEL.lower():
+                return errors
+        errors.append(
+            checks.Error(
+                f"{cls._meta.label} composes ServiceUserMixin without a user one-to-one to {settings.AUTH_USER_MODEL}.",
+                hint="Declare user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, "
+                "null=True, blank=True, related_name=...).",
+                obj=cls,
+                id="angee.iam.E002",
+            )
+        )
+        return errors
+
     def sync_service_user(self) -> Any:
         """Create or relabel this saved row's user and link it."""
 
         if self.pk is None:
             raise ValueError("The service owner must be saved before syncing its user.")
-        owner: Any = self  # The participant declares the ``user`` relation.
+        owner: Any = self  # check() requires the participant's ``user`` relation.
         with transaction.atomic():
             user = get_user_model().objects.ensure_service_user(
                 username=f"{self.service_user_prefix}-{self.public_id}", name=str(self), user_id=owner.user_id,
@@ -1107,7 +1132,7 @@ class ServiceUserMixin(PublicIdentity, models.Model):
     def deactivate_service_user(self) -> None:
         """Keep this deleted row's user for attribution while it can no longer act."""
 
-        owner: Any = self  # The participant declares the ``user`` relation.
+        owner: Any = self  # check() requires the participant's ``user`` relation.
         if owner.user_id is None:
             return
         with system_context(reason="iam.service_user.deactivate"):
