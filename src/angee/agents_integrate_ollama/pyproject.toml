@@ -5,7 +5,7 @@ name = "angee-agents-integrate-ollama"
 version = "3.0.0"
 description = "Ollama local inference backend — adds OpenAI-compatible local models to the agents catalogue"
 keywords = ["ollama", "local", "inference"]
-dependencies = ["angee-agents>=3,<4", "angee-agents-integrate-openai>=3,<4", "angee-integrate>=3,<4"]
+dependencies = ["angee-agents>=3,<4", "angee-agents-integrate-openai>=3,<4", "angee-integrate>=3,<4", "typesafe-sdk>=0.7.5,<0.8", "httpx2>=2.10,<3"]
 dynamic = ["entry-points"]
 
 [tool.angee]

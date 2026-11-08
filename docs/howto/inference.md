@@ -17,7 +17,7 @@ discovery and request settings; its default is localhost, but its provider URL
 can point to a remote server.
 
 Ollama refresh updates model use from native `/api/show` capabilities for both
-catalogue handles: embedding models become Embedding, completion with vision
+catalogue handles: decision models become Decision, embedding models become Embedding, completion with vision
 becomes Multimodal, and text completion becomes Chat. When capabilities are
 unavailable or unrecognized, refresh preserves curated model uses.
 
@@ -54,7 +54,21 @@ tools share the agents decoder. Function-tool declarations return calls in the
 native response and leave `output` unset. A malformed structured response raises
 `InferenceOutputError`, retaining its `response` and `usage` for accounting.
 
-The direct call makes one logical model request; the SDK may retry transport
+Typed decision inference uses `model.decide(state, questions, actor=actor, role="classification")`
+with TypeSafe SDK questions (`Choice`, `Noul`, `Score`) and its native
+`SystemOneResponse`. This method rechecks read access, exact deployment approval
+and the `decision` capability on every request. Native answers retain their
+probabilities and token usage; confidence is not a calibrated correctness
+guarantee or a human approval. Decision models are selected separately from
+mapping and recognition. They cannot extract invoice JSON or perform OCR.
+
+Ollama decision requests use its System One protocol through the native SDK,
+with the same provider credential and explicit endpoint policy. The SDK owns
+`/v1/systemone`; the adapter removes the provider URL's terminal `/v1` before
+passing its API root. Proxies and redirects remain disabled, requests are
+uncompressed, and SDK retries are disabled so the calling workflow owns recovery.
+
+The direct chat call makes one logical model request; the SDK may retry transport
 failures. Declare tools with native
 `ModelRequestParameters(function_tools=[ToolDefinition(...)])`; returned tool
 calls remain response parts. Only a session runtime runs a tool loop. For async
