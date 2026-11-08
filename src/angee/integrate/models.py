@@ -92,6 +92,7 @@ from angee.integrate.oauth.discovery import discovery_document as oidc_metadata_
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
 from angee.integrate.oauth.registrations import oauth_client_is_ready
+from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import (
     UNSET,
@@ -2125,6 +2126,20 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         except Exception as error:  # noqa: BLE001 — handler diagnostics stay outside the operator message.
             raise IntegrationError("Credential is not usable.") from error
         return "Credential is usable."
+
+    def request_sync(self, *, now: datetime | None = None) -> int:
+        """Request a sync of every bridge capability of this integration; return how many queued.
+
+        A capability whose sync a live worker or a retained run already owns
+        declines (:meth:`Bridge.request_sync`) and is not counted.
+        """
+
+        timestamp = now or timezone.now()
+        queued = 0
+        for model in models_with(base=Bridge):
+            for capability in model._default_manager.of_concrete_type().filter(pk=self.pk).order_by("pk"):
+                queued += capability.request_sync(now=timestamp)
+        return queued
 
     def test_connection(self) -> str:
         """Exercise this integration's connection and return the operator message.

@@ -22,7 +22,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count, Prefetch
-from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
 from rebac import PermissionDenied, check_new, generic_target, system_context, to_subject_ref
@@ -72,8 +71,6 @@ from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationMan
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension
-from angee.integrate.queue import queue_bridge_sync
-from angee.integrate.registry import models_with
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
@@ -1843,13 +1840,8 @@ class IntegrationActionMutation:
     def sync_integration(self, id: PublicID) -> ActionResult:
         """Queue every bridge of one integration for sync now."""
 
-        queued = 0
         with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
-            now = timezone.now()
-            for model in models_with(base=Bridge):
-                for bridge in model._default_manager.of_concrete_type().filter(pk=integration.pk).order_by("pk"):
-                    if queue_bridge_sync(bridge, now=now):
-                        queued += 1
+            queued = integration.request_sync()
         if queued == 0:
             return ActionResult(ok=True, message="No bridges need a new sync.")
         return ActionResult(ok=True, message=f"Queued {queued} bridge sync(s).")
