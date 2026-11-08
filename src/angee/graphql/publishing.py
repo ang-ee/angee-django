@@ -375,13 +375,12 @@ def broadcast_related_records(records: Iterable[models.Model]) -> None:
 
 def _queue_transport(model: type[models.Model], payload: ChangePayload) -> None:
     if payload.broadcasts:
-        using = payload.instance._state.db if payload.instance is not None else None
         message = payload.as_message()
 
         def broadcast() -> None:
             _broadcast(model, message)
 
-        transaction.on_commit(broadcast, using=using, robust=True)
+        transaction.on_commit(broadcast, robust=True)
 
 
 def _broadcast(model: type[models.Model], payload: dict[str, Any]) -> None:

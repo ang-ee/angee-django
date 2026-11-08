@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
-from django.db import connections, transaction
+from django.db import transaction
 from django.http import HttpRequest, HttpResponse
 from rebac import actor_context
 from rebac.actors import is_sudo
@@ -77,15 +76,11 @@ class ViewAs:
         request.view_as = self
         request.user = self.target
         try:
-            with actor_context(self.target), ExitStack() as transactions:
-                aliases = sorted(connections)
-                for alias in aliases:
-                    transactions.enter_context(transaction.atomic(using=alias))
+            with actor_context(self.target), transaction.atomic():
                 try:
                     return view(request)
                 finally:
-                    for alias in aliases:
-                        transaction.set_rollback(True, using=alias)
+                    transaction.set_rollback(True)
         finally:
             request.user = self.real_user
             del request.view_as
