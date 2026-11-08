@@ -2895,6 +2895,132 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             "absent_ids": [value for value in unique if value not in survivors],
         }
 
+    def record_scope(
+        self,
+        record: Any,
+        *,
+        role: str = "chatter",
+        search: str = "",
+        message_types: tuple[str, ...] = (),
+        trashed: bool = False,
+    ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
+        """The record-gated, hydrated message scope shared by transcript windows."""
+
+        attachment = _record_attachment(record, role=role)
+        if attachment is None:
+            return self.none().annotate(_order_at=self.chronological_time())
+        # Chatter reads bypass per-row REBAC: the record-level gate (and, for any other
+        # role, the thread's read) already authorised the whole feed, so scope with sudo
+        # and compose the chainable read predicates.
+        queryset = (
+            self.sudo(reason="messaging.message.for_record")
+            .for_thread(attachment.thread)
+            .filter(is_trashed=trashed)
+            .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
+            .prefetch_related(
+                models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.all()),
+                models.Prefetch(
+                    "parts__fragment", queryset=apps.get_model("messaging", "Fragment")._base_manager.all()
+                ),
+                models.Prefetch(
+                    "parts__file",
+                    queryset=apps.get_model("storage", "File")._base_manager.select_related("mime_type"),
+                ),
+                models.Prefetch("reactions", queryset=apps.get_model("messaging", "Reaction").objects.all()),
+                models.Prefetch(
+                    "reactions__handle",
+                    queryset=apps.get_model("parties", "Handle")._base_manager.all(),
+                ),
+                models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.all()),
+            )
+            .annotate(_order_at=MessageQuerySet.chronological_time())
+        )
+        kinds = {
+            strip_null_bytes(value or "").strip().lower()
+            for value in message_types
+            if strip_null_bytes(value or "").strip()
+        }
+        allowed_kinds = {value for value, _label in self.model.MessageKind.choices}
+        if not kinds.issubset(allowed_kinds):
+            raise ValueError("Message type filter contains an unsupported value.")
+        if kinds:
+            queryset = queryset.filter(message_type__in=kinds)
+        search = strip_null_bytes(search or "").strip()
+        for term in (item for item in _WS_RE.split(search) if item):
+            queryset = queryset.searching(term)
+        return queryset.distinct()
+
+    def for_record(
+        self,
+        record: Any,
+        *,
+        role: str = "chatter",
+        search: str = "",
+        limit: int = 50,
+        before: Any | None = None,
+        after: Any | None = None,
+        around: Any | None = None,
+        message_types: tuple[str, ...] = (),
+        trashed: bool = False,
+    ) -> tuple[list[Any], int]:
+        """Return fetched chatter messages for a record, optionally search-filtered.
+
+        Trashed messages never join the transcript; ``trashed=True`` returns only
+        them, for a caller that already required the record's moderation.
+        """
+
+        limit = max(1, min(int(limit or 50), 200))
+        queryset = self.record_scope(
+            record, role=role, search=search, message_types=message_types, trashed=trashed,
+        )
+        count = int(queryset.count())
+        # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
+        # return the page chronological ascending so the client renders it verbatim.
+        ascending = MESSAGE_ORDER.ordering(oldest_first=True)
+        descending = MESSAGE_ORDER.ordering()
+        if around not in (None, ""):
+            anchor = self._record_message_anchor(queryset, around)
+            if anchor is None:
+                return [], count
+            before_limit = max(1, limit // 2)
+            after_limit = max(0, limit - before_limit)
+            page = [
+                *queryset.filter(MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
+                *queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
+            ]
+        elif before not in (None, ""):
+            anchor = self._record_message_anchor(queryset, before)
+            if anchor is None:
+                return [], count
+            page = list(queryset.filter(MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
+        elif after not in (None, ""):
+            anchor = self._record_message_anchor(queryset, after)
+            if anchor is None:
+                return [], count
+            page = list(queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
+        else:
+            page = list(queryset.order_by(*descending)[:limit])
+        return sorted(page, key=lambda message: message.chronological_key), count
+
+    def record_window_continues(
+        self, record: Any, messages: list[Any], *, newer: bool,
+        role: str = "chatter", search: str = "", message_types: tuple[str, ...] = (),
+    ) -> bool:
+        """Whether a record-gated window has matching rows beyond its chronological edge."""
+
+        if not messages:
+            return False
+        edge = messages[-1] if newer else messages[0]
+        scope = self.record_scope(record, role=role, search=search, message_types=message_types)
+        boundary = (MESSAGE_ORDER.after(edge.chronological_key) if newer
+                    else MESSAGE_ORDER.before(edge.chronological_key))
+        return bool(scope.filter(boundary).exists())
+
+    def _record_message_anchor(self, queryset: Any, value: Any) -> tuple[Any, Any] | None:
+        """Resolve a public message id to its ``(order_at, pk)`` cursor in the window."""
+
+        return queryset.filter(**self.model.public_id_lookup(str(value))).values_list("_order_at", "pk").first()
+
 
 _MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
 
@@ -3400,134 +3526,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                         row.pk, token=row.external_id, claim=row.delivery_claim, error=error, pre_send_refusal=True,
                     )
         return count
-
-    def record_scope(
-        self,
-        record: Any,
-        *,
-        role: str = "chatter",
-        search: str = "",
-        message_types: tuple[str, ...] = (),
-        trashed: bool = False,
-    ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
-        """The record-gated, hydrated message scope shared by transcript windows."""
-
-        rows = self.db_manager(hints={"instance": record}).all()
-        using = rows.db
-        attachment = _record_attachment(record, role=role)
-        if attachment is None:
-            return rows.none().annotate(_order_at=self.chronological_time())
-        # Chatter reads bypass per-row REBAC: the record-level gate (and, for any other
-        # role, the thread's read) already authorised the whole feed, so scope with sudo
-        # and compose the chainable read predicates.
-        queryset = (
-            rows.sudo(reason="messaging.message.for_record")
-            .for_thread(attachment.thread)
-            .filter(is_trashed=trashed)
-            .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
-            .prefetch_related(
-                models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.using(using)),
-                models.Prefetch(
-                    "parts__fragment", queryset=apps.get_model("messaging", "Fragment")._base_manager.using(using)
-                ),
-                models.Prefetch(
-                    "parts__file",
-                    queryset=apps.get_model("storage", "File")._base_manager.using(using).select_related("mime_type"),
-                ),
-                models.Prefetch("reactions", queryset=apps.get_model("messaging", "Reaction").objects.using(using)),
-                models.Prefetch(
-                    "reactions__handle",
-                    queryset=apps.get_model("parties", "Handle")._base_manager.using(using),
-                ),
-                models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.using(using)),
-            )
-            .annotate(_order_at=MessageQuerySet.chronological_time())
-        )
-        kinds = {
-            strip_null_bytes(value or "").strip().lower()
-            for value in message_types
-            if strip_null_bytes(value or "").strip()
-        }
-        allowed_kinds = {value for value, _label in self.model.MessageKind.choices}
-        if not kinds.issubset(allowed_kinds):
-            raise ValueError("Message type filter contains an unsupported value.")
-        if kinds:
-            queryset = queryset.filter(message_type__in=kinds)
-        search = strip_null_bytes(search or "").strip()
-        for term in (item for item in _WS_RE.split(search) if item):
-            queryset = queryset.searching(term)
-        return queryset.distinct()
-
-    def for_record(
-        self,
-        record: Any,
-        *,
-        role: str = "chatter",
-        search: str = "",
-        limit: int = 50,
-        before: Any | None = None,
-        after: Any | None = None,
-        around: Any | None = None,
-        message_types: tuple[str, ...] = (),
-        trashed: bool = False,
-    ) -> tuple[list[Any], int]:
-        """Return fetched chatter messages for a record, optionally search-filtered.
-
-        Trashed messages never join the transcript; ``trashed=True`` returns only
-        them, for a caller that already required the record's moderation.
-        """
-
-        limit = max(1, min(int(limit or 50), 200))
-        queryset = self.record_scope(
-            record, role=role, search=search, message_types=message_types, trashed=trashed,
-        )
-        count = int(queryset.count())
-        # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
-        # return the page chronological ascending so the client renders it verbatim.
-        ascending = MESSAGE_ORDER.ordering(oldest_first=True)
-        descending = MESSAGE_ORDER.ordering()
-        if around not in (None, ""):
-            anchor = self._record_message_anchor(queryset, around)
-            if anchor is None:
-                return [], count
-            before_limit = max(1, limit // 2)
-            after_limit = max(0, limit - before_limit)
-            page = [
-                *queryset.filter(MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
-                *queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
-            ]
-        elif before not in (None, ""):
-            anchor = self._record_message_anchor(queryset, before)
-            if anchor is None:
-                return [], count
-            page = list(queryset.filter(MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
-        elif after not in (None, ""):
-            anchor = self._record_message_anchor(queryset, after)
-            if anchor is None:
-                return [], count
-            page = list(queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
-        else:
-            page = list(queryset.order_by(*descending)[:limit])
-        return sorted(page, key=lambda message: message.chronological_key), count
-
-    def record_window_continues(
-        self, record: Any, messages: list[Any], *, newer: bool,
-        role: str = "chatter", search: str = "", message_types: tuple[str, ...] = (),
-    ) -> bool:
-        """Whether a record-gated window has matching rows beyond its chronological edge."""
-
-        if not messages:
-            return False
-        edge = messages[-1] if newer else messages[0]
-        scope = self.record_scope(record, role=role, search=search, message_types=message_types)
-        boundary = (MESSAGE_ORDER.after(edge.chronological_key) if newer
-                    else MESSAGE_ORDER.before(edge.chronological_key))
-        return bool(scope.filter(boundary).exists())
-
-    def _record_message_anchor(self, queryset: Any, value: Any) -> tuple[Any, Any] | None:
-        """Resolve a public message id to its ``(order_at, pk)`` cursor in the window."""
-
-        return queryset.filter(**self.model.public_id_lookup(str(value))).values_list("_order_at", "pk").first()
 
     def post_to_thread(
         self,
