@@ -73,11 +73,10 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
         """
 
         addon = apps.get_model("platform", "Addon")
-        using = self._db or source._state.db or self.db
-        rows = addon.objects.db_manager(using)
+        rows = addon.objects
         with system_context(reason="platform_integrate_vcs.catalog.sync"):
             repository_field = source._meta.get_field("repository")
-            repository = repository_field.related_model._base_manager.db_manager(using).select_related(
+            repository = repository_field.related_model._base_manager.select_related(
                 "vcs_bridge__credential__oauth_client"
             ).get(pk=source.repository_id)
             source.repository = repository
@@ -88,7 +87,7 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
             seen: set[str] = set()
             with transaction.atomic():
                 current_source = (
-                    type(source)._base_manager.db_manager(using).select_related("repository")
+                    type(source)._base_manager.select_related("repository")
                     .select_for_update().get(pk=source.pk)
                 )
                 if (

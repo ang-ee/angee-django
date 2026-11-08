@@ -926,7 +926,6 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         """
 
         candidates = self.select_related("oauth_client", "external_account").select_for_update(of=("self",))
-        using = candidates.db
         with system_context(reason="integrate.credential.disconnect"), transaction.atomic():
             credential = (
                 candidates
@@ -938,7 +937,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             account = credential.external_account
             assert account is not None
             self.prepare_disconnect(credential)
-            type(account).objects.db_manager(using).filter(pk=account.pk).release(user)
+            type(account).objects.filter(pk=account.pk).release(user)
             deleted, _details = self.filter(pk=credential.pk).with_action("delete").delete()
         return deleted > 0
 
@@ -4757,10 +4756,10 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         Like applied_base, this completes that write without a pointer-only snapshot.
         """
 
-        if not transaction.get_connection(self.db).in_atomic_block or not is_sudo():
+        if not connection.in_atomic_block or not is_sudo():
             raise PermissionDenied("Target binding requires the trusted application transaction.")
         self._set_target(link, target)
-        link.save_without_historical_record(using=self.db, update_fields=("target_content_type", "target_object_id"))
+        link.save_without_historical_record(update_fields=("target_content_type", "target_object_id"))
 
     def revalidate(self, link: Any, *, target: Any = UNSET) -> Any:
         """Restore a verified identity without advancing its application base.
@@ -4958,8 +4957,7 @@ class RecordLink(
         ]
         observing = (
             type(self)
-            ._base_manager.using(self._state.db)
-            .filter(
+            ._base_manager.filter(
                 target_content_type_id=self.target_content_type_id,
                 target_object_id=self.target_object_id,
                 tombstoned_at__isnull=True,
@@ -4973,12 +4971,11 @@ class RecordLink(
         sibling = next((link for link in observing if link.asserting_source() == source), None) if targeted else None
         if sibling is None:
             return sum(
-                statement_model.objects.db_manager(self._state.db).withdraw(source, link=self)
-                for _reference, statement_model in statements
+                statement_model.objects.withdraw(source, link=self) for _reference, statement_model in statements
             )
         with system_context(reason="integrate.link_evidence_move"):
             for reference, _statement_model in statements:
-                rows = reference.rows(self).using(self._state.db).filter(asserted_by=str(source))
+                rows = reference.rows(self).filter(asserted_by=str(source))
                 if rows.exists():
                     reference.move(rows, survivor=sibling)
         return 0
