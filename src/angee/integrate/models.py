@@ -69,7 +69,6 @@ from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.refs import generic_pointer_target
 from angee.base.serialization import canonical_json
 from angee.graphql.capabilities import held_permissions
-from angee.integrate.connect import enabled_oauth_client_from_hint, oauth_client_slug_from_hint
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
 from angee.integrate.discovery import ConnectionDiscovery
@@ -1931,15 +1930,27 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         return self.capability_impl_class.oauth_client
 
-    def connect_oauth_client(self, owner_label: str) -> Any:
-        """Resolve the registration for this capability's declared connection."""
+    def connection_oauth_slug(self, owner_label: str = "") -> str:
+        """Expand this capability's declared OAuth registration hint with its vendor slug."""
 
-        return enabled_oauth_client_from_hint(
-            self.oauth_client_hint,
-            owner_label=owner_label,
-            reason="integrate.integration.connect_oauth_client",
-            vendor_slug=self.connection_vendor_slug(),
-        )
+        hint = str(self.oauth_client_hint or "").strip()
+        if not hint:
+            raise OAuthFlowError(
+                "oauth_client_not_connectable",
+                400,
+                f"{owner_label or self._meta.label} has no OAuth client.",
+            )
+        return hint.format(vendor=self.connection_vendor_slug())
+
+    def connect_oauth_client(self, owner_label: str) -> Any:
+        """Resolve the complete enabled registration for this capability's OAuth flow."""
+
+        slug = self.connection_oauth_slug(owner_label)
+        with system_context(reason="integrate.integration.connect_oauth_client"):
+            oauth_client = apps.get_model("integrate", "OAuthClient").objects.enabled_for_slug(slug)
+        if oauth_client is None:
+            raise OAuthFlowError("oauth_client_not_connectable", 400, f"{owner_label} has no enabled OAuth client.")
+        return oauth_client
 
     @classmethod
     def credential_projection_expressions(cls) -> dict[str, Any]:
@@ -2009,11 +2020,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         if (self.declared_concrete_model() or type(self)) is apps.get_model("integrate", "Integration"):
             return False
         try:
-            slug = oauth_client_slug_from_hint(
-                self.oauth_client_hint,
-                owner_label=self._meta.label,
-                vendor_slug=self.connection_vendor_slug(),
-            )
+            slug = self.connection_oauth_slug()
         except OAuthFlowError:
             return False
         return oauth_client_is_ready(slug)

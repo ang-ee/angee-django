@@ -19,7 +19,6 @@ from django.contrib.auth.base_user import AbstractBaseUser
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.http import HttpRequest
-from rebac import system_context
 
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -80,41 +79,6 @@ class AccountConnectCompletion:
     claims: dict[str, Any]
     next_path: str
     integration_id: str = ""
-
-
-def oauth_client_slug_from_hint(hint: Any, *, owner_label: str, vendor_slug: str = "") -> str:
-    """Expand a backend's client hint using its vendor identity."""
-
-    raw_hint = str(hint or "").strip()
-    if not raw_hint:
-        raise OAuthFlowError(
-            "oauth_client_not_connectable",
-            400,
-            f"{owner_label} has no OAuth client.",
-        )
-    return raw_hint.format(vendor=vendor_slug)
-
-
-def enabled_oauth_client_from_hint(
-    hint: Any,
-    *,
-    owner_label: str,
-    reason: str,
-    vendor_slug: str = "",
-) -> Any:
-    """Resolve a complete enabled registration for an actual OAuth flow."""
-
-    slug = oauth_client_slug_from_hint(hint, owner_label=owner_label, vendor_slug=vendor_slug)
-    OAuthClient = cast(Any, apps.get_model("integrate", "OAuthClient"))
-    with system_context(reason=reason):
-        oauth_client = OAuthClient.objects.enabled_for_slug(slug)
-    if oauth_client is None:
-        raise OAuthFlowError(
-            "oauth_client_not_connectable",
-            400,
-            f"{owner_label} has no enabled OAuth client.",
-        )
-    return oauth_client
 
 
 def complete_account_connect(
