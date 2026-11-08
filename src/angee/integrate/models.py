@@ -1405,13 +1405,13 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         (e.g. syncing it into a provisioned agent): an OAuth credential whose access token
         is near expiry is renewed through its provider refresh grant; every other case — a
         non-expiring local token, a still-valid token, or a credential with no refresh
-        grant — is a no-op. The refresh is serialized and re-checked under a row lock
-        (:meth:`_refresh_locked`), so racing consumers issue at most one network refresh.
-        A permanent refresh refusal records ``last_refresh_status="failed"`` and leaves
-        the existing token for the consumer to try. Transient refusals propagate so its
-        retry owner can reschedule without prompting for consent once the access
-        token has expired. Before expiry the existing token remains usable. Unexpected errors
-        also propagate.
+        grant — is a no-op. Concurrent consumers serialize in :meth:`_refresh_locked`:
+        one exchanges the grant and the others adopt its persisted token. A permanent
+        refresh refusal records ``last_refresh_status="failed"`` and leaves the existing
+        token for the consumer to try. Transient refusals propagate so its retry owner can
+        reschedule without prompting for consent once the access token has expired.
+        Before expiry the existing token remains usable. Unexpected errors also propagate.
+        Call it outside ``transaction.atomic``: the provider exchange is network I/O.
         """
 
         if self.expires_at is None or self.expires_at > timezone.now() + _OAUTH_REFRESH_MARGIN:
@@ -1433,7 +1433,6 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                 self.pk,
                 type(error).__name__,
             )
-            self._record_refresh_failure(error)
 
     def refresh_now(self) -> None:
         """Force a provider refresh now for an interactive caller, raising on failure.
@@ -1445,45 +1444,79 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         grant uses the refresh token; otherwise raises ``ValueError`` telling the caller
         to reconnect. A provider rejecting the grant records ``last_refresh_status`` as
         ``"failed"`` and re-raises (``OAuthFlowError``) so the caller can report it.
-        Serialized under the same row lock as :meth:`ensure_fresh`.
+        Serialized with :meth:`ensure_fresh` in :meth:`_refresh_locked`.
         """
 
         if not self.refreshable:
             raise ValueError("This credential cannot be refreshed; reconnect the account.")
-        try:
-            self._refresh_locked(force=True)
-        except (IntegrationError, ValueError) as error:
-            self._record_refresh_failure(error)
-            raise
+        self._refresh_locked(force=True)
+
+    @property
+    def refresh_fence(self) -> tuple[Any, ...]:
+        """Identify the exact grant whose exchange may update this row."""
+
+        return (
+            self.material,
+            self.status,
+            self.oauth_client_id,
+            self.external_account_id,
+            self.user_id,
+            self.last_refresh_at,
+        )
 
     def _refresh_locked(self, *, force: bool = False) -> None:
-        """Refresh under a row lock, skipping the network when a concurrent consumer won.
+        """Exchange the refresh grant outside any transaction, then persist it under a fence.
 
-        Locks the credential row, re-reads its expiry, and performs the provider refresh
-        while it is *still* stale — so two consumers racing to refresh the same
-        credential (concurrent provisions, or one plan's inference + MCP reads) issue at
-        most one network refresh and never replay a rotated refresh token. ``force``
-        renews regardless of expiry for an explicit, user-initiated refresh, still under
-        the lock so it serializes against the lazy path. The in-memory instance is
-        reloaded from the persisted row either way, so it adopts whichever consumer's
-        tokens won.
+        A blocking advisory lock serializes exchanges across workers: a second
+        consumer waits for the holder, re-reads the row and adopts the token it
+        persisted, so a rotated refresh token is never replayed. ``force`` renews
+        regardless of expiry for an explicit refresh. The provider call holds no
+        transaction; a short row lock then applies the result, or records a
+        permanent refusal, only while :attr:`refresh_fence` still names the grant
+        that was exchanged, so a reconnect, revocation or material edit during the
+        exchange wins. The instance reloads the persisted row either way.
         """
 
-        with transaction.atomic():
-            locked = type(self).objects.sudo(reason="integrate.credential.refresh").locked_get(pk=self.pk)
-            stale = locked.expires_at is not None and locked.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
-            if force or stale:
-                self.handler.refresh(locked)
+        if connection.in_atomic_block:
+            raise RuntimeError("Credential refresh requires autocommit.")
+        rows = type(self).objects.sudo(reason="integrate.credential.refresh")
+        with task_lock(record_lock_key(self._meta.label_lower, self.pk, "refresh"), blocking=True):
+            current = rows.select_related("oauth_client").get(pk=self.pk)
+            stale = current.expires_at is not None and current.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
+            if current.status != CredentialStatus.ACTIVE or not (force or stale):
+                self.refresh_from_db()
+                return
+            if not current.refreshable:
+                raise ValueError("This credential cannot be refreshed; reconnect the account.")
+            refresh_value = str(current.reveal().get("refresh_token") or "")
+            fence = current.refresh_fence
+            try:
+                tokens = OAuthClientProtocol(current.oauth_client).refresh_token(refresh_token=refresh_value)
+            except (IntegrationError, ValueError) as error:
+                if not (isinstance(error, IntegrationError) and error.transient):
+                    with system_context(reason="integrate.credential.refresh.failed"), transaction.atomic():
+                        locked = rows.lock_if_supported().get(pk=self.pk)
+                        if locked.refresh_fence == fence:
+                            locked.last_refresh_status = "failed"
+                            locked.save(update_fields=["last_refresh_status", "updated_at"])
+                self.refresh_from_db()
+                raise
+            # The response fully describes the new token; a provider that does not
+            # rotate keeps the stored refresh token, so a one-time token is not dropped.
+            renewed = dict(tokens)
+            renewed.setdefault("refresh_token", refresh_value)
+            with transaction.atomic():
+                locked = rows.lock_if_supported().get(pk=self.pk)
+                if locked.refresh_fence == fence:
+                    type(self).objects.upsert_for_user(
+                        locked.user,
+                        locked.oauth_client,
+                        CredentialKind.OAUTH,
+                        renewed,
+                        external_account=locked.external_account,
+                        reconnect=False,
+                    )
         self.refresh_from_db()
-
-    def _record_refresh_failure(self, error: Exception) -> None:
-        """Persist permanent refresh refusals; transport retries do not require consent."""
-
-        if isinstance(error, IntegrationError) and error.transient:
-            return
-        self.last_refresh_status = "failed"
-        with system_context(reason="integrate.credential.refresh.failed"):
-            self.save(update_fields=["last_refresh_status", "updated_at"])
 
 
 def _validated_manager_values(
