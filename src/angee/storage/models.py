@@ -934,7 +934,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                 owner_id=owner_id,
             )
             if row.upload_state == UploadState.READY:
-                self._grant_dedup_reach(row, owner_id)
+                row._grant_dedup_reach(owner_id)
                 row.merge_metadata(metadata)
                 return row  # content-addressed dedup hit — the bytes already exist
             storage = row.storage
@@ -959,7 +959,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                     visibility=FileVisibility.INHERITED,
                 ).first()
                 if winner is not None:
-                    self._grant_dedup_reach(winner, owner_id)
+                    winner._grant_dedup_reach(owner_id)
                     result = winner
                 else:
                     raise
@@ -1244,18 +1244,6 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             raise exceptions.UploadConflict("folder does not belong to the drive")
         return folder
 
-    def _grant_dedup_reach(self, row: Any, owner_id: Any) -> None:
-        """Grant a dedup-hit file read reach to the requested ingest owner."""
-
-        with transaction.atomic():
-            locked = type(row).system_queryset(lock=("self",)).get(pk=row.pk)
-            if locked.visibility != FileVisibility.INHERITED:
-                raise exceptions.UploadConflict("identical bytes already exist")
-            if owner_id is None or str(locked.owner_id or "") == str(owner_id):
-                return
-            user = get_user_model().objects.get(pk=owner_id)
-            locked.grant_record_access("viewer", user)
-
 
 class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A stored asset, deduplicated per drive by content hash.
@@ -1406,6 +1394,22 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
             else:
                 merged[key] = value
         return merged
+
+    def _grant_dedup_reach(self, owner_id: Any) -> None:
+        """Give an ingest owner read reach to the existing row its bytes deduplicated onto.
+
+        Only an inherited-visibility row is shared this way; a record-scoped row
+        conflicts without being identified.
+        """
+
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            if locked.visibility != FileVisibility.INHERITED:
+                raise exceptions.UploadConflict("identical bytes already exist")
+            if owner_id is None or str(locked.owner_id or "") == str(owner_id):
+                return
+            user = get_user_model().objects.get(pk=owner_id)
+            locked.grant_record_access("viewer", user)
 
     @property
     def storage(self) -> StorageBackend:
