@@ -635,6 +635,45 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         }
     )
 
+    def connect_oauth(
+        self,
+        oauth_client: Any,
+        *,
+        user: Any,
+        external_id: str,
+        tokens: dict[str, Any],
+        claims: dict[str, Any],
+        reason: str = "integrate.oauth.connect",
+    ) -> ExternalAccountT:
+        """Link ``user``'s verified provider identity and store its OAuth credential in one transaction.
+
+        The account is labelled from the provider claims; its credential is the
+        ``(user, provider)`` upsert, so a reconnect replaces the grant in place.
+        Raises ``ValidationError`` (``account_already_linked``) when another user
+        owns the identity.
+        """
+
+        email = oauth_client.email_from_claims(claims) or ""
+        with system_context(reason=reason), transaction.atomic():
+            account = self.link(
+                oauth_client,
+                external_id,
+                owner=user,
+                email=email,
+                identity_claims=claims,
+                display_name=oauth_client.display_name_from_claims(claims, email),
+                avatar_url=oauth_client.avatar_url_from_claims(claims),
+            )
+            account.credential = apps.get_model("integrate", "Credential").objects.upsert_for_user(
+                user,
+                oauth_client,
+                CredentialKind.OAUTH,
+                tokens,
+                external_account=account,
+            )
+            account.save(update_fields=["credential", "updated_at"])
+        return account
+
     def link(
         self,
         oauth_client: Any,

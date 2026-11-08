@@ -17,11 +17,10 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models
 from django.http import HttpRequest
 from rebac import system_context
 
-from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import (
@@ -183,36 +182,23 @@ def complete_external_account_link(
 ) -> AccountConnectCompletion:
     """Link an external account to ``user`` and store its OAuth credential."""
 
-    email = oauth_client.email_from_claims(claims) or ""
     Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
-    Credential = cast(Any, apps.get_model("integrate", "Credential"))
-    with system_context(reason=reason), transaction.atomic():
-        try:
-            account = Account.objects.link(
-                oauth_client,
-                external_id,
-                owner=user,
-                email=email,
-                identity_claims=claims,
-                display_name=oauth_client.display_name_from_claims(claims, email),
-                avatar_url=oauth_client.avatar_url_from_claims(claims),
-            )
-        except ValidationError as error:
-            if error.code == "account_already_linked":
-                raise OAuthFlowError("account_already_linked", 409) from error
-            raise
-        credential = Credential.objects.upsert_for_user(
-            user,
+    try:
+        account = Account.objects.connect_oauth(
             oauth_client,
-            CredentialKind.OAUTH,
-            tokens,
-            external_account=account,
+            user=user,
+            external_id=external_id,
+            tokens=tokens,
+            claims=claims,
+            reason=reason,
         )
-        account.credential = credential
-        account.save(update_fields=["credential", "updated_at"])
+    except ValidationError as error:
+        if error.code == "account_already_linked":
+            raise OAuthFlowError("account_already_linked", 409) from error
+        raise
     return AccountConnectCompletion(
         account=cast(models.Model, account),
-        credential=cast(models.Model, credential),
+        credential=cast(models.Model, account.credential),
         user=user,
         claims=claims,
         next_path=next_path or "/",
