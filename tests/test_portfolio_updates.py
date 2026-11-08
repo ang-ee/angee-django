@@ -77,3 +77,19 @@ def test_report_refuses_phasal_and_undeclared_targets(reportable: dict[str, Any]
         row = Update.objects.create(target=reportable["initiative"], health="on_track", body="Seeded")
         assert row.content_type == generic_target(reportable["initiative"]).content_type
         assert Update.objects.count() == 1
+
+
+def test_report_and_target_health_share_one_graphql_enum() -> None:
+    """A report's health and its target's projection are one vocabulary with one GraphQL name."""
+
+    from angee.portfolio import schema
+
+    report_health = next(
+        field for field in schema.PortfolioUpdateType.__strawberry_definition__.fields if field.python_name == "health"
+    )
+    initiative_health = next(
+        field for field in schema.InitiativeType.__strawberry_definition__.fields if field.python_name == "health"
+    )
+    assert report_health.type is schema.HealthChoice.__strawberry_definition__
+    assert initiative_health.type.of_type is schema.HealthChoice.__strawberry_definition__
+    assert schema.HealthChoice.__strawberry_definition__.name == "Health"

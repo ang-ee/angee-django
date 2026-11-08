@@ -34,8 +34,8 @@ Project = apps.get_model("projects", "Project")
 Task = apps.get_model("projects", "Task")
 User = get_user_model()
 
-UpdateHealthChoice = Update._meta.get_field("health").choices_enum
-strawberry.enum(cast(Any, UpdateHealthChoice))
+HealthChoice = Update._meta.get_field("health").choices_enum
+strawberry.enum(cast(Any, HealthChoice))
 
 
 @strawberry_django.type(Product)
@@ -229,7 +229,7 @@ class PortfolioActionMutation:
         self,
         info: strawberry.Info,
         id: PublicID,
-        health: UpdateHealthChoice,  # type: ignore[valid-type]
+        health: HealthChoice,  # type: ignore[valid-type]
         body: str,
     ) -> ActionResult:
         """Create one required-health report on a writable Project."""
@@ -244,7 +244,7 @@ class PortfolioActionMutation:
         self,
         info: strawberry.Info,
         id: PublicID,
-        health: UpdateHealthChoice,  # type: ignore[valid-type]
+        health: HealthChoice,  # type: ignore[valid-type]
         body: str,
     ) -> ActionResult:
         """Create one required-health report on a writable Initiative."""

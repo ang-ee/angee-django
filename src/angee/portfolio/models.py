@@ -62,8 +62,8 @@ class InitiativeStatus(models.TextChoices):
     DROPPED = "dropped", "Dropped"
 
 
-class InitiativeHealth(models.TextChoices):
-    """Latest reported health denormalized onto an Initiative."""
+class Health(models.TextChoices):
+    """Health asserted by every report and projected onto its Project or Initiative target."""
 
     ON_TRACK = "on_track", "On track"
     AT_RISK = "at_risk", "At risk"
@@ -78,14 +78,6 @@ class InitiativeDateResolution(models.TextChoices):
     QUARTER = "quarter", "Quarter"
     HALF_YEAR = "half_year", "Half year"
     YEAR = "year", "Year"
-
-
-class UpdateHealth(models.TextChoices):
-    """Health assertion required from every portfolio Update."""
-
-    ON_TRACK = "on_track", "On track"
-    AT_RISK = "at_risk", "At risk"
-    OFF_TRACK = "off_track", "Off track"
 
 
 class ReleaseStatus(models.TextChoices):
@@ -196,7 +188,7 @@ class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concr
     body = models.TextField(blank=True, default="")
     status = StateField(choices_enum=InitiativeStatus, default=InitiativeStatus.PROPOSED)
     health = StateField(
-        choices_enum=InitiativeHealth,
+        choices_enum=Health,
         null=True,
         blank=True,
         editable=False,
@@ -413,7 +405,7 @@ class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
         self,
         *,
         target: Project | Initiative,
-        health: str | UpdateHealth,
+        health: str | Health,
         body: str = "",
     ) -> UpdateT:
         """Create one report on a Project or Initiative; its ``create`` requires write on the target."""
@@ -437,7 +429,7 @@ class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
-    health = StateField(choices_enum=UpdateHealth)
+    health = StateField(choices_enum=Health)
     body = models.TextField(blank=True, default="")
 
     objects = UpdateManager()
@@ -594,7 +586,7 @@ class ProjectPortfolio(Composable, extends="projects.Project"):
         related_name="projects",
     )
     health = StateField(
-        choices_enum=InitiativeHealth,
+        choices_enum=Health,
         null=True,
         blank=True,
         editable=False,
