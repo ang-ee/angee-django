@@ -639,6 +639,10 @@ def test_page_backlinks_list_resolved_sources(composed_tables: None) -> None:
         )
     )["pages_by_pk"]
     assert detail["backlinks"] == [{"title": "Linker", "display_text": "see target"}]
+    links = apps.get_model("knowledge", "Link").objects.with_actor(alice)
+    chained = links.filter(display_text="see target").backlinks_to(target)
+    assert list(chained.values_list("source_page_id", flat=True)) == [linker.pk]
+    assert not links.filter(display_text="elsewhere").backlinks_to(target).exists()
 
 
 def test_crud_update_is_row_scoped(composed_tables: None) -> None:

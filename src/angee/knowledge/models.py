@@ -1320,13 +1320,20 @@ class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits=
 # ---------------------------------------------------------------------------
 
 
-class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
-    """Owns the wikilink edge set derived from page bodies."""
+class LinkQuerySet[LinkT: Link](AngeeHistoryQuerySet[LinkT]):
+    """Backlink selections over the wikilink edge set."""
 
-    def backlinks_to(self, page: Any) -> models.QuerySet[LinkT]:
+    def backlinks_to(self, page: Any) -> Self:
         """Resolved links into ``page`` from untrashed source pages the actor reads."""
 
         return self.filter(target_page_id=page.pk, is_resolved=True, source_page__is_trashed=False).scoped()
+
+
+_LinkManagerBase = AngeeHistoryManager.from_queryset(LinkQuerySet)
+
+
+class LinkManager[LinkT: Link](_LinkManagerBase[LinkT]):
+    """Owns the wikilink edge set derived from page bodies."""
 
     def rebuild_for(self, markdown: Any) -> None:
         """Replace the source page's outgoing links from its current body.
