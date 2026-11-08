@@ -45,6 +45,7 @@ from django.db.models.functions import MD5, Coalesce, JSONArray
 from django.db.models.sql.compiler import SQLCompiler
 from django.utils import timezone
 from django.utils.text import capfirst
+from django.views.decorators.debug import sensitive_variables
 from django_compose.models import Composable
 from rebac import (
     CheckItem,
@@ -66,6 +67,7 @@ from angee.base.fields import ModelLabelField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
+from angee.base.locks import task_locks_are_cross_process
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.identity import instance_from_public_id
@@ -79,8 +81,16 @@ from angee.base.prefetch import prefetched
 from angee.base.refs import RecordRef, generic_pointer_model
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
-from angee.integrate.models import Bridge, IntegrationCreateMode
-from angee.messaging.backends import ChannelBackend
+from angee.integrate.impl import LiveBridgeImpl
+from angee.integrate.live import (
+    PairingProjection,
+    armed_material_key,
+    await_session_exit,
+    reset_session_store,
+    skipped_password_marker,
+)
+from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationRuntimeStatus
+from angee.messaging.backends import ChannelBackend, PairingActionError
 from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
@@ -1115,6 +1125,101 @@ class Channel(Bridge, inherits="integrate.Integration"):
                 models.Q(left__channel_id=self.pk) | models.Q(right__channel_id=self.pk),
             ).order_by("pk"))
         return blockers
+
+    def require_live_backend(self) -> LiveBridgeImpl:
+        """Return the selected live implementation or reject a poll-only channel."""
+
+        impl = self.live_impl
+        if not isinstance(impl, LiveBridgeImpl):
+            raise PairingActionError("This action requires a live channel.")
+        return impl
+
+    def pairing(self) -> PairingProjection:
+        """Return this live channel's vendor-neutral pairing projection."""
+
+        return self.require_live_backend().pairing()
+
+    def resume_pairing(self) -> None:
+        """Start this live channel, clearing its runtime error but retaining identity.
+
+        A stale pairing report (a dead QR, a rejected account) is dropped only when
+        no session provably runs: a running session owns the report it is showing,
+        and a process-local lock backend cannot see a worker's session at all.
+        """
+
+        impl = self.require_live_backend()
+        with system_context(reason="messaging.resume_channel_pairing"):
+            self.refresh_from_db(from_queryset=type(self)._base_manager.select_related("credential"))
+            if task_locks_are_cross_process() and not self.is_syncing:
+                self.update_live_state(identity_key=impl.state_identity_key, drop_pairing_report=True)
+            self.set_lifecycle(IntegrationLifecycle.CONNECTED)
+            self.report_status(IntegrationRuntimeStatus.OK)
+            self.start_live()
+
+    @sensitive_variables("password", "material")
+    def submit_pairing_password(self, password: str) -> None:
+        """Store one transient secret under the armed material key and signal readiness."""
+
+        self.require_live_backend()
+        if not password:
+            raise PairingActionError("A channel password is required.")
+        with system_context(reason="messaging.submit_channel_password"):
+            self.refresh_from_db(from_queryset=type(self)._base_manager.select_related("credential"))
+            material_key = armed_material_key(self.subscription_state)
+            if not material_key:
+                raise PairingActionError("This channel is not awaiting a password.")
+            credential = self.credential
+            if credential is None:
+                raise PairingActionError("This channel has no credential for password input.")
+            credential.update_material(**{material_key: password})
+            # See ``LiveSession._mark_awaiting_password`` for the awaiting tri-state.
+            self.merge_subscription_state(awaiting="")
+
+    def skip_pairing_password(self) -> None:
+        """Skip one armed optional secret round and signal that choice to the session."""
+
+        impl = self.require_live_backend()
+        with system_context(reason="messaging.skip_channel_password"):
+            self.refresh_from_db(from_queryset=type(self)._base_manager.select_related("credential"))
+            material_key = armed_material_key(self.subscription_state)
+            if not material_key:
+                raise PairingActionError("This channel is not awaiting a password.")
+            if not impl.pairing().can_skip:
+                raise PairingActionError("This channel password cannot be skipped.")
+            self.merge_subscription_state(awaiting=skipped_password_marker(material_key))
+
+    def reset_pairing(self) -> None:
+        """Stop this live channel, wipe its released session store, and restart pairing.
+
+        The store is wiped only after the session provably exited; an unproven
+        shutdown keeps it intact and refuses, so the caller can retry shortly.
+        """
+
+        impl = self.require_live_backend()
+        with system_context(reason="messaging.reset_channel_pairing"):
+            self.stop_live()
+            try:
+                await_session_exit(self)
+            except TimeoutError as error:
+                raise PairingActionError("The channel is still shutting down; try again shortly.") from error
+            except ImproperlyConfigured as error:
+                raise PairingActionError(
+                    "Resetting this channel requires a cross-process task lock backend.",
+                ) from error
+            self.refresh_from_db(from_queryset=type(self)._base_manager.select_related("credential"))
+            if self.credential is not None:
+                self.credential.update_material(**dict.fromkeys(impl.transient_material_keys))
+            reset_session_store(self)
+            impl.mark_disconnected(clear_identity=True)
+        self.resume_pairing()
+
+    def disconnect_pairing(self) -> None:
+        """Stop this live channel and release its account while retaining pairing material."""
+
+        impl = self.require_live_backend()
+        with system_context(reason="messaging.disconnect_channel"):
+            self.stop_live()
+            impl.mark_disconnected(clear_identity=False)
 
     def start_live(self) -> None:
         """Mark this channel live-desired, then dispatch the backend's live ingest.

@@ -61,6 +61,7 @@ from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
+from angee.base.locks import task_locks_are_cross_process
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instances_from_public_ids
@@ -76,10 +77,11 @@ from angee.base.signals import mute_changes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.integrate.errors import IntegrationError, doubling_backoff, safe_integration_failure
 from angee.integrate.impl import LiveBridgeImpl
+from angee.integrate.live import session_store_path
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
 from angee.integrate.net import AddressNotAllowedError
 from angee.jobs.timeouts import task_claim_lease
-from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedPart
+from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, PairingActionError, ParsedPart
 from angee.messaging.constants import (
     DELIVERY_TASK_EXPIRES,
     MAX_DELIVERY_ATTEMPTS,
@@ -312,6 +314,38 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
             created_by_id=user.pk,
             **extra,
         )
+
+    def resume_or_create_pairing(self, user: Any, *, name: str, backend_class: str) -> Any:
+        """Restart the user's newest unfinished pairing channel, or create one.
+
+        A reused channel keeps its display name; ``name`` applies only to creation.
+        Reuse resets an existing session store: a released claim can follow a
+        duplicate-account rejection while the store still holds that linked
+        account. Without a store there is nothing to wipe, so the channel simply
+        resumes. A process-local lock backend cannot prove the reset safe, so there
+        a channel with a store is left alone and a new one is created. Reset errors
+        propagate without creating another channel, so an unproven shutdown leaves
+        the store intact and the caller can retry shortly.
+        """
+
+        field = self.model.live_implementation_field()
+        if field is None:
+            raise PairingActionError("This action requires a live channel.")
+        if not issubclass(field.resolve_class(backend_class), LiveBridgeImpl):
+            raise PairingActionError("This action requires a live channel.")
+        actor = current_actor() or user
+        with system_context(reason="messaging.resume_or_create_channel"), transaction.atomic():
+            channel = self.unfinished_pairing(user, backend_class).first()
+            if channel is not None and session_store_path(channel).exists() and not task_locks_are_cross_process():
+                channel = None
+            reused = channel is not None
+            if channel is None:
+                channel = self.create_disconnected(user, name=name, backend_class=backend_class)
+        if reused and session_store_path(channel).exists():
+            channel.reset_pairing()
+        else:
+            channel.resume_pairing()
+        return channel.with_actor(actor)
 
     def inventory(self, channel: Any) -> dict[type[models.Model], int]:
         """Return ``{model: count}`` for every row a purge of ``channel`` would delete.

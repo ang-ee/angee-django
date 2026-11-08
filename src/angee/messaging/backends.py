@@ -39,6 +39,10 @@ INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 logger = logging.getLogger(__name__)
 
 
+class PairingActionError(ValueError):
+    """A safe, actionable live-channel pairing precondition failure."""
+
+
 class DeliveryUncertain(IntegrationError):
     """A provider may have accepted an effect; retry needs reconciliation or acknowledgement.
 
