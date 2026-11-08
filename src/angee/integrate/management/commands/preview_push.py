@@ -9,14 +9,14 @@ from django.apps import apps
 from django.core.management.base import BaseCommand, CommandError
 from rebac import system_context
 
-from angee.integrate.streams import PushPreview, preview_push
+from angee.integrate.streams import PushPreview
 
 
 class Command(BaseCommand):
     """Print, for each current stream of an integration, what a push would write and what it holds back.
 
-    A thin dispatcher over :func:`angee.integrate.streams.preview_push`. It reads
-    the current epoch of every partition the integration ever recorded rather than
+    A thin dispatcher over :meth:`Integration.preview_push`, which reads the
+    current epoch of every partition the integration ever recorded rather than
     asking the adapter to declare them, since declaring discovers the remote and
     records what it finds; the preview sends no request and writes nothing.
     Streams record no retirement, so a partition the adapter no longer declares (a
@@ -38,18 +38,13 @@ class Command(BaseCommand):
 
         del args
         integration_model = apps.get_model("integrate", "Integration")
-        stream_model = apps.get_model("integrate", "SyncStream")
         with system_context(reason="integrate.preview_push"):
             for sqid in options["integrations"]:
                 integration = integration_model.objects.filter(sqid=sqid).first()
                 if integration is None:
                     raise CommandError(f"There is no integration {sqid}.")
-                adapter = integration.concrete_capability().capability_impl
-                try:
-                    for stream in stream_model.objects.current_for_bridge(integration):
-                        self._report(sqid, stream, preview_push(stream, adapter), keys=options["keys"])
-                finally:
-                    adapter.close()
+                for stream, preview in integration.preview_push():
+                    self._report(sqid, stream, preview, keys=options["keys"])
 
     def _report(self, sqid: str, stream: Any, preview: PushPreview, *, keys: bool) -> None:
         """Write one stream's counts, and its keys when asked."""

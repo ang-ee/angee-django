@@ -106,7 +106,14 @@ from angee.integrate.states import (
     SyncFailureKind,
     SyncFailureStatus,
 )
-from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
+from angee.integrate.streams import (
+    PushPreview,
+    begin_stream_cycle,
+    preview_push,
+    push_stream,
+    read_stream_keys,
+    sync_bridge,
+)
 from angee.integrate.sync import SyncDispatch, bridge_progress_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
@@ -2254,6 +2261,21 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         except Exception as error:  # noqa: BLE001 — handler diagnostics stay outside the operator message.
             raise IntegrationError("Credential is not usable.") from error
         return "Credential is usable."
+
+    def preview_push(self) -> tuple[tuple[SyncStream, PushPreview], ...]:
+        """Preview each current stream's push through one capability adapter, writing nothing.
+
+        Streams are read from the current epoch of every partition this
+        integration recorded, so a partition its adapter no longer declares still
+        previews its unsent local edits. The adapter is closed afterwards.
+        """
+
+        adapter = self.concrete_capability().capability_impl
+        try:
+            streams = apps.get_model("integrate", "SyncStream").objects.current_for_bridge(self)
+            return tuple((stream, preview_push(stream, adapter)) for stream in streams)
+        finally:
+            adapter.close()
 
     def request_sync(self, *, now: datetime | None = None) -> int:
         """Request a sync of every bridge capability of this integration; return how many queued.
