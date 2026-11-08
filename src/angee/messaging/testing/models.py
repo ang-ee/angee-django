@@ -79,6 +79,8 @@ class Party(AbstractParty):
 class Person(AbstractPerson, Party):
     """Concrete identity required by party-keyed messaging followers."""
 
+    rebac_grantable = AbstractPerson.rebac_grantable
+
     class Meta(AbstractPerson.Meta):
         """Django model options for the canonical test person."""
 
@@ -224,6 +226,8 @@ class ThreadNotification(AbstractThreadNotification):
 
 class Organization(AbstractOrganization, Party):
     """Concrete organization matching the composer inheritance shape."""
+
+    rebac_grantable = AbstractOrganization.rebac_grantable
 
     class Meta(AbstractOrganization.Meta):
         """Django model options for the canonical test organization."""

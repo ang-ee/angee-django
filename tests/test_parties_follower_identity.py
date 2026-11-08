@@ -94,6 +94,40 @@ def _allowed(row: Any, actor: Any, action: str = "read") -> bool:
     )
 
 
+@pytest.mark.parametrize("model, grant_parent", (
+    (Party, False), (Person, False), (Person, True), (Organization, False), (Organization, True),
+))
+def test_selected_identity_grant_reaches_mti_without_private_or_subject_access(
+    follower_schema: None, model: type, grant_parent: bool,
+) -> None:
+    users = get_user_model()
+    owner = users.objects.create_user(username="selected-identity-owner")
+    reader = users.objects.create_user(username="selected-identity-reader", kind="service")
+    outsider = users.objects.create_user(username="selected-identity-outsider")
+    with system_context(reason="selected identity grant fixtures"):
+        selected = model.objects.create(display_name="Selected identity", created_by=owner, **PARTY_PRIVATE)
+        other = Party.objects.create(display_name="Unselected identity", created_by=owner)
+        parent = Party.objects.get(pk=selected.pk)
+        handle = Handle.objects.create(platform="email", value="private@example.test", party=parent, created_by=owner)
+    target = parent if grant_parent else selected
+    target.with_actor(owner).grant_record_access("identity_reader", reader)
+    target.grant_record_access("identity_reader", reader)
+    assert len(target.direct_record_access(("identity_reader",))) == 1
+    for row in (parent, selected):
+        assert _allowed(row, reader)
+        assert type(row).objects.with_actor(reader).filter(pk=row.pk).exists()
+        for action in ("read_private", "read__notes", "read__first_met_note", "read__handle_count", "write"):
+            assert not _allowed(row, reader, action)
+    assert not _allowed(parent, reader, "read_as_subject")
+    assert not _allowed(handle, reader)
+    assert not _allowed(other, reader)
+    with pytest.raises(PermissionDenied):
+        target.with_actor(reader).grant_record_access("identity_reader", outsider)
+    target.with_actor(owner).revoke_record_access("identity_reader", reader)
+    assert not _allowed(parent, reader)
+    assert not _allowed(selected, reader)
+
+
 @pytest.fixture
 def followers(follower_schema: None) -> SimpleNamespace:
     """Seed explicit followers, another thread and an unfollowed identity."""

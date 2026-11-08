@@ -187,7 +187,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 sender = _address(participant.handle)
                 if sender:
                     return sender
-        values = _metadata_addresses(message, "from")
+        values = _source_addresses(message, "from")
         if values:
             return values[0]
         config = self.bridge.config if isinstance(self.bridge.config, dict) else {}
@@ -204,7 +204,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 recipients[role].append(address)
         for role in recipients:
             if not recipients[role]:
-                recipients[role].extend(_metadata_addresses(message, role))
+                recipients[role].extend(_source_addresses(message, role))
             recipients[role] = _dedupe(recipients[role])
         return recipients
 
@@ -248,17 +248,9 @@ def _address(handle: Any) -> str:
     return formataddr((str(getattr(handle, "display_name", "") or "").strip(), value))
 
 
-def _metadata_addresses(message: Any, header: str) -> list[str]:
-    metadata = message.metadata if isinstance(message.metadata, dict) else {}
-    raw_headers = metadata.get("headers")
-    if not isinstance(raw_headers, dict):
-        return []
-    values: Any = next((value for name, value in raw_headers.items() if str(name).casefold() == header), ())
-    if isinstance(values, str):
-        values = (values,)
-    if not isinstance(values, list | tuple):
-        return []
-    return [formataddr((name, address)) for name, address in getaddresses([str(value) for value in values]) if address]
+def _source_addresses(message: Any, header: str) -> list[str]:
+    return [formataddr((name, address)) for name, address in getaddresses(message.source_header_values(header))
+            if address]
 
 
 def _dedupe(addresses: Any) -> list[str]:

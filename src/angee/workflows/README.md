@@ -17,6 +17,10 @@ contract in the node config; execution uses that frozen contract. A child outcom
 outside it fails the await step. Publishing returns the version and the readable
 published parent workflow keys that should be republished to adopt a changed child
 contract.
+Native run fallbacks include `done`, `error`, `canceled` and `interrupted`, each
+allowing an empty output. Parents must route every frozen child outcome. Older
+publications missing a native outcome retain that contract; author the missing
+route and republish before reprocessing an affected parent run.
 Schema declaration checks, format validation and structural schema operations
 come from [`angee.base.validators`](../../../src/angee/base/validators.py).
 
@@ -50,6 +54,13 @@ failure rolls back record actions and retains final answers for operator retry.
 Application failure does not automatically ask a replacement. Repeated delivery still requires
 idempotent declared methods. Selected alternatives apply in authored order;
 multiple alternatives cannot overlap the same record's field write.
+
+The shared [party identity review](../workflows_parties/steps.py) defaults to
+the run actor's identity-write authority. Its `apply_as: answerer` configuration
+uses the answering person's current standing permissions for identity changes;
+the Party owner rechecks permissions and the frozen identity facts under its
+locks. This option leaves workflow execution and evidence reads under the run
+actor and creates no grants. An unavailable answerer fails application.
 
 The default continuation emits the decision public identity and chosen keys.
 `ctx.decision(id)` loads a retained decision from this run with normal read scope.

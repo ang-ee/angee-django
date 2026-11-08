@@ -39,6 +39,36 @@ def assert_access(row, actor, action, allowed):
     assert type(row).objects.with_actor(actor).with_action(action).scoped().filter(pk=row.pk).exists() is allowed
 
 
+def test_sender_handle_reads_follow_live_message_without_private_party_access(messaging_access_schema):
+    owner, reader = (make_user(name) for name in ("sender-source-owner", "sender-source-reader"))
+    with system_context(reason="source sender read fixtures"):
+        party = Party.objects.create(display_name="Private sender Party", notes="Private", created_by=owner)
+        sender = Handle.objects.create(platform="email", value="sender@example.test", party=party, created_by=owner)
+        unrelated = Handle.objects.create(platform="email", value="unrelated@example.test", created_by=owner)
+        vendor = Vendor.objects.create(slug="sender-source", display_name="Sender source")
+        channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
+        message = Message.objects.create(channel=channel, sender=sender)
+    assert_access(sender, reader, "read", False)
+    channel.with_actor(owner).grant_record_access("reader", reader)
+    assert_access(message, reader, "read", True)
+    assert_access(sender, reader, "read", True)
+    assert_access(sender, reader, "write", False)
+    assert_access(party, reader, "read", False)
+    assert_access(party, reader, "read_private", False)
+    assert_access(unrelated, reader, "read", False)
+
+    message.with_actor(owner).trash(reason="Withhold source envelope")
+    assert_access(sender, reader, "read", False)
+    message.restore()
+    assert_access(sender, reader, "read", True)
+    channel.with_actor(owner).revoke_record_access("reader", reader)
+    assert_access(sender, reader, "read", False)
+    message.with_actor(owner).grant_record_access("reader", reader)
+    assert_access(sender, reader, "read", True)
+    message.with_actor(owner).revoke_record_access("reader", reader)
+    assert_access(sender, reader, "read", False)
+
+
 def test_thread_transfer_requires_owner_and_clear_preserves_attribution(composed_tables, messaging_access_schema):
     owner, editor, successor = (make_user(name) for name in ("owner", "editor", "successor"))
     with actor_context(owner):

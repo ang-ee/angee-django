@@ -1,7 +1,7 @@
 """Typed human reviews that delegate identity and same_as writes to parties."""
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -50,11 +50,13 @@ class IdentityInput(BaseModel):
 
 
 class IdentityReviewConfig(BaseModel):
-    """Presentation for a shared identity review, independent of its consumer."""
+    """Presentation and application authority for a shared identity review."""
 
     model_config = ConfigDict(extra="forbid")
     party_label: str = Field(default="Party", min_length=1)
     default_address_label: str = Field(default="Primary", min_length=1, max_length=64)
+    apply_as: Literal["run_actor", "answerer"] = "run_actor"
+    """Whose current identity-write authority applies changes; run reads stay unchanged."""
 
 
 class IdentityOutput(BaseModel):
@@ -163,9 +165,12 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
             ctx.identity_results = {}
             return {"keep": "unchanged", "reject": "rejected", "escalate": "escalated"}[next(iter(other))]
         party = ctx.load(apps.get_model("parties", "Party"), ctx.input.party_id)
+        applying_actor = decision.answered_by if ctx.config.apply_as == "answerer" else ctx.actor
+        if applying_actor is None:
+            raise ValidationError("Identity changes require the configured applying actor.")
         addresses = apps.get_model("parties", "Address").objects.with_actor(ctx.actor).filter(party=party)
         existing_addresses = set(addresses.values_list("pk", flat=True)) if "address" in changes else set()
-        outcome, ctx.identity_results = party.apply_identity(
+        outcome, ctx.identity_results = party.with_actor(applying_actor).apply_identity(
             expected_facts_hash=ctx.state["facts_hash"],
             proposed=IdentityProposal.model_validate(ctx.state["proposed"]).model_dump(),
             choices={

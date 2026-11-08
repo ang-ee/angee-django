@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Any
+from typing import Any, Self
 
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -44,7 +44,7 @@ class EvidenceReference(BaseModel):
     pointer: str = ""
 
     @classmethod
-    def of(cls, record: models.Model, *, pointer: str = "") -> EvidenceReference:
+    def of(cls, record: models.Model, *, pointer: str = "") -> Self:
         """Name a saved record by the model its generic pointers resolve to and its public id."""
 
         pointer_model = generic_pointer_model(type(record))

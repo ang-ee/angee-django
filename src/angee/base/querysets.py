@@ -161,6 +161,7 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
     """Shared native lookup and locking, preserving each manager's policy."""
 
     model: type[_ModelT]
+    _hints: dict[str, models.Model]
 
     def from_public_id(self, value: str) -> _ModelT | None:
         """Return the row addressed by ``value`` within this queryset policy."""

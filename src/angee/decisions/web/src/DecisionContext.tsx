@@ -39,7 +39,7 @@ export function DecisionContext({ context, reasonOnly = false, representedRecord
   const parsed = v.safeParse(DecisionContextSchema, context);
   if (!parsed.success) return <ErrorBanner description={t("context.invalid")} />;
   if (reasonOnly) return parsed.output.reason ? <p className={`${textRoleVariants({ role: "caption" })} mt-1`}>{parsed.output.reason}</p> : null;
-  const { facts } = parsed.output;
+  const facts = parsed.output.facts.filter((fact) => fact.value !== null && fact.value !== "");
   const references = parsed.output.references.filter((reference) => !representedRecords.includes(reference.id));
   if (!facts.length && !references.length) return null;
   const authorityLabels = {
@@ -48,7 +48,7 @@ export function DecisionContext({ context, reasonOnly = false, representedRecord
   return <section aria-label={t("context.title")} className="min-w-0 space-y-2 [overflow-wrap:anywhere]">
     {facts.length ? <section aria-label={t("context.facts")} className="space-y-1">
       <SectionEyebrow as="h2">{t("context.facts")}</SectionEyebrow>
-      <MetaGrid rows={facts.filter((fact) => fact.value !== null && fact.value !== "").map((fact, index) => ({
+      <MetaGrid rows={facts.map((fact, index) => ({
         id: `${fact.pointer}:${index}`,
         label: <span title={authorityLabels[fact.authority]}>{fact.label}</span>,
         value: <>

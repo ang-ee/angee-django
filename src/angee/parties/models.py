@@ -95,7 +95,7 @@ class Party(
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    rebac_grantable = {"reader": "write"}
+    rebac_grantable = {"reader": "write", "identity_reader": "write"}
 
     sqid_prefix = "pty_"
     history = ModelHistory(inherit=True, excluded_fields=("handle_count",))
@@ -415,6 +415,7 @@ class Party(
 class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """A human party — carries name parts and an optional platform-user link."""
 
+    rebac_grantable = {"identity_reader": "write"}
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -464,6 +465,7 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
 class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """An organisation party — carries its legal name and primary domain."""
 
+    rebac_grantable = {"identity_reader": "write"}
 
     statements = StatementRecords(
         link="integrate.RecordLink",
