@@ -1243,7 +1243,12 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
     def refreshable(self) -> bool:
         """Derive refreshability from the current client and this grant's material."""
 
-        return self.handler.can_refresh(self)
+        return (
+            self.kind == CredentialKind.OAUTH
+            and self.oauth_client is not None
+            and self.oauth_client.supports_refresh
+            and bool(self.reveal().get("refresh_token"))
+        )
 
     @property
     def is_reconnect_required(self) -> bool:
@@ -1300,9 +1305,9 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         return CredentialKind(self.kind).handler
 
     def reveal(self) -> dict[str, Any]:
-        """Return decrypted material through the kind handler."""
+        """Decode this row's decrypted JSON material."""
 
-        return self.handler.reveal(self)
+        return json.loads(self.material or "{}")
 
     @staticmethod
     def encode_material(material: Mapping[str, Any]) -> str:
@@ -1411,7 +1416,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         if self.expires_at is None or self.expires_at > timezone.now() + _OAUTH_REFRESH_MARGIN:
             return
-        if not self.handler.can_refresh(self):
+        if not self.refreshable:
             return
         try:
             self._refresh_locked()
@@ -1443,7 +1448,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         Serialized under the same row lock as :meth:`ensure_fresh`.
         """
 
-        if not self.handler.can_refresh(self):
+        if not self.refreshable:
             raise ValueError("This credential cannot be refreshed; reconnect the account.")
         try:
             self._refresh_locked(force=True)

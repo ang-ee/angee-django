@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import json
 from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
@@ -73,24 +72,12 @@ class CredentialKindHandler:
     def secret_value(self, credential: Any) -> str:
         """Return the credential's primary secret value."""
 
-        material = self.reveal(credential)
-        return str(material.get(self.material_field) or "")
-
-    def can_refresh(self, credential: Any) -> bool:
-        """Return whether this credential can renew its own secret without the user."""
-
-        del credential
-        return False
+        return str(credential.reveal().get(self.material_field) or "")
 
     def refresh(self, credential: Any) -> None:
         """Refresh ``credential`` in place when the kind supports it."""
 
         raise NotImplementedError
-
-    def reveal(self, credential: Any) -> dict[str, Any]:
-        """Return the decrypted JSON material for ``credential``."""
-
-        return json.loads(credential.material or "{}")
 
 
 class OAuthCredentialHandler(CredentialKindHandler):
@@ -130,14 +117,6 @@ class OAuthCredentialHandler(CredentialKindHandler):
         except KeyError, TypeError, ValueError:
             return None
 
-    def can_refresh(self, credential: Any) -> bool:
-        """Return whether a refresh-capable provider and a stored refresh token exist."""
-
-        oauth_client = credential.oauth_client
-        if oauth_client is None or not getattr(oauth_client, "supports_refresh", False):
-            return False
-        return bool(self.reveal(credential).get("refresh_token"))
-
     def refresh(self, credential: Any) -> None:
         """Exchange the stored refresh token for fresh material, persisted in place.
 
@@ -152,7 +131,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
         rejected or no refresh token is stored.
         """
 
-        material = self.reveal(credential)
+        material = credential.reveal()
         refresh_value = str(material.get("refresh_token") or "")
         oauth_client = credential.oauth_client
         if oauth_client is None or not refresh_value:
@@ -240,7 +219,7 @@ class BasicAuthCredentialHandler(CredentialKindHandler):
     def auth_headers(self, credential: Any) -> dict[str, str]:
         """Return an HTTP Basic ``Authorization`` header from the username and password."""
 
-        material = self.reveal(credential)
+        material = credential.reveal()
         raw = f"{material.get('username', '')}:{material.get('password', '')}".encode()
         return {"Authorization": f"Basic {base64.b64encode(raw).decode('ascii')}"}
 

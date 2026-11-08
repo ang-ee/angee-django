@@ -136,7 +136,7 @@ metadata discovery resolves OAuth endpoints independently of connection
 discovery. Host
 settings are applied through `oauth_clients` after resources load.
 `Credential.is_reconnect_required` uses status, failed refresh and expiry.
-Refreshability is derived by its kind handler from the current client and grant
+`Credential.refreshable` derives refreshability from the current client and grant
 material; it is never stored as a copy of client policy. Ordinary access-token
 expiry with a refresh grant does not ask for new consent.
 
