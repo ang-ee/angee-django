@@ -137,7 +137,9 @@ class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         ``amount * rate_for(to_currency) / rate_for(self)`` in the target. The
         result is **not rounded** — the consumer rounds per its own policy
         (:meth:`round` with its chosen mode). Raises
-        :class:`CurrencyRate.DoesNotExist` when a needed rate is missing and
+        :class:`CurrencyRate.DoesNotExist` when a needed rate is missing,
+        :class:`~django.core.exceptions.ValidationError` when either rate is not
+        finite and positive, and
         :class:`~django.core.exceptions.ImproperlyConfigured` when the reference
         currency setting is unset.
         """
@@ -153,21 +155,12 @@ class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         )
         if canonical_source.pk == canonical_target.pk:
             return amount
-        return (
-            amount
-            * rates.rate_for(
-                canonical_target,
-                on_date,
-                context=context,
-                reference_currency=reference_currency,
-            )
-            / rates.rate_for(
-                canonical_source,
-                on_date,
-                context=context,
-                reference_currency=reference_currency,
-            )
-        )
+        target_rate = rates.rate_for(canonical_target, on_date, context=context, reference_currency=reference_currency)
+        source_rate = rates.rate_for(canonical_source, on_date, context=context, reference_currency=reference_currency)
+        # Two invalid operands can still divide to a plausible quotient, so each is checked on its own.
+        if any(not rate.is_finite() or rate <= 0 for rate in (source_rate, target_rate)):
+            raise ValidationError("Exchange rates must be finite and positive.")
+        return amount * target_rate / source_rate
 
 
 class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHistoryQuerySet[RateT]):
