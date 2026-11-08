@@ -517,7 +517,7 @@ Use these owners instead of maintaining another contract in an addon:
   forwards extension values in the resource's write data. The default
   [`AngeeHasuraWriteBackend`](../../src/angee/graphql/data/hasura.py) writes
   values naming model fields with the row and, in the same transaction, passes
-  the rest to the written row's cooperative
+  the rest (the mixin's `pop_input_extensions` splits them) to the written row's cooperative
   [`InputExtensionsMixin.apply_input_extensions`](../../src/angee/base/models/inputs.py),
   composed by `AngeeModel`, with nested line rows included. Input-owning mixins
   also compose this fieldless terminal when they support plain Django hosts.

@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 
 
@@ -11,6 +11,25 @@ class InputExtensionsMixin(models.Model):
 
     class Meta:
         abstract = True
+
+    @classmethod
+    def pop_input_extensions(cls, values: dict[str, Any]) -> dict[str, Any]:
+        """Remove and return the write-input values no field of this model owns.
+
+        A name this model's ``_meta.get_field`` resolves (a field, its attname
+        or a relation) stays in ``values`` for the writer to persist with the
+        row; every other name is an input extension, which the writer hands to
+        the written row's :meth:`apply_input_extensions` in the same transaction.
+        """
+
+        def owned(name: str) -> bool:
+            try:
+                cls._meta.get_field(name)
+            except FieldDoesNotExist:
+                return False
+            return True
+
+        return {name: values.pop(name) for name in [name for name in values if not owned(name)]}
 
     def apply_input_extensions(self, **values: Any) -> None:
         """Terminal cooperative hook for write-input values no model field owns.

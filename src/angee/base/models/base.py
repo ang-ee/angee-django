@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
-from typing import Any, ClassVar, Self, TypeVar
+from typing import Any, ClassVar, Self, TypeVar, cast
 
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -136,7 +136,9 @@ class AngeeModel(
                         setattr(line, position.attname, rank)
                     lines.bulk_update(staged, [position.name])
             for pid, values in desired:
-                extensions = {name: values.pop(name) for name in [n for n in values if not _model_field(line_model, n)]}
+                extensions = (
+                    line_model.pop_input_extensions(values) if issubclass(line_model, InputExtensionsMixin) else {}
+                )
                 if pid is not None:
                     line = by_public_id[pid]
                     previous = line.row_lock() if isinstance(line, RowLockMixin) else None
@@ -160,9 +162,7 @@ class AngeeModel(
                     if value is not None:
                         getattr(line, name).set(value)
                 if extensions:
-                    if not isinstance(line, InputExtensionsMixin):
-                        raise ImproperlyConfigured(f"{line_model._meta.label} does not support input extensions.")
-                    line.apply_input_extensions(**extensions)
+                    cast(InputExtensionsMixin, line).apply_input_extensions(**extensions)
 
     def retained(self) -> bool:
         """Whether a live or historical reference, or a stored grant, names this row.
@@ -584,16 +584,6 @@ def _relationship_subject(value: Any) -> SubjectRef:
         pass
     ref = to_object_ref(value)
     return SubjectRef.of(ref.resource_type, ref.resource_id)
-
-
-def _model_field(model: type[models.Model], name: str) -> bool:
-    """Whether ``name`` (a field name or attname) names one of ``model``'s fields."""
-
-    try:
-        model._meta.get_field(name)
-    except FieldDoesNotExist:
-        return False
-    return True
 
 
 def _assign_line_values(line: models.Model, values: Mapping[str, Any]) -> list[tuple[str, Any]]:

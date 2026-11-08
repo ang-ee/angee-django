@@ -59,6 +59,7 @@ from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
+from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.refs import RecordRefMixin
@@ -235,7 +236,6 @@ class AngeeHasuraWriteBackend:
         if lines is not None:
             if not issubclass(model, AngeeModel):
                 raise ImproperlyConfigured(f"{model._meta.label} must be an AngeeModel to own editable lines.")
-            _child_back_fk(model, lines.field)
             self._line_public_id_fields = _public_id_field_models(lines.model, lines.public_id_fields)
         else:
             self._line_public_id_fields = {}
@@ -278,9 +278,8 @@ class AngeeHasuraWriteBackend:
     def insert(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Insert one row, its declared nested child lines and input extensions atomically."""
 
-        data = dict(data)
+        data, extensions = self._split_input(data)
         line_rows = self._pop_line_rows(data) if self.lines is not None else None
-        extensions = _pop_input_extensions(self.model, data)
         with transaction.atomic():
             instance = self._create_row(info, data)
             if line_rows is not None:
@@ -292,9 +291,8 @@ class AngeeHasuraWriteBackend:
     def creation_values(self, data: dict[str, Any]) -> dict[str, Any]:
         """Return decoded creation values, including input extensions and child lines."""
 
-        data = dict(data)
+        data, extensions = self._split_input(data)
         line_rows = self._pop_line_rows(data) if self.lines is not None else None
-        extensions = _pop_input_extensions(self.model, data)
         content = {
             "object": {**self._decode_public_id_fields(data), **extensions},
             "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None,
@@ -328,8 +326,7 @@ class AngeeHasuraWriteBackend:
         if self.lines is None:
             raise ImproperlyConfigured(f"{self.model._meta.label} resource declares no editable lines.")
         with transaction.atomic():
-            patch = dict(patch)
-            extensions = _pop_input_extensions(self.model, patch)
+            patch, extensions = self._split_input(patch)
             decoded = self._decode_public_id_fields(patch)
             instance = self._locked_write_target(pk, decoded)
             if expected_revision is not None:
@@ -356,6 +353,19 @@ class AngeeHasuraWriteBackend:
             key_attr=PUBLIC_ID_FIELD_NAME,
             full_clean=True,
         )
+
+    def _split_input(self, data: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Copy write input and pop the input-extension values the model's own owner takes.
+
+        :meth:`InputExtensionsMixin.pop_input_extensions` decides which names
+        no model field owns; a plain Django model composes no such owner and
+        takes none.
+        """
+
+        data = dict(data)
+        if not issubclass(self.model, InputExtensionsMixin):
+            return data, {}
+        return data, self.model.pop_input_extensions(data)
 
     def _pop_line_rows(self, data: dict[str, Any]) -> list[dict[str, Any]] | None:
         """Pop the nested-insert envelope for the lines relation off ``data``."""
@@ -411,8 +421,7 @@ class AngeeHasuraWriteBackend:
         """Patch one public-id-addressed row through the write queryset, then its input extensions."""
 
         with transaction.atomic():
-            data = dict(data)
-            extensions = _pop_input_extensions(self.model, data)
+            data, extensions = self._split_input(data)
             decoded = self._decode_public_id_fields(data)
             instance = self._locked_write_target(pk, decoded)
             if expected_revision is not None:
@@ -488,24 +497,6 @@ class AngeeHasuraWriteBackend:
             except ValidationError as error:
                 raise ValidationError({key: error}) from error
         return out
-
-
-def _pop_input_extensions(model: type[models.Model], data: dict[str, Any]) -> dict[str, Any]:
-    """Pop write values whose input field names no field of ``model``.
-
-    Generated insert/set inputs carry model fields, which strawberry-django
-    applies; a composed input extension may add others, which it would ignore.
-    The caller hands them to the written row's ``apply_input_extensions``.
-    """
-
-    def is_model_field(name: str) -> bool:
-        try:
-            model._meta.get_field(name)
-        except FieldDoesNotExist:
-            return False
-        return True
-
-    return {name: data.pop(name) for name in [name for name in data if not is_model_field(name)]}
 
 
 def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:
