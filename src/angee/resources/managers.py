@@ -22,6 +22,7 @@ from angee.base.implementations import resolve_impl_class
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin, public_id_of
+from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.querysets import AngeeQuerySet
 from angee.base.schemas.forms import relation_positions
 from angee.base.serialization import ASCII_JSON, canonical_json_sha256
@@ -173,12 +174,35 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         return str(public_id_of(target))
 
     def upsert_target(
-        self, *, entry: ResourceEntry, xref: str, instance: models.Model, model: type[models.Model], content_hash: str,
+        self,
+        *,
+        entry: ResourceEntry,
+        xref: str,
+        instance: models.Model,
+        model: type[models.Model],
+        content_hash: str,
+        replace: bool = True,
     ) -> LedgerT:
-        """Record ``instance`` as the target of ``entry``'s ``xref`` and return the ledger row."""
+        """Record ``instance`` as the target of ``entry``'s ``xref`` and return the ledger row.
+
+        The row is read or inserted under its lock (``get_or_create``), so
+        concurrent first loads converge on one row, and a row bound to another
+        model is refused before anything is written. An existing row takes the
+        new target unless ``replace`` is false.
+        """
 
         values = self._target_values(instance, entry=entry, model=model, content_hash=content_hash)
-        ledger, _created = self.update_or_create(source_addon=entry.addon.name, xref=xref, defaults=values)
+        with transaction.atomic():
+            ledger, created = self.lock_if_supported().get_or_create(
+                source_addon=entry.addon.name,
+                xref=xref,
+                defaults=values,
+            )
+            ledger.require_target_model(model)
+            if replace and not created:
+                for field, value in values.items():
+                    setattr(ledger, field, value)
+                ledger.save(update_fields=update_fields_with_auto_now(ledger, values))
         return ledger
 
     def bind_instance(
@@ -187,16 +211,17 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         """Ledger an owner-created installation identity; only ``replace`` retargets a bound xref."""
 
         entry = ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source)
-        xref = entry.normalize_xref(xref, 0)
-        values = self._target_values(instance, entry=entry, model=type(instance), content_hash="")
-        identity = str(values["target_id"])
-        values["content_hash"] = f"sha256:{canonical_json_sha256(chunks=(ASCII_JSON.encode({'identity': identity}),))}"
-        with transaction.atomic():
-            write = self.update_or_create if replace else self.get_or_create
-            ledger, _created = write(source_addon=addon.name, xref=xref, defaults=values)
-            ledger.require_target_model(type(instance))
-            if str(ledger.target_id) != identity:
-                raise ResourceLoadError(f"{addon.name}.{xref} already identifies another record.")
+        identity = public_id_of(instance)
+        ledger = self.upsert_target(
+            entry=entry,
+            xref=entry.normalize_xref(xref, 0),
+            instance=instance,
+            model=type(instance),
+            content_hash=f"sha256:{canonical_json_sha256(chunks=(ASCII_JSON.encode({'identity': identity}),))}",
+            replace=replace,
+        )
+        if ledger.target_id != identity:
+            raise ResourceLoadError(f"{addon.name}.{ledger.xref} already identifies another record.")
 
     @staticmethod
     def _target_values(
