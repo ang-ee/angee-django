@@ -9,7 +9,6 @@ import strawberry_django
 from django.apps import apps
 from django.core import signing
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from django.db.models import Q
 from rebac import PermissionDenied, current_actor
 from strawberry import auto
@@ -20,7 +19,7 @@ from angee.base.models.identity import instance_from_public_id
 from angee.base.models.locks import StaleRevisionError
 from angee.base.serialization import ASCII_JSON, canonical_json_sha256
 from angee.dashboards.models import Dashboard as DashboardModel
-from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
+from angee.dashboards.models import DashboardConflictError, widget_visibility_answers
 from angee.graphql.actions import session_user
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
@@ -394,7 +393,7 @@ class DashboardMutation:
         if row is None or addressed is None or row.pk != addressed.pk:
             return DashboardPayload(status="conflict", message="The persisted dashboard identity is no longer current.")
         try:
-            Dashboard.objects.reset_snapshot(row, expected_revision=expected_revision)
+            row.reset_snapshot(expected_revision=expected_revision)
         except StaleRevisionError as error:
             return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
@@ -417,33 +416,9 @@ class DashboardMutation:
         if source is None:
             return DashboardPayload(status="unavailable")
         try:
-            visible = canonical_dashboard_snapshot(snapshot)
-            duplicated_widgets = []
-            for index, widget in enumerate(visible["widgets"]):
-                if widget["isArchived"]:
-                    continue
-                duplicate = {**widget, "id": f"copy-{index + 1}"}
-                duplicate.pop("definitionRef", None)
-                duplicated_widgets.append(duplicate)
-            visible["widgets"] = duplicated_widgets
-            canonical = canonical_dashboard_snapshot(visible)
-            with transaction.atomic():
-                created = Dashboard.objects.create_personal(
-                    user,
-                    name=name,
-                    idempotency_key=idempotency_key,
-                )
-                if created.revision > 1:
-                    return _payload(created)
-                saved = Dashboard.objects.save_snapshot(
-                    user,
-                    scope="personal",
-                    scope_key=None,
-                    persisted_id=created.pk,
-                    expected_revision=created.revision,
-                    snapshot=canonical,
-                    name=created.name,
-                )
+            saved = Dashboard.objects.duplicate_personal(
+                user, source=source, name=name, idempotency_key=idempotency_key, snapshot=snapshot
+            )
         except StaleRevisionError as error:
             return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
