@@ -39,6 +39,12 @@ live in code docstrings.
   `InferenceBackend`, `InferenceProvider` and `InferenceModel` takes its
   `Content` and `Question` types and returns its `SystemOneResponse`. The Ollama
   backend answers through System One.
+- Integrate: `Bridge` replaces `next_subscription_refresh_at` with `live_retry_at`
+  and `live_retry_attempts`: a transient live-session failure defers the
+  reconciler's restart by a doubling backoff instead of latching the bridge for
+  repair. Projects author the host migrations for every concrete bridge
+  (messaging channels, party directories, VCS bridges, Notion connections and
+  the personal-messaging bridges).
 - Agents: `angee-agents` now requires `pydantic-ai-slim>=2.60`. Inference
   retries classify failures through pydantic-ai's typed provider errors
   (`ModelConnectionError`, `ModelRateLimitError`, `ModelServerError`,
