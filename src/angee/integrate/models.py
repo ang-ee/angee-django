@@ -1417,7 +1417,8 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         token for the consumer to try. Transient refusals propagate so its retry owner can
         reschedule without prompting for consent once the access token has expired.
         Before expiry the existing token remains usable. Unexpected errors also propagate.
-        Call it outside ``transaction.atomic``: the provider exchange is network I/O.
+        A refresh it must run inside ``transaction.atomic`` raises ``RuntimeError``: the
+        provider exchange is network I/O, so call it in autocommit.
         """
 
         if self.expires_at is None or self.expires_at > timezone.now() + _OAUTH_REFRESH_MARGIN:
@@ -1445,11 +1446,12 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         The explicit counterpart to :meth:`ensure_fresh`: a console refresh action
         renews the token regardless of how much life it has left and surfaces the
-        outcome instead of swallowing it. Requires a refresh-capable provider and a
-        stored refresh token — an expired *access* token still refreshes, since the
-        grant uses the refresh token; otherwise raises ``ValueError`` telling the caller
-        to reconnect. A provider rejecting the grant records ``last_refresh_status`` as
-        ``"failed"`` and re-raises (``OAuthFlowError``) so the caller can report it.
+        outcome instead of swallowing it. Requires an active credential, a
+        refresh-capable provider and a stored refresh token — an expired *access* token
+        still refreshes, since the grant uses the refresh token; otherwise raises
+        ``ValueError`` telling the caller to reconnect. A provider rejecting the grant
+        records ``last_refresh_status`` as ``"failed"`` and re-raises (``OAuthFlowError``)
+        so the caller can report it.
         Serialized with :meth:`ensure_fresh` in :meth:`_refresh_locked`.
         """
 
@@ -1476,7 +1478,9 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         A blocking advisory lock serializes exchanges across workers: a second
         consumer waits for the holder, re-reads the row and adopts the token it
         persisted, so a rotated refresh token is never replayed. ``force`` renews
-        regardless of expiry for an explicit refresh. The provider call holds no
+        regardless of expiry for an explicit refresh, and raises ``ValueError`` when
+        the row it reads is inactive or cannot refresh; the lazy path leaves an
+        inactive row's token alone. The provider call holds no
         transaction; a short row lock then applies the result, or records a
         permanent refusal, only while :attr:`refresh_fence` still names the grant
         that was exchanged, so a reconnect, revocation or material edit during the
@@ -1489,10 +1493,11 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         with task_lock(record_lock_key(self._meta.label_lower, self.pk, "refresh"), blocking=True):
             current = rows.select_related("oauth_client").get(pk=self.pk)
             stale = current.expires_at is not None and current.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
-            if current.status != CredentialStatus.ACTIVE or not (force or stale):
+            active = current.status == CredentialStatus.ACTIVE
+            if not (force or (active and stale)):
                 self.refresh_from_db()
                 return
-            if not current.refreshable:
+            if not (active and current.refreshable):
                 raise ValueError("This credential cannot be refreshed; reconnect the account.")
             refresh_value = str(current.reveal().get("refresh_token") or "")
             fence = current.refresh_fence

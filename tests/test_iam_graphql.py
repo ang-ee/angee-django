@@ -838,6 +838,39 @@ def test_reveal_credential_returns_the_secret_and_is_admin_only(
     assert _execute(console_schema, reveal, {"id": credential_id}, user=plain).errors is not None
 
 
+def test_admin_refresh_of_a_revoked_credential_is_refused(
+    iam_connection_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A forced refresh asks to reconnect a revoked grant instead of reporting it refreshed."""
+
+    user = User.objects.create_user(username="refresh-revoked", email="refresh-revoked@example.com")
+    admin = _platform_admin("refresh-revoked-admin")
+    oauth_client = _oauth_client("refresh-revoked", is_oidc=False, supports_refresh=True)
+    material = {"access_token": "revoked-access", "refresh_token": "revoked-refresh", "expires_in": 3600}
+    credential = Credential.objects.upsert_for_user(user, oauth_client, CredentialKind.OAUTH, material)
+    refreshed_at = credential.last_refresh_at
+    with system_context(reason="test.integrate.credential.revoke"):
+        Credential.objects.filter(pk=credential.pk).update(status="revoked")
+    monkeypatch.setattr(
+        OAuthClientProtocol,
+        "refresh_token",
+        lambda *args, **kwargs: pytest.fail("A revoked grant must not reach the provider."),
+    )
+
+    refresh = "mutation Refresh($id: ID!) { refresh_credential(id: $id) { ok message } }"
+    result = _data(_execute(_schema("console"), refresh, {"id": str(credential.sqid)}, user=admin))
+
+    assert result["refresh_credential"] == {
+        "ok": False,
+        "message": "The credential cannot be refreshed; reconnect it.",
+    }
+    with system_context(reason="test.integrate.credential.verify"):
+        credential.refresh_from_db()
+    assert (credential.status, credential.reveal()) == ("revoked", material)
+    assert credential.last_refresh_at == refreshed_at
+
+
 def test_user_hasura_delete_reports_related_blockers(iam_connection_tables: None) -> None:
     """IAM's authored write backend shares the readable relationship error."""
 
