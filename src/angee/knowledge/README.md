@@ -15,7 +15,13 @@ its bindings without changing their Page or Vault owners.
 MCP exposes vault-scoped `create_page` through the same GraphQL tool compiler as
 `read_page` and `append_to_page`; vault write grants remain the boundary.
 Retrieval backends implement `search_many` over each bounded readable vault group;
-the lexical owner performs one text scan for the group.
+they return `RetrievalHit` values (page, rank, optional passage coordinates and
+text). The lexical owner performs one text scan for the group and returns
+page-only hits. `search_pages` preserves its page projection; `search_passages`
+exposes the evidence through GraphQL and MCP. Vault writers select the backend
+through the resource's writable `retrieval_class`. The optional
+[pgvector addon](../knowledge_graph_pgvector/README.md) contributes model
+selection and passage retrieval through these contracts.
 
 Knowledge contributes a **Pages** group to the Related tab of record routes. It lists
 actor-readable page bindings as `PaneRow` links to each page's reader. Binding and

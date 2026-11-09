@@ -13,7 +13,7 @@ import logging
 import re
 from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
 from itertools import islice
@@ -57,7 +57,7 @@ from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import send_created_batch
-from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend
+from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.context import changeset, changeset_model, require_changeset, write_group
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -129,6 +129,11 @@ class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeHistoryQuerySet[V
     """Actor-scoped vault reads and search helpers."""
 
     def search_pages(self, query: str, *, first: int = 20) -> list[Any]:
+        """Project ranked hits to the existing page-only search surface."""
+
+        return [hit.page for hit in self.search_passages(query, first=first)]
+
+    def search_passages(self, query: str, *, first: int = 20) -> list[RetrievalHit]:
         """Search at most 100 readable vaults, once per selected backend class.
 
         Vault name/id order bounds the work set. Backend-key order is stable;
@@ -141,14 +146,14 @@ class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeHistoryQuerySet[V
         for vault in self.untrashed().scoped().order_by("name", "sqid")[:MAX_SEARCH_VAULTS]:
             groups.setdefault(vault.retrieval_class, []).append(vault)
         field = self.model.retrieval_class.field
-        pages: list[Any] = []
+        hits: list[RetrievalHit] = []
         for key, vaults in sorted(groups.items()):
-            remaining = limit - len(pages)
+            remaining = limit - len(hits)
             implementation = field.resolve_class(key)
-            pages.extend(islice(implementation.search_many(vaults, query, first=remaining), remaining))
-            if len(pages) == limit:
+            hits.extend(islice(implementation.search_many(vaults, query, first=remaining), remaining))
+            if len(hits) == limit:
                 break
-        return pages
+        return [replace(hit, rank=rank) for rank, hit in enumerate(hits, 1)]
 
 
 _VaultManagerBase = AngeeHistoryManager.from_queryset(VaultQuerySet)
