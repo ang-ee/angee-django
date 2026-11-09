@@ -2173,6 +2173,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             target = copy(self).sudo(reason="integrate.connection.lock_target").concrete_capability()
         return type(target).objects.lock_if_supported().get(pk=self.pk)
 
+    def sync_lock_key(self) -> LockKey:
+        """Return the advisory task lock held by this capability's sync, live session and discovery work."""
+
+        return record_lock_key(self._meta.label_lower, self.pk, "sync")
+
     def resume(self) -> None:
         """Recheck Resume admission under the integration lock before connecting."""
 
@@ -3328,11 +3333,6 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
                 row.record_sync_error(error, now=at)
         self.refresh_from_db()
         return True
-
-    def sync_lock_key(self) -> LockKey:
-        """Return the advisory task lock key for this bridge sync."""
-
-        return record_lock_key(self._meta.label_lower, self.pk, "sync")
 
     def live_session_host_lock_key(self) -> LockKey:
         """Deduplicate process hosts without borrowing the child's store lock."""
