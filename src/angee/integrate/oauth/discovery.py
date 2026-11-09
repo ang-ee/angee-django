@@ -8,7 +8,7 @@ from typing import Any
 from django.conf import settings
 from django.core.cache import cache
 
-from angee.integrate.oauth.client import _get_json
+from angee.integrate.oauth.client import get_json
 from angee.integrate.oauth.errors import DISCOVERY_FAILED, OAuthFlowError
 
 _DISCOVERY_CACHE_PREFIX = "angee.integrate.oauth.discovery:"
@@ -22,7 +22,7 @@ def discovery_document(discovery_url: str) -> dict[str, Any]:
     if isinstance(cached, dict):
         return cached
     try:
-        discovery = _get_json(discovery_url, error_code=DISCOVERY_FAILED)
+        discovery = get_json(discovery_url, error_code=DISCOVERY_FAILED)
     except OAuthFlowError:
         raise
     except Exception as exc:
