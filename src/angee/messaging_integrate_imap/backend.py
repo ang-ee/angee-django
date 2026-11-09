@@ -66,7 +66,7 @@ from angee.integrate.errors import IntegrationError
 from angee.integrate.net import is_unsafe_address, resolved_addresses
 from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import CursorInvalid, StreamPage
-from angee.integrate.sync import current_bridge_progress
+from angee.integrate.sync import current_progress_bridge
 from angee.messaging.backends import ParsedMessage
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging_integrate_imap.parser import fallback_message, parse_message
@@ -453,12 +453,12 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
 
     def _report_progress(self, stage: str, message: str, **details: Any) -> None:
-        """Publish IMAP-specific progress into the generic bridge reporter."""
+        """Publish IMAP-specific progress through the current bridge."""
 
-        reporter = current_bridge_progress()
-        if reporter is None:
+        bridge = current_progress_bridge()
+        if bridge is None:
             return
-        reporter.report(stage, message=message, details={"backend": self.key, **details})
+        bridge.report_progress(stage, message=message, details={"backend": self.key, **details})
 
     # --- discovery ---
 

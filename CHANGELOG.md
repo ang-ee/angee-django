@@ -8,6 +8,49 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — shared addon contracts and native embedding providers
+
+- Provenance and timeline: reads and owner writes use the default database;
+  Django and history hooks retain their handed aliases. `ChangesetScope`,
+  `ChangesetHistory` and `UNLOADED` are public. Command and resource-load
+  attribution no longer select a database. Member timeline reads have a fixed
+  statement and SQL-size budget.
+- Messaging, posts and parties: owner verbs no longer select a database.
+  `Message.posts.land` and `land_relations` own public-post ingestion;
+  `ParsedMessage.sync_hash` and `ParsedPart.sync_digest` own envelope hashes.
+  Outbound email selection raises coded configuration or connection refusals.
+  Comment timeline reads apply the host's thread permission in SQL.
+- Projects, work, knowledge and proposals: owner operations drop database
+  selection; page-tree reads follow ambient actor scope. Proposal manager grants
+  compose the task owner's read and share rules, preserving withheld content.
+- Resources, IAM and storage: resource lookup, user bootstrap, counters and
+  purge use the default database. `NativeJSONWidget` is public, resource-load
+  hooks dispatch through `ResourceLoadMixin`, and mount modes use `MountMode`.
+  Dashboard resource loads revalidate parents in one read.
+- Workflows and extraction: transaction limits, SQLSTATE handling and diagnostic
+  savepoints live in `workflows.transactions`. `StepContext` receives its runner;
+  `Settlement` is the public result base. Attempt diagnostics retain exception
+  types and causes. Text acquisition exposes `text_part`.
+- Integrate: `Bridge.admit_due_sync` claims the poll interval even on declined
+  admission. `Integration.sync_lock_key` owns advisory-lock identity; nested sync
+  code uses `current_progress_bridge().report_progress`, and `LiveSession` takes
+  no reporter. OAuth discovery uses public `get_json` and the shared HTTP timeout.
+- Web: imperative reads use TanStack Query's `query` and `infiniteQuery` APIs
+  (react-query >= 5.102). The shared test harness opens tooltips without delay.
+  Agent provisioning reads workspace status directly; ACP chat drops runtime
+  dispatch props, context and retired package exports.
+- Agents: `InferenceModel.embed` admits the requested deployment role, binds
+  native OpenAI/Ollama embedding models and validates vector dimensions. SDK
+  client lifetime is shared with chat; discovery records embedding capabilities.
+  The OpenAI addon requires pydantic-ai-slim >= 2.66 for compatible providers.
+- Tests and docs: test module names describe their subjects; the shared fixture
+  restores per-test installed-model registrations. Workflow retention and resource
+  tests reuse it. Timing keys follow renamed tests, and jobs guidance names the
+  current integration owners.
+- PostgreSQL CI: both database services use pgvector on PostgreSQL 17 and prepare
+  `vector` in the host and template databases before composition and tests.
+  Readiness tests cover native and composed databases.
+
 ## Unreleased — domain and capability owners on their rows, managers and querysets
 
 - Storage: `FileManager.ingest_bytes`/`ingest_stream` (and `PartCarrier.retain`)

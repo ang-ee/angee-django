@@ -120,7 +120,6 @@ class WorkflowDefinitionResource(AngeeResource):
         for field in instance._meta.concrete_fields:
             setattr(instance, field.attname, getattr(installed, field.attname))
         instance._state.adding = False
-        instance._state.db = installed._state.db
         self.after_save_instance(instance, row, **kwargs)
 
 

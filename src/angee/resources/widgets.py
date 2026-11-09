@@ -207,7 +207,7 @@ def resolve_xref[TargetT: models.Model](
     value: str,
     ledger_model: type[Resource] | None,
     addon_aliases: Mapping[str, str] | None,
-    *, model: type[TargetT], using: str | None = None,
+    *, model: type[TargetT],
 ) -> TargetT: ...
 
 
@@ -216,7 +216,7 @@ def resolve_xref(
     value: str,
     ledger_model: type[Resource] | None,
     addon_aliases: Mapping[str, str] | None,
-    *, model: None = None, using: str | None = None,
+    *, model: None = None,
 ) -> models.Model: ...
 
 
@@ -224,7 +224,7 @@ def resolve_xref(
     value: str,
     ledger_model: type[Resource] | None,
     addon_aliases: Mapping[str, str] | None,
-    *, model: type[models.Model] | None = None, using: str | None = None,
+    *, model: type[models.Model] | None = None,
 ) -> models.Model:
     """Resolve ``<addon>.<xref>`` through the resource ledger."""
 
@@ -236,7 +236,7 @@ def resolve_xref(
         raise ValueError("xref resolution requires addon aliases")
     source_addon, xref = split_xref(value, addon_aliases)
     matches = list(
-        ledger_model._default_manager.using(using).filter(
+        ledger_model._default_manager.filter(
             source_addon=source_addon,
             xref=xref,
         ).exclude(target_id="")[:2]

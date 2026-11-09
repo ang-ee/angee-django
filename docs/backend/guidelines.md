@@ -1134,9 +1134,7 @@ tasks through [`angee.provenance.tasks.Task`](../../src/angee/provenance/tasks.p
 commands through `angee.server.management`'s `ANGEE_SERVER_COMMAND_CONTEXT` hooks, contributed by
 [`provenance`](../../src/angee/provenance/contrib/angee/context.py). The
 [server launcher](../composer.md#flow) supplies the winning command's parsed,
-read-only options at its `execute` boundary; a command's `--database` is a
-Django-supplied alias that a context passes through unchanged from those options,
-never parsed from argv. (`serve`, `runserver` and `test` are
+read-only options at its `execute` boundary. (`serve`, `runserver` and `test` are
 excluded because their requests, connections, tasks and tests own boundaries;
 interactive shells keep the command boundary); a bridge live-session run through
 [`run_bridge_session_job`](../../src/angee/integrate/session_runner.py). A

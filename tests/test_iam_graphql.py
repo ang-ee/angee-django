@@ -2069,7 +2069,7 @@ def test_discover_oauth_endpoints_persists_the_filled_endpoints(
         "authorization_endpoint": "https://persisted.example/authorize",
         "token_endpoint": "https://persisted.example/token",
     }
-    monkeypatch.setattr(oauth_discovery, "_get_json", lambda url, **kwargs: document)
+    monkeypatch.setattr(oauth_discovery, "get_json", lambda url, **kwargs: document)
     discover = "mutation($id: ID!){ discover_oauth_endpoints(id: $id){ ok message } }"
 
     result = _data(_execute(_schema("console"), discover, {"id": str(client.sqid)}, user=admin))
