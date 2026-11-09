@@ -58,7 +58,7 @@ class SourceCopyMixin(MergeableMixin, StatementsMixin, models.Model):
         """A copy stays whole and untrashed: a reader without the survivor still reads it."""
 
         merged.merged_into = self
-        merged.save(using=merged._state.db, update_fields=("merged_into",))
+        merged.save(update_fields=("merged_into",))
 
     def apply_pair(self, *, aspect: str, other: Any, statement: Any | None) -> None:
         """Derive the redirect from the pair's applied stance; reverting the statement reverts it."""
@@ -98,11 +98,11 @@ def observe_email_identity(message: Any) -> None:
     """
 
     message_model = apps.get_model("messaging", "Message")
-    messages = message_model._base_manager.db_manager(hints={"instance": message})
+    messages = message_model._base_manager
     rule_model = apps.get_model("provenance", "Rule")
     with system_context(reason=SOURCE_IDENTITY_RULE):
         try:
-            source = rule_model.objects.db_manager(hints={"instance": message}).get(key=SOURCE_IDENTITY_RULE)
+            source = rule_model.objects.get(key=SOURCE_IDENTITY_RULE)
         except rule_model.DoesNotExist:
             # The envelope landed before the install resources (the rule and its grants).
             return
@@ -111,7 +111,7 @@ def observe_email_identity(message: Any) -> None:
         return
     actor = to_subject_ref(source)
     copies = (
-        message_model.objects.db_manager(hints={"instance": message}).with_actor(actor)
+        message_model.objects.with_actor(actor)
         .with_external_ids((message.external_id,))
         .filter(platform=message.platform, message_type="email", channel__isnull=False)
         .exclude(channel_id=message.channel_id)

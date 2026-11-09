@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import connections, models, transaction
+from django.db import connection, models, transaction
 from django.utils import timezone
 from django_compose.models import Composable
 from rebac import PermissionDenied, system_context
@@ -439,8 +439,6 @@ class MessagePublic(Composable, extends="messaging.Message"):
         """
 
         message = cast("Message", self)
-        using = type(message)._base_manager.db_manager(hints={"instance": message}).db
-        connection = connections[using]
         table = connection.ops.quote_name(message._meta.db_table)
         body_sql, body_params = apps.get_model("messaging", "Part").objects.plain_body_sql(
             "c.id",

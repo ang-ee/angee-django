@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.apps import apps
 from django.core.exceptions import BadRequest
-from django.db import connections
+from django.db import connection
 from django.db.models import Count, Exists, OuterRef, Q, Subquery
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -345,7 +345,7 @@ class MessageInbox:
                         term, search_type="phrase"
                     )
                 )
-                if connections[rows.db].vendor == "postgresql"
+                if connection.vendor == "postgresql"
                 else Q(fragment__text__icontains=term)
             )
             # Independent candidate paths let PostgreSQL start at the fragment
