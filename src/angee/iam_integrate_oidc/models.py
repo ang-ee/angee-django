@@ -41,34 +41,26 @@ class CredentialOidc(Composable, extends="integrate.Credential"):
             return
         if credential.oauth_client_id is None:
             return
-        using = credential._state.db
-        oauth_field = type(credential).oauth_client.field
+        oauth_client_model = type(credential).oauth_client.field.related_model
         # Disconnect must honor current login policy rather than a cached related row.
-        oauth_client = (
-            oauth_field.related_model._base_manager.using(using).filter(pk=credential.oauth_client_id).first()
-        )
-        if oauth_client is None or not type(oauth_client).login_picker_queryset(
-            type(oauth_client)._base_manager.using(using).filter(pk=oauth_client.pk),
+        if not oauth_client_model.login_picker_queryset(
+            oauth_client_model._base_manager.filter(pk=credential.oauth_client_id),
         ).exists():
             return
         user_field = type(credential).user.field
         assert credential.user_id is not None
         # A password may have changed since this credential cached its user.
-        user = (
-            user_field.related_model._base_manager.using(using)
-            .select_for_update()
-            .get(pk=credential.user_id)
-        )
+        user = user_field.related_model._base_manager.select_for_update().get(pk=credential.user_id)
         if user.has_usable_password():
             return
         with system_context(reason="iam_integrate_oidc.unlink.guard"):
             has_alternative = (
                 type(credential)
-                .objects.using(using).filter(
+                .objects.filter(
                     user_id=credential.user_id,
                     kind=CredentialKind.OAUTH,
-                    external_account_id__in=type(oauth_client).login_accounts(
-                        type(credential).external_account.field.related_model._base_manager.using(using).all(),
+                    external_account_id__in=oauth_client_model.login_accounts(
+                        type(credential).external_account.field.related_model._base_manager.all(),
                     ).values("pk"),
                 )
                 .exclude(pk=credential.pk)
@@ -142,7 +134,7 @@ class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
     def login_accounts(cls, rows: Any) -> Any:
         """Admit active linked identities whose provider can still start OIDC login."""
 
-        clients = cls.login_picker_queryset(cls._base_manager.using(rows.db).all())
+        clients = cls.login_picker_queryset(cls._base_manager.all())
         return rows.filter(status=AccountStatus.ACTIVE, oauth_client_id__in=clients.values("pk"))
 
     DISCOVERY_FIELDS = {
