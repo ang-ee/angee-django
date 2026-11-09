@@ -90,6 +90,9 @@ def test_decide_does_not_return_an_answer_to_an_actor_without_decision_read(sche
         question.assignees.clear()
     assert question.with_actor(actor).has_access("act")
     assert not question.with_actor(actor).has_access("read")
+    rows = Decision.objects.with_actor(actor).filter(pk=question.pk).scoped()
+    assert not rows.exists()
+    assert list(rows.waiting_on(actor).values_list("pk", flat=True)) == [question.pk]
     result = result_data(execute_schema(schema, """mutation($id: ID!, $revision: Int!) {
       decide(id: $id, revision: $revision, chosen: ["intake.deny"]) {
         ok message code validation_errors decision { id context proposal verdict }
@@ -98,6 +101,7 @@ def test_decide_does_not_return_an_answer_to_an_actor_without_decision_read(sche
     assert result["ok"], result
     assert result["decision"] is None
     assert Decision.system_queryset().get(pk=question.pk).verdict == ["intake.deny"]
+    assert not rows.waiting_on(actor).exists()
 
 
 @pytest.mark.parametrize("viewer", [1, 2])

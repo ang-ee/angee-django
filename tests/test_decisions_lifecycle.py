@@ -57,6 +57,26 @@ def test_one_question_lifecycle_and_audit(people):
     assert Decision.system_queryset().count() == 1
 
 
+def test_waiting_on_requires_act_open_and_own_or_no_assignment(people):
+    requester, reviewer, other, outsider, _subject = people
+    admin = create_platform_admin("waiting-admin")
+    assigned = Decision.objects.ask(request_for(people, assignees=(requester, reviewer)), actor=requester)
+    unassigned = Decision.objects.ask(request_for(people, assignees=()), actor=requester)
+    closed = Decision.objects.ask(request_for(people), actor=requester)
+    closed.decide(actor=reviewer, chosen=["complete"])
+    assert assigned.with_actor(requester).has_access("read")
+    assert not assigned.with_actor(requester).has_access("act")
+    assert assigned.with_actor(admin).has_access("act")
+    for actor, expected in (
+        (requester, set()), (reviewer, {assigned.pk}), (other, set()),
+        (outsider, set()), (admin, {unassigned.pk}),
+    ):
+        rows = Decision.objects.with_actor(actor).waiting_on(actor)
+        assert set(rows.values_list("pk", flat=True)) == expected
+        assert not rows.filter(pk=closed.pk).exists()
+    assert not Decision.objects.with_actor(reviewer).waiting_on(None).exists()
+
+
 @pytest.mark.parametrize("assignments", [{}, {"assignees": ()}])
 def test_unassigned_question_accepts_only_an_active_admin_answer(people, assignments):
     requester, reviewer, other, outsider, subject = people

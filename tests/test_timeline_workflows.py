@@ -8,7 +8,7 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated, change_published
@@ -16,6 +16,7 @@ from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql import publishing
 from angee.provenance.context import changeset
+from angee.timeline.reading import Timeline
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
@@ -37,6 +38,79 @@ def kinds(settings):
         "angee.workflows.timeline.timeline_kinds", "angee.decisions.timeline.timeline_kinds",
         "angee.provenance.timeline.timeline_kinds",
     ]
+
+
+@pytest.mark.parametrize("viewer", ["admin", "member"])
+def test_timeline_read_planner_memory(review, settings, viewer, record_property):
+    """Budget the actual page statement, with a waiting run and folded and standalone decisions."""
+    if connection.vendor != "postgresql" or connection.pg_version < 170000:
+        pytest.skip("EXPLAIN MEMORY requires PostgreSQL 17 or later")
+    settings.ANGEE_TIMELINE_KINDS = [
+        "angee.workflows.timeline.timeline_kinds", "angee.decisions.timeline.timeline_kinds",
+    ]
+    admin, reviewers, _, question = review
+    run, _step = start_review(review)
+    member = reviewers[0]
+    write_relationships([RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(member))])
+    standalone = Decision.objects.ask(DecisionRequest(
+        kind="standalone", records=(question.review_subject,), assignees=(admin, member),
+        proposal=DecisionProposal(alternatives=[{"key": "done", "label": "Done", "outcome": "done"}]),
+    ), actor=admin)
+    actor = admin if viewer == "admin" else member
+
+    def read():
+        with actor_context(actor):
+            timeline = Timeline(question.review_subject, actor)
+            rows, children = timeline._read(kinds=None, needs_me=False, anchor=None, limit=25)
+        assert {(row["_result_kind"], row["_result_pk"]) for row in rows} == {
+            ("workflows.run", run.pk), ("decisions.decision", standalone.pk),
+        }
+        assert timeline.counts == {"workflows.run": (1, viewer == "member"), "decisions.decision": (1, 1)}
+        assert sum(child.count for group in children.values() for child in group) == 1
+        return rows
+
+    read()  # Warm the same read, as in the console document budgets.
+    statements = []
+
+    def capture(execute, sql, params, many, context):
+        if '"timeline_source"' in sql:
+            statements.append((sql, params))
+        return execute(sql, params, many, context)
+
+    with connection.execute_wrapper(capture):
+        read()
+    (sql, params), = statements
+    with connection.cursor() as cursor:
+        cursor.execute("EXPLAIN (MEMORY, SUMMARY, FORMAT JSON) " + sql, params)
+        plan = cursor.fetchone()[0][0]
+    memory = plan["Planning"]["Memory Allocated"]
+    record_property("sql_bytes", len(sql.encode()))
+    record_property("planner_memory_used_kib", plan["Planning"]["Memory Used"])
+    record_property("planner_memory_allocated_kib", memory)
+    # PG18: 61,687 SQL bytes, 24,367 KiB used / 24,576 KiB allocated, for either actor.
+    assert 0 < memory <= 25 * 1024, f"Timeline planner allocated {memory} KiB; ceiling 25 MiB"
+
+
+@pytest.mark.parametrize("readable", [False, True])
+@pytest.mark.parametrize("viewer", ["reviewer", "bystander"])
+def test_run_attention_exposes_only_the_boolean_on_readable_runs(review, settings, readable, viewer):
+    settings.ANGEE_TIMELINE_KINDS = ["angee.workflows.timeline.timeline_kinds"]
+    admin, reviewers, _, question = review
+    run, step = start_review(review)
+    actor = reviewers[0] if viewer == "reviewer" else create_user("attention-bystander")
+    if readable:
+        write_relationships([RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(actor))])
+    assert step.decision.with_actor(actor).has_access("act") is (viewer == "reviewer")
+    # An unrelated ambient administrator must not lend the viewer read or act access.
+    with actor_context(admin):
+        timeline = Timeline(question.review_subject, actor)
+        page = timeline.page()
+    assert len(page.entries) == int(readable)
+    assert page.needs_me == int(readable and viewer == "reviewer")
+    if readable:
+        assert page.entries[0].needs_me is (viewer == "reviewer")
+        assert page.entries[0].target_id == public_id_of(run)
+    assert timeline.counts.get("workflows.run", (0, 0)) == (int(readable), page.needs_me)
 
 
 @pytest.mark.parametrize("redacted_run", [False, True])
