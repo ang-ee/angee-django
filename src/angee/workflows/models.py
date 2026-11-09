@@ -933,8 +933,7 @@ class StepRun(AngeeDataModel, concrete=True):
         rows = tuple(instances)
         if not rows:
             return ()
-        using = rows[0]._state.db
-        decisions = apps.get_model("decisions", "Decision")._base_manager.using(using).filter(
+        decisions = apps.get_model("decisions", "Decision")._base_manager.filter(
             pk__in={row.decision_id for row in rows if row.decision_id},
         ).defer("proposal", "context", "verdict", "verdict_values") if "decision_id" in update_fields else ()
         return decisions

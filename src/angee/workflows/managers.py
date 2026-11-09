@@ -898,10 +898,9 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
             keys = list(self.lock_if_supported().order_by("pk").values_list("pk", flat=True))
             changed = sum(batch.update(**values) for batch in by_key(self, keys))
             if changed and not changes_muted():
-                rows = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes")
+                rows = self.model._base_manager.defer("input", "output", "state", "notes")
                 for batch in by_key(rows, keys):
-                    bulk_updated.send_robust(sender=self.model, instances=tuple(batch),
-                                            update_fields=frozenset(values), using=self.db)
+                    bulk_updated.send_robust(sender=self.model, instances=tuple(batch), update_fields=frozenset(values))
             return changed
 
     def nodes(self) -> Any:
@@ -1051,9 +1050,10 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
             attempt.result, attempt.diagnostic_error or attempt.error, attempt.stacktrace,
         ) != 1:
             raise Superseded
-        current = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes").get(pk=step_run.pk)
-        bulk_updated.send_robust(sender=self.model, instances=(current,),
-                                update_fields=frozenset(("status", "decision_id")), using=self.db)
+        current = self.model._base_manager.defer("input", "output", "state", "notes").get(pk=step_run.pk)
+        bulk_updated.send_robust(
+            sender=self.model, instances=(current,), update_fields=frozenset(("status", "decision_id")),
+        )
 
     def to_succeeded(self, *, output: Any, outcome: str) -> int:
         """Complete selected claims with their validated result and clear their wait."""
