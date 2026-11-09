@@ -10,8 +10,8 @@ cursor or sync loop. Connection discovery composes integrate's
 their identity; `FeedBackend.apply_discovery` writes it through the handle owner.
 
 Posts supplies `record_key`, `apply_record` and `finish_page`. Each parsed post
-lands through [`land_posts`](ingest.py), which composes messaging's one ingest
-owner. Its overlay and provider trash state are applied before live events;
+lands through `Message.posts.land` ([`MessagePostsManager`](managers.py)), which
+composes messaging's one ingest owner. Its overlay and provider trash state are applied before live events;
 trashed rows never emit `message_ingested`. Cross-post relations finish after
 successfully landed page records become visible. A source that unhides a row
 restores only trash whose protected `provider_hidden` timestamp matches the current

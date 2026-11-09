@@ -50,7 +50,6 @@ from angee.messaging.backends import (
     ParsedHandle,
     ParsedMessage,
 )
-from angee.posts.ingest import land_post_relations, land_posts
 from angee.provenance.statements import (
     SourceKind,
 )
@@ -414,7 +413,7 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
             # Repair before classification; NULL never makes backfilled records live.
             with system_context(reason="posts.discovery.horizon"):
                 self.bridge.discovery_finished()
-        (message,) = land_posts(
+        (message,) = apps.get_model("messaging", "Message").posts.land(
             self.bridge,
             [record],
             owner_id=self.bridge.owner_id,
@@ -428,7 +427,12 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
 
         messages = [outcome.bound_target for outcome in outcomes if outcome.bound_target is not None]
         records = [record for record in page.records if isinstance(record, ParsedPost)]
-        land_post_relations(self.bridge, records, messages, owner_id=self.bridge.owner_id)
+        apps.get_model("messaging", "Message").posts.land_relations(
+            self.bridge,
+            records,
+            messages,
+            owner_id=self.bridge.owner_id,
+        )
 
     def deliver(self, message: Any) -> DeliveryOutcome:
         """Reconcile a previous attempt, then publish one reply through provider hooks.

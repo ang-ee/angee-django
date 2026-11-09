@@ -46,6 +46,7 @@ from angee.messaging.managers import MessageQuerySet
 from angee.posts.backends import FeedBackend, ParsedPost
 from angee.posts.managers import (
     FeedFollowManager,
+    MessagePostsManager,
     PostMetricsManager,
     QuotaManager,
 )
@@ -355,9 +356,12 @@ class MessagePublic(Composable, extends="messaging.Message"):
 
     ``is_original_post`` marks the root post of a public thread (a post with no parent).
     It has no producer in base messaging, so posts owns it and the composer folds it
-    onto the single ``messaging.Message`` table.
+    onto the single ``messaging.Message`` table. ``Message.posts`` is the separately
+    named manager carrying public-post landing; ``Message.objects`` stays the
+    message's default manager.
     """
 
+    posts = MessagePostsManager()
 
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("is_original_post",)
 
