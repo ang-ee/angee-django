@@ -77,7 +77,11 @@ def relation_read_queryset[M: models.Model](model: type[M], source: models.Query
     """
 
     if isinstance(source, EmptyQuerySet):
-        return require_rebac_queryset(model, actor=None).with_action("read")
+        # Nothing is related to no rows. An empty queryset under REBAC's
+        # queryset-level system context reads nothing and still scopes without an
+        # actor, so declaration-time expression probes compose.
+        empty = require_rebac_queryset(model).system_context(reason="base.relation_read.empty_source")
+        return empty.with_action("read").none()
     actor = relation_actor(source)
     related = require_rebac_queryset(model) if actor is None else require_rebac_queryset(model, actor=actor)
     return related.with_action("read")
