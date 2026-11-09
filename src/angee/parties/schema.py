@@ -125,6 +125,12 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 
         return parent.concrete_kind
 
+    @strawberry.field
+    def merge_scalar_fields(parent: strawberry.Parent[PartyModel]) -> list[str]:
+        """Return the scalar merge choices this party projection carries."""
+
+        return list(parent.merge_common_scalar_fields)
+
     handles: list["HandleType"]
 
     @strawberry_django.field(
@@ -149,6 +155,12 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 @strawberry_django.type(Person)
 class PersonType(PartyType):
     """GraphQL projection of a person."""
+
+    @strawberry.field
+    def merge_scalar_fields(parent: strawberry.Parent[PartyModel]) -> list[str]:
+        """Return the scalar merge choices the person projection carries, its name parts included."""
+
+        return list(parent.merge_scalar_fields)
 
     name_prefix: auto
     given_name: auto

@@ -269,15 +269,29 @@ class Party(
                         return cast(RelationshipKind.PartyKind, kind)
         return None
 
+    @property
+    def merge_common_scalar_fields(self) -> tuple[str, ...]:
+        """Scalar merge choices the parent party projection carries for every subtype."""
+
+        return self._merge_scalar_fields
+
+    @property
+    def merge_scalar_fields(self) -> tuple[str, ...]:
+        """Scalar merge choices this party's native subtype admits; a person adds its name parts and birthday."""
+
+        if self.concrete_kind == "person":
+            return self._merge_scalar_fields + self._person_merge_scalar_fields
+        return self._merge_scalar_fields
+
     def apply_merge_field_overrides(
         self,
         source: Party,
         field_overrides: Any,
     ) -> None:
-        """Apply the allow-listed scalar overrides selected for a merge survivor.
+        """Apply the scalar overrides both merge endpoints admit to the survivor.
 
         Common human fields live on ``Party``. Person-only name and birthday
-        fields are accepted only when both endpoints materialize a ``Person``
+        fields are admitted only when both endpoints materialize a ``Person``
         child; the child owns coercion and persistence for those columns.
         """
 
@@ -286,17 +300,14 @@ class Party(
         if not isinstance(field_overrides, Mapping):
             raise ValidationError({"field_overrides": "Expected an object of field values."})
 
-        both_people = self.concrete_kind == "person" and source.concrete_kind == "person"
-        allowed = set(self._merge_scalar_fields)
-        if both_people:
-            allowed.update(self._person_merge_scalar_fields)
+        allowed = set(self.merge_scalar_fields).intersection(source.merge_scalar_fields)
         unknown = set(field_overrides) - allowed
         if unknown:
             names = ", ".join(sorted(str(name) for name in unknown))
             raise ValidationError({"field_overrides": f"Unsupported merge field(s): {names}."})
 
         self._apply_merge_scalar_values(field_overrides, self._merge_scalar_fields)
-        if both_people and any(name in field_overrides for name in self._person_merge_scalar_fields):
+        if any(name in field_overrides for name in self._person_merge_scalar_fields):
             person_model = apps.get_model("parties", "Person")
             person = person_model.objects.filter(pk=self.pk).first()
             if person is None or not person.has_access("write"):
