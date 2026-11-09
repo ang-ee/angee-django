@@ -216,10 +216,7 @@ class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
         if fields is not None and not self.model.ORDERING_FIELDS.intersection(fields):
             yield self
             return
-        self._for_write = True
-        with self.model.ordering_write(
-            using=self.db, rows=self, project_ids=project_ids, parent_ids=parent_ids,
-        ) as rows:
+        with self.model.ordering_write(rows=self, project_ids=project_ids, parent_ids=parent_ids) as rows:
             yield cast(Self, rows)
 
     def update(self, **kwargs: Any) -> int:
@@ -232,7 +229,6 @@ class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
 
         if not self.model.ORDERING_FIELDS.intersection(kwargs):
             return super().update(**kwargs)
-        self._for_write = True
         rows = self
         destinations = {}
         for name in ("project", "parent"):
@@ -298,7 +294,6 @@ class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
     ) -> list[TaskT]:
         """Lock inserted destinations and any native upsert conflict sources."""
 
-        self._for_write = True
         rows = list(objs)
         unique_fields = tuple(unique_fields) if unique_fields is not None else None
         sources = self.none()
@@ -311,7 +306,7 @@ class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
             matches = Q(pk__in=[])
             for row in rows:
                 matches |= Q(**{field.attname: getattr(row, field.attname) for field in fields})
-            sources = self.model._base_manager.using(self.db).filter(matches)
+            sources = self.model._base_manager.filter(matches)
         for row in rows:
             row._default_root_subrank()
         with sources._ordering_write(
@@ -373,7 +368,6 @@ class TaskQuerySet[TaskT: Task](
     def create_forest(self, rows: Sequence[TaskT]) -> list[TaskT]:
         """Bracket the hierarchy owner's native insert/path initialization once."""
 
-        self._for_write = True
         for row in rows:
             row._default_root_subrank()
         with self.none()._ordering_write(
@@ -457,8 +451,6 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         if assignee_id is None:
             raise ValidationError({"assignee": "A record task needs an assignee."})
         kinds = self.model.activity_type.field.related_model
-        tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
-        using = tasks.db
         with transaction.atomic():
             self.model.validate_target(record)
             task = self.model(
@@ -469,9 +461,8 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
                 **generic_target(record).lookups(self.model, "subject"),
                 activity_type_id=strip_null_bytes(activity_type or kinds.DEFAULT_KEY),
             )
-            task._state.db = using
             task.full_clean(validate_unique=False, validate_constraints=False)
-            task.save(using=using)
+            task.save()
         return task
 
     def log(self, record: Any, *, activity_type: str, occurred_on: Any, note: str) -> TaskT:
@@ -492,9 +483,8 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         assert length is not None
         if len(title) > length:
             title, rest = title[: length - 1] + "…", note
-        tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
         with transaction.atomic():
-            task = tasks.schedule(
+            task = self.schedule(
                 record,
                 title=title,
                 note=note,
@@ -1115,7 +1105,7 @@ class Task(
     @classmethod
     @contextmanager
     def ordering_write(
-        cls, *, using: str, rows: models.QuerySet | None = None,
+        cls, *, rows: models.QuerySet | None = None,
         project_ids: Iterable[Any] = (), parent_ids: Iterable[Any] = (),
     ) -> Iterator[models.QuerySet]:
         """Lock project order and non-root sibling order before target-row locks.
@@ -1125,7 +1115,7 @@ class Task(
         Freeze selected keys and refuse a concurrent context move after waiting.
         """
 
-        rows = cls._base_manager.using(using).none() if rows is None else rows
+        rows = cls._base_manager.none() if rows is None else rows
         observed = {pk: (project, parent) for pk, project, parent in rows.order_by().values_list(
             "pk", "project_id", "parent_id",
         )}
@@ -1144,7 +1134,7 @@ class Task(
                             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                             [f"angee.projects.task.ordering:{owner._meta.db_table}:{scope}"],
                         )
-            selected = cls._base_manager.using(using).filter(pk__in=observed)
+            selected = cls._base_manager.filter(pk__in=observed)
             if any(observed[pk] != (project, parent) for pk, project, parent in selected.values_list(
                 "pk", "project_id", "parent_id",
             )):
@@ -1163,20 +1153,15 @@ class Task(
 
         if task_order is not None:
             order = validate_value(TaskOrder, task_order, field="task_order")
-            using = self._state.db or router.db_for_write(type(self), instance=self)
-            with type(self).ordering_write(
-                using=using, rows=type(self).system_queryset().using(using).filter(pk=self.pk),
-            ):
+            with type(self).ordering_write(rows=type(self).system_queryset().filter(pk=self.pk)):
                 actor, bypass = self.effective_actor(strict=True)
-                project_id = (
-                    type(self).system_queryset().using(using).values_list("project_id", flat=True).get(pk=self.pk)
-                )
+                project_id = type(self).system_queryset().values_list("project_id", flat=True).get(pk=self.pk)
                 readable = (
                     type(self).system_queryset() if bypass
                     else type(self).objects.with_actor(actor).for_write()
                 )
                 requested = [*order.preceding, *order.following]
-                neighbors = instances_from_public_ids(type(self), requested, queryset=readable.using(using))
+                neighbors = instances_from_public_ids(type(self), requested, queryset=readable)
                 if len(set(requested)) != len(requested) or any(
                     key not in neighbors or neighbors[key].pk == self.pk for key in requested
                 ):
@@ -1193,7 +1178,7 @@ class Task(
                     raise ValidationError({"task_order": "The project order changed; refresh the board."})
                 # Only ranks are read outside actor scope. Hidden or other-lane
                 # rows participate in uniqueness without exposing their identity.
-                ranks = type(self).system_queryset().using(using).filter(project_id=project_id).exclude(pk=self.pk)
+                ranks = type(self).system_queryset().filter(project_id=project_id).exclude(pk=self.pk)
                 lower: float | None
                 upper: float | None
                 if following is not None:
@@ -1214,11 +1199,11 @@ class Task(
                 except FractionalRankExhausted:
                     field = type(self)._meta.get_field("sort_order")
                     assert isinstance(field, FractionalRankField)
-                    field.rebalance(type(self).system_queryset().using(using).filter(project_id=project_id))
+                    field.rebalance(type(self).system_queryset().filter(project_id=project_id))
                     return self.apply_input_extensions(task_order=task_order, **values)
                 # Keep the original actor: native write/write__sort_order and
                 # history capture decide this save, including extension-only writes.
-                self.save(using=using, update_fields=("sort_order", "updated_at"))
+                self.save(update_fields=("sort_order", "updated_at"))
         super().apply_input_extensions(**values)
 
     class TaskVisibility(models.TextChoices):
@@ -1378,10 +1363,9 @@ class Task(
     def lock_merge_records(cls, records: Sequence[Self]) -> None:
         """Acquire every merge participant's contexts before any Task row lock."""
 
-        using = records[0]._state.db or router.db_for_write(cls)
         keys = [record.pk for record in records]
-        affected = cls.system_queryset().using(using).filter(Q(pk__in=keys) | Q(parent_id__in=keys))
-        with cls.ordering_write(using=using, rows=affected, parent_ids=keys):
+        affected = cls.system_queryset().filter(Q(pk__in=keys) | Q(parent_id__in=keys))
+        with cls.ordering_write(rows=affected, parent_ids=keys):
             super().lock_merge_records(records)
 
     @classmethod
@@ -1390,11 +1374,11 @@ class Task(
 
         if reference.name != "parent":
             return NotImplemented
-        list(cls.system_queryset(lock=("self",)).using(rows.db).filter(parent=survivor).order_by("pk"))
+        list(cls.system_queryset(lock=("self",)).filter(parent=survivor).order_by("pk"))
         for child in rows.order_by("sub_sort_order", "pk"):
             child.parent = survivor
             child.sub_sort_order = None
-            child.save(using=rows.db, update_fields=("parent", "sub_sort_order", "updated_at"))
+            child.save(update_fields=("parent", "sub_sort_order", "updated_at"))
 
     @classmethod
     def setup_state_expression(cls, actor: Any) -> models.expressions.BaseExpression:
@@ -1483,7 +1467,7 @@ class Task(
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         guard = (
             type(self).ordering_write(
-                using=using, rows=type(self).system_queryset().using(using).filter(pk=self.pk),
+                rows=type(self).system_queryset().filter(pk=self.pk),
                 project_ids=(self.project_id,), parent_ids=(self.parent_id,),
             )
             if self._state.adding or fields is None or self.ORDERING_FIELDS.intersection(fields)
@@ -1503,8 +1487,7 @@ class Task(
             previous_project_id, previous_assignee_id = None, None
             if not self._state.adding and (project_is_written or assignee_is_written):
                 previous_project_id, previous_assignee_id = (
-                    type(self).system_queryset().using(using).filter(pk=self.pk)
-                    .values_list("project_id", "assignee_id").get()
+                    type(self).system_queryset().filter(pk=self.pk).values_list("project_id", "assignee_id").get()
                 )
             project = self.project
             if project_is_written and project is not None:
@@ -1587,7 +1570,7 @@ class Task(
         """Refuse ``action`` with the first declared blocker the stored row matches."""
 
         for condition, error in self.action_blockers(action):
-            if type(self).system_queryset().using(self._state.db).filter(condition, pk=self.pk).exists():
+            if type(self).system_queryset().filter(condition, pk=self.pk).exists():
                 raise ValidationError(error)
 
     def complete(self, *, feedback: str = "") -> Task:
@@ -1605,10 +1588,7 @@ class Task(
             self.done_at = self.done_at or timezone.now()
             cast(Any, self).dropped_reason = None
             self.dropped_at = None
-            self.save(
-                using=self._state.db,
-                update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"),
-            )
+            self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
             self.post_completion(feedback)
         return self
 
@@ -1619,7 +1599,7 @@ class Task(
             return
         stored = (
             type(self)
-            .system_queryset(lock=("self",)).using(self._state.db)
+            .system_queryset(lock=("self",))
             .values("status", "done_at", "dropped_at", "dropped_reason")
             .get(pk=self.pk)
         )
