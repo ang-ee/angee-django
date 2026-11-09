@@ -39,7 +39,7 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, actor_context
+from rebac import PermissionDenied, actor_context, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
@@ -105,7 +105,8 @@ class Party(
         return [row for row in candidates if row.confidence >= self.REVIEW_CONFIDENCE]
 
     def apply_handle(self, *, member: Mapping[str, Any], **kwargs: Any) -> None:
-        apps.get_model("parties", "Handle").objects.db_manager(self._state.db).resolve(member["handle"])
+        # The member carries the handle's key; resolution locks and reloads that row itself.
+        apps.get_model("parties", "Handle")(pk=member["handle"]).resolve()
 
     record_links = RetainedGenericRelation(
         "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
@@ -238,7 +239,7 @@ class Party(
         The import placeholder and letterless names (a phone number or other
         handle spelling promoted into the name slot) do not count. When links tie,
         a handle resolves to a party that passes
-        (:meth:`~angee.parties.managers.HandleManager.resolve`).
+        (:meth:`Handle.resolve`).
         """
 
         name = (self.display_name or "").strip()
@@ -392,6 +393,14 @@ class Party(
                 for link in links
             ],
         }
+
+    def recount_handles(self) -> None:
+        """Refresh this party's derived handle count without inventing history."""
+
+        count = apps.get_model("parties", "Handle").objects.filter(party=self).count()
+        if self.handle_count != count:
+            self.handle_count = count
+            self.save_without_historical_record(update_fields=("handle_count",))
 
     def circle_names(self) -> list[str]:
         """Return this party's actor-visible circle names, from its read's prefetch when present.
@@ -595,7 +604,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
     )
     """The avatar the handle's own network shows for it (a messenger profile picture).
 
-    Written only by :meth:`HandleManager.set_avatar`, onto storage's image drive every signed-in user reads.
+    Written only by :meth:`Handle.set_avatar`, onto storage's image drive every signed-in user reads.
     """
 
     objects = HandleManager()
@@ -703,18 +712,65 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
             self.save(using=self._state.db, update_fields=(*values, "updated_at"))
         for row in merged:
             if self.avatar_id is None and row.avatar_id is not None:
-                type(self).objects.db_manager(self._state.db).set_avatar(self, row.avatar)
+                self.set_avatar(row.avatar)
 
     def retire_merged(self, merged: Any) -> None:
-        """Recompute identity projections after shared reference moves, then redirect."""
+        """Recompute identity projections after shared reference moves, then redirect.
 
-        owner = type(self).objects.db_manager(self._state.db)
-        owner.resolve(merged)
-        owner.resolve(self)
-        # Resolution wrote the party on its own locked row; the redirect's history
-        # snapshot must carry that party, not this instance's stale one.
-        merged.refresh_from_db(using=self._state.db, fields=("party", "party_link_confirmed"))
+        Resolution carries each handle's resolved party onto its instance, so the
+        redirect's history snapshot records that party.
+        """
+
+        merged.resolve()
+        self.resolve()
         super().retire_merged(merged)
+
+    def resolve(self) -> None:
+        """Materialize the applied, eligible cross-party winner and both parties' handle counts.
+
+        The handle, its competing parties and their statements are locked in the
+        identity order first; this instance then carries the resolved party.
+        """
+
+        party_model = apps.get_model("parties", "Party")
+        with transaction.atomic(), system_context(reason="parties.handle.resolve"):
+            handles, parties = party_model.objects.lock_identity_rows(party_ids=(), handle_ids=(self.pk,))
+            handle = handles[self.pk]
+            candidates = list(
+                party_model.objects.handle_statements().applied()
+                .filter(handle=handle, subject__is_trashed=False)
+                .select_related("subject", "link__stream")
+            )
+            winner = min(candidates, key=lambda row: row.sort_key(), default=None)
+            previous = handle.party_id
+            resolved = winner.subject_id if winner else None
+            confirmed = bool(winner and winner.is_confirmed)
+            if handle.party_id != resolved or handle.party_link_confirmed != confirmed:
+                handle.party_id, handle.party_link_confirmed = resolved, confirmed
+                handle.save(update_fields=("party", "party_link_confirmed", "updated_at"))
+            for pk in sorted({value for value in (previous, resolved) if value is not None}):
+                parties[pk].recount_handles()
+            handle._party_links_resolved()
+        self.party_id, self.party_link_confirmed = handle.party_id, handle.party_link_confirmed
+
+    def set_avatar(self, avatar: Any | None) -> bool:
+        """Set the avatar this handle's own network shows for it; return whether it changed.
+
+        The one write path of :attr:`avatar`: a source reports the avatar
+        (:meth:`HandleManager.fill_avatar`), never writes the column itself. ``avatar``
+        is a stored image (``File.objects.ingest_image``), or ``None`` when the network
+        shows none.
+        """
+
+        avatar_id = avatar.pk if avatar is not None else None
+        with system_context(reason="parties.handle.set_avatar"), transaction.atomic():
+            locked = type(self).objects.filter(pk=self.pk).lock_if_supported().first()
+            if locked is None or locked.avatar_id == avatar_id:
+                return False
+            locked.avatar_id = avatar_id
+            locked.save(update_fields=["avatar", "updated_at"])
+        self.avatar_id = avatar_id
+        return True
 
     def _party_links_resolved(self) -> None:
         """Run addon contributions after this handle's party is fully resolved.

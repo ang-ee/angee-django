@@ -1041,7 +1041,7 @@ per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — prefe
 rank, the aspect's source precedence (`Aspect.priority`), confidence, the row
 class's `tie_break()`, the stance's update time (bookkeeping — `applied`,
 supersession, a merge move — keeps it), primary key — shared by survivorship,
-cross-subject member resolution (`Handle.objects.resolve`) and merge collapse;
+cross-subject member resolution (`Handle.resolve`) and merge collapse;
 `trust_ordering` is the SQL display order of the same stances. The model owns
 one source-priority rule; there is no separate strategy enum.
 Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract

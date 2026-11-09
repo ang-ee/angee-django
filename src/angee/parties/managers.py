@@ -530,71 +530,15 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             )
         return handle
 
-    def resolve(self, handle: Any) -> None:
-        """Materialize the applied, eligible cross-party winner and both counters."""
-        handle_id = handle.pk if isinstance(handle, models.Model) else handle
-        using = (handle._state.db if isinstance(handle, models.Model) else None) or self.db
-        owner = apps.get_model("parties", "Party").objects.db_manager(using)
-        with transaction.atomic(), system_context(reason="parties.handle.resolve"):
-            handles, parties = owner.lock_identity_rows(party_ids=(), handle_ids=(handle_id,))
-            handle = handles[handle_id]
-            candidates = list(
-                owner.handle_statements()
-                .applied()
-                .filter(
-                    handle=handle,
-                    subject__is_trashed=False,
-                )
-                .select_related("subject", "link__stream")
-            )
-            winner = min(candidates, key=lambda row: row.sort_key(), default=None)
-            previous = handle.party_id
-            resolved = winner.subject_id if winner else None
-            confirmed = bool(winner and winner.is_confirmed)
-            if handle.party_id != resolved or handle.party_link_confirmed != confirmed:
-                handle.party_id, handle.party_link_confirmed = resolved, confirmed
-                handle.save(using=using, update_fields=("party", "party_link_confirmed", "updated_at"))
-            for pk in sorted({value for value in (previous, resolved) if value is not None}):
-                self.recount(parties[pk])
-            handle._party_links_resolved()
-
-    def recount(self, party: Any) -> None:
-        owner = self.db_manager(hints={"instance": party})
-        count = owner.filter(party=party).count()
-        if party.handle_count != count:
-            party.handle_count = count
-            party.save_without_historical_record(using=party._state.db, update_fields=("handle_count",))
-
     def resolve_stale_owners(self) -> int:
-        owner = apps.get_model("parties", "Party").objects.db_manager(self.db)
-        decisive = (
-            owner.handle_statements().applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
-        )
+        statements = apps.get_model("parties", "Party").objects.handle_statements()
+        decisive = statements.applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
         stale = self.filter(party__isnull=False).exclude(Exists(decisive)).order_by("pk")
         repaired = 0
         for handle in stale.iterator():
-            self.resolve(handle)
+            handle.resolve()
             repaired += 1
         return repaired
-
-    def set_avatar(self, handle: Any, avatar: Any | None) -> bool:
-        """Set the avatar ``handle``'s own network shows for it; return whether it changed.
-
-        The one write path of :attr:`Handle.avatar`: a source reports the avatar
-        (:meth:`fill_avatar`), never writes the column itself. ``avatar`` is a stored
-        image (``File.objects.ingest_image``), or ``None`` when the network shows none.
-        """
-
-        avatar_id = getattr(avatar, "pk", None)
-        owner = self.db_manager(hints={"instance": handle})
-        with system_context(reason="parties.handle.set_avatar"), transaction.atomic():
-            locked = owner.filter(pk=handle.pk).lock_if_supported().first()
-            if locked is None or locked.avatar_id == avatar_id:
-                return False
-            locked.avatar_id = avatar_id
-            locked.save(update_fields=["avatar", "updated_at"])
-        handle.avatar_id = avatar_id
-        return True
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
@@ -618,7 +562,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             except UploadTooLarge, UploadTypeRefused:
                 logger.info("A reported %s handle avatar was not an accepted image.", report.platform)
                 return False
-        return self.set_avatar(handle, avatar)
+        return handle.set_avatar(avatar)
 
 class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[StatementT]):
     """Party handle scopes; serving callers explicitly authorize both endpoints."""
