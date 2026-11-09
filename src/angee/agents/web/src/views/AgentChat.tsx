@@ -27,7 +27,7 @@ import { AgentPermission } from "./AgentPermission";
 import type { AgentChatView, McpServerConfig } from "../documents";
 
 /**
- * Chat with a running agent through ACP, or a runtime-owned transport in the slot. The
+ * Chat with a running agent over ACP; every agent speaks it. The
  * surface is the `@angee/ui` chat primitives: a dense top bar (an agent chooser + a single
  * ⋯ overflow holding Settings/Reconnect/Clear), streamed markdown replies, reasoning frames,
  * and tool-call cards. `modelHandle` (when known) labels the agent's model in the bar + the

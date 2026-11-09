@@ -23,7 +23,6 @@ import { AgentChat } from "./AgentChat";
 import { AgentProvisioning } from "./AgentProvisioning";
 import { type AgentChatView } from "../documents";
 
-// AgentChat provides ACP by default and admits runtime-owned transports through its slot.
 // (`sqid` is not a GraphQL field — the agent's public id is carried by `id` for
 // the view envelope; see below.)
 const CHAT_FIELDS = ["id", "can_chat", "runtime_class"] as const;
@@ -33,7 +32,7 @@ function canDeleteAgent(record: Row): boolean {
 }
 
 /**
- * The agent detail's Chat tab. AgentChat resolves the composed runtime surface.
+ * The agent detail's Chat tab: the agent's ACP chat when the record allows chat.
  */
 function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
   const t = useAgentsT();
