@@ -1048,6 +1048,32 @@ def test_the_image_drive_is_provisioned_on_the_default_backend_at_first_use(driv
 
 
 @pytest.mark.django_db(transaction=True)
+def test_an_image_an_acting_user_ingests_stays_ownerless_and_the_next_one_lands(image_drive: Any) -> None:
+    """The drive owns its images: an acting user never owns one, so it never disqualifies the drive."""
+
+    assert image_drive.owns_items
+    with actor_context(image_drive.alice), system_context(reason="test storage ingest image as a user"):
+        first = File.objects.ingest_image(PNG_BYTES)
+        second = File.objects.ingest_image(PNG_BYTES + b"\x00")
+    assert first.pk != second.pk
+    assert (first.owner_id, second.owner_id) == (None, None)
+    assert first.drive_id == second.drive_id == image_drive.pk
+    with system_context(reason="test storage image drive reuse"):
+        assert Drive.objects.image_drive().pk == image_drive.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_image_drive_provisioned_before_it_owned_its_items_gains_that_at_its_next_use(image_drive: Any) -> None:
+    """An earlier image drive keeps serving, and later images are ownerless."""
+
+    with system_context(reason="test storage image drive upgrade"):
+        Drive._base_manager.filter(pk=image_drive.pk).update(owns_items=False)
+        assert Drive.objects.image_drive().owns_items
+    with actor_context(image_drive.alice), system_context(reason="test storage ingest image as a user"):
+        assert File.objects.ingest_image(PNG_BYTES).owner_id is None
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("squatter", ["granted", "writable_by_everyone", "owned_file"])
 def test_a_drive_that_only_shares_the_image_drives_name_is_refused(drive: Any, squatter: str) -> None:
     """An operator's drive with the slug must not take avatars onto its files or its grantees' reach."""
