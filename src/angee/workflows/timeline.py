@@ -91,14 +91,17 @@ class RunKind(TimelineKind):
             models.Prefetch("step_runs", queryset=waiting, to_attr="timeline_waits"),
         )
 
-    def waiting_on(self, actor: Any) -> models.QuerySet:
-        decisions = apps.get_model("decisions", "Decision").objects.waiting_on(actor)
-        return apps.get_model("workflows", "WorkflowRun")._base_manager.filter(
+    def waiting_on(self, record: Any, actor: Any) -> models.QuerySet | None:
+        run = apps.get_model("workflows", "WorkflowRun")
+        waiting = models.Q(
             status=RunStatus.WAITING,
             step_runs__status=StepRunStatus.WAITING,
             step_runs__waiting_kind=WaitingKind.DECISION,
-            step_runs__decision__in=decisions.values("pk"),
         )
+        if not run._base_manager.filter(self._record_filter(record), waiting).exists():
+            return None
+        decisions = apps.get_model("decisions", "Decision").objects.waiting_on(actor)
+        return run._base_manager.filter(waiting, step_runs__decision__in=decisions.values("pk"))
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         return (row,) if row._meta.label == RUN_MODEL else apps.get_model(
