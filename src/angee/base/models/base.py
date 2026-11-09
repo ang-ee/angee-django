@@ -219,7 +219,7 @@ class AngeeModel(
             if reference.blocks_target_delete(type(self))
         )
         if named_in_relationships(self) or any(
-            reference.rows(self).using(self._state.db).exists() for reference in live_references
+            reference.rows(self).exists() for reference in live_references
         ):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()

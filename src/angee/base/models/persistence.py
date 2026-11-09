@@ -60,12 +60,11 @@ class PersistenceMixin(models.Model):
         return candidate
 
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
-        """Lock and reload this subject through its row-bound base manager."""
+        """Lock and reload this subject through its base manager."""
 
         del members
         model = type(self)
-        manager = model._base_manager.db_manager(self._state.db, hints={"instance": self})
-        return manager.all().select_for_update(of=row_lock_paths(model)).get(pk=self.pk)
+        return model._base_manager.select_for_update(of=row_lock_paths(model)).get(pk=self.pk)
 
     @classmethod
     def system_queryset(

@@ -7,7 +7,7 @@ from itertools import batched
 from typing import Any, Self, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, ValidationError
-from django.db import connections, models
+from django.db import connection, models
 from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Coalesce, RowNumber
 from rebac import current_actor
@@ -56,11 +56,11 @@ class ClosedUpdateQuerySet(models.QuerySet[_ModelT]):
 def query_batch_size(queryset: models.QuerySet[Any], *, width: int = 1) -> int:
     """Bound native key batches by this query's remaining database parameters."""
 
-    limit = connections[queryset.db].features.max_query_params
+    limit = connection.features.max_query_params
     if limit is None:
         return KEY_CHUNK
     try:
-        _, params = queryset.query.get_compiler(using=queryset.db).as_sql()
+        _, params = queryset.query.get_compiler(connection=connection).as_sql()
     except EmptyResultSet:
         params = ()
     size = min(KEY_CHUNK, (limit - len(params)) // width)

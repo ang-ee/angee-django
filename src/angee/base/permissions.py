@@ -371,10 +371,5 @@ def candidate_relationships(instance: models.Model, action: str) -> CandidateRel
     if definition is None:
         return None
     required = frozenset(relation_dependencies(schema, resource_type, action))
-    relationships = proposed_forward_relationships(
-        instance,
-        definition,
-        required_relations=required,
-        using=instance._state.db,
-    )
+    relationships = proposed_forward_relationships(instance, definition, required_relations=required)
     return CandidateRelationships(resource_type, definition, required, relationships)

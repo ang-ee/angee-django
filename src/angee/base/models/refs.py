@@ -173,7 +173,7 @@ class RecordRefMixin(RecordRefMergeContract):
         content_type_id = getattr(self, reference.ct_field_attname)
         object_id = getattr(self, reference.fk_field)
         model = (
-            ContentType.objects.db_manager(self._state.db).get_for_id(content_type_id).model_class()
+            ContentType.objects.get_for_id(content_type_id).model_class()
             if content_type_id not in (None, "") and object_id not in (None, "") else None
         )
         if model is None:
@@ -212,7 +212,7 @@ class RecordRefMixin(RecordRefMergeContract):
         scope: dict[str, object] = {reference.ct_field: content_type}
         if cls.merge_policy == MergePolicy.KEEP and issubclass(model, MergeableMixin):
             assert isinstance(record, MergeableMixin)
-            group = model._base_manager.using(record._state.db)
+            group = model._base_manager.all()
             if not isinstance(group, MergeableQuerySet):
                 raise ImproperlyConfigured(f"{model._meta.label}'s base queryset must support merge redirects.")
             group = group.redirect_group(record).order_by()
