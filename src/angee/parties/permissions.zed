@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 16
+// @rebac_schema_revision: 18
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -21,8 +21,9 @@
 // which retains per-row grants. An explicit `reader` grant on an MTI child also
 // reaches each parent that accepts the relation and subject through the resources
 // grant loader (`src/angee/resources/grants.py`). Related rows keep their own
-// read rules. identity_reader shares only the selected entity's basic identity,
-// across its MTI rows, without lending private data or related subject records.
+// read rules. identity_reader, granted on the canonical Party, shares only its
+// basic identity: the Person or Organization row reads it through `party`,
+// without lending private data or related subject records.
 // Lossless contact data and handle counts are private. created_by,
 // updated_by and their labels remain readable: attribution belongs to identity.
 
@@ -31,8 +32,6 @@ definition parties/party {
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation identity_reader: auth/user | auth/group#member
-    relation person: parties/person // rebac:field=person
-    relation organization: parties/organization // rebac:field=organization
     // Admission follows retained source links and registered principal roles.
     relation directory: integrate/integration // rebac:field=record_links__stream__integration
     relation statement_role: provenance/role // rebac:const=parties_statement_source
@@ -40,7 +39,7 @@ definition parties/party {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + identity_reader + person->identity_reader + organization->identity_reader + statement_source + admin->member
+    permission read_granted = owner + editor + reader + identity_reader + statement_source + admin->member
     permission read = read_granted
     // What a party lends the record tasks about it: its direct holders only, so
     // task access never recurses through a thread the party follows (rebac.E016).
@@ -66,14 +65,13 @@ definition parties/person {
     relation party: parties/party // rebac:field=party_ptr
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
-    relation identity_reader: auth/user | auth/group#member
     relation directory: integrate/integration // rebac:field=party_ptr__record_links__stream__integration
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + identity_reader + party->identity_reader + statement_source + admin->member
+    permission read_granted = owner + editor + reader + party->identity_reader + statement_source + admin->member
     permission read = read_granted
     permission read_private = owner + editor + reader + admin->member
     // Field gates are per resource definition, including inherited columns.
@@ -93,14 +91,13 @@ definition parties/organization {
     relation party: parties/party // rebac:field=party_ptr
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
-    relation identity_reader: auth/user | auth/group#member
     relation directory: integrate/integration // rebac:field=party_ptr__record_links__stream__integration
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + identity_reader + party->identity_reader + statement_source + admin->member
+    permission read_granted = owner + editor + reader + party->identity_reader + statement_source + admin->member
     permission read = read_granted
     permission read_private = owner + editor + reader + admin->member
     permission read__notes = read_private
@@ -122,7 +119,8 @@ definition parties/handle {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = creator + editor + reader + statement_source + admin->member
+    permission read_granted = creator + editor + reader + statement_source + admin->member
+    permission read = read_granted
     permission write  = creator + editor + admin->member
     permission delete = creator + admin->member
 }

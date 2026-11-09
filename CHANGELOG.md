@@ -8,6 +8,41 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — run interrupts, identity sharing, annotation and delivery expiry
+
+- Workflows: `interrupted` joins `done`, `error` and `canceled` as a native run
+  fallback outcome. A parent must route every frozen child outcome, so a parent
+  that awaits a child fails `Definition.check` until it routes `interrupted`;
+  frozen published versions keep their contract until republished.
+- Parties: Organization now declares `read_private` and gates `notes`,
+  `first_met_note` and `handle_count` behind it, as Party and Person do.
+  Statement sources and identity readers read the Organization without them.
+- Parties: `identity_reader` on the canonical Party shares its basic identity;
+  the Person or Organization row reads the grant through its `party` link. It
+  lends no private fields, handles or related subject records. Grant it on the
+  Party: the MTI children declare no share surface. Handle `read` now derives
+  from `read_granted`; the sender Handle stays directory data, and a message's
+  reader takes its sender from `Message.source_header_values`.
+- Tags on messaging threads and messages are governed by `annotate`, not
+  `write`. The channel's grantable `annotator` relation allows tag changes on
+  readable conversations without content-edit access; withholding and trash
+  still apply.
+- Ollama: SDK retries are disabled (`max_retries=0`). Callers own retries within
+  their execution budget.
+- Workflows: execution messages carry Celery expiry anchored to the database
+  `dispatched_at`: the whole redelivery allowance
+  (`ANGEE_WORKFLOW_MAX_DISPATCHES` recovery intervals) plus one interval.
+  Replacement admission stays at 60 s. Workers are assumed to run at most 45 s
+  ahead of the database clock.
+- Agents: TypeSafe's SDK is the framework's decision-inference owner.
+  `angee-agents` depends on `typesafe-sdk`, and the public `decide` contract of
+  `InferenceBackend`, `InferenceProvider` and `InferenceModel` takes its
+  `Content` and `Question` types and returns its `SystemOneResponse`. The Ollama
+  backend answers through System One.
+- Agents: `InferenceModelUse.DECISION` is a new model use. Projects author the
+  `AlterField` migration for `InferenceModel.model_use` before
+  `makemigrations --check` passes.
+
 ## Unreleased — django-zed-rebac 0.31
 
 - The base addon requires `django-zed-rebac>=0.31.4,<0.32` (GraphQL its

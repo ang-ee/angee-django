@@ -46,10 +46,10 @@ gates. Once asserted, subjects leave active use only through trash;
 retained statements protect their subjects and Handle evidence from deletion.
 Circle and spaces memberships keep plain acceptance/rejection decisions.
 
-Writers can share a selected Party's basic identity through `identity_reader`.
-The grant reaches its Person or Organization identity and canonical Party, while
-private fields, related subject records, handles and banking keep their own
-gates. The existing `reader` relation includes private Party reads; use it only
+Writers can share a Party's basic identity through `identity_reader` on the
+canonical Party. Its Person or Organization row reads that grant through its
+`party` link, while private fields, related subject records, handles and banking
+keep their own gates. The existing `reader` relation includes private Party reads; use it only
 when that wider access is intended. Both use the native record-access owner.
 
 Source admission follows RecordLinks and seeded Rule/Seed role membership.

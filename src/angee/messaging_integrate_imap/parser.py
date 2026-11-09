@@ -51,8 +51,9 @@ from angee.parties.models import Handle
 MIME_ERRORS = (MessageError, ValueError, LookupError, TypeError, RecursionError)
 """Malformed MIME, charset/content lookup and bounded-parser failures.
 
-Fallbacks retain the raw message for these data errors. Worker cancellation and
-unrelated runtime failures propagate instead of becoming message content.
+Inner helpers degrade only the affected header or part for these data errors.
+Any other failure escapes ``parse_message``; the backend then lands the whole raw
+message through ``fallback_message``, and worker cancellation propagates.
 """
 
 # The parties platform email handles live under (`Handle.Platform` owns the value).

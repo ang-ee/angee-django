@@ -27,13 +27,15 @@ restarting a completed backfill.
 call — ``config["batch_size"]``, default 200, with body pulls additionally split
 under a ``config["max_batch_bytes"]`` budget). A message over ``config
 ["max_message_bytes"]`` lands header-only with a truncation marker; a message the
-MIME layer rejects lands through the parser's fallback envelope — mail is never
-dropped, and UIDs the server fails to answer for are logged rather than silently
-skipped. Authentication draws on the channel's credential: ``basic_auth`` logs in
-with username/password, ``oauth`` refreshes then presents the access token over
-XOAUTH2 (Gmail, Outlook). The operator-supplied host passes the shared outbound
-address judgement under the operator-configured-connection policy
-(``integrate.net``): self-hosted private hosts work, metadata escapes never do.
+parser fails on, for any reason, lands through its fallback envelope — mail is
+never dropped and one poison message never stalls the mailbox — while worker
+cancellation propagates with the cursor unchanged. UIDs the server fails to
+answer for are logged rather than silently skipped. Authentication draws on the
+channel's credential: ``basic_auth`` logs in with username/password, ``oauth``
+refreshes then presents the access token over XOAUTH2 (Gmail, Outlook). The
+operator-supplied host passes the shared outbound address judgement under the
+operator-configured-connection policy (``integrate.net``): self-hosted private
+hosts work, metadata escapes never do.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ from hashlib import sha256
 from time import monotonic
 from typing import Any, TypeVar
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import ValidationError
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientAbortError, IMAPClientError, LoginError
@@ -66,7 +69,7 @@ from angee.integrate.streams import CursorInvalid, StreamPage, open_stream, rese
 from angee.integrate.sync import current_bridge_progress
 from angee.messaging.backends import ParsedMessage
 from angee.messaging.email import AnymailEmailChannelBackend
-from angee.messaging_integrate_imap.parser import MIME_ERRORS, fallback_message, parse_message
+from angee.messaging_integrate_imap.parser import fallback_message, parse_message
 
 logger = logging.getLogger(__name__)
 
@@ -736,7 +739,12 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         body_key: bytes,
         truncated: bool = False,
     ) -> list[ParsedMessage]:
-        """Parse one fetch response; a poison message lands via the fallback envelope."""
+        """Parse one fetch response; any parser failure lands via the fallback envelope.
+
+        Per-message isolation is deliberately broad: an unlisted parser error that
+        aborted the page would keep the cursor on that UID and stall the mailbox on
+        every later poll. Worker cancellation is not a parser failure and propagates.
+        """
 
         messages: list[ParsedMessage] = []
         for uid in sorted(data):
@@ -761,7 +769,9 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                         truncated_bytes=int(item[b"RFC822.SIZE"]) if truncated else None,
                     )
                 )
-            except MIME_ERRORS as error:
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception as error:  # noqa: BLE001 — one poison message must not stall the mailbox.
                 messages.append(
                     fallback_message(
                         bytes(raw),

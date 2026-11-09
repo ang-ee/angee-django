@@ -166,11 +166,17 @@ fenced by the attempt counter and deadline. IO timeouts leave a settlement windo
 below the worker's soft and hard limits; [`Step`](steps.py) owns those bounds.
 Heartbeats retain that reserve against the current attempt's absolute lifetime.
 The shared-worker tick wakes due waits, reaps
-expired claims and redispatches undelivered ready rows. Execution messages use
-Celery expiry derived from the stored database dispatch time and recovery
-interval. Deferred publication cannot extend a message past replacement admission;
-stale messages are refused before database execution while the ready row remains
-recoverable. Message expiry is separate from a claimed attempt's execution deadline.
+expired claims and redispatches undelivered ready rows. A ready row whose copy is
+older than the 60 s recovery interval gets a replacement, which consumes one of
+`ANGEE_WORKFLOW_MAX_DISPATCHES`; exhaustion parks the step for an operator. Every
+copy keeps its queue position: Celery expiry is the stored database dispatch time
+plus the whole allowance and one more recovery interval, so a saturated queue
+still runs the step from its oldest copy and the claim fences the rest. Expiry
+only sweeps copies a parked or settled step no longer needs; deferred publication
+never extends it. The worker compares that database-clock instant with its own
+clock: workers are assumed to run at most 45 s ahead of the database (one
+recovery interval less the 15 s tick). Larger skew shortens every copy's life by
+the excess. Message expiry is separate from a claimed attempt's execution deadline.
 An uncertain external
 effect requires operator acknowledgement unless the step declares
 `effect_idempotent`. A recorded effect takes precedence over `Retryable`;

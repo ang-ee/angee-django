@@ -78,7 +78,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
 DISPATCH_RECOVERY_SECONDS = 60
-"""Database-clock delivery age shared by message expiry and replacement admission."""
+"""Database-clock delivery age after which the tick admits a replacement copy."""
 PRUNE_BATCH_LIMIT = 25
 """Prune examines at most 25 roots per tick; blocked roots retry after one day."""
 _held_runs: ContextVar[set[int] | None] = ContextVar("workflows_held_runs", default=None)
@@ -1054,7 +1054,15 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
         return {"waiting_kind": None, "wait_reason": "", "wake_at": None, "deadline_at": None, "updated_at": Now()}
 
     def dispatch(self) -> None:
-        """Send ready rows with native expiry; the retained row owns recovery."""
+        """Send ready rows; each copy stays executable while its step may still wait for it.
+
+        Replacement admission (``undispatched``) recovers a lost copy after one
+        recovery interval, but an earlier copy keeps its place in the FIFO queue:
+        a copy expires only after the step's whole redelivery allowance plus one
+        recovery interval, which covers the tick period and a worker clock running
+        ahead of the database ``dispatched_at``. The claim fences the overlap.
+        """
+        lifetime = timedelta(seconds=DISPATCH_RECOVERY_SECONDS * (settings.ANGEE_WORKFLOW_MAX_DISPATCHES + 1))
         with transaction.atomic(), system_context(reason="workflows.dispatch"):
             ready = self.filter(status=StepRunStatus.READY).exclude(run__status__in=RunStatus.terminal_values())
             selected = ready.order_by("pk").lock_if_supported(no_key=True, skip_locked=True)
@@ -1062,10 +1070,7 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
             ready.filter(pk__in=selected_ids).update(dispatched_at=Now(), updated_at=Now())
             deliveries = ready.filter(pk__in=selected_ids).order_by("pk").values_list("pk", "dispatched_at")
             for pk, dispatched_at in deliveries:
-                enqueue_task(
-                    "workflows.execute", kwargs={"step_run_id": pk},
-                    expires=dispatched_at + timedelta(seconds=DISPATCH_RECOVERY_SECONDS),
-                )
+                enqueue_task("workflows.execute", kwargs={"step_run_id": pk}, expires=dispatched_at + lifetime)
 
     def count_redispatch(self) -> int:
         """Count a tick redelivery without changing status or publishing a change."""
