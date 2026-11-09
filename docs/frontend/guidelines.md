@@ -54,6 +54,11 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   `@angee/app/src/providers/{auth,i18n}`. Transport auth headers stay in
   `@angee/refine`; chrome reads only the app-supplied session surface on
   `@angee/ui`'s `AppRuntime`.
+- Server unavailability is shared transport state, not a page's error or auth
+  decision. Compose the [app connection boundary](../../packages/app/src/providers/connection.tsx)
+  and its native Query recovery; preserve mounted pages and never replay an
+  interrupted write. Customer artwork and guidance use its containers and
+  existing brand/i18n contracts ([customization](../../packages/app/README.md#server-connection-recovery)).
 - Dialect data hooks live in `@angee/refine` as metadata-free hooks. Callers
   resolve `resourceOperationTarget` at the metadata edge and pass the root as
   `{ root }`.

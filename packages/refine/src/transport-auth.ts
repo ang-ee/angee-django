@@ -48,7 +48,11 @@ export function createCsrfTokenProvider(
 
   async function load(): Promise<CsrfBootstrap> {
     const response = await fetchImpl(endpoint, { credentials: "include" });
-    if (!response.ok) return { token: null, cookieName: null };
+    if (!response.ok) {
+      throw Object.assign(new Error("Unable to establish a secure session."), {
+        response: { status: response.status },
+      });
+    }
     const body = (await response.json()) as { token?: unknown; cookieName?: unknown };
     return {
       token: typeof body.token === "string" ? body.token : null,

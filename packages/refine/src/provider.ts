@@ -12,6 +12,7 @@ import type {
 } from "@refinedev/core";
 import { resourceMutationMeta, type ResourceMutationOperations, type ResourceMutationTarget } from "./operations";
 import type { QueryClient } from "@tanstack/react-query";
+import { ServerUnavailableError, type ServerConnection } from "./server-connection";
 import {
   graphQLWebSocketUrl,
   sessionAuth,
@@ -45,6 +46,8 @@ export interface AngeeHasuraClientOptions {
   auth?: AuthFetch;
   csrfEndpoint?: string;
   fetch?: FetchFn;
+  /** Shared availability gate for this app's server, before session bootstrap. */
+  connection?: ServerConnection;
   /**
    * Which server error messages reach the UI. `public` (the default) keeps only
    * errors whose code the console marks public; `all` keeps every message and its
@@ -96,12 +99,16 @@ export interface AngeeLiveResource {
 export function createAngeeGraphQLClient(
   options: AngeeHasuraClientOptions,
 ): GraphQLClient {
-  const baseFetch = options.fetch ?? globalThis.fetch;
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const baseFetch = options.connection?.fetch(fetchImpl) ?? fetchImpl;
   const auth = options.auth ?? sessionAuth({
     endpoint: options.csrfEndpoint,
     fetch: baseFetch,
   });
-  const authenticatedFetch = auth(baseFetch);
+  const withAuth = auth(baseFetch);
+  // Check before CSRF too: a blocked call must not create a failed shared
+  // bootstrap that the independent recovery probe would then join.
+  const authenticatedFetch = options.connection?.fetch(withAuth) ?? withAuth;
   const requestFetch: FetchFn = (input, init) =>
     authenticatedFetch(typeof options.url === "function" ? options.url() : input, init);
   return new GraphQLClient(typeof options.url === "string" ? options.url : "", {
@@ -168,6 +175,7 @@ export function boundedGraphQLTransportError(
   value: unknown,
   errorMessages: AngeeHasuraClientOptions["errorMessages"] = "public",
 ): Error {
+  if (value instanceof ServerUnavailableError) return value;
   const record = recordValue(value);
   if (!record || (!("request" in record) && !("response" in record))) {
     return new Error("Request failed.");
@@ -242,10 +250,11 @@ export function publicGraphQLErrorsFromUnknown(value: unknown): readonly PublicG
 /**
  * Whether a failed query is worth retrying: a transport or server failure is,
  * a public GraphQL answer (validation, permission, conflict, sign-in) is not,
- * because a retry repeats the same answer.
+ * because a retry repeats the same answer. A shared server outage is retried
+ * once by the app's recovery query, not by every failed read.
  */
 export function retryableQueryError(error: unknown): boolean {
-  return publicGraphQLErrorsFromUnknown(error).length === 0;
+  return !(error instanceof ServerUnavailableError) && publicGraphQLErrorsFromUnknown(error).length === 0;
 }
 
 export function createAngeeHasuraDataProviders(

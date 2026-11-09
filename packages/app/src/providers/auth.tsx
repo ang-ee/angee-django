@@ -336,9 +336,9 @@ export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
   const identity = useGetIdentity<AuthIdentity | null>({
     queryOptions: IDENTITY_QUERY_SETTINGS,
   });
-  const auth = useMemo(() => identity.data === undefined && identity.isFetching
+  const auth = useMemo(() => identity.data === undefined && !isUnauthorizedError(identity.error)
     ? { user: null, status: "resolving", hasRole: () => false } satisfies AuthState
-    : authStateFromUser(identity.data ?? null), [identity.data, identity.isFetching]);
+    : authStateFromUser(identity.data ?? null), [identity.data, identity.error]);
   return {
     auth,
     identity: identity.data ?? null,

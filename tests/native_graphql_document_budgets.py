@@ -219,12 +219,16 @@ BUDGETS = {
     ("admin", "person"): (2, 20, 49),  # 0.31: 29 -> 20 statements (2 witnesses), 50 -> 49 KB
     ("admin", "projects"): (6, 10, 17),  # 0.31: 15 -> 10 statements (2 witnesses), 24 -> 17 KB
     ("admin", "identity"): (1, 1, 2),
-    ("member", "inbox"): (9, 14, 781),  # 0.31: 123 -> 14 statements (3 witnesses), 898 -> 781 KB; id sets are CTEs
+    ("member", "inbox"): (9, 14, 785),  # 0.31: 123 -> 14 statements (3 witnesses), 898 -> 781 KB; id sets are CTEs;
+    # identity_reader on the canonical Party: 781 -> 785 KB
     # The feed reads its messages under ``read_inbox`` and the reply-parent fields read ``read``
     # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
-    ("member", "transcript"): (3, 32, 2593),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2593 KB
-    ("member", "person"): (2, 20, 791),  # 0.31: 174 -> 20 statements (2 witnesses), 1036 -> 791 KB
-    ("member", "projects"): (3, 10, 247),  # 0.31: 89 -> 10 statements (2 witnesses), 538 -> 247 KB
+    ("member", "transcript"): (3, 32, 2600),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2593 KB;
+    # identity_reader: 2593 -> 2600 KB
+    ("member", "person"): (2, 20, 805),  # 0.31: 174 -> 20 statements (2 witnesses), 1036 -> 791 KB;
+    # identity_reader: 791 -> 805 KB
+    ("member", "projects"): (3, 10, 251),  # 0.31: 89 -> 10 statements (2 witnesses), 538 -> 247 KB;
+    # identity_reader: 247 -> 251 KB
     ("member", "identity"): (1, 1, 2),
 }
 

@@ -12,6 +12,7 @@ import {
 import {
   type I18nResources,
   OperationDocumentsProvider,
+  ServerConnection,
   createAngeeHasuraDataProviders,
   createAngeeHasuraLiveProvider,
   createTanStackRouterProvider,
@@ -31,6 +32,7 @@ import {
 } from "@refinedev/core";
 import {
   QueryClient,
+  QueryClientProvider,
   keepPreviousData,
   useQuery,
   type QueryClientConfig,
@@ -124,6 +126,7 @@ import {
   type UserPreferences,
 } from "./providers/auth";
 import { createViewAsProvider, useViewAsState, type ViewAsProvider } from "./providers/view-as";
+import { ConnectionBoundary, createServerProbe, SERVER_CONNECTION_QUERY_KEY } from "./providers/connection";
 import {
   parseFlatSearch,
   stringifyFlatSearch,
@@ -256,12 +259,13 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
  */
 export function createApp(input: CreateAppInput): AngeeApp {
   const queryClient = new QueryClient(APP_QUERY_CLIENT_CONFIG);
+  const connection = new ServerConnection();
   const viewAs: ViewAsProvider = createViewAsProvider({
     changed: async (userId) => {
       // Stop live delivery before resetting/refetching any actor-bound data.
       refineLiveProvider?.setEnabled(false);
       resetSessionQueries(queryClient);
-      if (userId === null) refineLiveProvider?.setEnabled(true);
+      if (userId === null && !connection.getSnapshot()) refineLiveProvider?.setEnabled(true);
       const identity = await queryClient.fetchQuery(identityQueryOptions(refineAuthProvider));
       if (userId !== null && (identity?.id !== userId || !identity.realUser)) {
         throw new Error("Preview identity was not returned.");
@@ -271,6 +275,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const schemas = normalizeSchemaConfigs(Object.fromEntries(
     Object.entries(input.schemas).map(([name, schema]) => [name, {
       ...schema,
+      connection,
       fetch: viewAsAuth(viewAs.getUserId)(schema.fetch ?? globalThis.fetch),
     }]),
   ));
@@ -507,6 +512,16 @@ export function createApp(input: CreateAppInput): AngeeApp {
     queryClient,
   );
   const authSchema = authSchemaNameForSchemas(schemas, defaultSchema);
+  const probeServer = createServerProbe(input.schemas[authSchema]!);
+  const onConnectionLost = () => { refineLiveProvider?.setEnabled(false); };
+  const onConnectionRestored = () => {
+    if (viewAs.getUserId() === null) refineLiveProvider?.setEnabled(true);
+    // Refresh reads in place. Never resume or replay a failed mutation.
+    void queryClient.invalidateQueries({ predicate: query =>
+      query.queryKey[0] !== SERVER_CONNECTION_QUERY_KEY[0] || query.queryKey[1] !== SERVER_CONNECTION_QUERY_KEY[1],
+    });
+    void router.invalidate();
+  };
   const refineAuthProvider: RefineAuthProvider = createAuthProviderForSchema(
     schemas,
     authSchema,
@@ -514,7 +529,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     queryClient,
     () => {
       viewAs.reset();
-      refineLiveProvider?.setEnabled(true);
+      if (!connection.getSnapshot()) refineLiveProvider?.setEnabled(true);
     },
     presenceRefs(requirements),
   );
@@ -598,7 +613,13 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const { vocabulary, routesByResource: selected, activeMenuId } = useAppRuntime();
     // Refine's resources feed the rail, menus and palette.
     const labeledResources = useMemo(() => resourceRegistryFor(selected, vocabulary, navigation), [navigation, selected, vocabulary]);
-    const refineNotificationProvider = useRefineNotificationProvider();
+    const notifications = useRefineNotificationProvider();
+    const refineNotificationProvider = useMemo(() => ({
+      ...notifications,
+      open: (params: Parameters<typeof notifications.open>[0]) => {
+        if (params.type !== "error" || !connection.getSnapshot()) notifications.open(params);
+      },
+    }), [notifications]);
     const routerProvider = useMemo(() => createTanStackRouterProvider(activeMenuId ? menuRouteResourceIdentifier(activeMenuId) : undefined), [activeMenuId]);
     return (
       <Refine
@@ -674,6 +695,16 @@ export function createApp(input: CreateAppInput): AngeeApp {
   });
 
   const router = createRouter({
+    Wrap: ({ children }) => (
+      <QueryClientProvider client={queryClient}>
+        <AppRuntimeProvider runtime={runtime}>
+          <ConnectionBoundary connection={connection} queryClient={queryClient} probe={probeServer}
+            onLost={onConnectionLost} onRestored={onConnectionRestored}>
+            {children}
+          </ConnectionBoundary>
+        </AppRuntimeProvider>
+      </QueryClientProvider>
+    ),
     routeTree: rootRoute.addChildren([
       indexRoute,
       ...[...layoutRoutes.entries()]
