@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cached_property
-from typing import Any
+from typing import Any, cast
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Cast
 from django_cte import CTE, with_cte
 from rebac import to_subject_ref
+from rebac.managers import RebacQuerySet
 
 from angee.base.models.identity import public_id_for
 from angee.base.pagination import KeysetOrder, keyset_signer
@@ -126,13 +127,16 @@ class Timeline:
         branches = []
         for kind in self.kinds:
             rows = kind.queryset(record, actor).order_by()
-            # An empty kind stays out of the statement: compiling its read scope and
-            # attention subquery there costs more than this probe of its bare scope.
-            if not rows.exists():
+            if isinstance(rows, models.query.EmptyQuerySet):
                 continue
             self.sources[kind.id] = rows
             fold_type, fold_pk = kind.fold(record) or (models.Value(None), models.Value(None))
-            waiting = kind.waiting_on(rows, actor).filter(pk=models.OuterRef("pk"))
+            # The outer branch already authorizes this row. Only its attention
+            # boolean crosses this boundary; do not repeat the read scope inside it.
+            waiting = kind.waiting_on(
+                cast(RebacQuerySet, rows.model._default_manager.all()).system_context(reason="timeline.attention"),
+                actor,
+            ).filter(pk=models.OuterRef("pk"))
             branches.append(rows.annotate(
                 _timeline_kind=models.Value(kind.id, output_field=models.CharField()),
                 _timeline_type=models.Value(

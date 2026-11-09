@@ -33,6 +33,8 @@ class DecisionKind(TimelineKind):
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         rows = apps.get_model("decisions", "Decision").objects.with_actor(actor)
+        if not rows.model._base_manager.exists():
+            return rows.none()
         return (rows.for_records(record) | rows.filter(self._requested_by(record))).scoped().select_related(
             "answered_by",
         ).prefetch_related(
@@ -40,7 +42,7 @@ class DecisionKind(TimelineKind):
         )
 
     def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        return rows.waiting_on(actor).scoped()
+        return rows.waiting_on(actor)
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         types, ids = [], []

@@ -114,7 +114,7 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     with CaptureQueriesContext(connection) as queries:
         data = read_timeline(vault, owner)
     # The page, every kind's totals (read again by timeline_attention) and the
-    # page's children share one statement over the kinds with readable rows.
+    # page's children share one statement; structurally empty sources are omitted.
     statements = [query["sql"] for query in queries if '"timeline_source"' in query["sql"]]
     assert len(statements) == 1
     assert "UNION ALL" in statements[0] and "LIMIT 26" in statements[0]
@@ -170,11 +170,11 @@ def test_member_reading_by_grant_pays_a_fixed_rail_cost(composed_permissions: No
     assert counts["provenance.change"] >= 3 and counts["projects.task"] == 1
     assert few.data["timeline"]["entries"][0]["detail"] == "Edit 1"
     assert few.data["timeline"]["needs_me"] == few.data["timeline_attention"] == 0
-    few.assert_ceiling(statements=19, sql_kb=783)
+    few.assert_ceiling(statements=15, sql_kb=552)
     many = edit_then_read(range(2, 10))
     assert len(many.data["timeline"]["entries"]) == len(few.data["timeline"]["entries"]) + 8
     assert many.statements == few.statements
-    many.assert_ceiling(statements=19, sql_kb=783)
+    many.assert_ceiling(statements=15, sql_kb=552)
 
 
 def timeline_entries(record, actor=None, *, kind=None):

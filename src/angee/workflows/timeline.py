@@ -72,6 +72,8 @@ class RunKind(TimelineKind):
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor)
+        if not runs.model._base_manager.exists():
+            return runs.none()
         rows = runs.about(record, ancestors=False)
         if isinstance(record, rows.model):
             rows = (rows | runs.filter(parent_step__run=record).distinct()).exclude(pk=record.pk)
@@ -84,12 +86,13 @@ class RunKind(TimelineKind):
         )
 
     def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        decisions = apps.get_model("decisions", "Decision").objects.with_actor(actor).waiting_on(actor).scoped()
-        steps = apps.get_model("workflows", "StepRun").objects.with_actor(actor).scoped().filter(
-            status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
-            decision_id__in=decisions.values("pk"),
+        decisions = apps.get_model("decisions", "Decision").objects.waiting_on(actor)
+        return rows.filter(
+            status=RunStatus.WAITING,
+            step_runs__status=StepRunStatus.WAITING,
+            step_runs__waiting_kind=WaitingKind.DECISION,
+            step_runs__decision__in=decisions.values("pk"),
         )
-        return rows.filter(status=RunStatus.WAITING, pk__in=steps.values("run_id"))
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         return (row,) if row._meta.label == RUN_MODEL else apps.get_model(
