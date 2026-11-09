@@ -11,7 +11,6 @@ from typing import Any, ClassVar, Literal, TypeVar, cast, get_args, get_origin
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
 
@@ -24,7 +23,6 @@ from angee.workflows.states import (
     DONE_OUTCOME,
     ERROR_OUTCOME,
     Outcome,
-    StepRunStatus,
     WaitingKind,
 )
 
@@ -103,10 +101,7 @@ class Done(_Settlement):
         return Done(output=output, outcome=outcome)
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
-        return rows.update(
-            **rows._cleared_wait(), status=StepRunStatus.SUCCEEDED,
-            output=self.output, outcome=self.outcome, retries=0,
-        )
+        return rows.to_succeeded(output=self.output, outcome=self.outcome)
 
 
 @dataclass(frozen=True)
@@ -166,19 +161,7 @@ class Fail(_Settlement):
         return replace(self, error=validate_value(str, self.error, field="error"))
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
-        retries = step_run.retries + 1
-        if attempt.retryable and step_run.requires_duplicate_acknowledgement:
-            return rows.to_waiting(kind=WaitingKind.ERROR, reason="possible duplicate effect", retries=retries)
-        if attempt.retryable and retries < step_run.step.retry.max_attempts:
-            return rows.to_waiting(
-                until=Now() + step_run.step.retry.delay_for(retries),
-                state=step_run.state, retries=retries,
-            )
-        error_field = apps.get_model("workflows", "StepAttempt")._meta.get_field("error")
-        return rows.update(
-            **rows._cleared_wait(), status=StepRunStatus.FAILED,
-            outcome=ERROR_OUTCOME, output={"error": error_field.get_prep_value(self.error)}, retries=retries,
-        )
+        return rows.fail_attempt(step_run, attempt, error=self.error)
 
 
 @dataclass(frozen=True)

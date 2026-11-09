@@ -50,6 +50,7 @@ from angee.workflows.definition import (
 from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
     CANCELED_OUTCOME,
+    ERROR_OUTCOME,
     INTERRUPTED_OUTCOME,
     AttemptResult,
     NodeKey,
@@ -1162,6 +1163,27 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
         current = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes").get(pk=step_run.pk)
         bulk_updated.send_robust(sender=self.model, instances=(current,),
                                 update_fields=frozenset(("status", "decision_id")), using=self.db)
+
+    def to_succeeded(self, *, output: Any, outcome: str) -> int:
+        """Complete selected claims with their validated result and clear their wait."""
+        return self.update(
+            **self._cleared_wait(), status=StepRunStatus.SUCCEEDED, output=output, outcome=outcome, retries=0,
+        )
+
+    def fail_attempt(self, step_run: Any, attempt: Any, *, error: str) -> int:
+        """Retry or fail this selected claim under its persisted effect and retry policy."""
+        retries = step_run.retries + 1
+        if attempt.retryable and step_run.requires_duplicate_acknowledgement:
+            return self.to_waiting(kind=WaitingKind.ERROR, reason="possible duplicate effect", retries=retries)
+        if attempt.retryable and retries < step_run.step.retry.max_attempts:
+            return self.to_waiting(
+                until=Now() + step_run.step.retry.delay_for(retries), state=step_run.state, retries=retries,
+            )
+        error_field = apps.get_model("workflows", "StepAttempt")._meta.get_field("error")
+        return self.update(
+            **self._cleared_wait(), status=StepRunStatus.FAILED,
+            outcome=ERROR_OUTCOME, output={"error": error_field.get_prep_value(error)}, retries=retries,
+        )
 
     def to_waiting(
         self, *, until: Any = None, state: Any = None, retries: int | None = None,
