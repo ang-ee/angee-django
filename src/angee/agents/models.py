@@ -27,7 +27,6 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import models, transaction
-from django.utils import timezone
 from django_compose.models import Composable
 from pydantic_ai.messages import (
     BinaryContent,
@@ -690,8 +689,7 @@ class SkillManager(VcsOutputManager, AngeeHistoryManager):
                 )
                 seen.add(skill.pk)
             self.filter(source=source).exclude(pk__in=seen).delete()
-            source.last_synced_at = timezone.now()
-            source.save(update_fields=["last_synced_at", "updated_at"])
+            source.complete_sync()
         return len(descriptors)
 
 
