@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ActionMenu, ActionTrigger, Alert, Button, ChatBar, ChatBubble, ChatTypingIndicator, ContextBlock, Dialog, DropdownMenu, ErrorBanner, Glyph, InlineEmpty, LazyBoundary, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, MetaGrid, StatusBadge, StatusDot, Textarea, ToolFallback, titleCase, useStatusTone } from "@angee/ui";
+import { ActionMenu, ActionTrigger, Alert, Button, ChatBar, ChatBubble, ChatTypingIndicator, ContextBlock, Dialog, DropdownMenu, ErrorBanner, Glyph, InlineEmpty, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, MetaGrid, StatusBadge, StatusDot, Textarea, ToolFallback, titleCase, useStatusTone } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -57,15 +57,6 @@ export interface AgentChatProps {
  * loads or for a default agent not yet in the list.
  */
 export function AgentChat(props: AgentChatProps): React.ReactElement {
-  return (
-    <LazyBoundary pending={<LoadingPanel />}>
-      <AcpAgentChat {...props} />
-    </LazyBoundary>
-  );
-}
-
-/** Bind the agent's ACP runtime, then render its session navigation and chat. */
-function AcpAgentChat(props: AgentChatProps): React.ReactElement {
   const runtimeState = useAcpRuntime({ agentId: props.agentId, view: props.view, knownSessionId: props.sessionId,
     protocolVersion: props.protocolVersion, showSessions: props.renderSessionNavigation !== undefined,
     onSessionChange: props.onSessionChange });

@@ -23,7 +23,7 @@ import type {
   BaseLayoutProvider,
   RefineLayoutConfig,
 } from "./define-base-addon";
-import { identityQueryOptions, isUnauthorizedError } from "./providers/auth";
+import { identityQueryOptions, isUnauthorizedError, readSharedIdentity } from "./providers/auth";
 import { routePathUnderParent } from "./route-paths";
 
 interface RouteSchemaConfig {
@@ -225,7 +225,7 @@ export function layoutAuthGuard(
 /** Read route identity through the shared cache and the route's session failure policy. */
 export async function loadRouteIdentity(authProvider: RefineAuthProvider, queryClient: QueryClient) {
   try {
-    return await queryClient.query({ ...identityQueryOptions(authProvider), staleTime: "static" });
+    return await readSharedIdentity(queryClient, authProvider);
   } catch (error) {
     if (!isUnauthorizedError(error)) throw new AuthIdentityCheckError();
     return null;

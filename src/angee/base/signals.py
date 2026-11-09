@@ -38,11 +38,27 @@ its cleanup runs after the fold, including when validation or a write fails.
 """
 
 bulk_updated = Signal()
-"""An owning bulk verb changed a batch of rows (instances, update_fields, using).
+"""An owning bulk verb changed a batch of rows (instances, update_fields).
 
 Observers receive persisted rows without pretending they were individually saved:
 the queryset already owns history and authorization for the write.
 """
+
+
+def send_bulk_update(
+    *, sender: type[Model], instances: Iterable[Model], update_fields: Iterable[str],
+) -> None:
+    """Deliver one persisted batch to every observer, logging receiver failures."""
+
+    for receiver, response in bulk_updated.send_robust(
+        sender=sender, instances=tuple(instances), update_fields=frozenset(update_fields),
+    ):
+        if isinstance(response, Exception):
+            logger.error(
+                "bulk_updated receiver %r failed for %s.", receiver, sender._meta.label,
+                exc_info=(type(response), response, response.__traceback__),
+            )
+
 
 record_access_revoked = Signal()
 """A direct record relation was revoked (instance, relation, subject).

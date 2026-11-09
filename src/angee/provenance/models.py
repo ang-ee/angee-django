@@ -44,7 +44,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
-from angee.base.signals import bulk_updated
+from angee.base.signals import send_bulk_update
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.exceptions import ChangesetRequired
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
@@ -312,11 +312,10 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
             touched=self.touched,
             counts=self.counts,
         )
-        bulk_updated.send(
+        send_bulk_update(
             sender=type(self),
             instances=(self,),
             update_fields=("state", "outcome", "touched", "counts"),
-            using=self._state.db,
         )
 
     def history_rows(self) -> Any:

@@ -221,6 +221,14 @@ def test_a_database_router_is_refused() -> None:
     assert "DATABASE_ROUTERS" in error.msg
 
 
+@pytest.mark.parametrize("aliases", [(), ("other",), ("default", "other")])
+def test_database_configuration_requires_only_default(settings, aliases) -> None:
+    settings.DATABASES = {alias: {"ENGINE": "django.db.backends.sqlite3"} for alias in aliases}
+    [error] = check_database_routers()
+    assert error.id == "angee.E050"
+    assert "DATABASES" in error.msg
+
+
 @pytest.mark.parametrize("ordering", ["first", "last", "override", "inherited", "plain"])
 def test_hierarchy_queryset_order_checks_every_declared_manager(ordering: str) -> None:
     """Path maintenance may skip its own guard, but must retain other update guards."""

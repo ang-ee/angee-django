@@ -1842,9 +1842,9 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         The cleanup for an acquisition its flow created: ``created`` from
         :meth:`FileManager.ingest_bytes` names an insert, not exclusive use, so
         the decision is made here under the row lock. A committed edit or owner
-        change since this instance was read, an attachment, a direct share, or a
-        protected reference keeps the row. Unless the row's own authority is
-        elevated (:meth:`effective_actor`), its actor needs ``delete``; once
+        change since this instance was read, a direct share, or any reverse
+        foreign key keeps the row, regardless of its on-delete policy. Unless
+        the row's own authority is elevated (:meth:`effective_actor`), its actor needs ``delete``; once
         admitted, the retention recheck and the purge run in a system scope.
         """
 
@@ -1857,7 +1857,11 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
                 if (
                     locked is None
                     or (locked.updated_at, locked.owner_id) != (self.updated_at, self.owner_id)
-                    or locked.attachments.exists()
+                    or any(
+                        relation.related_model._base_manager.filter(**{relation.field.name: locked}).exists()
+                        for relation in locked._meta.get_fields(include_hidden=True)
+                        if isinstance(relation, models.ManyToOneRel)
+                    )
                     or locked.system_direct_record_access()
                 ):
                     return False

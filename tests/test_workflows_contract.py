@@ -9,7 +9,7 @@ from pydantic import BaseModel, field_serializer
 
 from angee.workflows.context import StepContext
 from angee.workflows.runner import runner
-from angee.workflows.steps import Fail, NextPage, RetryPolicy, Step, StepMode, resolve_step
+from angee.workflows.steps import Fail, NextPage, RetryPolicy, Settlement, Step, StepMode, resolve_step
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 
 
@@ -166,3 +166,8 @@ def test_context_acknowledgement_belongs_to_its_claimed_attempt():
     assert not ctx.retry_acknowledged
     ctx.attempt.acknowledged_by_id = 5
     assert ctx.retry_acknowledged
+
+
+def test_settlement_base_cannot_be_returned_as_an_unimplemented_transition():
+    with pytest.raises(TypeError, match="abstract"):
+        Settlement()

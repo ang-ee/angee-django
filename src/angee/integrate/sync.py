@@ -22,7 +22,7 @@ _progress_bridge: ContextVar[Bridge | None] = ContextVar("angee_progress_bridge"
 
 
 @contextmanager
-def bridge_progress_context(bridge: Bridge) -> Iterator[Bridge]:
+def progress_bridge_context(bridge: Bridge) -> Iterator[Bridge]:
     """Make ``bridge`` the receiver of progress reports from nested sync code."""
 
     token = _progress_bridge.set(bridge)
@@ -40,6 +40,6 @@ def current_progress_bridge() -> Bridge | None:
 
 __all__ = [
     "SyncDispatch",
-    "bridge_progress_context",
+    "progress_bridge_context",
     "current_progress_bridge",
 ]

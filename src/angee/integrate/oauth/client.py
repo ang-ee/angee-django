@@ -33,7 +33,7 @@ from authlib.integrations.httpx_client import OAuth2Client
 from authlib.oauth2.rfc6749.parameters import prepare_grant_uri
 
 from angee.integrate.errors import IntegrationError, RequestNotSentError
-from angee.integrate.http import HTTP_TIMEOUT_SECONDS, PinnedTransport
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient, PinnedTransport
 from angee.integrate.oauth.errors import (
     CLIENT_NOT_CONFIGURED,
     MISSING_ENDPOINT,
@@ -171,7 +171,7 @@ class OAuthClientProtocol:
                 userinfo_endpoint = str(self.oauth_client.userinfo_endpoint or "")
             if not userinfo_endpoint:
                 return {}
-            return get_json(
+            return _get_json(
                 with_query(userinfo_endpoint, params or {}),
                 headers={"Authorization": f"Bearer {access_token}"},
                 error_code=USERINFO_FAILED,
@@ -263,7 +263,7 @@ class OAuthClientProtocol:
             # Authlib parses the token body as JSON before checking the status, so a
             # non-JSON 4xx (the documented Anthropic/CDN 403/429 block page) surfaces as
             # a ValueError, and a transport failure as httpx2.HTTPError — both map to the
-            # stable OAuthFlowError seam, like the JSON-shim and get_json paths.
+            # stable OAuthFlowError seam, like the JSON-shim and _get_json paths.
             self._log_token_failure(f"transport_error:{type(exc).__name__}", None)
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if isinstance(exc, httpx2.TransportError) else 400) from exc
         finally:
@@ -458,14 +458,14 @@ def with_query(url: str, query: Mapping[str, str]) -> str:
     return parse.urlunsplit((parts.scheme, parts.netloc, parts.path, encoded, parts.fragment))
 
 
-def get_json(
+def _get_json(
     url: str,
     *,
     headers: Mapping[str, str] | None = None,
     error_code: str,
     transport: httpx2.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """GET one JSON object with the shared outbound headers and transport policy.
+    """Map the shared JSON GET's failures and response shape to the OAuth contract.
 
     Transport, HTTP and decoding failures raise ``OAuthFlowError(error_code)``,
     transient (503) when the request was not sent or the transport failed. A
@@ -474,10 +474,7 @@ def get_json(
 
     request_headers = {**OUTBOUND_HEADERS, **dict(headers or {})}
     try:
-        with httpx2.Client(**_outbound_kwargs(transport)) as client:
-            response = client.get(url, headers=request_headers)
-            response.raise_for_status()
-            data = response.json()
+        data = HttpClient().get_json(url, headers=request_headers, allow_private=True, transport=transport)
     except (RequestNotSentError, httpx2.HTTPError, ValueError) as exc:
         status = 503 if isinstance(exc, (RequestNotSentError, httpx2.TransportError)) else 400
         raise OAuthFlowError(error_code, status) from exc

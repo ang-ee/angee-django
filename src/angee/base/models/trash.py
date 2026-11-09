@@ -22,7 +22,7 @@ from angee.base.models.timestamps import auto_now_stamps, update_fields_with_aut
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import CanonicalQuerySet, by_key
 from angee.base.serialization import strip_null_bytes
-from angee.base.signals import bulk_updated
+from angee.base.signals import bulk_updated, send_bulk_update
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
@@ -322,7 +322,7 @@ class TrashQuerySet(CanonicalQuerySet[_TrashModelT]):
             changed = sum(batch.update(**values) for batch in by_key(self, keys))
             if bulk_updated.has_listeners(self.model):
                 for batch in by_key(self.model._base_manager.all(), keys):
-                    bulk_updated.send_robust(
-                        sender=self.model, instances=tuple(batch), update_fields=frozenset(values), using=self.db,
+                    send_bulk_update(
+                        sender=self.model, instances=batch, update_fields=values,
                     )
             return changed

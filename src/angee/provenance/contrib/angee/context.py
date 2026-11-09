@@ -8,7 +8,7 @@ from typing import Any
 
 from django.db import models
 
-from angee.provenance.context import ChangesetScope, changeset, current_changeset
+from angee.provenance.context import ChangesetContext, changeset, current_changeset
 
 SERVER_COMMANDS = frozenset({"celery", "runserver", "serve", "test"})
 """Commands whose units of work own their boundaries instead of the process.
@@ -24,7 +24,7 @@ logical write and keeps the command boundary.
 
 def management_context(
     command: str, argv: Sequence[str], options: Mapping[str, Any],
-) -> ChangesetScope | nullcontext[None]:
+) -> ChangesetContext | nullcontext[None]:
     """Attribute command writes while servers, workers and tests own their boundaries."""
 
     del argv, options

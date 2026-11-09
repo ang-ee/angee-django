@@ -11,7 +11,6 @@ from django_compose.models import Composable
 from rebac import actor_context, system_context
 
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.streams import open_stream, reset_stream
 from angee.messaging_integrate_imap.backend import (
     NEW_MAIL_DELIVERY_MODE,
@@ -115,7 +114,7 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
                 "credential__oauth_client",
             ).get(pk=self.pk)
             backend = current._require_paused_imap(actor)
-            with bridge_advisory_lock(current) as acquired:
+            with current.sync_lock() as acquired:
                 if not acquired:
                     raise ValidationError("The channel is busy. Retry when its current operation finishes.")
                 snapshot = backend.prepare_new_mail_boundary()
@@ -185,7 +184,7 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
             .get(pk=self.pk)
         )
         backend = current._require_paused_imap(actor)
-        with bridge_advisory_lock(current) as acquired:
+        with current.sync_lock() as acquired:
             if not acquired:
                 raise ValidationError("The channel is busy. Retry when its current operation finishes.")
             parsed, imported_uids, flags_unchanged = backend.fetch_sample(

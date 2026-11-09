@@ -259,7 +259,7 @@ def discard_changeset_claim(instance: ChangesetLike) -> None:
         boundary.discard(instance)
 
 
-class ChangesetScope:
+class ChangesetContext:
     """One ``changeset()`` entry, usable with ``with`` and ``async with``.
 
     The asynchronous exit closes the boundary in Django's thread-sensitive worker
@@ -330,7 +330,7 @@ def changeset(
     occurred_at: datetime | None = None,
     fresh: bool = False,
     process: bool = False,
-) -> ChangesetScope:
+) -> ChangesetContext:
     """Open logical attribution, yielding a callback to mark a handled failure.
 
     Entrypoints use ``fresh=True`` to own a boundary; their facts are defaults.
@@ -358,7 +358,7 @@ def changeset(
         )
         if value is not None
     }
-    return ChangesetScope(facts, fresh=fresh, process=process)
+    return ChangesetContext(facts, fresh=fresh, process=process)
 
 
 @dataclass

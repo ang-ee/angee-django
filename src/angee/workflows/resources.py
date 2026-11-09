@@ -75,7 +75,7 @@ class WorkflowDefinitionResource(AngeeResource):
 
         if self.kind_declarations is None:
             workflow = (
-                self._meta.model.system_queryset().using(self.get_db_connection_name())
+                self._meta.model.system_queryset()
                 .filter(key=key).select_related("published").first()
             )
             return (
@@ -104,7 +104,7 @@ class WorkflowDefinitionResource(AngeeResource):
 
         del is_create
         self.before_save_instance(instance, row, **kwargs)
-        installed = type(instance).objects.db_manager(self.get_db_connection_name()).install_definition(
+        installed = type(instance).objects.install_definition(
             key=instance.key,
             name=instance.name,
             description=instance.description,
@@ -117,10 +117,7 @@ class WorkflowDefinitionResource(AngeeResource):
             ),
             actor=kwargs.get("actor"),
         )
-        for field in instance._meta.concrete_fields:
-            setattr(instance, field.attname, getattr(installed, field.attname))
-        instance._state.adding = False
-        self.after_save_instance(instance, row, **kwargs)
+        self.adopt_persisted_instance(instance, installed, row, **kwargs)
 
 
 class TriggerResource(AngeeResource):

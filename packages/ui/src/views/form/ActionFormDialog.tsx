@@ -12,9 +12,9 @@ import { titleCase } from "../../lib/titleCase";
 import { relationIdList, relationValueId } from "../../widgets/types";
 import { useRuntimeViewAs } from "../../runtime";
 import {
-  emptyDialogValue,
   emptyValueForField,
   mutationDialogValueCodecs,
+  requiredDialogErrors,
 } from "./MutationDialog";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useActionForm } from "./use-action-form";
@@ -91,6 +91,7 @@ function ActionArgsDialog({
   const toolbarHost = useRecordChromeContextMaybe()?.toolbarHost;
   const definition = isActionFormDefinition(declaredArgs) ? declaredArgs : undefined;
   const args = isActionFormDefinition(declaredArgs) ? EMPTY_ARGS : declaredArgs;
+  const fields = React.useMemo(() => definition?.fields ?? args.map(actionArgField), [args, definition]);
   const argNames = React.useMemo(
     () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
       ? definition.fields.map((field) => field.name) : args.map((arg) => arg.name))),
@@ -98,7 +99,13 @@ function ActionArgsDialog({
   );
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
-    resolver: definition?.resolver,
+    resolver: async (values, resolverContext, options) => {
+      const errors = requiredDialogErrors(fields, values, t("form.required"));
+      if (Object.keys(errors).length) return { values: {}, errors };
+      return definition?.resolver
+        ? definition.resolver(values, resolverContext, options)
+        : { values, errors: {} };
+    },
     submit: async (collected) => {
       const result = await action.submit?.(serializeActionArgValues(args, collected), context);
       return result && "status" in result ? result : actionOutcomeSubmitResult(result);
@@ -123,7 +130,7 @@ function ActionArgsDialog({
   const submitButton = (
     <ActionSubmitButton
       control={form.control}
-      args={args}
+      fields={fields}
       submitting={submitting}
       disabled={saveConflict}
       danger={action.danger}
@@ -175,7 +182,7 @@ function ActionArgsDialog({
  */
 function ActionSubmitButton({
   control,
-  args,
+  fields,
   submitting,
   disabled,
   danger,
@@ -183,7 +190,7 @@ function ActionSubmitButton({
   onSubmit,
 }: {
   control: Control<ArgValues>;
-  args: readonly ActionArg[];
+  fields: ActionFormDefinition["fields"];
   submitting: boolean;
   disabled?: boolean;
   danger?: boolean;
@@ -193,7 +200,8 @@ function ActionSubmitButton({
 }): React.ReactElement {
   const values = useWatch({ control }) as ArgValues;
   const preview = useRuntimeViewAs();
-  const ready = args.every((arg) => arg.optional || !emptyDialogValue(values[arg.name]));
+  const t = useUiT();
+  const ready = Object.keys(requiredDialogErrors(fields, values, t("form.required"))).length === 0;
   return (
     <Button
       type={onSubmit ? "button" : "submit"}

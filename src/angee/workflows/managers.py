@@ -34,7 +34,7 @@ from angee.base.permissions import actor_user_id
 from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.serialization import canonical_json_sha256
-from angee.base.signals import bulk_updated, changes_muted, mute_changes
+from angee.base.signals import changes_muted, mute_changes, send_bulk_update
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -900,7 +900,7 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
             if changed and not changes_muted():
                 rows = self.model._base_manager.defer("input", "output", "state", "notes")
                 for batch in by_key(rows, keys):
-                    bulk_updated.send_robust(sender=self.model, instances=tuple(batch), update_fields=frozenset(values))
+                    send_bulk_update(sender=self.model, instances=batch, update_fields=values)
             return changed
 
     def nodes(self) -> Any:
@@ -1051,7 +1051,7 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
         ) != 1:
             raise Superseded
         current = self.model._base_manager.defer("input", "output", "state", "notes").get(pk=step_run.pk)
-        bulk_updated.send_robust(
+        send_bulk_update(
             sender=self.model, instances=(current,), update_fields=frozenset(("status", "decision_id")),
         )
 

@@ -53,10 +53,7 @@ class _ChatterResource(AngeeResource):
             if isinstance(record, RebacMixin):
                 record = record.with_actor(author)
             written = self.write(record, author, instance, row)
-        for field in instance._meta.concrete_fields:
-            setattr(instance, field.attname, getattr(written, field.attname))
-        instance._state.adding = False
-        self.after_save_instance(instance, row, **kwargs)
+        self.adopt_persisted_instance(instance, written, row, **kwargs)
 
     def write(self, record: Any, author: Any, instance: Any, row: Mapping[str, Any]) -> models.Model:
         """Persist one chatter row on ``record`` as ``author``."""

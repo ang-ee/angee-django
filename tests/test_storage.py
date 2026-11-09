@@ -46,6 +46,7 @@ from angee.graphql import records
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.graphql.views import graphql_endpoint
+from angee.messaging.testing.models import Message, Part
 from angee.storage import exceptions
 from angee.storage import models as storage_models
 from angee.storage.models import FileManager, UploadState
@@ -2254,3 +2255,19 @@ def test_drive_local_file_path_uses_readable_live_file_and_native_location(drive
     stranger = get_user_model().objects.create_user(username="local-path-stranger")
     with actor_context(stranger), pytest.raises(PermissionDenied):
         drive.with_actor(stranger).local_file_path("Manifest.db")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_purge_if_unretained_keeps_a_committed_message_part(drive: Any) -> None:
+    with system_context(reason="test.storage.retained_message_file"):
+        file, created = File.objects.ingest_bytes(
+            b"retained by message", filename="retained.txt", drive_id=str(drive.sqid), owner_id=drive.alice.pk,
+        )
+        message = Message.objects.create(message_type="email", direction="inbound")
+        part = Part.objects.create(message=message, file=file, type="text/plain")
+    assert created and not connection.in_atomic_block
+    with system_context(reason="test.storage.cleanup_message_file"):
+        assert not file.purge_if_unretained()
+    part.refresh_from_db()
+    assert part.file_id == file.pk
+    assert File._base_manager.filter(pk=file.pk).exists()

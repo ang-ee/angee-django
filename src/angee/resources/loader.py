@@ -230,10 +230,19 @@ class AngeeResource(resources.ModelResource):
         """Save updates without writing omitted columns or stale live state."""
 
         if is_create:
-            instance.save(using=self.get_db_connection_name())
+            instance.save()
         else:
-            instance.save(using=self.get_db_connection_name(),
-                          update_fields=update_fields_with_auto_now(instance, self._update_fields))
+            instance.save(update_fields=update_fields_with_auto_now(instance, self._update_fields))
+
+    def adopt_persisted_instance(
+        self, instance: models.Model, persisted: models.Model, row: Mapping[str, Any], **kwargs: Any,
+    ) -> None:
+        """Adopt a verb's saved row into the import instance and finish its ledger lifecycle."""
+
+        for field in instance._meta.concrete_fields:
+            setattr(instance, field.attname, getattr(persisted, field.attname))
+        instance._state.adding = False
+        self.after_save_instance(instance, row, **kwargs)
 
     def instance_for_xref(self, xref: str) -> models.Model | None:
         """Return an existing or adopted instance for a row xref."""

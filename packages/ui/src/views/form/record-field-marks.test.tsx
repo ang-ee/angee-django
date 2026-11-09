@@ -71,8 +71,7 @@ test("a linked mark opens its record and names its origin on hover", async () =>
   expect(screen.getByRole("button", { name: "Unconfirmed: Name" })).toBeTruthy();
   const trigger = link.parentElement!;
   fireEvent.mouseEnter(trigger);
-  fireEvent.mouseMove(trigger);
-  expect(await screen.findByText("Directory: Customer contacts")).toBeTruthy();
+  expect(screen.getByText("Directory: Customer contacts")).toBeTruthy();
 });
 
 test("a reveal mark preserves its origin tooltip", async () => {
@@ -88,8 +87,7 @@ test("a reveal mark preserves its origin tooltip", async () => {
   render(<Provider><RecordFieldMarksProvider><Marks /></RecordFieldMarksProvider></Provider>);
   const mark = await screen.findByRole("button", { name: "Source: Name" });
   fireEvent.mouseEnter(mark.parentElement!);
-  fireEvent.mouseMove(mark.parentElement!);
-  expect(await screen.findByText("Imported directory")).toBeTruthy();
+  expect(screen.getByText("Imported directory")).toBeTruthy();
   fireEvent.click(mark);
   expect(onReveal).toHaveBeenCalledOnce();
 });

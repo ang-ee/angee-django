@@ -19,7 +19,6 @@ from rebac import PermissionDenied, actor_context, system_context
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError
-from angee.integrate.locks import bridge_advisory_lock
 from angee.knowledge.mcp_tools import register
 from angee.messaging.backends import ParsedHandle
 from angee.posts.backends import FeedBackend
@@ -152,7 +151,7 @@ class ReplyJoins(DeliveryFixtures):
                 close_old_connections()
 
         with patch.object(Feed, "verify_webhook", return_value=True), patch.object(Feed, "handle_webhook") as land:
-            with bridge_advisory_lock(self.feed) as acquired, ThreadPoolExecutor(max_workers=1) as pool:
+            with self.feed.sync_lock() as acquired, ThreadPoolExecutor(max_workers=1) as pool:
                 self.assertTrue(acquired)
                 with self.assertRaises(IntegrationError) as refusal:
                     pool.submit(copy_context().run, inbound).result(timeout=10)

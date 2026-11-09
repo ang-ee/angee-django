@@ -19,7 +19,8 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from copy import copy, deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -57,7 +58,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.base.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
+from angee.base.locks import LockKey, record_lock_key, task_lock, task_lock_is_held, task_locks_are_cross_process
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
@@ -83,7 +84,6 @@ from angee.integrate.errors import (
 from angee.integrate.events import EventKind
 from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
-from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked, bridge_session_is_hosted
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -114,7 +114,7 @@ from angee.integrate.streams import (
     read_stream_keys,
     sync_bridge,
 )
-from angee.integrate.sync import SyncDispatch, bridge_progress_context
+from angee.integrate.sync import SyncDispatch, progress_bridge_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.context import current_changeset
@@ -2178,6 +2178,31 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         return record_lock_key(self._meta.label_lower, self.pk, "sync")
 
+    @contextmanager
+    def sync_lock(self) -> Iterator[bool]:
+        """Try to hold this capability's advisory lock for sync, discovery or a live session."""
+
+        if self.pk is None:
+            yield False
+            return
+        with task_lock(self.sync_lock_key()) as acquired:
+            yield acquired
+
+    def sync_is_locked(self) -> bool:
+        """Whether this capability's live sync lock is currently held."""
+
+        return self.pk is not None and task_lock_is_held(self.sync_lock_key())
+
+    def live_session_host_lock_key(self) -> LockKey:
+        """Deduplicate process hosts without borrowing the child's store lock."""
+
+        return record_lock_key(self._meta.label_lower, self.pk, "live-host")
+
+    def session_is_hosted(self) -> bool:
+        """Whether a process host owns startup, execution or child reaping."""
+
+        return self.pk is not None and task_lock_is_held(self.live_session_host_lock_key())
+
     def resume(self) -> None:
         """Recheck Resume admission under the integration lock before connecting."""
 
@@ -2805,7 +2830,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         if connection.in_atomic_block:
             raise RuntimeError("Connection discovery requires autocommit.")
         target = self.concrete_capability()
-        with bridge_advisory_lock(target) as acquired:
+        with target.sync_lock() as acquired:
             if not acquired:
                 return {"ok": False, "reason": "locked"}
             with transaction.atomic():
@@ -3083,7 +3108,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         impl = self.live_impl
         if not isinstance(impl, LiveBridgeImpl):
             return None
-        if cross_process and (bridge_is_locked(self) or bridge_session_is_hosted(self)):
+        if cross_process and (self.sync_is_locked() or self.session_is_hosted()):
             return None
         if self.subscription_state.get("desired") != self.LiveState.LIVE:
             self.start_live()
@@ -3105,7 +3130,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     def is_syncing(self) -> bool:
         """Return whether a worker currently holds this bridge's live sync lock."""
 
-        return bridge_is_locked(self)
+        return self.sync_is_locked()
 
     def live_account_lock_key(self, impl_key: str, external_id: str) -> LockKey:
         """Return the cross-worker lock for one backend-normalized account id."""
@@ -3334,11 +3359,6 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         self.refresh_from_db()
         return True
 
-    def live_session_host_lock_key(self) -> LockKey:
-        """Deduplicate process hosts without borrowing the child's store lock."""
-
-        return record_lock_key(self._meta.label_lower, self.pk, "live-host")
-
     LIVE_RETRY_BACKOFF_CAP: ClassVar[timedelta] = timedelta(hours=1)
     """Longest wait between automatic restarts of a transiently failing live session."""
 
@@ -3561,37 +3581,41 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
 
         with system_context(reason="integrate.bridge.queue"), transaction.atomic():
             row = self.lock_capability()
-            if not row.discovery_ready:
-                raise IntegrationError("Connection discovery must finish before syncing.")
-            if row.sync_is_dispatched or row.is_syncing:
-                return False
-            row.sync_stage = self.SyncStage.QUEUED
-            row.sync_error = ""
-            row.sync_run_id = None
-            row.sync_progress = row._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
-            row.save(
-                update_fields=["sync_error", "sync_run_id", "sync_progress", "sync_stage", "updated_at"],
-            )
+            admitted = row._queue_sync(now=now)
         self.sync_stage, self.sync_error, self.sync_progress = row.sync_stage, row.sync_error, row.sync_progress
         self.sync_run_id = row.sync_run_id
-        return True
+        return admitted
+
+    def _queue_sync(self, *, now: datetime, claim_interval: bool = False) -> bool:
+        """Decide and persist admission from this already-locked capability row."""
+
+        if not self.discovery_ready:
+            raise IntegrationError("Connection discovery must finish before syncing.")
+        recovering = self.sync_stage == self.SyncStage.QUEUED
+        admitted = not (self.sync_is_dispatched or self.is_syncing)
+        fields = []
+        if admitted:
+            self.sync_stage = self.SyncStage.QUEUED
+            self.sync_error = ""
+            self.sync_run_id = None
+            self.sync_progress = self._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
+            fields.extend(("sync_error", "sync_run_id", "sync_progress", "sync_stage"))
+        if claim_interval and not (admitted and recovering):
+            self.next_sync_at = self._next_sync_at(now=now)
+            fields.append("next_sync_at")
+        if fields:
+            self.save(update_fields=[*fields, "updated_at"])
+        return admitted
 
     def admit_due_sync(self, *, now: datetime) -> bool:
-        """Admit a due scheduled sync and claim its next interval; return whether it queued.
+        """Admit scheduled sync from the scheduler's locked row inside its system transaction.
 
-        The due scheduler's admission. A fresh admission claims the interval; a
-        recovered stale queue keeps the claim it was queued with. A declined
-        admission (a live worker or a retained run owns this sync) still claims
-        the interval, so the bridge leaves the due set until its next poll
-        instead of being re-selected and its sync lock re-probed on every pass.
+        A fresh or declined admission claims the next interval. Recovery of a
+        stale queue retains its existing claim. The scheduler already holds the
+        capability row lock; this verb takes no second lock or savepoint.
         """
 
-        with system_context(reason="integrate.bridge.admit_due"), transaction.atomic():
-            recovering = self.lock_capability().sync_stage == self.SyncStage.QUEUED
-            admitted = self.mark_sync_queued(now=now)
-            if not (admitted and recovering):
-                self.claim_sync(now=now)
-        return admitted
+        return self._queue_sync(now=now, claim_interval=True)
 
     def reset_sync_queue(self, *, now: datetime) -> None:
         """Make a failed queue dispatch due again for the next scheduler pass."""
@@ -3817,7 +3841,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         if not self.mark_sync_started(now=now):
             raise IntegrationError("Connection discovery must finish before syncing.")
         try:
-            with bridge_progress_context(self):
+            with progress_bridge_context(self):
                 result = self.sync()
             if result is SyncDispatch.DISPATCHED:
                 return result
@@ -3863,7 +3887,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             capability = self.concrete_capability()
         if not capability.verify_webhook(request_or_payload):
             return False
-        with bridge_advisory_lock(capability) as acquired:
+        with capability.sync_lock() as acquired:
             if not acquired:
                 raise IntegrationError("The bridge is busy; retry inbound delivery.", transient=True)
             capability.handle_webhook(request_or_payload)

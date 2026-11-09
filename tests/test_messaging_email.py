@@ -209,15 +209,28 @@ def test_outbound_email_names_why_its_selection_is_empty(composed_tables: None) 
     with system_context(reason="test.messaging.outbound_email"):
         paused.pause()
         with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True):
-            assert set(Channel.objects.outbound_email(backend_class="email")) == {billing}
+            assert set(Channel.objects.require_outbound_email(backend_class="email")) == {billing}
+            assert not Channel.objects.filter(pk=paused.pk).outbound_email(backend_class="email").exists()
+            assert not Channel.objects.outbound_email(backend_class="manual").exists()
             with pytest.raises(OutboundEmailNotConfigured):
-                Channel.objects.outbound_email(backend_class="manual")
+                Channel.objects.require_outbound_email(backend_class="manual")
             with pytest.raises(OutboundEmailChannelMissing) as missing:
-                Channel.objects.filter(pk=paused.pk).outbound_email(backend_class="email")
+                Channel.objects.filter(pk=paused.pk).require_outbound_email(backend_class="email")
             with pytest.raises(OutboundEmailChannelMissing):
-                Channel.objects.filter(pk=mailbox.pk).outbound_email(backend_class="email")
-        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False), pytest.raises(OutboundEmailNotConfigured) as off:
-            Channel.objects.outbound_email()
+                Channel.objects.filter(pk=mailbox.pk).require_outbound_email(backend_class="email")
+        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False):
+            assert not Channel.objects.outbound_email().exists()
+            with pytest.raises(OutboundEmailNotConfigured) as off:
+                Channel.objects.require_outbound_email()
     assert missing.value.code == "OUTBOUND_EMAIL_CHANNEL_MISSING"
     assert missing.value.message_dict == {"channel": ["Select a connected email channel."]}
     assert off.value.code == "OUTBOUND_EMAIL_NOT_CONFIGURED"
+
+
+@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+def test_outbound_email_predicate_is_lazy_and_chainable() -> None:
+    # No database fixture: constructing either selection must not execute SQL.
+    selected = Channel.objects.outbound_email(backend_class="email").filter(pk=41)
+    assert selected.model is Channel
+    assert selected._result_cache is None
+    assert Channel.objects.outbound_email(backend_class="manual")._result_cache is None

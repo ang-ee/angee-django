@@ -12,7 +12,6 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rebac import system_context
 
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge
 from angee.integrate.sync import SyncDispatch
 
@@ -35,7 +34,7 @@ def run_bridge_sync_job(
                 return {"ok": False, "items": 0, "skipped": True, "reason": "connection-not-ready"}
             if require_queue_token and not bridge.sync_queue_token_matches(now):
                 return {"ok": True, "items": 0, "skipped": True, "stale": True}
-            acquired = locks.enter_context(bridge_advisory_lock(bridge))
+            acquired = locks.enter_context(bridge.sync_lock())
             if not acquired:
                 # The holder owns this bridge; this run declines. Clear our own queue
                 # claim so the stale-queue recovery stops re-queuing a row nobody will

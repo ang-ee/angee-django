@@ -73,7 +73,7 @@ export function AgentChatterPane({
   // child's `agentId`) so keep-alive never re-runs `useAcpRuntime`'s lossy reset.
   const [pickedId, setPickedId] = React.useState<string | null>(null);
   const sessionAgentId = session?.agent_id ?? null;
-  const selectedId = pickedId ?? sessionAgentId;
+  const selectedId = agents.some((agent) => agent.id === pickedId) ? pickedId : sessionAgentId;
   const handleSelect = React.useCallback((id: string) => setPickedId(id), []);
   const { openedIds } = useOpenedAgents({ selectedId });
 

@@ -376,7 +376,8 @@ settlement. A retry creates another attempt for the same step run.
 
 **Settlement** — what a step returns: `Done`, `Wait`, `NextPage`, `Ask` or `Fail`. It describes the
 attempt's completion or continuation, and the transition owner persists it.
-Runner-only retry and diagnostic facts belong to the attempt record.
+Runner-only retry and diagnostic facts belong to the attempt record. The abstract
+`Settlement` base is framework-internal to extend; addons return these public variants.
 
 **Result** — what a workflow run reports, selected and projected from its
 declared producer bindings by `Definition`.

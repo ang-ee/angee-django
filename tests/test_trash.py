@@ -91,8 +91,8 @@ def test_bulk_trash_and_restore_publish_only_changed_rows_in_bounded_batches(mon
     rows[0].trash()
     batches = []
 
-    def observed(sender, *, instances, update_fields, using, **kwargs):
-        assert sender is TrashRow and using == "default"
+    def observed(sender, *, instances, update_fields, **kwargs):
+        assert sender is TrashRow and "using" not in kwargs
         assert "is_trashed" in update_fields
         batches.append([(row.pk, row.is_trashed) for row in instances])
 

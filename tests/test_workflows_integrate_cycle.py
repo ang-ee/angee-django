@@ -170,7 +170,7 @@ def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, 
     now = timezone.now()
     bridge.request_sync(now=now)
     acquired, release_winner = Event(), Event()
-    advisory_lock = integrate_sync_runner.bridge_advisory_lock
+    advisory_lock = type(bridge).sync_lock
 
     @contextmanager
     def pause_acquired(row):
@@ -180,7 +180,7 @@ def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, 
                 assert release_winner.wait(10)
             yield held
 
-    monkeypatch.setattr(integrate_sync_runner, "bridge_advisory_lock", pause_acquired)
+    monkeypatch.setattr(type(bridge), "sync_lock", pause_acquired)
 
     def deliver():
         return run_bridge_sync_job(bridge._meta.label_lower, bridge.pk, now, require_queue_token=True)

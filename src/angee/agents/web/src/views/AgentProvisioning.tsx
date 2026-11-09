@@ -104,7 +104,7 @@ export function AgentProvisioning({
         )
       ) : (
         <>
-          {agent.last_error ? <ErrorBanner description={String(agent.last_error)} /> : null}
+          <ErrorBanner description={agent.last_error ? String(agent.last_error) : null} />
           {conflictName && conflictKind ? (
             <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
           ) : null}
@@ -168,7 +168,7 @@ function ConflictingWorkspace({ name }: { name: string }): React.ReactElement {
   const { status, error } = useWorkspaceStatus(name);
   return (
     <>
-      {error ? <ErrorBanner description={error.message} /> : null}
+      <ErrorBanner description={error?.message ?? null} />
       <WorkspaceSources
         emptyContent={t("provisioning.workspaceSourcesEmpty")}
         sources={status?.sources ?? []}
@@ -226,7 +226,7 @@ function WorkspaceRuntimeView({
 
   return (
     <div className="flex flex-col gap-4">
-      {error ? <ErrorBanner description={error.message} /> : null}
+      <ErrorBanner description={error?.message ?? null} />
       {workspace ? (
         <WorkspaceRow
           emptyContent={t("provisioning.activityWaiting")}
@@ -262,7 +262,7 @@ function ServiceRuntimeView({
 
   return (
     <div className="flex flex-col gap-4">
-      {error ? <ErrorBanner description={error.message} /> : null}
+      <ErrorBanner description={error?.message ?? null} />
       {service ? (
         <>
           <ServiceRow

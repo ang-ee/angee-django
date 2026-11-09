@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import system_context
 
@@ -16,7 +17,6 @@ from angee.integrate import scheduler as integrate_scheduler
 from angee.integrate import sync_runner as integrate_sync_runner
 from angee.integrate import tasks as integrate_tasks
 from angee.integrate.errors import IntegrationError
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import models_with
 from angee.integrate.scheduler import enqueue_due_bridges
@@ -455,7 +455,7 @@ def test_declined_sync_run_releases_its_queue_claim(transactional_db: None) -> N
         bridge.mark_sync_queued(now=now)
 
     # Hold the lock the way a live session does, then let a sync run decline.
-    with bridge_advisory_lock(bridge):
+    with bridge.sync_lock():
         result = integrate_sync_runner.run_bridge_sync_job(bridge._meta.label_lower, bridge.pk, now.isoformat())
 
     assert result == {"ok": True, "items": 0, "skipped": True}
@@ -558,10 +558,10 @@ def test_bridge_is_syncing_uses_live_lock_state(transactional_db: None) -> None:
 
     assert bridge.is_syncing is False
 
-    with bridge_advisory_lock(bridge) as acquired:
+    with bridge.sync_lock() as acquired:
         assert acquired is True
         assert bridge.is_syncing is True
-        with bridge_advisory_lock(bridge) as second_acquired:
+        with bridge.sync_lock() as second_acquired:
             assert second_acquired is False
 
     assert bridge.is_syncing is False
@@ -610,7 +610,7 @@ def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transact
     with _cross_process_locks():
         bridge.sync_stage = bridge.SyncStage.SYNCING
         assert bridge.effective_sync_stage == bridge.SyncStage.FAILED
-        with bridge_advisory_lock(bridge) as acquired:
+        with bridge.sync_lock() as acquired:
             assert acquired is True
             assert bridge.effective_sync_stage == bridge.SyncStage.SYNCING
         bridge.sync_stage = bridge.SyncStage.DISCOVERING
@@ -701,7 +701,7 @@ def test_active_sync_keeps_its_progress_when_another_sync_is_requested(
         bridge.refresh_from_db()
         progress = bridge.sync_progress
 
-    with bridge_advisory_lock(bridge) as acquired:
+    with bridge.sync_lock() as acquired:
         assert acquired
         assert bridge.request_sync(now=now) is False
         assert enqueue_due_bridges(now=now) == {"enqueued": 0, "skipped": 1}
@@ -738,7 +738,7 @@ def test_declined_scheduled_admission_waits_for_the_next_interval(
             next_sync_at=now - timedelta(seconds=1),
         )
 
-    with bridge_advisory_lock(bridge) as acquired:
+    with bridge.sync_lock() as acquired:
         assert acquired
         assert enqueue_due_bridges(now=now) == {"enqueued": 0, "skipped": 1}
         bridge.refresh_from_db()
@@ -986,3 +986,19 @@ def test_scheduler_claims_a_row_before_running_it(
 
     assert counters == {"ran": 1, "errors": 0}
     assert observed == [now + timedelta(seconds=120)]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL row locks")
+def test_scheduled_admission_uses_the_schedulers_single_row_lock(transactional_db, monkeypatch):
+    now = timezone.now()
+    monkeypatch.setattr("angee.integrate.models.enqueue_task", lambda *args, **kwargs: None)
+    with system_context(reason="test.scheduler.single_lock"):
+        bridge = make_integration("single-admission-lock", model=SchedulerBridge, next_sync_at=now)
+    with CaptureQueriesContext(connection) as queries:
+        assert enqueue_due_bridges(now=now) == {"enqueued": 1, "skipped": 0}
+    locks = [
+        query["sql"] for query in queries
+        if "FOR UPDATE" in query["sql"] and bridge._meta.db_table in query["sql"]
+    ]
+    assert len(locks) == 1

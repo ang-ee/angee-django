@@ -531,7 +531,7 @@ def test_diagnostics_distinguish_run_operators_editors_and_readers(schema, calle
         (reader, False, False),
         (other, False, False),
     ):
-        assert attempt.with_actor(actor).has_access("read__error") is error
+        assert attempt.with_actor(actor).has_access("read__error") is trace
         assert attempt.with_actor(actor).has_access("read__stacktrace") is trace
         assert run.with_actor(actor).has_access("read__error") is error
         data = result_data(execute_schema(schema, query, {"id": attempt.sqid, "run": run.sqid}, user=actor))
@@ -539,7 +539,7 @@ def test_diagnostics_distinguish_run_operators_editors_and_readers(schema, calle
             assert data["stepattempt_by_pk"] is None
             assert data["workflowrun_by_pk"] is None
         else:
-            assert data["stepattempt_by_pk"]["error"] == (attempt.error if error else None)
+            assert data["stepattempt_by_pk"]["error"] == (attempt.error if trace else None)
             assert data["workflowrun_by_pk"]["error"] == (run.error if error else None)
             if trace:
                 assert "ValueError" in data["stepattempt_by_pk"]["stacktrace"]

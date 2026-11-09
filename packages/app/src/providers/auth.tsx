@@ -190,12 +190,9 @@ export function createAngeeAuthProviderFromRequest(
     const data = await request(AngeeCurrentUserDocument, { refs: permitted });
     return currentUserPayload(data.current_user);
   };
-  const sharedIdentity = async (): Promise<AuthIdentity | null> => {
-    const query = identityQueryOptions(provider);
-    // The mounted identity observer refreshes invalidations; route checks reuse
-    // its last answer instead of issuing a second public and preview read.
-    return options.queryClient ? options.queryClient.query({ ...query, staleTime: "static" }) : query.queryFn();
-  };
+  const sharedIdentity = (): Promise<AuthIdentity | null> => options.queryClient
+    ? readSharedIdentity(options.queryClient, provider)
+    : identityQueryOptions(provider).queryFn();
   const provider: RefineAuthProvider = {
     async check() {
       try {
@@ -293,7 +290,7 @@ export function createAngeeAuthProviderFromRequest(
  * The identity-query contract, owned once. Refine's `useGetIdentity` reads the
  * react-query entry keyed `keys().auth().action("identity")`; the route gate
  * (`@angee/app` `beforeLoad`) reaches that SAME entry through
- * `queryClient.query({ ...identityQueryOptions(authProvider), staleTime: "static" })`,
+ * `readSharedIdentity(queryClient, authProvider)`,
  * as do `check` and `getPermissions`, so the gate, `useRuntimeAuthState`, `check`,
  * and `getPermissions` share one session/preview identity query and reuse its
  * answer. A `"static"` read returns even an invalidated answer; the mounted
@@ -329,6 +326,14 @@ export function identityQueryOptions(authProvider: RefineAuthProvider) {
       ((await authProvider.getIdentity?.()) ?? null) as AuthIdentity | null,
     ...IDENTITY_QUERY_SETTINGS,
   };
+}
+
+/** Reuse the last identity answer; the mounted observer owns invalidation refreshes.
+ * @kind null
+ * @reason Shared identity cache read without rendered anatomy.
+ */
+export function readSharedIdentity(queryClient: QueryClient, authProvider: RefineAuthProvider): Promise<AuthIdentity | null> {
+  return queryClient.query({ ...identityQueryOptions(authProvider), staleTime: "static" });
 }
 
 /**

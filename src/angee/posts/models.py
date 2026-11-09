@@ -389,7 +389,7 @@ class MessagePublic(Composable, extends="messaging.Message"):
         """
 
         message = cast("Message", self)
-        with system_context(reason="posts.ingest.moderation"):
+        with system_context(reason="posts.message.moderation"):
             local = message.local_metadata
             if hidden and not message.is_trashed:
                 message.trash(reason=self.PROVIDER_TRASH_REASON)

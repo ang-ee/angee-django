@@ -40,7 +40,7 @@ from angee.integrate.states import (
     StreamPhase,
     SyncFailureKind,
 )
-from angee.integrate.sync import bridge_progress_context, current_progress_bridge
+from angee.integrate.sync import current_progress_bridge, progress_bridge_context
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset, current_changeset
 
@@ -1106,7 +1106,7 @@ def _drain_partition(bridge: Any, definition: StreamDefinition, deadline: float)
             row = type(bridge)._base_manager.get(pk=bridge.pk)
             adapter = row.capability_impl
             try:
-                with bridge_progress_context(row):
+                with progress_bridge_context(row):
                     return _drain(row, adapter, definition, deadline)
             finally:
                 adapter.close()

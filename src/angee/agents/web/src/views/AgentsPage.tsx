@@ -4,7 +4,7 @@ import type {
 } from "@angee/metadata";
 import { useOne, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  Column, InlineEmpty, ResourceList, Field, Form, Group, List, type RecordTabDescriptor } from "@angee/ui";
+  Column, ErrorBanner, InlineEmpty, LoadingPanel, ResourceList, Field, Form, Group, List, type RecordTabDescriptor } from "@angee/ui";
 import {
   useModelMetadata,
 } from "@angee/metadata";
@@ -51,6 +51,8 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
       enabled: Boolean(agentId) && resource !== null,
     },
   });
+  if (run.query.isPending) return <LoadingPanel />;
+  if (run.query.error) return <ErrorBanner description={run.query.error.message} />;
   const record = (run.result as Row | undefined) ?? null;
   if (!booleanField(record, "can_chat")) {
     return <InlineEmpty icon="agent" label={t("agent.chatUnavailable")} />;

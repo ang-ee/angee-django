@@ -27,7 +27,6 @@ from angee.integrate import scheduler, tasks
 from angee.integrate.connect import complete_account_connect, complete_external_account_link
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK
 from angee.integrate.discovery import ConnectionDiscovery
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
@@ -378,7 +377,7 @@ def test_live_desire_stops_before_lock_contention_without_spending_an_attempt(br
     def live_session():
         close_old_connections()
         try:
-            with bridge_advisory_lock(bridge) as held:
+            with bridge.sync_lock() as held:
                 assert held
                 ready.set()
                 assert release.wait(10)

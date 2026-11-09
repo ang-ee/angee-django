@@ -98,6 +98,7 @@ from angee.messaging.constants import (
 )
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
+from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
 from angee.messaging.source_copies import observe_email_identity
 from angee.parties.managers import Signing
 from angee.parties.models import Handle
@@ -256,19 +257,28 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
     def outbound_email(self, *, backend_class: str | None = None) -> Self:
         """Connected channels whose declared backend currently offers configured outbound email.
 
-        ``backend_class`` narrows the selection to one declared backend. An empty
-        selection is refused with its reason: :class:`OutboundEmailNotConfigured`
-        when no backend (or not the named one) offers configured outbound email, else
-        :class:`OutboundEmailChannelMissing` when none of these channels is connected
-        on one. Narrow the queryset first to ask about an explicit channel.
+        ``backend_class`` narrows the selection to one declared backend. This
+        predicate remains lazy and chainable; ``require_outbound_email`` refuses
+        an empty selection with its coded reason.
         """
+
+        return self.filter(
+            backend_class__in=self._outbound_email_backends(backend_class), lifecycle=IntegrationLifecycle.CONNECTED,
+        )
+
+    def _outbound_email_backends(self, backend_class: str | None) -> list[str]:
+        """Configured email implementations in the channel's declared registry."""
 
         field = self.model.backend_class.field
         candidates = field.registered_keys() if backend_class is None else (backend_class,)
-        keys = [key for key in candidates if field.resolve_class(key).outbound_email_configured()]
-        if not keys:
+        return [key for key in candidates if field.resolve_class(key).outbound_email_configured()]
+
+    def require_outbound_email(self, *, backend_class: str | None = None) -> Self:
+        """Require configured transport and at least one connected channel in this selection."""
+
+        if not self._outbound_email_backends(backend_class):
             raise OutboundEmailNotConfigured
-        channels = self.filter(backend_class__in=keys, lifecycle=IntegrationLifecycle.CONNECTED)
+        channels = self.outbound_email(backend_class=backend_class)
         if not channels.exists():
             raise OutboundEmailChannelMissing
         return channels
@@ -1530,9 +1540,6 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
     def end_unreadable_for_collections(self, collections: Sequence[models.QuerySet[Any]]) -> int:
         """Recheck record follows across several changed access collections in batches."""
 
-        # Models import their managers; the mixin is read only once the models module has loaded.
-        from angee.messaging.models import ThreadedModelMixin
-
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         selection = models.Q(pk__in=[])
         for rows in collections:
@@ -1554,9 +1561,6 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
 
     def _end_unreadable_attachments(self, attachments: Any, *, party_id: Any | None = None) -> int:
         """Use each model's native account read scope and delete revoked follows together."""
-
-        # Models import their managers; the mixin is read only once the models module has loaded.
-        from angee.messaging.models import ThreadedModelMixin
 
         selected = [pk for pk, _content_type_id, _object_id in attachments]
         if not selected:
@@ -1988,9 +1992,6 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         Record-less inbox rows have no record pointer.
         """
 
-        # Models import their managers; the mixin is read only once the models module has loaded.
-        from angee.messaging.models import ThreadedModelMixin
-
         if not rows or actor is None:
             return {}
         recipient_id = actor_user_id(actor)
@@ -2117,9 +2118,6 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         only matching explicit followers and directly addressed accounts are told.
         """
 
-        # Models import their managers; the mixin is read only once the models module has loaded.
-        from angee.messaging.models import ThreadedModelMixin
-
         if message.thread_id is None:
             return 0
         follower_model = apps.get_model("messaging", "ThreadFollower")
@@ -2223,9 +2221,6 @@ def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type:
     primary key would mis-resolve. Guard it where the write keys — the placement
     invariant stated in :mod:`angee.base.refs`.
     """
-
-    # Models import their managers; the mixin is read only once the models module has loaded.
-    from angee.messaging.models import ThreadedModelMixin
 
     if not isinstance(record, ThreadedModelMixin):
         return
@@ -2482,9 +2477,6 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         caller authorizes the message population; follows are structural read
         state, and the preference and chronological owners supply their rules.
         """
-
-        # Models import their managers; preference values are needed only when querying.
-        from angee.messaging.models import NotificationPreference
 
         follower_model = apps.get_model("messaging", "ThreadFollower")
         follows = follower_model.objects.for_message_expression(user)

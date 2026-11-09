@@ -45,6 +45,28 @@ def test_angee_models_declare_the_change_hooks_with_neutral_defaults() -> None:
     assert not issubclass(TrashRow, AngeeModel)
 
 
+def test_bulk_delivery_logs_a_failed_receiver_and_reaches_the_next(caplog) -> None:
+    row = TrashRow(pk=1)
+    received = []
+
+    def broken(sender, **kwargs):
+        raise RuntimeError("observer failed")
+
+    def healthy(sender, *, instances, update_fields, **kwargs):
+        assert "using" not in kwargs
+        received.append((instances, update_fields))
+
+    signals.bulk_updated.connect(broken, sender=TrashRow)
+    signals.bulk_updated.connect(healthy, sender=TrashRow)
+    try:
+        signals.send_bulk_update(sender=TrashRow, instances=(row,), update_fields=("title",))
+    finally:
+        signals.bulk_updated.disconnect(broken, sender=TrashRow)
+        signals.bulk_updated.disconnect(healthy, sender=TrashRow)
+    assert received == [((row,), frozenset({"title"}))]
+    assert any(record.name == "angee.base.signals" and record.exc_info for record in caplog.records)
+
+
 def test_bulk_publication_observes_the_batch_rows_unless_the_model_coalesces(
     monkeypatch: pytest.MonkeyPatch,
     observed: list[tuple[str, tuple[str, ...] | None]],

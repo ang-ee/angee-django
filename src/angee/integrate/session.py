@@ -31,7 +31,6 @@ from angee.integrate.live import (
     reset_session_store,
     session_store_path,
 )
-from angee.integrate.locks import bridge_is_locked
 from angee.integrate.models import IntegrationRuntimeStatus
 
 logger = logging.getLogger(__name__)
@@ -233,7 +232,7 @@ class LiveSession:
         if lifecycle is not self.bridge.Lifecycle.CONNECTED:
             self.pairing = PairingState.STOPPED
             return False
-        if not bridge_is_locked(self.bridge):
+        if not self.bridge.sync_is_locked():
             logger.warning(
                 "%s session for bridge %s lost its advisory lock; exiting for a clean restart.",
                 self.live_impl.label,

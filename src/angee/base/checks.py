@@ -19,19 +19,20 @@ def check_database_routers(
     app_configs: Sequence[AppConfig] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
-    """Refuse a database router: Angee runs on one database.
+    """Refuse routers and aliases beyond ``default``: Angee runs on one database.
 
     Owners open bare transactions and commit hooks on ``default``; a router
     would place rows outside them, or permission reads on a replica.
     """
 
     del app_configs, kwargs
-    if not settings.DATABASE_ROUTERS:
+    if not settings.DATABASE_ROUTERS and set(settings.DATABASES) == {"default"}:
         return []
     return [
         checks.Error(
-            f"settings.DATABASE_ROUTERS must be empty; found {settings.DATABASE_ROUTERS!r}.",
-            hint="Angee runs on one database, Django's default; remove the router.",
+            "Angee requires only DATABASES['default'] and empty DATABASE_ROUTERS; "
+            f"found aliases {sorted(settings.DATABASES)!r} and routers {settings.DATABASE_ROUTERS!r}.",
+            hint="Remove additional database aliases and routers; Angee uses Django's default database.",
             id="angee.E050",
         )
     ]

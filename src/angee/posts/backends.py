@@ -39,7 +39,6 @@ from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import HttpClientMixin, ResponseTooLargeError
 from angee.integrate.impl import AdapterContractError, BridgeImpl
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.net import AddressNotAllowedError
 from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import ApplyResult, SemanticError, StreamPage
@@ -580,7 +579,7 @@ class FeedChannelBackend(ManualChannelBackend):
     def delivery_lock(self) -> AbstractContextManager[bool]:
         """Serialize publish and settlement with the feed's stream sync."""
 
-        return bridge_advisory_lock(self.bridge)
+        return self.bridge.sync_lock()
 
     def deliver(self, message: Any) -> DeliveryOutcome:
         """Dispatch the Channel transport to its Feed's one publishing backend."""

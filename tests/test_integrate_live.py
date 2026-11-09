@@ -19,7 +19,6 @@ from rebac import system_context
 
 from angee.base.locks import task_lock_is_held
 from angee.integrate.live import PairingState
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
@@ -220,7 +219,7 @@ def test_live_session_wake_honors_persisted_stop_desire(live_tables: Any) -> Non
         channel,
         stop_event=threading.Event(),
     )
-    with system_context(reason="test live desire check"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live desire check"), channel.sync_lock() as acquired:
         assert acquired
         assert session._still_wanted() is True
         row = Channel._base_manager.get(pk=channel.pk)
@@ -242,7 +241,7 @@ def test_live_session_wake_honors_paused_lifecycle(live_tables: Any) -> None:
         channel,
         stop_event=threading.Event(),
     )
-    with system_context(reason="test live pause check"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live pause check"), channel.sync_lock() as acquired:
         assert acquired
         assert session._still_wanted() is False
         assert session.pairing == PairingState.PAUSED
@@ -255,13 +254,13 @@ def test_live_session_lost_lock_exits_for_clean_restart(live_tables: Any, monkey
     from angee.integrate import session as session_module
 
     monkeypatch.setattr(session_module, "WAKE_SECONDS", 0.05)
-    monkeypatch.setattr(session_module, "bridge_is_locked", lambda _bridge: False)
     channel = _live_channel()
+    monkeypatch.setattr(type(channel), "sync_is_locked", lambda _bridge: False)
     session = FakeLiveSession(
         channel,
         stop_event=threading.Event(),
     )
-    with system_context(reason="test live lost lock"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live lost lock"), channel.sync_lock() as acquired:
         assert acquired
         assert session.run() == PairingState.STARTING
 
@@ -280,7 +279,7 @@ def test_live_session_worker_shutdown_exits_within_one_wake(live_tables: Any, mo
         channel,
         stop_event=stop_event,
     )
-    with system_context(reason="test live worker shutdown"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live worker shutdown"), channel.sync_lock() as acquired:
         assert acquired
         assert session.run() == PairingState.STOPPED
 
@@ -326,7 +325,7 @@ def test_live_session_drains_events_after_vendor_thread_exits(live_tables: Any, 
 
     channel = _live_channel()
     session = FinishedSession(channel, stop_event=threading.Event())
-    with system_context(reason="test completed vendor drain"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test completed vendor drain"), channel.sync_lock() as acquired:
         assert acquired
         if terminal in {"logged_out", "error_before_logout"}:
             with pytest.raises(SessionLoggedOut):
@@ -372,7 +371,7 @@ def test_live_session_hands_off_submitted_password_and_consumes_it_once(
 
     operator_thread = threading.Thread(target=submit_password, daemon=True)
 
-    with system_context(reason="test live password handoff"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live password handoff"), channel.sync_lock() as acquired:
         assert acquired
         session_credential = channel.credential
         assert "password" not in session_credential.reveal()
@@ -449,7 +448,7 @@ def test_optional_material_round_skips_without_touching_durable_password(
             operator_failures.append(error)
 
     operator_thread = threading.Thread(target=skip_round, daemon=True)
-    with system_context(reason="test optional material skip"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test optional material skip"), channel.sync_lock() as acquired:
         assert acquired
         operator_thread.start()
         outcome = session.run()
@@ -534,7 +533,7 @@ def test_live_session_end_discards_queued_password_answers(live_tables: Any) -> 
     session.inputs.put("late-answer")
     session._password_delivered = True
 
-    with system_context(reason="test live password end"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live password end"), channel.sync_lock() as acquired:
         assert acquired
         assert session.run() is PairingState.STOPPED
 
@@ -590,7 +589,7 @@ def test_second_round_resubmit_delivers_the_new_password(
 
     operator_thread = threading.Thread(target=submit_both_rounds, daemon=True)
 
-    with system_context(reason="test second password round"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test second password round"), channel.sync_lock() as acquired:
         assert acquired
         operator_thread.start()
         outcome = session.run()
@@ -640,7 +639,7 @@ def test_missing_credential_at_password_delivery_is_a_latched_session_outcome(
             operator_failures.append(error)
 
     operator_thread = threading.Thread(target=remove_credential_and_signal_ready, daemon=True)
-    with system_context(reason="test missing password credential"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test missing password credential"), channel.sync_lock() as acquired:
         assert acquired
         operator_thread.start()
         outcome = session.run()
@@ -692,7 +691,7 @@ def test_missing_password_at_consume_time_reports_and_rearms(
             stop_event.set()
 
     operator_thread = threading.Thread(target=signal_ready_without_material, daemon=True)
-    with system_context(reason="test missing password material"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test missing password material"), channel.sync_lock() as acquired:
         assert acquired
         operator_thread.start()
         outcome = session.run()
@@ -732,7 +731,7 @@ def test_live_session_stop_while_awaiting_password_exits_without_input(
     )
     connection_thread = threading.Thread(target=session._connect, daemon=True)
 
-    with system_context(reason="test live password stop"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live password stop"), channel.sync_lock() as acquired:
         assert acquired
         connection_thread.start()
         assert session._drain_once() is True
@@ -1002,7 +1001,7 @@ def test_live_channel_session_owns_message_ingest(live_tables: Any) -> None:
         body=ParsedPart(type="text/plain", role="body", text="hello"),
     )
 
-    with system_context(reason="test live channel ingest"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live channel ingest"), channel.sync_lock() as acquired:
         assert acquired
         assert session._handle("messages", [(message, None)]) is True
 
@@ -1303,7 +1302,7 @@ def test_pairing_clears_a_previous_runs_sync_failure(live_tables: Any) -> None:
         channel,
         stop_event=threading.Event(),
     )
-    with system_context(reason="test pairing clears failure"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test pairing clears failure"), channel.sync_lock() as acquired:
         assert acquired
         outcome = session.run()
 
@@ -1381,7 +1380,7 @@ def test_native_crash_report_preserves_terminal_or_stopped_row(live_tables: Any,
             channel.record_sync_error(RuntimeError("terminal"), now=timezone.now())
     channel.refresh_from_db()
     previous = channel.sync_progress.copy()
-    with bridge_advisory_lock(channel) as acquired:
+    with channel.sync_lock() as acquired:
         assert acquired
         channel.record_live_session_failure(SessionProcessError(2), now=timezone.now())
     channel.refresh_from_db()
@@ -1534,7 +1533,7 @@ def test_pairing_ends_a_transient_failure_streak(live_tables: Any) -> None:
     """Reaching PAIRED proves the failure untrue: deferral and attempts reset."""
 
     channel = _live_channel("fake-live-streak-reset")
-    with system_context(reason="test seed transient failures"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test seed transient failures"), channel.sync_lock() as acquired:
         assert acquired
         channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
         channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
@@ -1552,7 +1551,7 @@ def test_pairing_ends_a_transient_failure_streak(live_tables: Any) -> None:
             return not connection.is_alive()
 
     session = PairingSession(channel, stop_event=threading.Event())
-    with system_context(reason="test pairing resets streak"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test pairing resets streak"), channel.sync_lock() as acquired:
         assert acquired
         assert session.run() is PairingState.PAIRED
     with system_context(reason="test pairing resets streak verify"):
@@ -1598,7 +1597,7 @@ def test_a_transient_failure_drops_the_dead_sessions_pairing_report(live_tables:
         }
         channel.save(update_fields=["sync_progress", "updated_at"])
     assert channel.live_impl.pairing().state is PairingState.AWAITING_SCAN
-    with system_context(reason="test qr session fails"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test qr session fails"), channel.sync_lock() as acquired:
         assert acquired
         channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
     channel.refresh_from_db()
@@ -1616,7 +1615,7 @@ def test_operator_start_and_repair_end_a_retry_streak(live_tables: Any, monkeypa
     channel = _live_channel("fake-live-operator-start")
 
     def fail_twice() -> None:
-        with system_context(reason="test transient streak"), bridge_advisory_lock(channel) as acquired:
+        with system_context(reason="test transient streak"), channel.sync_lock() as acquired:
             assert acquired
             channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
             channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())

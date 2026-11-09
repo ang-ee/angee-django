@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -59,11 +60,12 @@ class RetryPolicy:
         return self.backoff * 2 ** max(0, retries - 1)
 
 
-class Settlement:
+class Settlement(ABC):
     """What a step returns: the attempt's completion or continuation, applied by its transition.
 
     Step bodies return ``Done``, ``Wait``, ``NextPage``, ``Fail`` or ``Ask``; the
-    map and await planners own their private subclasses.
+    map and await planners own their private subclasses. Extension of this
+    abstract base is framework-internal; addons return the public settlements.
     """
 
     def check(self, step: type[Step], *, config: Any = None) -> Settlement:
@@ -74,6 +76,7 @@ class Settlement:
         """Prepare checked settlement resources inside the body's transaction."""
         return self
 
+    @abstractmethod
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
         """Apply this settlement through the queryset's named transition."""
         raise NotImplementedError
