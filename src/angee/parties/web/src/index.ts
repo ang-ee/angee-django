@@ -49,7 +49,8 @@ const parties = defineBaseAddon({
       name: "parties.review",
       path: "/parties/review",
       layout: "console",
-      component: lazyRouteComponent(() => import("./ReviewPage"), "ReviewPage"),
+      // The queue renders as the index child so its merge child replaces it in the outlet.
+      indexComponent: lazyRouteComponent(() => import("./ReviewPage"), "ReviewPage"),
     },
     {
       name: "parties.merge",
