@@ -1768,7 +1768,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                     raise PermissionDenied("Only a person with record read access may follow.")
             self._require_follow_access(target, party_id)
             if attachment is None:
-                attachment = attachments.ensure_for_record(record, role=role, title=_record_thread_title(record))
+                attachment = attachments.ensure_for_record(record, role=role, title=record.message_thread_title())
             with system_context(reason="messaging.follower.subscribe"):
                 type(attachment.thread).system_queryset(lock=("self",)).get(pk=attachment.thread_id)
                 follower = self.effective_for_thread(attachment.thread).lock_if_supported().filter(
@@ -2324,13 +2324,6 @@ def _record_attachment(record: Any, *, role: str = "chatter") -> ThreadAttachmen
     """
 
     return apps.get_model("messaging", "ThreadAttachment").objects.readable_for_record(record, role=role)
-
-
-def _record_thread_title(record: Any) -> str:
-    """Return the title text a record declares for its chatter thread."""
-
-    title = getattr(record, "message_thread_title", None)
-    return str(title()) if callable(title) else str(record)
 
 
 def _resolve_user_id(*, user: Any = None, user_id: Any = None) -> Any | None:

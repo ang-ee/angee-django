@@ -137,11 +137,8 @@ def _actor_user_id(instance: models.Model) -> Any | None:
     ``idempotency_actor`` explicitly. That override does not change attribution or access.
     """
 
-    actor_getter = getattr(instance, "actor", None)
-    actor = actor_getter() if callable(actor_getter) else None
-    if actor is None:
-        actor = current_actor()
-    return actor_user_id(actor)
+    actor = instance.actor() if isinstance(instance, RebacMixin) else None
+    return actor_user_id(actor if actor is not None else current_actor())
 
 
 def _user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
