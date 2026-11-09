@@ -39,6 +39,11 @@ live in code docstrings.
   `InferenceBackend`, `InferenceProvider` and `InferenceModel` takes its
   `Content` and `Question` types and returns its `SystemOneResponse`. The Ollama
   backend answers through System One.
+- Agents: `angee-agents` now requires `pydantic-ai-slim>=2.60`. Inference
+  retries classify failures through pydantic-ai's typed provider errors
+  (`ModelConnectionError`, `ModelRateLimitError`, `ModelServerError`,
+  `ModelUnavailableError`), which that release introduced; projects relock to
+  pick up the floor.
 - Agents: `InferenceModelUse.DECISION` is a new model use. Projects author the
   `AlterField` migration for `InferenceModel.model_use` before
   `makemigrations --check` passes.
