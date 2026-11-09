@@ -1,0 +1,19 @@
+// @rebac_package: knowledge_graph_pgvector
+// @rebac_package_version: 3.0.0
+// @rebac_schema_revision: 1
+
+definition knowledge_graph_pgvector/passage {
+    relation page: knowledge/page // rebac:field=page
+
+    permission read = page->read
+    permission write = page->write
+    permission delete = page->write
+}
+
+definition knowledge_graph_pgvector/passage_embedding {
+    relation passage: knowledge_graph_pgvector/passage // rebac:field=passage
+
+    permission read = passage->read
+    permission write = passage->write
+    permission delete = passage->write
+}

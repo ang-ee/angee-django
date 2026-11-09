@@ -1,87 +1,109 @@
-# knowledge_graph_pgvector (plugin skeleton)
+# Passage retrieval with pgvector
 
-A **semantic-retrieval plugin** for the knowledge addon. Its job here is to prove
-that graph-RAG / pgvector capability bolts onto `angee.knowledge` through its
-declared seams alone — **with zero edits to the knowledge addon**. The bundled
-backend is a lexical stub; the real embedding model, its backfill, and the ANN
-index are this plugin's responsibility (see *Out of scope*).
+This optional addon adds hybrid passage retrieval to Knowledge. A vault selects
+`retrieval_class="pgvector"` and may select an embedding `InferenceModel` through
+`embedding_model`. Both are writable through the vault GraphQL resource. Selecting
+a model opts that vault's document text into the provider's processing. The writer
+must be able to read an available embedding model approved for the
+`knowledge_embedding` role. Every provider call rechecks that role's approval.
+Readers need access to the pages, without separate inference-catalogue grants.
 
-It is intentionally **not** in any project's `INSTALLED_APPS` — it is the
-template/contract for a real semantic backend, verified by
-`tests/test_knowledge_plugin.py`.
+`search_pages` keeps its existing page result. Knowledge's `search_passages`
+GraphQL field and MCP tool return each page's best passage: heading path, text,
+exclusive character offsets into the current body, rank and backend-local score.
+A lexical vault returns page-only hits. The `related_pages` GraphQL query, Page
+field and MCP tool combine current-model embedding-centroid neighbours with
+resolved wikilinks. There is no `semantic_search` override of the vault's choice.
 
-## The three seams (each owned by a base addon)
+## Installation and migration ownership
 
-### 1. Retrieval backend — the `ImplClassField` registry
+Enable `angee.knowledge_graph_pgvector` in the host's `INSTALLED_APPS`. Its manifest
+requires Knowledge, Agents, MCP and Jobs, plus `pgvector` and
+`semantic-text-splitter`. A PostgreSQL server must have the pgvector extension
+package installed. SQLite can host the source models for tests but refuses the
+pgvector backend selection and search; it provides no fallback.
 
-`knowledge.Vault.retrieval_class` is an `ImplClassField` over the
-`ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES` registry (default `lexical`). A plugin
-contributes one impl with a **namespaced key** through the autoconfig dotted-key
-deep-merge — mirroring `agents_integrate_anthropic`:
+The addon's native `AppConfig.ready()` connects `pre_migrate`. Before Django
+applies migrations, the receiver executes `CREATE EXTENSION IF NOT EXISTS vector`
+on PostgreSQL and does nothing on SQLite. If creation fails, the error identifies
+the extension and privileges needed. With a restricted application role, a database
+administrator must create the extension in the database first. Test databases
+created without migrations also need it in their template database before table
+creation. Provision hooks run after migrations and do not prepare this extension.
 
-```python
-# autoconfig.py
-SETTINGS = {
-    "ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES.pgvector":
-        "angee.knowledge_graph_pgvector.retrieval.PgvectorRetrievalBackend",
-}
-```
+Projects own migration history. After composition, the host authors native
+migrations with `makemigrations` for:
 
-```python
-# retrieval.py — a concrete RetrievalBackend leaf (here a lexical stub)
-class PgvectorRetrievalBackend(LexicalRetrievalBackend):
-    key = "pgvector"
-```
+- `knowledge`: the `Vault.embedding_model` donor field;
+- `knowledge_graph_pgvector`: `Passage`, `PassageEmbedding`, their unique
+  constraints, the passage GIN index and the `(model, passage)` btree index.
 
-A vault then selects it with `retrieval_class = "pgvector"`, and knowledge's
-`search_pages` resolver dispatches to it via the vault's `retrieval` property;
-this plugin's `semantic_search` forces its own key via the public
-`Vault.retrieval_for("pgvector")` seam — no edit to the knowledge addon and no
-reach into its model internals. The field guarantees deterministic enum order
-(sorted keys) and fail-fast `manage.py check` validation of every impl path.
-Keys are **last-writer-wins** on collision, so always namespace the key to the
-plugin (`pgvector`, `graphrag`).
+For portable, explicit migration history, the host may put
+`pgvector.django.VectorExtension()` before the vector table's `CreateModel`
+operation; the lifecycle receiver makes this idempotent. Reversing that operation
+drops the extension, so review reversals where other tables use vectors. The
+addon ships no competing migration history. Apply host migrations and the normal
+REBAC provisioning before restarting the application through its operator.
 
-> Override vs augment: `ImplClassField` selects exactly **one** backend per
-> vault. To run lexical + semantic and fuse, ship a `RetrievalBackend` subclass
-> that resolves each arm through `Vault.retrieval_for(key)` and blends their
-> results in `search_many` — fan-out lives on the impl, not in a list-merge seam.
+## Index lifecycle
 
-Implement the grouped `RetrievalBackend.search_many` contract; bound `search`
-delegates to it, so both single-vault and cross-vault reads use the same backend.
+`Passage` stores the page identity, ordinal, heading path, body coordinates,
+content hash, source fingerprint and PostgreSQL search vector. Its text is a
+slice of the canonical markdown body. Knowledge's outline supplies section
+boundaries; [MarkdownSplitter](https://semantic-text-splitter.readthedocs.io/en/stable/semantic_text_splitter.html)
+splits long sections and returns their character offsets. Chunking budgets the
+contextual title and heading prefix as well as the body. With no tokenizer in
+the inference contract, UTF-8 byte length is the conservative size callback,
+capped at 2,000 and at the reported `max_input_tokens()` when available. Duplicate
+headings remain addressable by offsets. An empty body yields a title passage.
 
-### 2. GraphQL — projection extension + new query (`schemas`)
+The manager diffs by `text_hash`: surviving passages keep their primary keys
+while ordinal and offsets move; deleted passages cascade their vectors and any
+addon-contributed evidence. A model change leaves passage boundaries and old
+model vectors intact, and backfills only the newly selected model. Unchanged
+passages are never rechunked just because the model budget changes; a deployment
+must choose a model able to accept those existing inputs. `PassageEmbedding`
+stores one vector per `(passage, model)`, using an any-dimension `VectorField`.
+Batches must have finite, nonzero vectors and consistent dimensions for the model.
 
-The `schemas` seam — inferred from this addon's `schema.py` (which defines
-`schemas`) — contributes into knowledge's existing `public`/`console` buckets (the
-composer merges per bucket):
+Page/body saves dispatch `embed_page` through Jobs' commit boundary. Vault saves
+dispatch a bounded reconciliation. The periodic reconciler enqueues at most 100
+stale markdown pages every ten minutes; it catches raw clones, bulk writes,
+lost sends and backfills. Folders carry no body and are not indexed. The embed
+task holds a per-page advisory lock and batches at most 32 inputs per provider
+call. Database locks never surround provider IO; the write phase rechecks the
+source fingerprint, selected model and backend before publishing. Only failures
+classified as transient by the provider get task retries. Other failures remain
+visible to the worker and the page remains stale for reconciliation.
 
-- **`type_extensions`** — `@strawberry_django.type(Page, name="PageType",
-  extend=True)` adds `related_pages` onto knowledge's `PageType` (mirrors
-  `iam_integrate_oidc`'s `OAuthClientOidcExtension`).
-- **`query`** — a `semantic_search` root field that forces this plugin's provider
-  through the vault-owned registry.
+Trash retains the index for restoration. Queries exclude trashed pages and
+vaults, even when an administrator can otherwise read them. Hard page deletion
+cascades the index. Stale source fingerprints are excluded from retrieval until
+the index catches up, so old coordinates cannot quote newly edited text.
 
-### 3. MCP tools — the `mcp_tools` register seam
+## Retrieval and permissions
 
-The `mcp_tools` seam — inferred from this addon's `mcp_tools.py` (which defines
-`register`) — adds a `semantic_search` `GraphQLTool` over the
-query above. It runs the same actor-scoped GraphQL engine the knowledge tools use,
-so REBAC scoping and projection are reused — the tool only names the operation and
-its projection. The `/mcp` mount auto-lights via `has_tools()`.
+`permissions.zed` makes passage reads inherit page reads, and vector reads inherit
+passage reads. Every retrieval arm narrows to readable, live pages before ranking:
 
-## Adding a real backing column
+- Exact cosine distance in the vault's currently selected model space. Each
+  model embeds the query once for its vault group; distances from different
+  models are never compared.
+- PostgreSQL full-text `websearch` over passages, using the language-neutral
+  `simple` configuration and cover-density ranking. The base-owned search stamp
+  also serves messaging and bounds PostgreSQL's text input.
+- One-hop resolved Knowledge links from the initial hybrid seeds. Both endpoints
+  must be readable. Outgoing edges carry the seed's RRF contribution; incoming
+  edges carry half. The expansion does not recurse.
 
-A production plugin that stores embeddings contributes an abstract source model
-with the native class keyword `extends="knowledge.Page"` carrying the embedding (pgvector) field. The
-composer folds it into the runtime `Page`; field-name collisions across addons
-**fail fast** at compose time. That column, its backfill, the pgvector extension,
-and the ANN index ship as **this plugin's migration** — never the knowledge
-addon's.
+Each arm keeps its best passage per page. Reciprocal rank fusion uses `k=60`,
+with final ties on `(title, sqid)`. Candidate overfetch is four times the requested
+page count, bounded by Knowledge's 100-page maximum. Provider failures surface as
+GraphQL/MCP errors; full-text-only operation is intentional only when no model
+is selected. Related pages need no query embedding call.
 
-## Out of scope (this skeleton)
-
-Real embeddings, a vector/graph index, the `knowledge.Page` embedding column and
-its migration, and ranking by vector distance. The seams above are exactly what
-make those drop-in: the provider key, the projection/query buckets, and the MCP
-tool register call.
+Search uses [pgvector's exact operators](https://github.com/pgvector/pgvector-python#django).
+A deployment can later author partial expression HNSW indexes per model and
+dimension, with matching casts in its queries. The addon does not install an
+approximate index or mix vector spaces. Extracted entity graphs are a separate
+opt-in capability; the structural link arm needs no LLM or additional tables.
