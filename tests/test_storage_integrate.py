@@ -35,7 +35,6 @@ from tests.conftest import (
     make_mount,
 )
 
-storage_integrate_models = importlib.import_module("angee.storage_integrate.models")
 storage_integrate_schema = importlib.import_module("angee.storage_integrate.schema")
 
 BASE_MTIME_NS = 1_700_000_000_000_000_000
@@ -92,11 +91,7 @@ def queued_mounts(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """Capture eager connect queues without dispatching a worker task."""
 
     queued: list[Any] = []
-    monkeypatch.setattr(
-        storage_integrate_models,
-        "queue_bridge_sync",
-        lambda mount, **kwargs: queued.append((mount, kwargs)),
-    )
+    monkeypatch.setattr(Mount, "request_sync", lambda mount, **kwargs: queued.append((mount, kwargs)))
     return queued
 
 
@@ -820,11 +815,7 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
         sync_calls.append((row, kwargs))
         return True
 
-    monkeypatch.setattr(
-        storage_integrate_schema,
-        "queue_bridge_sync",
-        queue_sync,
-    )
+    monkeypatch.setattr(Mount, "request_sync", queue_sync)
     synced = result_data(
         execute_schema(
             schema,

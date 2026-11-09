@@ -24,7 +24,6 @@ from angee.integrate.models import (
     IntegrationManager,
     IntegrationQuerySet,
 )
-from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions
 from angee.storage_integrate.mounts import MountBackend, MountBrowseResult, MountEntry, MountLocation
@@ -170,7 +169,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
                 created_by_id=user.pk,
             )
             mount.connect()
-        queue_bridge_sync(mount)
+        mount.request_sync()
         return mount
 
     @staticmethod

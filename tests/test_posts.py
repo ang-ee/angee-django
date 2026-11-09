@@ -158,9 +158,10 @@ def test_due_feed_is_queued_once_as_feed(posts_tables: None, monkeypatch: pytest
         feed.next_sync_at = _AT
         feed.save(update_fields=["next_sync_at"])
     queued: list[tuple[str, int]] = []
+    # Patched on the Channel ancestor so a separate ancestor enqueue would be recorded too.
     monkeypatch.setattr(
-        scheduler,
-        "queue_bridge_sync",
+        Channel,
+        "request_sync",
         lambda bridge, **kwargs: queued.append((bridge._meta.label, bridge.pk)),
     )
 
