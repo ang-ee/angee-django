@@ -161,9 +161,9 @@ class PersonType(PartyType):
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
-        """Return manager-prefetched, actor-visible circle names as chip values."""
+        """Return the person's actor-visible circle names as chip values."""
 
-        return cast("list[str]", Person.objects.circle_names_for(cast(Any, self)))
+        return cast("list[str]", cast(Any, self).circle_names())
 
     @strawberry_django.field(only=["user_id"])
     def user(self) -> strawberry.ID | None:

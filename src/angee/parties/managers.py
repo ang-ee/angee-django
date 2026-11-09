@@ -143,28 +143,17 @@ class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQu
         return self.filter(pk__in=Subquery(members.order_by().values("circle_id")))
 
     def with_member_counts(self) -> Self:
-        """Annotate each circle with its distinct-party count across its subtree."""
+        """Annotate each circle with its distinct readable-person count across its readable subtree."""
 
-        circle_model = apps.get_model("parties", "Circle")
-        circle_member_model = apps.get_model("parties", "CircleMember")
-        person_model = apps.get_model("parties", "Person")
-        visible_person_ids = person_model.objects.all().scoped_for_aggregate().canonical().values("pk")
-        visible_subtree_circle_ids = (
-            circle_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                owner_id=OuterRef(OuterRef("owner_id")),
-                path__startswith=OuterRef(OuterRef("path")),
-            )
-            .values("pk")
-        )
+        circles = apps.get_model("parties", "Circle").objects.all()
+        people = apps.get_model("parties", "Person").objects.all()
+        if actor := self.actor():
+            circles, people = circles.with_actor(actor), people.with_actor(actor)
+        visible_person_ids = people.scoped_for_aggregate().canonical().values("pk")
+        subtree = circles.filter(owner_id=OuterRef(OuterRef("owner_id")), path__startswith=OuterRef(OuterRef("path")))
         subtree_count = (
-            circle_member_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                circle_id__in=Subquery(visible_subtree_circle_ids),
-                party_id__in=Subquery(visible_person_ids),
-            )
+            subtree.memberships()
+            .filter(party_id__in=Subquery(visible_person_ids))
             .order_by()
             .values("circle__owner_id")
             .annotate(total=Count("party_id", distinct=True))
@@ -736,6 +725,12 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
             Q(display_name__iregex=pattern) | Q(pk__in=Subquery(legal_name_ids)),
         )
 
+    def _readable_circles(self) -> Any:
+        """Circles read as this queryset's actor, else the ambient one."""
+
+        circles = apps.get_model("parties", "Circle").objects.all()
+        return circles.with_actor(actor) if (actor := self.actor()) else circles
+
     def with_circle_names(self) -> Self:
         """Prefetch actor-visible circle names for generic chip rendering.
 
@@ -744,15 +739,8 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         and circle row policies before projecting names.
         """
 
-        circle_model = apps.get_model("parties", "Circle")
-        circle_member_model = apps.get_model("parties", "CircleMember")
-        visible_circle_ids = circle_model.objects.all().scoped_for_aggregate().values("pk")
         visible_memberships = (
-            circle_member_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(circle_id__in=Subquery(visible_circle_ids))
-            .select_related("circle")
-            .order_by("circle__name", "sqid")
+            self._readable_circles().memberships().select_related("circle").order_by("circle__name", "sqid")
         )
         return self.prefetch_related(
             Prefetch(
@@ -765,17 +753,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
     def unassigned(self) -> Self:
         """Return canonical parties with no actor-visible circle membership."""
 
-        circle_model = apps.get_model("parties", "Circle")
-        circle_member_model = apps.get_model("parties", "CircleMember")
-        visible_circle_ids = circle_model.objects.all().scoped_for_aggregate().values("pk")
-        visible_membership = (
-            circle_member_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                party_id=OuterRef("pk"),
-                circle_id__in=Subquery(visible_circle_ids),
-            )
-        )
+        visible_membership = self._readable_circles().memberships().filter(party_id=OuterRef("pk"))
         return (
             self.canonical()
             .annotate(
@@ -805,12 +783,8 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
     def in_circle(self, circle: Any, *, confirmed_only: bool = False) -> Self:
         """Return canonical parties in ``circle`` or any of its descendants."""
 
-        circle_model = apps.get_model("parties", "Circle")
-        circles = circle_model.objects.all()
-        if actor := self.actor():
-            circles = circles.with_actor(actor)
         visible_subtree_membership = (
-            circles.subtree_of(circle)
+            self._readable_circles().subtree_of(circle)
             .memberships(confirmed_only=confirmed_only)
             .filter(party_id=OuterRef("pk"))
         )
@@ -1708,33 +1682,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             locked.display_name = normalized
             locked.save(update_fields=["display_name", "updated_at"])
             return "replaced"
-
-    def circle_names_for(self, party: Any) -> list[str]:
-        """Return one party's actor-visible circle names through the fast projection.
-
-        Resource reads install :meth:`PartyQuerySet.with_circle_names`; alternate
-        authored paths fall back to the same independently scoped membership and
-        circle collections instead of silently presenting an empty list.
-        """
-
-        prefetched = getattr(party, "_angee_visible_circle_members", None)
-        if prefetched is not None:
-            return list(dict.fromkeys(membership.circle.name for membership in prefetched))
-
-        circle_model = apps.get_model("parties", "Circle")
-        circle_member_model = apps.get_model("parties", "CircleMember")
-        visible_circle_ids = circle_model.objects.all().scoped_for_aggregate().values("pk")
-        return list(
-            circle_member_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                party_id=party.pk,
-                circle_id__in=Subquery(visible_circle_ids),
-            )
-            .order_by("circle__name")
-            .values_list("circle__name", flat=True)
-            .distinct()
-        )
 
     def for_user(self, user: Any) -> Any:
         """Return the :class:`Person` linked to ``user``, get-or-created on the ``user`` O2O.
