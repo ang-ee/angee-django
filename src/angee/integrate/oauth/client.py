@@ -33,7 +33,7 @@ from authlib.integrations.httpx_client import OAuth2Client
 from authlib.oauth2.rfc6749.parameters import prepare_grant_uri
 
 from angee.integrate.errors import IntegrationError, RequestNotSentError
-from angee.integrate.http import PinnedTransport
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS, PinnedTransport
 from angee.integrate.oauth.errors import (
     CLIENT_NOT_CONFIGURED,
     MISSING_ENDPOINT,
@@ -45,7 +45,6 @@ from angee.integrate.oauth.errors import (
 if TYPE_CHECKING:
     from angee.integrate.models import OAuthClient
 
-HTTP_TIMEOUT_SECONDS = 10
 # An honest, non-browser User-Agent for all outbound connection requests. Must NOT
 # spoof a browser: Anthropic's edge denylists browser/curl User-Agents with a 429
 # ``rate_limit_error`` (and blocks the HTTP client's default UA with a 403), while

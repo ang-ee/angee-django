@@ -18,12 +18,8 @@ from django.conf import settings
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError, PyJWTError
 
-from angee.integrate.http import HttpClient
-from angee.integrate.oauth.client import (
-    HTTP_TIMEOUT_SECONDS,
-    USER_AGENT,
-    OAuthClientProtocol,
-)
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
+from angee.integrate.oauth.client import USER_AGENT, OAuthClientProtocol
 from angee.integrate.oauth.errors import (
     INVALID_ID_TOKEN,
     MISSING_ENDPOINT,
