@@ -25,6 +25,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.db.models.query import EmptyQuerySet
 from django.db.models.signals import post_save
 from django.utils import timezone
 from django_compose.models import Composable
@@ -54,7 +55,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, require_rebac_queryset
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend
@@ -380,18 +381,29 @@ class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], 
     def navigation_root_expression(self, *, removed: bool = False) -> models.Expression:
         """A visible tree root has no readable parent in the same trash state."""
 
-        actor = relation_actor(self)
-        # Scoping needs the reader; an expression inspected without one reads no parent.
-        parents = self.none() if actor is None else self.with_actor(actor).filter(is_trashed=removed).scoped()
+        parents = self._related_pages(trashed=removed)
         return ~models.Exists(parents.filter(pk=models.OuterRef("parent_id")))
 
     def has_children_expression(self) -> models.Exists:
         """Whether the actor can expand this page to an untrashed child."""
 
-        actor = relation_actor(self)
-        children = self.none() if actor is None else self.with_actor(actor).untrashed().scoped()
+        children = self._related_pages(trashed=False)
         return models.Exists(children.filter(parent_id=models.OuterRef("pk")))
 
+    def _related_pages(self, *, trashed: bool) -> Self:
+        """Scoped pages in one trash state, read as these rows are read (REBAC's ``relation_actor``).
+
+        Without a reader, REBAC's ambient scope answers, as it does for these rows:
+        system context reads every page and an actorless read fails closed. Rows
+        already emptied (``none()``, as schema composition inspects an expression's
+        output field) relate to no page.
+        """
+
+        if isinstance(self, EmptyQuerySet):
+            return self.none()
+        actor = relation_actor(self)
+        pages = self.with_actor(actor) if actor is not None else cast(Self, require_rebac_queryset(self.model))
+        return (pages.trashed() if trashed else pages.untrashed()).scoped()
 
 _PageManagerBase = AngeeHistoryManager.from_queryset(PageQuerySet)
 
