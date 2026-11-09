@@ -163,7 +163,11 @@ class _PinnedPyJWKClient(PyJWKClient):
         )
 
     def fetch_data(self) -> Any:
-        """Fetch the JWKS document through ``integrate.http.HttpClient``."""
+        """Fetch the JWKS document through ``integrate.http.HttpClient``.
+
+        Only the transport is replaced: PyJWT's ``get_jwk_set`` validates,
+        parses and caches the payload this returns.
+        """
 
         try:
             response = HttpClient().get(
@@ -179,8 +183,6 @@ class _PinnedPyJWKClient(PyJWKClient):
             raise
         except Exception as exc:
             raise PyJWKClientConnectionError(f'Fail to fetch data from the url, err: "{exc}"') from exc
-        if self.jwk_set_cache is not None:
-            self.jwk_set_cache.put(jwk_set)
         return jwk_set
 
 

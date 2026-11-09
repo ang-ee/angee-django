@@ -486,7 +486,7 @@ def _render_dev_stack(
         "operator_home": operator_home,
         "operator_port": "9000",
         "operator_image": "ghcr.io/ang-ee/angee-operator:latest",
-        "playwright_image": "mcr.microsoft.com/playwright:v1.62.1-noble",
+        "playwright_image": "mcr.microsoft.com/playwright:v1.65.0-noble",
         "playwright_mcp_image": "mcr.microsoft.com/playwright/mcp:v0.0.76",
         "postgres_mode": postgres_mode,
         "postgres_host": postgres_host,
@@ -1788,7 +1788,7 @@ def test_dev_stack_docker_mode_playwright_services_are_edge_routed() -> None:
     mcp = stack["services"]["playwright-mcp"]
 
     assert server["runtime"] == "container"
-    assert server["image"] == "mcr.microsoft.com/playwright:v1.62.1-noble"
+    assert server["image"] == "mcr.microsoft.com/playwright:v1.65.0-noble"
     assert server["route"] == {"port": 3100, "auth": "forward"}
     assert "ports" not in server
     assert server["command"][-1].startswith("corepack enable pnpm;")
@@ -1861,7 +1861,7 @@ def test_dev_stack_chains_the_project_host_with_the_framework_slot() -> None:
         "runtime_mode": "process",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
         "node_image": "node:22-bookworm-slim",
-        "playwright_image": "mcr.microsoft.com/playwright:v1.62.1-noble",
+        "playwright_image": "mcr.microsoft.com/playwright:v1.65.0-noble",
         "playwright_mcp_image": "mcr.microsoft.com/playwright/mcp:v0.0.76",
         "ingress_domain": "localhost",
     }

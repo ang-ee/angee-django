@@ -132,7 +132,7 @@ def test_reordered_sources_keep_physical_authority_and_remap_claim_positions(mes
     candidate = replace(values["result"], value=reversed_candidate(values), parts=reordered_parts, claims={})
     held = retain(request_key="reordered-hold", sources=reordered_sources, result=candidate)
     assert held.awaiting_correspondence and held.lineage_id == first.lineage_id
-    assert first.authority_carrier_positions(held) == {0: 1, 1: 0}
+    assert first.authority_carrier_positions(held.parts.order_by("position")) == {0: 1, 1: 0}
     resolved = retain(
         base=held,
         request_key="reordered-resolved",
@@ -166,7 +166,7 @@ def test_identical_text_from_another_message_part_cannot_inherit_authority(messa
     )
     held = retain(request_key="replacement-hold", sources=(original, replacement_source), result=candidate)
     assert held.awaiting_correspondence and held.lineage_id == first.lineage_id
-    assert first.authority_carrier_positions(held) == {}
+    assert first.authority_carrier_positions(held.parts.order_by("position")) == {}
     with pytest.raises(ValidationError, match="lacks a retained carrier"):
         retain(
             base=held,
@@ -184,6 +184,6 @@ def test_duplicate_physical_carriers_are_ambiguous(evidence):
     candidate = replace(values["result"], value=reversed_candidate(values), parts=(part, part), claims={})
     held = retain(request_key="duplicate-hold", result=candidate)
     assert held.awaiting_correspondence
-    assert first.authority_carrier_positions(held) == {}
+    assert first.authority_carrier_positions(held.parts.order_by("position")) == {}
     with pytest.raises(ValidationError, match="lacks a retained carrier"):
         retain(base=held, request_key="duplicate-resolved", result=candidate, identity_mapping=reviewed_mapping(first))

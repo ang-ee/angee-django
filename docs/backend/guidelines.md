@@ -831,7 +831,11 @@ data through REBAC, never a queryset bypass.
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
-  callers continue under the original actor, never the elevated one.
+  callers continue under the original actor, never the elevated one. A read
+  through a model's unscoped `_base_manager` (its `Meta.base_manager_name`, the
+  manager Django's relation descriptors use) is an owner-level bypass: owner
+  code takes it for structural work it owns, such as locks, existence checks and
+  counters, with no audit row, and never returns its rows as an actor's read.
 - **System work reads an actor-bound row's relations through
   `<related>.system_context(reason=...)`.** Since REBAC 0.31 a related manager
   keeps its source instance's actor even inside `system_context`. That actor comes
@@ -2057,6 +2061,14 @@ bridge advisory lock as polling and delivery settlement.
   clearing that status itself, never by a lifecycle edge as a side effect. Keep
   the gate on the shared `runtime_status`, not a private health key the generic
   verbs cannot clear.
+- **Only a known-broken handshake latches.** A transient failure
+  (`angee.integrate.errors.is_transient_failure`: a dropped connection, a DNS or
+  resource error, a crashed session process) is not evidence the account needs
+  repair, so it must never park a live bridge behind the operator's verb.
+  `Bridge.record_live_session_failure` owns every live-session failure: it shows
+  a transient one on the sync axis and defers the reconciler's restart
+  (`live_retry_at`) by the shared doubling backoff. Pairing, the generic repair
+  verbs and an explicit start end the streak.
 - **Periodic tasks accept an optional `timestamp`.** Static Celery beat ticks
   call without it; tests and scheduler backends may inject a Unix timestamp.
 - **TLS trust is an environment concern, not a per-call one.** Which CA roots we

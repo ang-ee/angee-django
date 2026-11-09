@@ -400,17 +400,17 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
     def failure_reason(self) -> str | None:
         """Surface the retained reader-facing failure from the run or its failed step.
 
-        ``error`` stays out: it is gated to run writers (``read__error``).
+        ``error`` stays out: it is gated to run writers (``read__error``). The failed
+        steps are read elevated, never through the scope of a reader this run is bound to.
         """
         if self.outcome != ERROR_OUTCOME:
             return None
         if isinstance(self.output, dict) and isinstance(self.output.get("error"), str) and self.output["error"]:
             return self.output["error"]
-        with system_context(reason="workflows.failure_reason"):
-            rows = self.step_runs.filter(status=StepRunStatus.FAILED).order_by(
-                "rank", "map_index", "pk",
-            ).only("status", "output")
-            return next((reason for row in rows if (reason := row.failure_reason)), None)
+        rows = self.step_runs.system_context(reason="workflows.failure_reason").filter(
+            status=StepRunStatus.FAILED,
+        ).order_by("rank", "map_index", "pk").only("status", "output")
+        return next((reason for row in rows if (reason := row.failure_reason)), None)
 
     def graph(self, actor: Any) -> RunGraph | None:
         """Read this run's frozen topology; ``None`` once the reader can no longer read the run.
@@ -872,8 +872,8 @@ class StepRun(AngeeDataModel, concrete=True):
             return False
         if projected:
             return True
-        with system_context(reason="workflows.effect_policy"):
-            return self.attempts.filter(page_index=self.page_index, effect_started_at__isnull=False).exists()
+        attempts = self.attempts.system_context(reason="workflows.effect_policy")
+        return attempts.filter(page_index=self.page_index, effect_started_at__isnull=False).exists()
 
     @classmethod
     def effect_started_expression(cls) -> models.Exists:

@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from celery import shared_task
 from django.apps import apps
 from django.utils import timezone
 from rebac import system_context
 
-
-def _periodic_now(timestamp: int | None) -> datetime:
-    """Return an aware instant from Celery's optional periodic timestamp."""
-
-    return timezone.now() if timestamp is None else datetime.fromtimestamp(timestamp, tz=UTC)
+from angee.jobs.scheduler import periodic_now
 
 
 @shared_task(name="work.wake_due_snoozes")
@@ -22,14 +16,14 @@ def wake_due_snoozes(timestamp: int | None = None) -> int:
 
     task_model = apps.get_model("projects", "Task")
     with system_context(reason="work.tasks.wake_due_snoozes"):
-        return int(task_model.wake_due_snoozes(now=_periodic_now(timestamp)))
+        return int(task_model.wake_due_snoozes(now=periodic_now(timestamp)))
 
 
 @shared_task(name="work.generate_cycles")
 def generate_cycles(timestamp: int | None = None) -> int:
     """Maintain generated cadence and close every cycle whose end day passed."""
 
-    now = _periodic_now(timestamp)
+    now = periodic_now(timestamp)
     as_of = timezone.localtime(now).date()
     queue_model = apps.get_model("work", "Queue")
     cycle_model = apps.get_model("work", "Cycle")

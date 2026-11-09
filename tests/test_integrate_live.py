@@ -6,6 +6,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -189,6 +190,14 @@ def _live_channel(slug: str = "fake-live") -> Any:
         channel.subscription_state["desired"] = Channel.LiveState.LIVE
         channel.save(update_fields=["subscription_state", "updated_at"])
     return channel
+
+
+def _after_live_retry(channel: Any) -> int:
+    """Return a beat timestamp just past the channel's transient-failure deferral."""
+
+    channel.refresh_from_db()
+    assert channel.live_retry_at is not None
+    return int((channel.live_retry_at + timedelta(seconds=1)).timestamp())
 
 
 def _wait_until(predicate: Any, *, timeout: float = 1.0) -> None:
@@ -1253,10 +1262,12 @@ def test_native_session_crash_is_visible_and_retried(live_tables: Any, monkeypat
     assert channel.lifecycle == channel.Lifecycle.CONNECTED
     assert channel.subscription_state["desired"] == channel.LiveState.LIVE
     assert channel.sync_stage == channel.SyncStage.FAILED
-    assert "automatic recovery" in channel.sync_progress["message"]
+    assert channel.sync_error == "Live session process exited with code 2."
+    assert channel.live_retry_at is not None
     sent: list[Any] = []
     monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
-    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
+    assert tasks_module.ensure_bridge_sessions(_after_live_retry(channel)) == {"ok": True, "dispatched": 1}
     assert len(sent) == 1
 
 
@@ -1411,6 +1422,8 @@ def test_stalled_native_shutdown_exits_before_releasing_locks(
 def test_native_crash_report_preserves_terminal_or_stopped_row(live_tables: Any, stopped: bool) -> None:
     """A late parent observation does not replace account errors or operator intent."""
 
+    from angee.integrate.session_process import SessionProcessError
+
     channel = _live_channel("fake-live-late-crash-report")
     with system_context(reason="test stop during child failure"):
         if stopped:
@@ -1421,9 +1434,10 @@ def test_native_crash_report_preserves_terminal_or_stopped_row(live_tables: Any,
     previous = channel.sync_progress.copy()
     with bridge_advisory_lock(channel) as acquired:
         assert acquired
-        channel.report_live_session_interrupted(exitcode=2)
+        channel.record_live_session_failure(SessionProcessError(2), now=timezone.now())
     channel.refresh_from_db()
     assert channel.sync_progress == previous
+    assert channel.live_retry_at is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1459,3 +1473,258 @@ def test_transport_only_live_session_accepts_report_only_reporter() -> None:
     session = LiveSession(bridge, reporter=reporter, stop_event=threading.Event())
     session._report(PairingState.STARTING)
     assert reports == [(Bridge.SyncStage.DISCOVERING, {"pairing": {"state": PairingState.STARTING}})]
+
+
+class _FailingSession(FakeLiveSession):
+    """Fake vendor thread that reports one producer failure and disconnects."""
+
+    failure: ClassVar[Exception] = ConnectionError("Connection to Telegram failed 5 time(s)")
+
+    def _connect(self) -> None:
+        self.events.put(("error", self.failure))
+        self.events.put(("disconnected", None))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_transient_session_failure_defers_restart_with_doubling_backoff(
+    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dropped connection is shown and retried later instead of latching runtime health."""
+
+    from angee.integrate import tasks as tasks_module
+
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_class", _FailingSession)
+    sent: list[Any] = []
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
+    channel = _live_channel("fake-live-transient-failure")
+
+    delays = []
+    for attempt in (1, 2, 3):
+        before = timezone.now()
+        result = tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)
+        assert result["session_error"] is True
+        channel.refresh_from_db()
+        assert channel.runtime_status == IntegrationRuntimeStatus.OK
+        assert channel.sync_stage == channel.SyncStage.FAILED
+        assert channel.sync_error == "Integration operation failed."
+        assert channel.live_retry_attempts == attempt
+        assert channel.subscription_state["desired"] == channel.LiveState.LIVE
+        delays.append(channel.live_retry_at - before)
+        assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
+        assert tasks_module.ensure_bridge_sessions(_after_live_retry(channel)) == {"ok": True, "dispatched": 1}
+    assert [round(delay / timedelta(minutes=1)) for delay in delays] == [1, 2, 4]
+    assert len(sent) == 3
+
+
+@pytest.mark.django_db(transaction=True)
+def test_transient_session_failure_honours_retry_after(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A vendor horizon lengthens the backoff; the safe message reaches the operator."""
+
+    from angee.integrate import tasks as tasks_module
+    from angee.integrate.errors import IntegrationError
+
+    class ThrottledSession(_FailingSession):
+        failure = IntegrationError("The vendor asked to wait.", retry_after=timedelta(minutes=30))
+
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_class", ThrottledSession)
+    channel = _live_channel("fake-live-throttled")
+    before = timezone.now()
+    tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)
+    channel.refresh_from_db()
+    assert channel.runtime_status == IntegrationRuntimeStatus.OK
+    assert channel.sync_error == "The vendor asked to wait."
+    assert channel.live_retry_at - before >= timedelta(minutes=30)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_permanent_session_failure_still_latches_runtime_health(
+    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-transient outcome stays a known-broken handshake until the operator repairs it."""
+
+    from angee.integrate import tasks as tasks_module
+    from angee.integrate.errors import IntegrationError
+
+    class RefusedSession(_FailingSession):
+        failure = IntegrationError("The vendor refused this client.")
+
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_class", RefusedSession)
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
+    channel = _live_channel("fake-live-refused")
+    tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)
+    channel.refresh_from_db()
+    assert channel.runtime_status == IntegrationRuntimeStatus.ERROR
+    assert channel.sync_error == "The vendor refused this client."
+    assert channel.live_retry_at is None
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_transient_exception_from_session_run_is_deferred(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A connection that ends without a producer event is retried, not raised from the task."""
+
+    from angee.integrate import tasks as tasks_module
+
+    class EndedSession(FakeLiveSession):
+        def run(self) -> Any:
+            self.store_released = True
+            raise ConnectionError("Fake Live connection ended unexpectedly.")
+
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_class", EndedSession)
+    channel = _live_channel("fake-live-ended")
+    result = tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)
+    assert result["session_error"] is True
+    channel.refresh_from_db()
+    assert channel.runtime_status == IntegrationRuntimeStatus.OK
+    assert channel.sync_stage == channel.SyncStage.FAILED
+    assert channel.live_retry_at is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_pairing_ends_a_transient_failure_streak(live_tables: Any) -> None:
+    """Reaching PAIRED proves the failure untrue: deferral and attempts reset."""
+
+    from angee.integrate.sync import BridgeProgressReporter
+
+    channel = _live_channel("fake-live-streak-reset")
+    with system_context(reason="test seed transient failures"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
+        channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
+    channel.refresh_from_db()
+    assert channel.live_retry_attempts == 2
+
+    class PairingSession(FakeLiveSession):
+        def _connect(self) -> None:
+            self.events.put(("paired", "account-1"))
+            self.events.put(("disconnected", None))
+            self._stopping.wait(timeout=1)
+
+        def _shutdown(self, connection: threading.Thread) -> bool:
+            connection.join(timeout=0.5)
+            return not connection.is_alive()
+
+    session = PairingSession(channel, reporter=BridgeProgressReporter(channel), stop_event=threading.Event())
+    with system_context(reason="test pairing resets streak"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        assert session.run() is PairingState.PAIRED
+    with system_context(reason="test pairing resets streak verify"):
+        fresh = type(channel).objects.get(pk=channel.pk)
+    assert fresh.live_retry_at is None
+    assert fresh.live_retry_attempts == 0
+    assert fresh.sync_error == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_non_transient_exception_from_the_session_latches_like_a_reported_one(
+    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One policy owner: a raised broken setup latches instead of looping every tick."""
+
+    from angee.integrate import tasks as tasks_module
+
+    class BrokenSetupSession(FakeLiveSession):
+        def run(self) -> Any:
+            self.store_released = True
+            raise FileNotFoundError(2, "No such file or directory", "signal-cli")
+
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_class", BrokenSetupSession)
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
+    channel = _live_channel("fake-live-broken-setup")
+    assert tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)["session_error"] is True
+    channel.refresh_from_db()
+    assert channel.runtime_status == IntegrationRuntimeStatus.ERROR
+    assert channel.sync_stage == channel.SyncStage.FAILED
+    assert channel.live_retry_at is None
+    assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_transient_failure_drops_the_dead_sessions_pairing_report(live_tables: Any) -> None:
+    """A QR shown by the session that just failed is never projected during the deferral."""
+
+    channel = _live_channel("fake-live-dead-qr")
+    with system_context(reason="test seed live qr"):
+        channel.sync_progress = {
+            "stage": "discovering",
+            "details": {"pairing": {"state": PairingState.AWAITING_SCAN, "qr": "data:image/png;base64,dead"}},
+        }
+        channel.save(update_fields=["sync_progress", "updated_at"])
+    assert channel.live_impl.pairing().state is PairingState.AWAITING_SCAN
+    with system_context(reason="test qr session fails"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
+    channel.refresh_from_db()
+    assert "pairing" not in channel.sync_progress.get("details", {})
+    assert channel.live_impl.pairing().state is PairingState.STARTING
+    assert channel.live_impl.pairing().qr == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_operator_start_and_repair_end_a_retry_streak(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit start is never deferred and restarts the backoff; so does the generic connect."""
+
+    from angee.messaging.connect import resume_channel_pairing
+
+    sent: list[Any] = []
+    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
+    channel = _live_channel("fake-live-operator-start")
+
+    def fail_twice() -> None:
+        with system_context(reason="test transient streak"), bridge_advisory_lock(channel) as acquired:
+            assert acquired
+            channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
+            channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
+        channel.refresh_from_db()
+        assert channel.live_retry_attempts == 2 and channel.live_retry_at is not None
+
+    fail_twice()
+    resume_channel_pairing(channel)
+    channel.refresh_from_db()
+    assert len(sent) == 1
+    assert channel.live_retry_at is None and channel.live_retry_attempts == 0
+
+    fail_twice()
+    with system_context(reason="test generic repair"):
+        channel.set_lifecycle(channel.Lifecycle.PAUSED)
+        channel.set_lifecycle(channel.Lifecycle.CONNECTED)
+    channel.refresh_from_db()
+    assert channel.live_retry_at is None and channel.live_retry_attempts == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_clearing_a_clean_rows_failure_writes_nothing(live_tables: Any) -> None:
+    """A healthy re-pair leaves the change feed quiet."""
+
+    channel = _live_channel("fake-live-clean-repair")
+    channel.refresh_from_db()
+    settled_at = channel.updated_at
+    channel.clear_sync_error()
+    channel.refresh_from_db()
+    assert channel.updated_at == settled_at
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_child_ended_by_its_stopping_host_is_not_a_failure(
+    live_tables: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker shutdown's SIGTERM leaves health, the sync axis and the retry clock alone."""
+
+    from angee.integrate import session_runner
+    from angee.integrate.session_process import SessionProcessError
+
+    channel = _live_channel("fake-live-host-stop")
+    monkeypatch.setattr(FakeLiveChannelBackend, "session_isolation", "process")
+    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda: True)
+    stop_event = threading.Event()
+
+    def terminated(_host: Any) -> Any:
+        stop_event.set()
+        raise SessionProcessError(-15)
+
+    monkeypatch.setattr(session_runner.BridgeSessionProcess, "run", terminated)
+    result = session_runner.run_bridge_session_job(channel._meta.label_lower, channel.pk, stop_event=stop_event)
+    assert result == {"ok": True, "skipped": True, "reason": "host-stopping"}
+    channel.refresh_from_db()
+    assert channel.runtime_status == IntegrationRuntimeStatus.OK
+    assert channel.sync_error == "" and channel.live_retry_at is None

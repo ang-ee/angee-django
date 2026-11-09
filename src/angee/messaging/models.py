@@ -1124,9 +1124,10 @@ class Channel(Bridge, inherits="integrate.Integration"):
         backend owns the vendor dispatch. A poll-only backend's no-op hook makes
         this safely idempotent on any channel. The desire is merged under a row
         lock so a concurrent live session writing its own pairing keys cannot
-        clobber it.
+        clobber it. An explicit start ends a transient-failure retry streak.
         """
 
+        self.end_live_retry()
         self.merge_subscription_state(desired=self.LiveState.LIVE)
         self.backend.start_live()
 

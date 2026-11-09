@@ -576,13 +576,16 @@ class StepRecordQuerySet[T: StepRecord](AppendOnlyQuerySet[T], AngeeQuerySet[T])
     """Keep retained admission references immutable until their run is pruned."""
 
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
-        """Publish distinct concern identities without loading retained evidence rows."""
-        with system_context(reason="workflows.change_concerns"):
-            identities = self.order_by().values_list("content_type_id", "object_id").distinct()
-            return ChangeRelatedRecord.for_records(*(
-                self.model(content_type_id=content_type_id, object_id=object_id).record_ref
-                for content_type_id, object_id in identities
-            ))
+        """Publish distinct concern identities without loading retained evidence rows.
+
+        The rows are read elevated, including through a run's ``records`` bound to a reader.
+        """
+        rows = self.system_context(reason="workflows.change_concerns")
+        identities = rows.order_by().values_list("content_type_id", "object_id").distinct()
+        return ChangeRelatedRecord.for_records(*(
+            self.model(content_type_id=content_type_id, object_id=object_id).record_ref
+            for content_type_id, object_id in identities
+        ))
 
 
 StepRecordManager = AngeeManager.from_queryset(StepRecordQuerySet)

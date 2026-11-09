@@ -186,7 +186,7 @@ class AngeeModel(
         type(self).record_access_permission(relation)
         self._write_declared_record_access(relation, subject)
 
-    def lock_for_record_access(self, *, using: str) -> Self:
+    def lock_for_record_access(self) -> Self:
         """Lock and reload this grant target in its owning domain's lock order.
 
         The write owner calls this inside its transaction. Contributors acquire
@@ -194,7 +194,7 @@ class AngeeModel(
         pure admission check usable by non-write callers.
         """
 
-        return type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
+        return type(self).system_queryset(lock=("self",)).get(pk=self.pk)
 
     def _write_declared_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
         """Keep fresh subject admission and the native relationship write under owner locks."""
@@ -205,7 +205,7 @@ class AngeeModel(
             transaction.atomic(using=relationships_using) if relationships_using != using else nullcontext()
         ):
             actor, elevated = self.effective_actor()
-            target = self.lock_for_record_access(using=using)
+            target = self.lock_for_record_access()
             if elevated:
                 target.sudo(reason="base.record_access.admitted")
             elif actor is not None:
@@ -268,7 +268,6 @@ class AngeeModel(
                 instance=self,
                 relation=relation,
                 subject=subject_ref,
-                using=using,
             )
 
     def direct_record_access(self, relations: Sequence[str] | None = None) -> tuple[DirectRecordAccess, ...]:

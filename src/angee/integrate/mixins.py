@@ -12,6 +12,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from angee.base.querysets import AngeeQuerySet
+from angee.integrate.errors import doubling_backoff
 from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus
 
 if TYPE_CHECKING:
@@ -118,7 +119,7 @@ class SyncStateMixin(models.Model):
         interval = self.failure_stream.reconcile_interval
         if interval and interval > timedelta(0):
             cap = min(cap, interval)
-        return timezone.now() + min(timedelta(minutes=2 ** min(max(0, attempts - 1), 11)), cap)
+        return timezone.now() + doubling_backoff(attempts, cap=cap)
 
     def _transition_state(self, data: dict[str, Any], *, retry: bool, conflict: bool) -> None:
         if not data:

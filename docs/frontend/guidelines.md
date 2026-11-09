@@ -1083,10 +1083,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
   invalidate through refine mutations, and subscription pushes invalidate the
   affected refine resources. Authored reads receive pushes through the
-  [live coalescer](../../packages/refine/src/query-invalidation.ts): a change
-  cancels matching in-flight requests at once and one refetch per burst follows
-  within the max wait, so declare each read's `models` from the owners its
-  resolver actually reads. Refine's own resource hooks still invalidate per
+  [live coalescer](../../packages/refine/src/query-invalidation.ts): one
+  refetch per burst follows within the max wait, and a read still running then
+  commits and refetches once it settles instead of being cancelled, so a
+  continuous stream (a history backfill) cannot starve slow reads. Declare each
+  read's `models` from the owners its resolver actually reads. Refine's own resource hooks still invalidate per
   push. Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`) over its own subscriptions.
   A dashboard widget may explicitly declare interval refresh through its

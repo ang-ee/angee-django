@@ -76,10 +76,14 @@ def run_bridge_session_job(
                 try:
                     return BridgeSessionProcess(model_label, pk, stop_event=stop_event).run()
                 except SessionProcessError as error:
+                    if stop_event.is_set():
+                        # The stopping host ended its child; the next host's reconciler restarts it.
+                        logger.info("Live session process for %s %s stopped with its host.", model_label, pk)
+                        return {"ok": True, "skipped": True, "reason": "host-stopping"}
                     logger.error("Live session process for %s %s exited with code %s.", model_label, pk, error.exitcode)
                     with bridge_advisory_lock(bridge) as session_acquired:
                         if session_acquired:
-                            bridge.report_live_session_interrupted(exitcode=error.exitcode)
+                            bridge.record_live_session_failure(error, now=timezone.now())
                     return {"ok": False, "process_error": True, "exitcode": error.exitcode}
         with bridge_advisory_lock(bridge) as acquired:
             if not acquired:
@@ -115,11 +119,15 @@ def run_bridge_session_job(
                 except SessionLoggedOut as error:
                     _record_logged_out(bridge, error, session=session)
                     return {"ok": False, "logged_out": True}
+                except Exception as error:  # noqa: BLE001 — the bridge's policy owner classifies every failure.
+                    logger.warning("Live session for %s %s failed.", model_label, pk, exc_info=True)
+                    bridge.record_live_session_failure(error, now=timezone.now())
+                    return {"ok": False, "session_error": True, "state": session.pairing}
                 if state == PairingState.DUPLICATE_ACCOUNT:
                     _record_duplicate_account(bridge, session=session)
                     return {"ok": False, "duplicate_account": True}
                 if session.outcome_error is not None:
-                    bridge.record_sync_error(session.outcome_error, now=timezone.now())
+                    bridge.record_live_session_failure(session.outcome_error, now=timezone.now())
                     return {"ok": False, "session_error": True, "state": state}
                 reporter.report(bridge.SyncStage.IDLE, details={"pairing": {"state": state}})
         return {"ok": True, "state": state, "items": session.landed}

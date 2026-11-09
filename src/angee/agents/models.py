@@ -2183,9 +2183,13 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
             turn.refresh_from_db()
 
     def _enqueue_pending_turn(self) -> None:
-        """Send the next delivery on commit when this locked session has queued work."""
+        """Send the next delivery on commit when this locked session has queued work.
 
-        if self.status != SessionStatus.CLOSED and self.turns.filter(status=TurnStatus.PENDING).exists():
+        The queue is read elevated, also on a session ``require_access`` bound to its caller.
+        """
+
+        turns = self.turns.system_context(reason="agents.session.enqueue")
+        if self.status != SessionStatus.CLOSED and turns.filter(status=TurnStatus.PENDING).exists():
             enqueue_task("agents.run_session", kwargs={"session_id": self.pk}, robust=True)
 
     @transition(

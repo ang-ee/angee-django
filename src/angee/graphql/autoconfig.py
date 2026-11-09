@@ -7,7 +7,11 @@ from typing import Any
 
 from sentry_sdk.integrations.strawberry import StrawberryIntegration
 
-from angee.graphql.constants import CHANGE_GROUP_EXPIRY_SECONDS, PUBLIC_ID_FIELD_NAME
+from angee.graphql.constants import (
+    CHANGE_GROUP_EXPIRY_SECONDS,
+    CHANNEL_LAYER_SOCKET_TIMEOUT_SECONDS,
+    PUBLIC_ID_FIELD_NAME,
+)
 
 SETTINGS = {
     "COMPOSE_INTEGRATIONS:append": ["angee.graphql.sdl.SchemaIntegration"],
@@ -40,7 +44,10 @@ def settings(namespace: Mapping[str, Any]) -> dict[str, str | None | dict[str, A
         derived["CHANNEL_LAYERS:append"] = {
             "default": {
                 "BACKEND": "channels_redis.core.RedisChannelLayer",
-                "CONFIG": {"hosts": [redis_url], "group_expiry": CHANGE_GROUP_EXPIRY_SECONDS},
+                "CONFIG": {
+                    "hosts": [{"address": redis_url, "socket_timeout": CHANNEL_LAYER_SOCKET_TIMEOUT_SECONDS}],
+                    "group_expiry": CHANGE_GROUP_EXPIRY_SECONDS,
+                },
             }
         }
     return derived
