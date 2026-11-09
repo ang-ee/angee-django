@@ -21,9 +21,15 @@ export type ServerConnectionStatus = "connected" | "checking" | "unavailable";
  */
 export class ServerConnection {
   private status: ServerConnectionStatus = "connected";
+  private armed: number | null = null;
   private readonly listeners = new Set<() => void>();
 
   getSnapshot = (): ServerConnectionStatus => this.status;
+
+  /** When the connection last left `connected` (epoch ms); null while connected. */
+  get armedAt(): number | null {
+    return this.armed;
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -42,6 +48,8 @@ export class ServerConnection {
 
   private setStatus(status: ServerConnectionStatus): void {
     if (this.status === status) return;
+    if (status === "connected") this.armed = null;
+    else if (this.status === "connected") this.armed = Date.now();
     this.status = status;
     this.listeners.forEach(listener => listener());
   }

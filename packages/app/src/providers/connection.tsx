@@ -64,8 +64,9 @@ export function createServerProbe(schema: AngeeHasuraClientOptions): (signal: Ab
 
 /**
  * One native recovery query for the whole app. A request that fails like an
- * outage starts it; the dialog opens only when it fails too. Children stay
- * mounted so an interrupted connection does not discard a person's page or edits.
+ * outage starts it; the dialog opens only when it fails too, and recovery
+ * refreshes the reads that failed since. Children stay mounted so an
+ * interrupted connection does not discard a person's page or edits.
  * @kind null
  * @reason App provider infrastructure: connects transport availability to native query recovery and modal feedback.
  */
@@ -91,8 +92,15 @@ export function ConnectionBoundary({ connection, queryClient, probe, onRestored,
       }
       signal.throwIfAborted();
       const lost = connection.getSnapshot() === "unavailable";
+      const armedAt = connection.armedAt;
       connection.restore();
-      if (lost) onRestored();
+      if (lost) {
+        // Refresh in place the reads the outage refused or that failed once a
+        // request armed the probe; earlier ordinary errors stay. Never replay a mutation.
+        void queryClient.invalidateQueries({ predicate: ({ state }) => state.error instanceof ServerUnavailableError
+          || (armedAt !== null && state.error !== null && state.errorUpdatedAt >= armedAt) });
+        onRestored();
+      }
       return true;
     },
     retry: true,

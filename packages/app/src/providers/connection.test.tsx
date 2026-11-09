@@ -61,6 +61,43 @@ test("a failed check opens the dialog, retries on one bounded schedule and retai
   queryClient.clear();
 });
 
+/** A read fails before a request arms the probe, another while the probe checks; then the outage recovers. */
+async function recoverAroundReads() {
+  vi.useFakeTimers();
+  let failProbe!: (error: Error) => void;
+  const probe = vi.fn()
+    .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { failProbe = reject; }))
+    .mockResolvedValue(undefined);
+  const { connection, queryClient, onRestored, failRequest } = boundary(probe);
+  const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+  const read = (key: string) => queryClient.fetchQuery({
+    queryKey: [key], retry: false, queryFn: () => Promise.reject(new Error("Request failed.")),
+  }).catch(() => undefined);
+  await read("before");
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  await failRequest();
+  expect(connection.getSnapshot()).toBe("checking");
+  await read("during");
+  await act(async () => { failProbe(new TypeError("offline")); await vi.advanceTimersByTimeAsync(0); });
+  expect(connection.getSnapshot()).toBe("unavailable");
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(connection.getSnapshot()).toBe("connected");
+  expect(onRestored).toHaveBeenCalledTimes(1);
+  expect(invalidate).toHaveBeenCalledTimes(1);
+  const refreshes = invalidate.mock.calls[0]?.[0]?.predicate;
+  return (key: string) => refreshes?.(queryClient.getQueryCache().find({ queryKey: [key] })!);
+}
+
+test("recovery refreshes a read that failed while the probe was checking", async () => {
+  const refreshed = await recoverAroundReads();
+  expect(refreshed("during")).toBe(true);
+});
+
+test("recovery leaves a read that failed before the probe was armed", async () => {
+  const refreshed = await recoverAroundReads();
+  expect(refreshed("before")).toBe(false);
+});
+
 test("a healthy check leaves the failure ordinary: no dialog, no lost or restored transition", async () => {
   const probe = vi.fn().mockResolvedValue(undefined);
   const { connection, onRestored, onLost, failRequest } = boundary(probe);

@@ -13,7 +13,6 @@ import {
   type I18nResources,
   OperationDocumentsProvider,
   ServerConnection,
-  ServerUnavailableError,
   createAngeeHasuraDataProviders,
   createAngeeHasuraLiveProvider,
   createTanStackRouterProvider,
@@ -516,8 +515,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const onConnectionLost = () => { refineLiveProvider?.setEnabled(false); };
   const onConnectionRestored = () => {
     if (viewAs.getUserId() === null) refineLiveProvider?.setEnabled(true);
-    // Refresh the reads the outage refused, in place. Never resume or replay a failed mutation.
-    void queryClient.invalidateQueries({ predicate: query => query.state.error instanceof ServerUnavailableError });
+    // The boundary refreshed the failed reads; reload route gates too.
     void router.invalidate();
   };
   const refineAuthProvider: RefineAuthProvider = createAuthProviderForSchema(

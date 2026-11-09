@@ -43,9 +43,13 @@ describe("shared server connection", () => {
     expect(results.map(result => result.status === "rejected" && result.reason)).toEqual([expect.any(TypeError), expect.any(TypeError)]);
     expect(changed).toHaveBeenCalledTimes(1);
     expect(connection.getSnapshot()).toBe("checking");
+    const armedAt = connection.armedAt;
+    expect(armedAt).toEqual(expect.any(Number));
     connection.disconnect();
+    expect(connection.armedAt).toBe(armedAt);
     await expect(fetch("/graphql/")).rejects.toBeInstanceOf(ServerUnavailableError);
     connection.restore();
+    expect(connection.armedAt).toBeNull();
     expect(changed).toHaveBeenCalledTimes(3);
     expect(network).toHaveBeenCalledTimes(2);
     network.mockImplementation(async () => new Response("OK"));
@@ -58,6 +62,7 @@ describe("shared server connection", () => {
     const response = await connection.fetch(async () => new Response(null, { status }))("/graphql/");
     expect(response.status).toBe(status);
     expect(connection.getSnapshot()).toBe("connected");
+    expect(connection.armedAt).toBeNull();
   });
 
   test("does not treat cancellation or application exceptions as downtime", async () => {

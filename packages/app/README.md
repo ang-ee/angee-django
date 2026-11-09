@@ -168,14 +168,17 @@ session bootstrap. A network failure or a 502, 503 or 504 response keeps that
 request's ordinary error and starts one TanStack Query probe of the public
 schema. Only a failed probe opens the connection dialog and stops further
 requests before CSRF; after a healthy probe the failure stays an ordinary error.
-The probe retries after 5, 10, 20, then 30 seconds. Recovery refreshes the reads
-the outage refused and the current route without reloading the page. Failed
+The probe retries after 5, 10, 20, then 30 seconds. Recovery refreshes the
+current route and, in place, the reads the outage refused or that failed after a
+request armed the probe; earlier ordinary errors stay as they are. Failed
 mutations are never replayed: a write refused during the outage is reported once
 the server is back, so check the record before resubmitting it. Business errors
 and HTTP 500 responses retain their ordinary error handling.
 
 The dialog uses the selected customer brand mark, else ui's animated
-`AnimatedThemeLogo`, which respects reduced motion. Its `connection.*` copy
+`AnimatedThemeLogo`, which respects reduced motion. The dialog renders above the
+appearance provider, which an outage can leave unloaded, so that mark follows the
+theme default rather than a person's logo choice. Its `connection.*` copy
 belongs to `@angee/ui`'s reserved `ui` namespace, which neither addon bundles nor
 scoped vocabulary override. Addons replace the artwork or add guidance, with
 their own copy, through the usual containers:
