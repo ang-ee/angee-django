@@ -909,8 +909,11 @@ class AmbiguousMatchError(StructuredEditError):
     """Raised when a heading path (or replace target) matches more than once."""
 
 
-class MarkdownPageQuerySet(PageQuerySet):
-    """Keep the canonical body hash current even for native bulk writes."""
+class MarkdownBodyWritesQuerySet(models.QuerySet[Any]):
+    """Keep the canonical body hash current even for native bulk writes.
+
+    A following queryset base, so hierarchy path rewrites stay ahead of it.
+    """
 
     def update(self, **kwargs: Any) -> int:
         if "body" in kwargs:
@@ -924,6 +927,10 @@ class MarkdownPageQuerySet(PageQuerySet):
                 # canonical hash in the same UPDATE as the body.
                 kwargs["body_hash"] = TextSHA256(body)
         return super().update(**kwargs)
+
+
+class MarkdownPageQuerySet(PageQuerySet, MarkdownBodyWritesQuerySet):
+    """Markdown page reads; body writes derive the canonical hash."""
 
 
 _MarkdownPageManager = PageManager.from_queryset(MarkdownPageQuerySet)
