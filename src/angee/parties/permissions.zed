@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 16
+// @rebac_schema_revision: 17
 
 // Parties, folders and circles are grant roots: each is owned through its
 // transferable `owner` column (OwnerMixin), which an insert defaults to the row's
@@ -122,7 +122,8 @@ definition parties/handle {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = creator + editor + reader + statement_source + admin->member
+    permission read_granted = creator + editor + reader + statement_source + admin->member
+    permission read = read_granted
     permission write  = creator + editor + admin->member
     permission delete = creator + admin->member
 }

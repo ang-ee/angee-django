@@ -137,6 +137,10 @@ The channel's grantable `annotator` relation permits tag changes on readable
 threads and messages. It grants no read, reply, content-edit or channel-management
 access; pair it with `reader` when an automation needs to classify inbox content.
 Trashed messages remain unavailable to annotators who cannot read them.
+A message reader takes its sender address from the message's own envelope,
+`Message.source_header_values`; `sender_name` names a sender only for readers of
+its Handle. The Handle row, its tags and history stay parties directory data
+under the Handle's own read; messaging contributes no Handle read arm.
 If removal races with an already accepted provider publish, settlement records
 `sent` while retaining trash. Restoring that row never publishes it again.
 
