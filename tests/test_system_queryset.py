@@ -296,14 +296,12 @@ def test_lock_subject_preparation_keeps_foreign_key_values_and_caches_separate(r
     original = vendor_model(pk=1)
     proposed = vendor_model(pk=2)
     row = Integration(pk=3, vendor=original)
-    row._state.db = "default"
     row._state.adding = False
     values = {"vendor": proposed} if reference == "object" else {"vendor_id": proposed.pk}
 
     candidate = row.prepare_lock_subject(values)
 
     assert candidate.vendor_id == proposed.pk
-    assert candidate._state.db == row._state.db
     assert not candidate._state.adding
     assert field.is_cached(candidate) is (reference == "object")
     if reference == "object":

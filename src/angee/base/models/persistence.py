@@ -55,7 +55,6 @@ class PersistenceMixin(models.Model):
             else:
                 columns[field.attname] = self.__dict__.get(field.attname, models.DEFERRED)
         candidate = type(self)(**columns)
-        candidate._state.db = self._state.db
         candidate._state.adding = self._state.adding
         return candidate
 

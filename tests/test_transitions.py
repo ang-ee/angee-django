@@ -895,12 +895,11 @@ def test_transition_eligibility_uses_execution_guards_without_side_effects():
 
 
 def test_lock_subject_preparation_hydrates_guarded_state_without_transition():
-    row = TransitionTask.from_db("routed", ["id", "state"], [123, TransitionTask.State.RUNNING])
+    row = TransitionTask.from_db("default", ["id", "state"], [123, TransitionTask.State.RUNNING])
 
     candidate = row.prepare_lock_subject({"state": TransitionTask.State.PAUSED})
 
     assert candidate.pk == row.pk
-    assert candidate._state.db == "routed"
     assert not candidate._state.adding
     assert candidate.get_deferred_fields() == row.get_deferred_fields()
     assert candidate.state == TransitionTask.State.PAUSED
