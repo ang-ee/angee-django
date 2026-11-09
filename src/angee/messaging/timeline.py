@@ -31,14 +31,13 @@ class CommentKind(TimelineKind):
         return issubclass(model, ThreadedModelMixin)
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        messages = apps.get_model("messaging", "Message").objects
-        readers = type(record).objects.with_actor(actor).with_action(record.thread_read_access)
-        if not readers.filter(pk=record.pk).exists():
-            return messages.none().annotate(_order_at=messages.chronological_time())
+        """The record's chatter, gated in SQL on the viewer's thread read of the record."""
+
+        readers = type(record).objects.with_actor(actor).with_action(record.thread_read_access).filter(pk=record.pk)
         with actor_context(actor):
-            return messages.record_scope(record).scoped().prefetch_related(None).select_related(
-                "subtype", "sender", "created_by",
-            )
+            return apps.get_model("messaging", "Message").objects.record_scope(record).scoped().prefetch_related(
+                None,
+            ).select_related("subtype", "sender", "created_by").filter(models.Exists(readers.scoped()))
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         if row._meta.label == "messaging.ThreadAttachment" and row.role != "chatter":
