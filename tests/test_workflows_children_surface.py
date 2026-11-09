@@ -47,7 +47,7 @@ def child_workflows(execution, register_step):
             "start": {"step": StartChild.key, "next": {"done": "await"}},
             "await": {"step": "await_run", "config": {"expects": child.key},
                       "input": {"from": "start"},
-                      "next": {"done": "finish", "error": "finish", "canceled": "finish"}},
+                      "next": {outcome: "finish" for outcome in ("done", "error", "canceled", "interrupted")}},
             "finish": {"step": Finish.key},
         },
         "results": [{"from": "finish"}],
@@ -137,7 +137,7 @@ def test_await_executes_with_run_read_without_access_to_its_workflow(schema, exe
         "nodes": {
             "await": {"step": "await_run", "config": {"expects": child_workflow.key},
                       "input": {"run_id": {"value": child.sqid}},
-                      "next": {"done": "finish", "error": "finish", "canceled": "finish"}},
+                      "next": {outcome: "finish" for outcome in ("done", "error", "canceled", "interrupted")}},
             "finish": {"step": "echo", "input": {"value": {"value": 1}}},
         },
         "results": [{"from": "finish"}],

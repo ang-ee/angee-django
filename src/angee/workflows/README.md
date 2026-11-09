@@ -17,6 +17,10 @@ contract in the node config; execution uses that frozen contract. A child outcom
 outside it fails the await step. Publishing returns the version and the readable
 published parent workflow keys that should be republished to adopt a changed child
 contract.
+Native run fallbacks include `done`, `error`, `canceled` and `interrupted`, each
+allowing an empty output. Parents must route every frozen child outcome. Older
+publications missing a native outcome retain that contract; author the missing
+route and republish before reprocessing an affected parent run.
 Schema declaration checks, format validation and structural schema operations
 come from [`angee.base.validators`](../../../src/angee/base/validators.py).
 
@@ -50,6 +54,13 @@ failure rolls back record actions and retains final answers for operator retry.
 Application failure does not automatically ask a replacement. Repeated delivery still requires
 idempotent declared methods. Selected alternatives apply in authored order;
 multiple alternatives cannot overlap the same record's field write.
+
+The shared [party identity review](../workflows_parties/steps.py) defaults to
+the run actor's identity-write authority. Its `apply_as: answerer` configuration
+uses the answering person's current standing permissions for identity changes;
+the Party owner rechecks permissions and the frozen identity facts under its
+locks. This option leaves workflow execution and evidence reads under the run
+actor and creates no grants. An unavailable answerer fails application.
 
 The default continuation emits the decision public identity and chosen keys.
 `ctx.decision(id)` loads a retained decision from this run with normal read scope.
@@ -155,7 +166,18 @@ fenced by the attempt counter and deadline. IO timeouts leave a settlement windo
 below the worker's soft and hard limits; [`Step`](steps.py) owns those bounds.
 Heartbeats retain that reserve against the current attempt's absolute lifetime.
 The shared-worker tick wakes due waits, reaps
-expired claims and redispatches undelivered ready rows. An uncertain external
+expired claims and redispatches undelivered ready rows. A ready row whose copy is
+older than the 60 s recovery interval gets a replacement, which consumes one of
+`ANGEE_WORKFLOW_MAX_DISPATCHES`; exhaustion parks the step for an operator. Every
+copy keeps its queue position: Celery expiry is the stored database dispatch time
+plus the whole allowance and one more recovery interval, so a saturated queue
+still runs the step from its oldest copy and the claim fences the rest. Expiry
+only sweeps copies a parked or settled step no longer needs; deferred publication
+never extends it. The worker compares that database-clock instant with its own
+clock: workers are assumed to run at most 45 s ahead of the database (one
+recovery interval less the 15 s tick). Larger skew shortens every copy's life by
+the excess. Message expiry is separate from a claimed attempt's execution deadline.
+An uncertain external
 effect requires operator acknowledgement unless the step declares
 `effect_idempotent`. A recorded effect takes precedence over `Retryable`;
 retries and time waits retain every attempt's effect marker for the current page.

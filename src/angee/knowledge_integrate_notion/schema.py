@@ -57,8 +57,8 @@ class NotionMutation:
     def sync_notion_connection(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Queue one resumable import from the saved connection."""
         connection = authorized_action_target(info, NotionConnection, id, "write")
-        queue_bridge_sync(connection)
-        return ActionResult(ok=True, message="Queued Notion synchronization.")
+        queued = queue_bridge_sync(connection)
+        return ActionResult(ok=True, message="Queued Notion synchronization." if queued else "Sync already running.")
 
 
 schemas = {

@@ -32,9 +32,11 @@ from angee.workflows.bindings import (
 from angee.workflows.maps import Map
 from angee.workflows.schemas import compose_schema, embed_schema, schema_at, union_schema, unmatched_properties
 from angee.workflows.states import (
+    CANCELED_OUTCOME,
     DONE_OUTCOME,
     ERROR_OUTCOME,
     INPUT_SOURCE,
+    INTERRUPTED_OUTCOME,
     ITEM_SOURCE,
     NodeKey,
     Outcome,
@@ -1561,7 +1563,9 @@ class Definition(BaseModel):
     def output_schemas(self) -> dict[str, dict[str, Any]]:
         """Combine result contracts with native terminal fallbacks by outcome."""
         empty = Step._schema(EmptyOutput, "serialization")
-        alternatives = {outcome: [empty] for outcome in ("done", ERROR_OUTCOME, "canceled")}
+        alternatives = {outcome: [empty] for outcome in (
+            DONE_OUTCOME, ERROR_OUTCOME, CANCELED_OUTCOME, INTERRUPTED_OUTCOME,
+        )}
         for result in self.results:
             step = self.step(result.source)
             for outcome in step.available_outcomes(self.node(result.source).parsed_config):

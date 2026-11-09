@@ -66,6 +66,34 @@ describe("decision context", () => {
     expect(container.textContent).toBe("");
   });
 
+  test("omits empty fact sections while preserving independent references", () => {
+    const facts = [
+      { pointer: "/missing", label: "Missing", value: null, authority: "unverified" },
+      { pointer: "/blank", label: "Blank", value: "", authority: "source" },
+    ];
+    const { container, rerender } = render(<Provider><ShellPageTestProviders runtime={runtime}>
+      <DecisionContext context={{ facts }} />
+    </ShellPageTestProviders></Provider>);
+    expect(container.textContent).toBe("");
+    expect(screen.queryByRole("region", { name: "Facts" })).toBeNull();
+    rerender(<Provider><ShellPageTestProviders runtime={runtime}><DecisionContext context={{ facts,
+      references: [{ model: "notes.Note", id: "nte_related", label: "Related note" }],
+    }} /></ShellPageTestProviders></Provider>);
+    expect(screen.getByRole("link", { name: "Related note" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Facts" })).toBeNull();
+    expect(screen.queryByText("Missing")).toBeNull();
+  });
+
+  test("retains meaningful zero and false facts", () => {
+    render(<ShellPageTestProviders><DecisionContext context={{ facts: [
+      { pointer: "/count", label: "Count", value: 0, authority: "source" },
+      { pointer: "/paid", label: "Paid", value: false, authority: "source" },
+    ] }} /></ShellPageTestProviders>);
+    expect(screen.getByRole("heading", { name: "Facts" })).toBeTruthy();
+    expect(screen.getByText("0")).toBeTruthy();
+    expect(screen.getByText("No")).toBeTruthy();
+  });
+
   test("omits empty address components and reads formatted facts through registered widgets", () => {
     render(<ShellPageTestProviders runtime={{ widgets: defaultWidgets }}><DecisionContext context={{ facts: [
       { pointer: "/address", label: "Address", authority: "source", value: { street: "Oak Street", po_box: null, city: "" } },

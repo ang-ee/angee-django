@@ -10,8 +10,8 @@ reach every taggable model without a FK back to it.
 **Scope.** Tags are reference vocabulary readable by every non-anonymous actor
 through the native ``authenticated`` permission; tag administrators curate it.
 A tag assignment is authorized by the record it tags (``permissions.zed``):
-adding or removing a tag needs write on the record, and an assignment is visible
-to whoever reads both the tag and the record.
+adding or removing a tag needs the record owner's declared tag authority, and an
+assignment is visible to whoever reads both the tag and the record.
 
 **A taggable type is declared by its owner.** The owning addon depends on
 ``angee.tags``, composes :class:`TaggedModel` onto the model (the reverse
@@ -122,8 +122,8 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
 
     Every read and write runs under the ambient actor. The target and each tag
     resolve through REBAC-scoped lookups, which fail fast on a row the actor
-    cannot read, and the edge's own ``create`` and ``delete`` gates require write
-    on the target through the relation its type's app declares, so a type no
+    cannot read, and the edge's own ``create`` and ``delete`` gates require the
+    target authority its type's app declares, so a type no
     relation names is refused.
     """
 
@@ -161,7 +161,7 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
 
         Fails fast with :class:`ValueError` on an unresolvable target or tag (an
         unreadable row is indistinguishable from a missing one, by design); the
-        edge's ``create`` gate refuses an actor without write on the target.
+        edge's ``create`` gate enforces the target owner's declared tag authority.
         """
 
         target = self.resolve_target(target_type, target_id)
@@ -175,7 +175,7 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
         """Detach each tag from the target row; return the number of edges removed.
 
         Target and tags resolve as in :meth:`attach`; the edge's ``delete`` gate
-        refuses an actor without write on the target.
+        enforces the target owner's declared tag authority.
         """
 
         target = self.resolve_target(target_type, target_id)
@@ -189,7 +189,7 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
         """Make ``record``'s tags exactly ``tag_ids``: attach the missing ones, detach the rest.
 
         Runs in the save of an owner's insert or update carrying the ``tags``
-        input, under the same actor: the edge gates require write on the record
+        input, under the same actor: the edge gates require its declared tag authority
         for each tag added or removed.
         """
 

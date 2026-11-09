@@ -291,8 +291,8 @@ class VCSActionMutation:
         """Queue a refresh of every repository's sources for one VCS bridge."""
 
         with action_target(VcsBridge, id, reason="integrate.graphql.sync_vcs_bridge") as vcs:
-            queue_bridge_sync(vcs, now=timezone.now())
-        return ActionResult(ok=True, message="Queued bridge sync.")
+            queued = queue_bridge_sync(vcs, now=timezone.now())
+        return ActionResult(ok=True, message="Queued bridge sync." if queued else "Sync already running.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def refresh_source(self, id: PublicID) -> ActionResult:

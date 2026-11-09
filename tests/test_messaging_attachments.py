@@ -43,7 +43,10 @@ def test_attached_files_select_one_forward_level_and_count_each_skipped_part(
         # Decoration stays out: a referenced image, and an inline image with no filename.
         attached("logo.png", type="image/png", disposition="inline", cid="logo@example.com"),
         ParsedPart(type="image/png", disposition="inline", content=b"png"),
-        attached("cid.txt", cid="image@example.com"),
+        # Content-ID identifies a part; it does not override an explicit attachment.
+        attached("cid.txt", cid="file@example.com"),
+        attached("cid-bill.pdf", type="application/pdf", cid="bill@example.com"),
+        attached("inline-cid-bill.pdf", type="application/pdf", disposition="inline", cid="inline@example.com"),
         ParsedPart(cid="parent@example.com", children=(attached("cid-child.txt"),)),
         attached("inline-parent.txt", disposition="inline", children=(attached("inline-child.txt"),)),
         ParsedPart(role="signature", children=(attached("signature-child.txt"),)),
@@ -54,9 +57,9 @@ def test_attached_files_select_one_forward_level_and_count_each_skipped_part(
         attached("delivery.txt", type="message/delivery-status", disposition="inline"),
         attached("disposition.txt", type="message/disposition-notification"),
         ParsedPart(type="multipart/report", children=(attached("report-child.txt"),)),
-        attached("forward.eml", type="message/rfc822", children=(
+        attached("forward.eml", type="message/rfc822", cid="forward@example.com", children=(
             ParsedPart(type="multipart/mixed", children=(
-                attached("forwarded.txt"),
+                attached("forwarded.txt", cid="forwarded@example.com"),
                 attached("nested.eml", type=" MESSAGE/RFC822 ; name=nested.eml", children=(
                     attached("too-deep.txt"),
                 )),
@@ -79,7 +82,7 @@ def test_attached_files_select_one_forward_level_and_count_each_skipped_part(
     skipped = scope.attached_file_skip_counts()
     assert Counter(part.name for part in selected) == Counter({
         "direct.txt": 2, "image.png": 1, "opaque.bin": 1, "forwarded.txt": 1,
-        "inline-bill.pdf": 1, "inline-bill.xml": 1,
+        "inline-bill.pdf": 1, "inline-bill.xml": 1, "cid.txt": 1, "cid-bill.pdf": 1,
     })
     direct = [part for part in selected if part.name == "direct.txt"]
     assert direct[0].file_id == direct[1].file_id

@@ -23,6 +23,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import create_platform_admin, create_user, make_addon
 from tests.linesdemo.models import Document, DocumentLine, Tag
+from tests.recordrefdemo.models import RecordRefPlainTarget
 from tests.scopedemo.models import SharedDoc
 
 
@@ -391,3 +392,11 @@ def test_claimed_create_rolls_back_failed_input_extensions_before_retry(composed
     assert result_data(execute_schema(_STAMPED_SCHEMA, query, {"stamp": "accepted"}, user=author)) == first
     assert _titles() == ["Retryable"]
     assert len(_stamps()) == 1
+
+
+def test_native_django_model_without_persistence_contract_still_updates(composed_tables):
+    """The Hasura adapter also accepts plain Sqid-backed Django models."""
+    record = RecordRefPlainTarget.objects.create(name="Before")
+    result = AngeeHasuraWriteBackend(RecordRefPlainTarget).update(None, record.sqid, {"name": "After"})
+    record.refresh_from_db()
+    assert result.name == record.name == "After"

@@ -24,7 +24,7 @@ from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
 from django.utils.module_loading import import_string
-from rebac import PermissionDenied, system_context
+from rebac import PermissionDenied, RebacMixin, system_context
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
 from strawberry.extensions import FieldExtension
@@ -62,6 +62,7 @@ from angee.base.identity import public_data_id_field
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for, public_id_of
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
+from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.pagination import MAX_PAGE_SIZE, valid_page_size
 from angee.base.permissions import declared_rebac_definition
@@ -256,6 +257,22 @@ class AngeeHasuraWriteBackend:
 
         return write_queryset(self.model)
 
+    def _locked_write_target(self, pk: str, values: Mapping[str, Any]) -> Any:
+        """Delegate lock order to the model, then recheck this surface's write scope."""
+
+        targets = self.write_target_queryset()
+        instance = require_instance_for_id(self.model, pk, queryset=targets)
+        if isinstance(instance, PersistenceMixin):
+            instance.prepare_lock_subject(values).lock_subject()
+            instance = require_instance_for_id(self.model, pk, queryset=targets)
+        else:
+            instance = require_instance_for_id(
+                self.model, pk, queryset=targets.select_for_update(of=row_lock_paths(self.model)),
+            )
+        if isinstance(instance, RebacMixin) and not instance.has_access("write"):
+            raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
+        return instance
+
     def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create one row through this backend's native insertion contract."""
 
@@ -315,19 +332,14 @@ class AngeeHasuraWriteBackend:
         if self.lines is None:
             raise ImproperlyConfigured(f"{self.model._meta.label} resource declares no editable lines.")
         with transaction.atomic():
-            instance = require_instance_for_id(
-                self.model,
-                pk,
-                queryset=self.write_target_queryset().select_for_update(of=row_lock_paths(self.model)),
-            )
-            if not instance.has_access("write"):
-                raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
-            if expected_revision is not None:
-                instance.require_revision(expected_revision)
             patch = dict(patch)
             extensions = _pop_input_extensions(self.model, patch)
-            if patch:
-                instance = self._update_row(info, instance, self._decode_public_id_fields(patch))
+            decoded = self._decode_public_id_fields(patch)
+            instance = self._locked_write_target(pk, decoded)
+            if expected_revision is not None:
+                instance.require_revision(expected_revision)
+            if decoded:
+                instance = self._update_row(info, instance, decoded)
             elif (line_rows is not None or extensions) and isinstance(instance, OptimisticLockMixin):
                 # A document's revision covers its child set and extension values as well as its columns.
                 instance.save(update_fields={instance.REVISION_FIELD})
@@ -395,9 +407,12 @@ class AngeeHasuraWriteBackend:
         prepared = self._prepare_line_rows(rows)
         # Phase 2 — child writes elevated, under a parent-row lock.
         with system_context(reason="graphql.hasura.save.lines"):
-            self.model._default_manager.using(parent._state.db).select_for_update(
-                of=row_lock_paths(self.model),
-            ).filter(pk=parent.pk).first()
+            if isinstance(parent, PersistenceMixin):
+                parent.lock_subject()
+            else:
+                self.model._default_manager.using(parent._state.db).select_for_update(
+                    of=row_lock_paths(self.model),
+                ).filter(pk=parent.pk).first()
             children = child_model._base_manager.using(parent._state.db).filter(**{self._line_back_fk: parent})
             existing = children.in_bulk()
             by_public_id = {public_id_of(child): child for child in existing.values()}
@@ -456,7 +471,7 @@ class AngeeHasuraWriteBackend:
                 else:
                     values = {**decoded, back_fk_id: parent.pk}
                     if issubclass(child_model, RowLockMixin):
-                        _unsaved_row(child_model, values).validate_row_lock(None)
+                        child_model(**_column_values(child_model, values)).validate_row_lock(None)
                     # Created through the manager, so its factory invariants still apply.
                     child = mutation_resolvers.create(
                         info,
@@ -491,16 +506,13 @@ class AngeeHasuraWriteBackend:
         """Patch one public-id-addressed row through the write queryset, then its input extensions."""
 
         with transaction.atomic():
-            instance = require_instance_for_id(
-                self.model,
-                pk,
-                queryset=self.write_target_queryset().select_for_update(of=row_lock_paths(self.model)),
-            )
-            if expected_revision is not None:
-                instance.require_revision(expected_revision)
             data = dict(data)
             extensions = _pop_input_extensions(self.model, data)
-            instance = self._update_row(info, instance, self._decode_public_id_fields(data))
+            decoded = self._decode_public_id_fields(data)
+            instance = self._locked_write_target(pk, decoded)
+            if expected_revision is not None:
+                instance.require_revision(expected_revision)
+            instance = self._update_row(info, instance, decoded)
             if extensions:
                 instance.apply_input_extensions(**extensions)
             return instance
@@ -620,11 +632,11 @@ def _row_lock_check(previous: Mapping[str, Any]) -> Callable[[models.Model], Non
     return validate
 
 
-def _unsaved_row[M: models.Model](model: type[M], values: Mapping[str, Any]) -> M:
-    """Return an unsaved row carrying a new line's concrete column values, for its lock check."""
+def _column_values(model: type[models.Model], values: Mapping[str, Any]) -> dict[str, Any]:
+    """Select decoded concrete values for a model-owned lock check."""
 
     columns = {name for field in model._meta.concrete_fields for name in (field.name, field.attname)}
-    return model(**{name: value for name, value in values.items() if name in columns})
+    return {name: value for name, value in values.items() if name in columns}
 
 
 def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:

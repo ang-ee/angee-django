@@ -64,7 +64,7 @@ def child_graph(execution, register_step):
             nodes["start"]["next"] = {"done": "await"}
             nodes["await"] = {
                 "step": "await_run", "config": {"expects": child_workflow.key},
-                "next": {outcome: "finish" for outcome in ("done", "error", "canceled")},
+                "next": {outcome: "finish" for outcome in ("done", "error", "canceled", "interrupted")},
             }
             nodes["finish"] = {"step": Finish.key}
         parent_workflow = load_workflow({"nodes": nodes}, key=f"parent-{len(admitted)}", actor=actor)

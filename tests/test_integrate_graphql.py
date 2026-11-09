@@ -1437,12 +1437,13 @@ def test_sync_integration_queues_bridge_for_an_admin(
     bridge = make_integration("sync-queue", backend_class="stub", model=VcsBridge)
     queued: list[tuple[int, Any]] = []
 
-    def fake_queue_bridge_sync(queued_bridge: VcsBridge, *, now: Any = None) -> None:
+    def fake_queue_bridge_sync(queued_bridge: VcsBridge, *, now: Any = None) -> bool:
         queued.append((queued_bridge.pk, now))
         queued_bridge.sync_stage = queued_bridge.SyncStage.QUEUED
         queued_bridge.sync_error = ""
         queued_bridge.sync_progress = {"stage": queued_bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
         queued_bridge.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"])
+        return True
 
     monkeypatch.setattr(integrate_queue, "queue_bridge_sync", fake_queue_bridge_sync)
     monkeypatch.setattr("angee.integrate.schema.queue_bridge_sync", fake_queue_bridge_sync)

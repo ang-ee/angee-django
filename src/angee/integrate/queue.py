@@ -5,22 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from django.db import transaction
 from django.utils import timezone
-from rebac import system_context
 
 from angee.jobs.enqueue import enqueue_task
 
 
-def queue_bridge_sync(bridge: Any, *, now: datetime | None = None, persist: bool = True) -> None:
-    """Mark and send one bridge sync task."""
+def queue_bridge_sync(bridge: Any, *, now: datetime | None = None, persist: bool = True) -> bool:
+    """Send one admitted sync task; return false when an execution already owns it."""
 
     if bridge.pk is None:
         raise ValueError("Cannot queue an unsaved bridge.")
     timestamp = now or timezone.now()
-    if persist:
-        with system_context(reason="integrate.queue_bridge_sync"), transaction.atomic():
-            bridge.mark_sync_queued(now=timestamp)
+    if persist and not bridge.mark_sync_queued(now=timestamp):
+        return False
     enqueue_task(
         "integrate.sync_bridge_now",
         kwargs={
@@ -29,3 +26,4 @@ def queue_bridge_sync(bridge: Any, *, now: datetime | None = None, persist: bool
             "timestamp": timestamp.isoformat(),
         },
     )
+    return True

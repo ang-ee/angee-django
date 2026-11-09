@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 23
+// @rebac_schema_revision: 25
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -11,12 +11,14 @@ definition messaging/channel {
     relation integration: integrate/integration // rebac:field=integration_ptr
     relation replier: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    relation annotator: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
     permission read   = integration->read + reader + replier + admin->member
     permission reply  = replier + integration->write + admin->member
     permission write  = integration->write + admin->member
+    permission annotate = annotator + write
     permission delete = integration->write + admin->member
     permission write__owner = integration->transfer
 }
@@ -49,6 +51,9 @@ definition messaging/thread {
     permission read_inbox = read_granted
     permission read = read_granted + chatter_read
     permission write  = channel->write + owner + editor + identity_source + admin->member
+    // Messages inherit the authority, then apply their own read gate.
+    permission annotate_granted = write + channel->annotate
+    permission annotate = annotate_granted & read
     permission share  = owner + editor + admin->member
     permission delete = owner + channel->delete + admin->member
     permission transfer = owner + admin->member
@@ -85,6 +90,8 @@ definition messaging/message {
     permission read_inbox = ((thread->read_inbox + read_granted) - withheld) + withheld_keeper
     permission send_held = channel->write + admin->member
     permission write  = thread->write + channel->write + editor + identity_source + admin->member
+    // Tag-only access follows either channel link, without bypassing withholding.
+    permission annotate = (write + thread->annotate_granted + channel->annotate) & read
     permission delete = thread->delete + channel->write + editor + admin->member
 }
 

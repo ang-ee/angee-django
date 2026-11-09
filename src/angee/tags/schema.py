@@ -5,8 +5,8 @@ Exposed on the admin console. :class:`Tag` gets ordinary CRUD; the polymorphic
 written through the authored ``tag`` / ``untag`` mutations and read through the
 authored ``tag_assignments`` query — all thin dispatchers into
 :class:`~angee.tags.models.TagAssignmentManager`, which writes under the calling
-actor: the edge's own gates require write on the tagged record, whoever curates
-the vocabulary.
+actor: the edge's gates enforce the tagged record owner's declared tag authority,
+whoever curates the vocabulary.
 
 Owners of taggable models compose :class:`TaggedNode` onto their console node
 type to read a row's tags as a batched, actor-scoped relation list, and
@@ -236,14 +236,14 @@ class TagMutation:
 
     @strawberry.mutation(name="tag")
     def tag(self, target_type: str, target_id: PublicID, tag_ids: list[PublicID]) -> list[TagAssignmentType]:
-        """Attach each tag in ``tag_ids`` to a target row the actor writes (idempotent per edge)."""
+        """Attach each tag idempotently under the target owner's declared tag authority."""
 
         assignments = TagAssignment.objects.attach(target_type, str(target_id), [str(tag_id) for tag_id in tag_ids])
         return cast(list[TagAssignmentType], assignments)
 
     @strawberry.mutation(name="untag")
     def untag(self, target_type: str, target_id: PublicID, tag_ids: list[PublicID]) -> bool:
-        """Detach each tag in ``tag_ids`` from a target row the actor writes."""
+        """Detach each tag under the target owner's declared tag authority."""
 
         TagAssignment.objects.detach(target_type, str(target_id), [str(tag_id) for tag_id in tag_ids])
         return True

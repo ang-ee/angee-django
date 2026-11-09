@@ -71,9 +71,12 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
                     if bridge is None:
                         skipped += 1
                         continue
-                    if bridge.sync_stage != Bridge.SyncStage.QUEUED:
+                    was_queued = bridge.sync_stage == Bridge.SyncStage.QUEUED
+                    if not bridge.mark_sync_queued(now=timestamp):
+                        skipped += 1
+                        continue
+                    if not was_queued:
                         bridge.claim_sync(now=timestamp)
-                    bridge.mark_sync_queued(now=timestamp)
                 try:
                     queue_bridge_sync(bridge, now=timestamp, persist=False)
                 except Exception:

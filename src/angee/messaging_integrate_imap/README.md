@@ -45,3 +45,17 @@ starting-point action snapshots remote boundaries before its transaction and
 installs those positions through the driver's stream reset owner; epoch resets
 preserve current configuration. Retired bridge cursor formats are not read by
 the live backend.
+
+Polling admits IMAP commands and reconnect retries only within the driver's
+extraction deadline, using IMAPClient's native connection and socket timeouts.
+If a page runs out of budget, its records are discarded and its durable cursor
+stays unchanged; the next attempt rebuilds the UID plan from that position.
+Expired sessions shut down locally instead of waiting for a LOGOUT response.
+A message the parser fails on, for any reason, still lands through the
+raw-message fallback, so one poison message never stalls its mailbox; worker
+cancellation propagates to the task owner with the cursor unchanged.
+
+The deadline bounds transport work between commands; it does not interrupt an
+atomic page application. Configure the existing `sync_page_bound` and
+`sync_time_budget` on slow channels to leave time for page application and task
+settlement below the worker's limit.

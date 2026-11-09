@@ -155,8 +155,8 @@ class StorageIntegrateMutation:
         """Queue an immediate reconciliation of one Mount."""
 
         with action_target(Mount, id, reason="storage_integrate.graphql.sync_mount") as mount:
-            queue_bridge_sync(mount, now=timezone.now())
-        return ActionResult(ok=True, message="Queued mount sync.")
+            queued = queue_bridge_sync(mount, now=timezone.now())
+        return ActionResult(ok=True, message="Queued mount sync." if queued else "Sync already running.")
 
 
 schemas = {

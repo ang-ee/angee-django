@@ -669,8 +669,10 @@ data through REBAC, never a queryset bypass.
   field in its web fragment. The native prefetch hint batches every row's
   readable edges and tags once per page under the actor's scope. Adding or
   removing a tag, through the record's save or the `tag`/`untag` verbs, needs
-  write on the record; tag administrators curate only the vocabulary. An edge is
-  read by whoever reads both the tag and the record. `TagAssignment.check`
+  the record owner's declared tag authority, usually `write`; messaging uses
+  `annotate` to permit tags without content edits. Tag administrators curate
+  only the vocabulary. An edge is read by whoever reads both the tag and the
+  record. `TagAssignment.check`
   fails startup when the taggable models and the declared relations differ. The
   tags addon names no other addon's model.
 - **Raise through the model's access owner.** `require_access(permission, actor=None)`
@@ -1702,6 +1704,19 @@ open fresh evaluator scopes for authorization and change-feed reads.
   contributed field; [`AngeeSchema`](../../src/angee/graphql/schema.py) exposes
   the composed definition to optimizer consumers without mutating shared addon
   declarations, so a narrow list selection costs the same at any row count.
+
+### Record write locking
+
+Generic proposal and Hasura writes delegate to
+[`PersistenceMixin.lock_subject`](../../src/angee/base/models/persistence.py)
+before acquiring subject rows. Domain overrides acquire prerequisite rows in
+stable order and return the persisted subject. `prepare_lock_subject` hydrates
+only decoded concrete values through native Django construction, so owners can
+lock both current and proposed scopes without invoking guarded transitions.
+This candidate is only for lock selection; it never becomes the write target.
+Callers reload through their original actor and surface scope and recheck write
+permission after waiting. Statement-member identity remains the hook's optional
+`members` argument. Plain Django models retain native row locking.
 
 ### Direct record access
 

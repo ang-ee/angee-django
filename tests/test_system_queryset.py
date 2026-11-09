@@ -270,3 +270,29 @@ def test_an_explicit_none_reader_fails_closed_where_an_omitted_one_reads_ambient
         assert require_rebac_queryset(SystemQueryThing, actor=None).count() == 0
     assert require_rebac_queryset(SystemQueryThing).actor() is None
     assert require_rebac_queryset(SystemQueryThing, actor=actor).actor() == actor
+
+
+@pytest.mark.parametrize("reference", ["object", "id"])
+def test_lock_subject_preparation_keeps_foreign_key_values_and_caches_separate(reference):
+    field = Integration._meta.get_field("vendor")
+    vendor_model = field.remote_field.model
+    original = vendor_model(pk=1)
+    proposed = vendor_model(pk=2)
+    row = Integration(pk=3, vendor=original)
+    row._state.db = "default"
+    row._state.adding = False
+    values = {"vendor": proposed} if reference == "object" else {"vendor_id": proposed.pk}
+
+    candidate = row.prepare_lock_subject(values)
+
+    assert candidate.vendor_id == proposed.pk
+    assert candidate._state.db == row._state.db
+    assert not candidate._state.adding
+    assert field.is_cached(candidate) is (reference == "object")
+    if reference == "object":
+        assert candidate.vendor is proposed
+    assert row.vendor is original
+    assert candidate._state.fields_cache is not row._state.fields_cache
+    untouched = row.prepare_lock_subject({})
+    assert untouched.vendor_id == original.pk
+    assert not field.is_cached(untouched)
