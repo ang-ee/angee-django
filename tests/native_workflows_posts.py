@@ -4,10 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from datetime import datetime, timedelta
 from pathlib import Path
-from queue import Queue
 from tempfile import TemporaryDirectory
 from threading import Barrier
-from time import monotonic, sleep
 from types import ModuleType, SimpleNamespace
 from unittest import skipUnless
 from unittest.mock import patch
@@ -58,6 +56,7 @@ from angee.workflows.tasks import cancel as cancel_workflow
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.triggers import TriggerSource
 from angee.workflows_agents.steps import MAX_PENDING_REDISPATCHES, StartConversation, render_prompt
+from tests.lock_waits import submit, wait_for_lock
 
 Agent = apps.get_model("agents", "Agent")
 Workflow = apps.get_model("workflows", "Workflow")
@@ -373,34 +372,11 @@ class CommentReplyTests(TransactionTestCase):
     def test_cancellation_waits_for_settlement_before_removing_turn_watches(self):
         run, session = self.waiting_run()
         turn = session.claim_turn()
-        started = Queue()
-
-        def cancel():
-            close_old_connections()
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("SELECT pg_backend_pid()")
-                    started.put(cursor.fetchone()[0])
-                return WorkflowRun.objects.cancel(run, actor=self.admin)
-            finally:
-                close_old_connections()
-
         with ThreadPoolExecutor(max_workers=1) as pool:
             with transaction.atomic():
                 AgentSession.system_queryset(lock=("self",)).get(pk=session.pk)
-                contender = pool.submit(copy_context().run, cancel)
-                pid = started.get(timeout=10)
-                deadline = monotonic() + 10
-                while monotonic() < deadline:
-                    with connection.cursor() as cursor:
-                        cursor.execute("SELECT pg_stat_clear_snapshot()")
-                        cursor.execute("SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s", [pid])
-                        if cursor.fetchone() == ("Lock",):
-                            break
-                    self.assertFalse(contender.done(), "Cancellation finished before waiting for the session.")
-                    sleep(0.01)
-                else:
-                    self.fail("Cancellation did not reach a PostgreSQL row-lock wait.")
+                contender, pid = submit(pool, lambda: WorkflowRun.objects.cancel(run, actor=self.admin))
+                wait_for_lock(pid, contender)
                 # The worker owns the session; its turn save must still update the watches.
                 session.settle_turn(turn, TurnOutcome(kind="completed", text="Settled before cancellation"))
             self.assertTrue(contender.result(timeout=10).canceled)

@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
-from contextvars import copy_context
-from queue import Queue
-from time import monotonic, sleep
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from unittest import skipUnless
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import close_old_connections, connection, connections, transaction
+from django.db import connection, transaction
 from django.test import TransactionTestCase
 from rebac import system_context
 
 from angee.messaging.webforms import WebformChanged, WebformUnavailable
+from tests.lock_waits import submit, wait_for_lock
 
 
 class WebformFixture(TransactionTestCase):
@@ -90,8 +87,8 @@ class WebformSubmissionLockTests(WebformFixture):
         with ThreadPoolExecutor(max_workers=1) as pool:
             with transaction.atomic():
                 self.Channel.system_queryset(lock=("self",)).get(pk=self.channel.pk)
-                contender, pid = _submit(pool, lambda: channel.submit_webform(parsed))
-                _wait_for_lock(self, pid, contender)
+                contender, pid = submit(pool, lambda: channel.submit_webform(parsed))
+                wait_for_lock(pid, contender)
                 self.change(**values)
             with self.assertRaises(error):
                 contender.result(timeout=10)
@@ -103,36 +100,3 @@ class WebformSubmissionLockTests(WebformFixture):
     def test_submission_waits_for_a_concurrent_form_change(self) -> None:
         self.race(WebformChanged, max_field_bytes=1_024)
 
-
-def _submit(pool: ThreadPoolExecutor, call: Callable[[], Any]) -> tuple[Future[Any], int]:
-    """Run ``call`` on its own database connection and return its PostgreSQL backend pid."""
-
-    started: Queue[int] = Queue()
-
-    def invoke() -> Any:
-        close_old_connections()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT pg_backend_pid()")
-                started.put(cursor.fetchone()[0])
-            return call()
-        finally:
-            connections.close_all()
-
-    future = pool.submit(copy_context().run, invoke)
-    return future, started.get(timeout=10)
-
-
-def _wait_for_lock(case: TransactionTestCase, pid: int, future: Future[Any]) -> None:
-    """Prove the competing backend is blocked on a row lock before the holder commits."""
-
-    deadline = monotonic() + 10
-    while monotonic() < deadline:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT pg_stat_clear_snapshot()")
-            cursor.execute("SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s", [pid])
-            if cursor.fetchone() == ("Lock",):
-                return
-        case.assertFalse(future.done(), "The submission finished before waiting on the channel row.")
-        sleep(0.01)
-    case.fail("The submission did not reach a PostgreSQL row-lock wait.")

@@ -61,8 +61,8 @@ from tests import (
 from tests.conftest import Credential, ExternalAccount, OAuthClient, addon_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.iam_models import Group as IAMGroup
+from tests.lock_waits import submit, wait_for_lock
 from tests.tables import model_tables
-from tests.test_decisions_concurrency import submit, wait_for_lock
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")

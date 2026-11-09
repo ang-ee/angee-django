@@ -8,7 +8,7 @@ from django.db import connection, transaction
 from rebac import actor_context
 
 from angee.portfolio.testing.models import Update
-from tests.test_decisions_concurrency import submit, wait_for_lock
+from tests.lock_waits import submit, wait_for_lock
 from tests.test_portfolio_updates import reportable as reportable
 
 pytestmark = [

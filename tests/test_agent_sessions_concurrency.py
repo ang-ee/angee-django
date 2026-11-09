@@ -14,8 +14,8 @@ from angee.agents.models import SessionStatus, TurnStatus
 from angee.agents.runners import TurnOutcome
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn
 from tests.conftest import create_platform_admin
+from tests.lock_waits import submit, wait_for_lock
 from tests.test_agent_sessions import session as session
-from tests.test_decisions_concurrency import submit, wait_for_lock
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),

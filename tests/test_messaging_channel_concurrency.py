@@ -10,8 +10,8 @@ from rebac import system_context
 
 from angee.messaging.testing.models import Channel
 from tests.conftest import Vendor
+from tests.lock_waits import submit, wait_for_lock
 from tests.pairing_backend import FakePairingBackend
-from tests.test_decisions_concurrency import submit, wait_for_lock
 
 pytest_plugins = ("tests.test_messaging_pairing_graphql",)
 
