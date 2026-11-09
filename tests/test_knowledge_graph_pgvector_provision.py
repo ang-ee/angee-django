@@ -1,6 +1,6 @@
 """The native pre-migrate lifecycle prepares pgvector before host table DDL."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from django.apps import apps
@@ -11,12 +11,15 @@ from django.db.models.signals import pre_migrate
 from angee.knowledge_graph_pgvector.signals import prepare_vector_extension
 
 
-def test_pre_migrate_prepares_vector_once_for_the_addon(monkeypatch):
+def test_pre_migrate_prepares_vector_and_trigrams_once_for_the_addon(monkeypatch):
     monkeypatch.setattr(connection, "vendor", "postgresql")
     cursor = MagicMock()
     monkeypatch.setattr(connection, "cursor", lambda: cursor)
     pre_migrate.send(sender=apps.get_app_config("knowledge_graph_pgvector"), using="default")
-    cursor.__enter__.return_value.execute.assert_called_once_with("CREATE EXTENSION IF NOT EXISTS vector")
+    assert cursor.__enter__.return_value.execute.call_args_list == [
+        call('CREATE EXTENSION IF NOT EXISTS "vector"'),
+        call('CREATE EXTENSION IF NOT EXISTS "pg_trgm"'),
+    ]
 
 
 def test_pre_migrate_is_a_noop_on_sqlite(monkeypatch):
@@ -33,4 +36,13 @@ def test_pre_migrate_reports_extension_installation_and_privilege_failure(monkey
     cursor.__enter__.return_value.execute.side_effect = DatabaseError("permission denied")
     monkeypatch.setattr(connection, "cursor", lambda: cursor)
     with pytest.raises(ImproperlyConfigured, match="vector.*privileges"):
+        prepare_vector_extension(None, using="default")
+
+
+def test_pre_migrate_identifies_pg_trgm_failure_after_vector_succeeds(monkeypatch):
+    monkeypatch.setattr(connection, "vendor", "postgresql")
+    cursor = MagicMock()
+    cursor.__enter__.return_value.execute.side_effect = [None, DatabaseError("permission denied")]
+    monkeypatch.setattr(connection, "cursor", lambda: cursor)
+    with pytest.raises(ImproperlyConfigured, match="pg_trgm.*privileges"):
         prepare_vector_extension(None, using="default")

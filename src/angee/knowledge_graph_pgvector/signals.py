@@ -13,9 +13,9 @@ from angee.knowledge_graph_pgvector.constants import EMBED_PAGE_TASK, RECONCILE_
 
 
 def prepare_vector_extension(sender: Any, using: str, **kwargs: Any) -> None:
-    """Create the extension before Django applies any host-authored migration.
+    """Prepare vector storage and trigram resolution before host migrations.
 
-    Ordinary migrations may also carry ``pgvector.django.VectorExtension``.
+    Host migrations may also carry ``VectorExtension`` and ``TrigramExtension``.
     A preinstalled extension needs no elevated role; a missing extension needs
     the server package and creation privileges. SQLite remains a no-op here.
     """
@@ -23,14 +23,15 @@ def prepare_vector_extension(sender: Any, using: str, **kwargs: Any) -> None:
     connection = connections[using]
     if connection.vendor != "postgresql":
         return
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    except DatabaseError as error:
-        raise ImproperlyConfigured(
-            "Cannot prepare PostgreSQL extension 'vector'. Install pgvector on the server and grant "
-            "extension-creation privileges, or have an administrator CREATE EXTENSION vector before migrate."
-        ) from error
+    for extension in ("vector", "pg_trgm"):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(f"CREATE EXTENSION IF NOT EXISTS {connection.ops.quote_name(extension)}")
+        except DatabaseError as error:
+            raise ImproperlyConfigured(
+                f"Cannot prepare PostgreSQL extension '{extension}'. Install the extension on the server and grant "
+                f"extension-creation privileges, or have an administrator CREATE EXTENSION {extension} before migrate."
+            ) from error
 
 
 def connect() -> None:
@@ -63,9 +64,14 @@ def enqueue_embedding(
     if raw:
         return
     if sender._meta.label_lower == "knowledge.vault":
-        if update_fields is None or {"retrieval_class", "embedding_model", "embedding_model_id"}.intersection(
-            update_fields
-        ):
+        if update_fields is None or {
+            "retrieval_class",
+            "embedding_model",
+            "embedding_model_id",
+            "extraction_model",
+            "extraction_model_id",
+            "graph_entity_kinds",
+        }.intersection(update_fields):
             enqueue_task(RECONCILE_TASK, kwargs={"vault_id": instance.pk}, expires=RECONCILE_SECONDS, robust=True)
     elif update_fields is None or {"body", "title", "vault", "vault_id"}.intersection(update_fields):
         enqueue_task(EMBED_PAGE_TASK, kwargs={"pk": instance.pk}, expires=RECONCILE_SECONDS, robust=True)
