@@ -16,7 +16,7 @@ from typing import ClassVar, Protocol, cast
 from asgiref.sync import sync_to_async
 from django.apps import apps
 from django.conf import settings
-from django.db import connection, models, router, transaction
+from django.db import connection, models, transaction
 from django.db.models.base import ModelState
 from django.utils import timezone
 
@@ -137,8 +137,6 @@ class _ChangesetBoundary:
                 origin = facts.pop("origin", None)
                 facts.setdefault("occurred_at", timezone.now())
                 instance = cast(ChangesetLike, model(actor_ref=key[1], **facts))
-                if self.using is not None:
-                    instance._state.db = self.using
                 if origin is not None:
                     setattr(instance, "origin", origin)
                 row = self.rows[key] = _ChangesetRow(instance)
@@ -151,7 +149,6 @@ class _ChangesetBoundary:
             instance.change_reason = cast(str, self.facts.get("change_reason", instance.ambient_attribution()[1]))
             row.attributed = True
         if record and not row.persisted:
-            using = self.using or router.db_for_write(changeset_model(), instance=instance)
             # Django removes callbacks on savepoint/transaction rollback and
             # retains them on savepoint release. The queue owns that distinction.
             if row.pending_commit is None or not any(
@@ -159,7 +156,7 @@ class _ChangesetBoundary:
             ):
                 instance._set_pk_val(None)
                 instance._state.adding = True
-                instance.save(force_insert=True, using=using)
+                instance.save(force_insert=True, using=self.using)
 
                 def mark_persisted() -> None:
                     row.persisted = True
@@ -351,9 +348,9 @@ def changeset(
     each writing thread and actor records its own row under the shared facts.
     Asynchronous entrypoints use ``async with``. ``process=True`` is for an
     entrypoint that owns the whole process (a management command, a test): threads
-    it starts without copying the context write under this boundary too. An explicit
-    ``using`` passes a Django-supplied alias (a command's ``--database``) through to
-    fresh attribution rows; omitted, Django's router places them. Nested scopes
+    it starts without copying the context write under this boundary too. Angee runs
+    on one database, so callers omit ``using`` and Django places the rows; an
+    explicit alias still passes through to fresh attribution rows. Nested scopes
     restore the previous boundary.
     """
 

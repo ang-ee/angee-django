@@ -233,7 +233,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         if not self.scope or not self.key:
             raise RuntimeError("Only a claimed changeset can record a created row.")
         self.created_row = row
-        type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).filter(pk=self.pk).update(
+        type(self)._base_manager.filter(pk=self.pk).update(
             created_content_type_id=self.created_content_type_id,
             created_object_id=self.created_object_id,
         )
@@ -307,7 +307,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         self.state = self.State(self.State.CLOSED)
         self.outcome = self.Outcome(outcome)
         self.touched = sorted(set(self.touched))
-        type(self)._base_manager.using(self._state.db).filter(pk=self.pk).update(
+        type(self)._base_manager.filter(pk=self.pk).update(
             state=self.state,
             outcome=self.outcome,
             touched=self.touched,
@@ -323,12 +323,11 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
     def history_rows(self) -> Any:
         """Yield touched owners and their native versions in deterministic order."""
 
-        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
         for label in sorted(set(self.touched)):
             model = apps.get_model(label)
             if model_history(model) is None:
                 raise ValidationError(f"{label}: the history owner is unavailable.")
-            yield model, model.history.using(using).filter(changeset_id=self.pk).order_by("history_id")
+            yield model, model.history.filter(changeset_id=self.pk).order_by("history_id")
 
     def _document_chunks(self) -> Any:
         fields = {
@@ -365,7 +364,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         digest = canonical_json_sha256(chunks=(text,))
         if self.hash != digest:
             self.hash = digest
-            type(self)._base_manager.using(self._state.db).filter(pk=self.pk).update(hash=digest)
+            type(self)._base_manager.filter(pk=self.pk).update(hash=digest)
         return text
 
     def revert(self) -> Any:
@@ -377,14 +376,13 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         detection queues the corrected projection on the next sync.
         """
 
-        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
         actor = instance_actor(self) or current_actor()
         if self.state != self.State.CLOSED or self.outcome != self.Outcome.SUCCESS:
             raise ValidationError("Only a successfully closed changeset can be reverted.")
         with (
             actor_context(actor) if actor is not None else nullcontext(),
             transaction.atomic(),
-            changeset(fresh=True, activity="revert", origin=self, using=using),
+            changeset(fresh=True, activity="revert", origin=self),
         ):
             histories = []
             subjects: dict[tuple[type[models.Model], Any], Any] = {}
@@ -393,16 +391,8 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
                 if not isinstance(history, ModelHistory):
                     raise ValidationError(f"{model._meta.label}: no record history policy owner.")
                 histories.append((model, history))
-                for version in (
-                    model.history.using(using)
-                    .filter(
-                        changeset_id=self.pk,
-                    )
-                    .order_by("history_id")
-                    .iterator()
-                ):
+                for version in model.history.filter(changeset_id=self.pk).order_by("history_id").iterator():
                     subject = version.history_object
-                    subject._state.db = using
                     subjects.setdefault((type(subject), subject.pk), subject)
             for subject in sorted(subjects.values(), key=lambda row: (row._meta.label_lower, str(row.pk))):
                 try:
@@ -413,7 +403,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
                     pass
             states = []
             for model, history in histories:
-                for first, last, previous in history.changeset_states(model, self, using=using):
+                for first, last, previous in history.changeset_states(model, self):
                     history.authorize_revert(first, last, previous, actor)
                     states.append((history, first, last, previous))
             affected = {}
@@ -424,7 +414,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
                     for subject in history.revert_row(first, last, previous):
                         affected[(type(subject), subject.pk)] = subject
                 for subject in affected.values():
-                    if type(subject)._base_manager.using(using).filter(pk=subject.pk).exists():
+                    if type(subject)._base_manager.filter(pk=subject.pk).exists():
                         for manager in subject.statement_managers():
                             manager.resolve()
                 result = current_changeset(required=True, record=True)

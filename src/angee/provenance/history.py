@@ -248,8 +248,7 @@ class ModelHistory(HistoricalRecords):
         if previous is _UNLOADED:
             previous = (
                 type(last)
-                .objects.using(last._state.db)
-                .filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
+                .objects.filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
                 .order_by("-history_id")
                 .first()
             )

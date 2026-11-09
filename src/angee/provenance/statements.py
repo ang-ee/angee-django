@@ -285,8 +285,6 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         if model is not None:
             self.model = model
         self.instance = instance
-        if instance is not None:
-            self._db = instance._state.db
 
     def get_queryset(self) -> StatementQuerySet[T]:
         rows = cast(StatementQuerySet[T], super().get_queryset())
@@ -325,7 +323,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         if not natural_key:
             raise ValidationError("Statements require a subject natural key.")
         with transaction.atomic():
-            subject = self.model.statement_subject_model._base_manager.using(self.db).get(**natural_key)
+            subject = self.model.statement_subject_model._base_manager.get(**natural_key)
             subject = most_derived_concrete(subject).lock_subject(member_key)
             source, members, defaults = self._admit(
                 subject,
@@ -343,11 +341,11 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
             key = dict(subject=subject, asserted_by=str(source), aspect=aspect, superseded=None, **members)
             candidate = self.model(**key, **defaults)
             candidate.full_clean(validate_unique=False, validate_constraints=False)
-            existing = self.model._base_manager.using(self.db).filter(**key).first()
+            existing = self.model._base_manager.filter(**key).first()
             if existing is not None and existing.same_values(candidate, defaults):
                 return existing
             with system_context(reason="statements.set"):
-                statement, _ = self.model._base_manager.db_manager(self.db).update_or_create(**key, defaults=defaults)
+                statement, _ = self.model._base_manager.update_or_create(**key, defaults=defaults)
                 self.resolve(subject=subject, aspect=aspect, members=members)
             statement.refresh_from_db()
             return statement
@@ -394,7 +392,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         refs = validate_value(list[EvidenceReference], list(evidence), field="evidence")
         if kind == SourceKind.PERSON:
             readable_records(refs, (source,))
-        members = declaration.coerce_members(self.model, source, member_key, kind=SourceKind(kind), using=self.db)
+        members = declaration.coerce_members(self.model, source, member_key, kind=SourceKind(kind))
         defaults = {name: values.get(name) for name in declaration.fields}
         defaults.update(
             snak=snak,
@@ -427,7 +425,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         link: Any = None,
     ) -> int:
         source = self.asserting_source(asserted_by)
-        rows = self.model._base_manager.using(self.db).filter(asserted_by=str(source), superseded__isnull=True)
+        rows = self.model._base_manager.filter(asserted_by=str(source), superseded__isnull=True)
         rows = rows.exclude(status=status)
         if (bound := self.instance) is not None:
             rows = rows.filter(subject=bound)
@@ -441,7 +439,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         if subjects is not None:
             selected: set[object] = set()
             for subject_batch in by_key(
-                self.model.statement_subject_model._base_manager.using(self.db),
+                self.model.statement_subject_model._base_manager.all(),
                 [subject.pk if isinstance(subject, models.Model) else subject for subject in subjects],
             ):
                 selected.update(rows.filter(subject__in=subject_batch.values("pk")).values_list("pk", flat=True))
@@ -463,7 +461,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         count = 0
         for subject_id, subject_keys in sorted(affected.items()):
             with transaction.atomic():
-                subject = self.model.statement_subject_model._base_manager.using(self.db).get(pk=subject_id)
+                subject = self.model.statement_subject_model._base_manager.get(pk=subject_id)
                 subject = most_derived_concrete(subject).lock_subject()
                 subject.require_statement_write(source)
                 with system_context(reason="statements.transition"):
@@ -472,7 +470,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
                         for row in statement_batch.order_by("pk").select_for_update():
                             row.status = status
                             # A transition changes the source's stance, so it moves its recency.
-                            row.save(using=self.db, update_fields=("status", "updated_at"))
+                            row.save(update_fields=("status", "updated_at"))
                             members = {
                                 name: _statement_column(type(row), name).value_from_object(row)
                                 for name in self.model.statement_aspects[row.aspect].members
@@ -506,10 +504,9 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         actor = instance_actor(subject)
         if not is_sudo():
             subject.require_statement_write(actor)
-        using = subject._state.db
         with transaction.atomic(), system_context(reason="statements.resolve"):
             subject = subject.lock_subject(members or {})
-            rows = self.model._base_manager.using(using).filter(subject=subject, superseded__isnull=True)
+            rows = self.model._base_manager.filter(subject=subject, superseded__isnull=True)
             if aspect is not None:
                 rows = rows.filter(aspect=aspect, **(members or {}))
             link_field = self.model.link_field()
@@ -571,7 +568,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
                 for row in sorted(candidates, key=lambda row: row is winner):
                     if row.applied != (row is winner):
                         row.applied = row is winner
-                        row.save(using=using, update_fields=("applied",))
+                        row.save(update_fields=("applied",))
                 if (winner is not None and winner.snak == self.model.StatementSnak.SOME_VALUE) or (
                     winner is None and any(row.snak == self.model.StatementSnak.SOME_VALUE for row in asserted)
                 ):
@@ -599,22 +596,22 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
             if row.superseded_id is None:
                 key = dict(row.current_key(), superseded__isnull=True)
                 key.update(target)
-                kept = self.model._base_manager.using(rows.db).filter(**key).exclude(pk=row.pk).first()
+                kept = self.model._base_manager.filter(**key).exclude(pk=row.pk).first()
                 if kept is not None:
                     winner = min((kept, row), key=lambda item: item.sort_key())
                     loser = row if winner is kept else kept
                     loser.superseded = winner
                     loser.applied = False
-                    loser.save(using=rows.db, update_fields=("superseded", "applied"))
+                    loser.save(update_fields=("superseded", "applied"))
             for name, value in target.items():
                 setattr(row, name, value)
             # Applied rows from different sources also share the destination's key.
             row.applied = False
-            row.save(using=rows.db, update_fields=(*columns, "applied"))
+            row.save(update_fields=(*columns, "applied"))
             subjects.add(row.subject_id)
         for subject_id in sorted(subjects):
-            subject = self.model.statement_subject_model._base_manager.using(rows.db).get(pk=subject_id)
-            self.db_manager(rows.db).resolve(subject=subject)
+            subject = self.model.statement_subject_model._base_manager.get(pk=subject_id)
+            self.resolve(subject=subject)
 
 
 _StatementPairManagerBase = AngeeManager.from_queryset(AngeeHistoryQuerySet)
@@ -628,8 +625,6 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
         if model is not None:
             self.model = model
         self.instance = instance
-        if instance is not None:
-            self._db = instance._state.db
 
     def get_queryset(self) -> AngeeHistoryQuerySet[T]:
         rows = super().get_queryset()
@@ -642,7 +637,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
 
         first, second = sorted((left.pk, right.pk))
         statements = self.model.statements
-        return statements.using(left._state.db).current().filter(
+        return statements.current().filter(
             subject__left_id=first, subject__right_id=second, aspect=self.model.pair_name,
             applied=True, snak=statements.model.StatementSnak.NO_VALUE,
         ).exists()
@@ -651,19 +646,16 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
         model = _statement_foreign_key(self.model, "left").remote_field.model
         if not all(isinstance(row, model) and row.pk is not None for row in (left, right)) or left.pk == right.pk:
             raise ValidationError("A pair requires two distinct persisted endpoints of its declared model.")
-        using = left._state.db
-        if right._state.db != using:
-            raise ValidationError("Pair endpoints must belong to the same database.")
         actor = instance_actor(left)
         for endpoint in (left, right):
-            visible = require_rebac_queryset(model, actor=actor).with_action("read").using(using)
+            visible = require_rebac_queryset(model, actor=actor).with_action("read")
             if not visible.filter(pk=endpoint.pk).exists():
                 raise PermissionDenied("A pair requires read on both endpoints.")
         ordered = sorted((left, right), key=lambda endpoint: endpoint.pk)
         with transaction.atomic():
             for endpoint in ordered:
                 endpoint.lock_subject()
-            pair, _ = self.model._base_manager.using(using).get_or_create(
+            pair, _ = self.model._base_manager.get_or_create(
                 left_id=ordered[0].pk, right_id=ordered[1].pk,
             )
             pair.with_actor(actor)
@@ -680,8 +672,8 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
             other = pair.right if "left" in reference.columns else pair.left
             if other.pk == survivor.pk:
                 continue
-            target = self.db_manager(rows.db).for_pair(survivor, other)
-            self.model.statements.db_manager(rows.db).merge(None, pair.statements.all(), survivor=target)
+            target = self.for_pair(survivor, other)
+            self.model.statements.merge(None, pair.statements.all(), survivor=target)
             pair.trash(reason="Merged pair endpoints")
 
 
@@ -821,7 +813,13 @@ class Aspect:
         return index + 1 if index >= person else index
 
     def coerce_members(
-        self, model: type[models.Model], source: SubjectRef, key: dict[str, Any], *, kind: SourceKind, using: str
+        self,
+        model: type[models.Model],
+        source: SubjectRef,
+        key: dict[str, Any],
+        *,
+        kind: SourceKind,
+        using: str | None = None,
     ) -> dict[str, Any]:
         """Consume this aspect's complete identity through native field ownership."""
 
@@ -860,7 +858,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
 
     @classmethod
     def history_related_scopes(
-        cls, predicate: Q, root_pk: Any, *, direct: bool, using: str | None,
+        cls, predicate: Q, root_pk: Any, *, direct: bool, using: str | None = None
     ) -> dict[type[models.Model], Q]:
         """Contribute assertions for direct subjects or the document's retained owned lines."""
 
@@ -902,7 +900,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
             subject = (
                 self
                 if subject_model is type(self)
-                else subject_model._base_manager.db_manager(self._state.db).get(pk=self.pk)
+                else subject_model._base_manager.get(pk=self.pk)
             )
             if subject is not self and (actor := instance_actor(self)) is not None:
                 if not isinstance(subject, RebacMixin):
@@ -1061,7 +1059,7 @@ class StatementHistory(ModelHistory):
         model = type(first.instance).statement_subject_model
         ids = sorted({version.subject_id for version in (first, last, previous) if version is not None})
         for pk in ids:
-            subject = model._base_manager.using(first._state.db).filter(pk=pk).first()
+            subject = model._base_manager.filter(pk=pk).first()
             if subject is None:
                 raise ValidationError(f"{model._meta.label} {pk}: a retained subject is missing.")
             yield subject
@@ -1081,14 +1079,14 @@ class StatementHistory(ModelHistory):
         replay restores the exact predecessor stance within this transaction.
         """
 
-        rows = type(first.instance)._base_manager.using(first._state.db)
+        rows = type(first.instance)._base_manager
         row = rows.filter(pk=first.id).first()
         if row is None:
             raise ValidationError(f"{first._meta.label} {first.id}: a retained statement is missing.")
         if row.superseded_id is None:
             row.superseded = rows.filter(**row.current_key()).exclude(pk=row.pk).first()
         row.applied = False
-        row.save(using=first._state.db, update_fields=("superseded", "applied"))
+        row.save(update_fields=("superseded", "applied"))
 
     def revert_row(self, first: Any, last: Any, previous: Any) -> list[Any]:
         """Restore the stance before the changeset, recency included; a first assertion withdraws.
@@ -1102,7 +1100,6 @@ class StatementHistory(ModelHistory):
         """
         row = (previous or first).instance
         model = type(row)
-        using = first._state.db
         values = {
             field.attname: getattr(row, field.attname)
             for field in model._meta.concrete_fields
@@ -1114,13 +1111,12 @@ class StatementHistory(ModelHistory):
             values.update(
                 status=row.StatementStatus.WITHDRAWN,
                 updated_at=timezone.now(),
-                superseded_id=model._base_manager.using(using)
-                .filter(**row.current_key(), superseded__isnull=True)
+                superseded_id=model._base_manager.filter(**row.current_key(), superseded__isnull=True)
                 .exclude(pk=row.pk)
                 .values_list("pk", flat=True)
                 .first(),
             )
-        model._base_manager.using(using).filter(pk=row.pk).update(**values)
+        model._base_manager.filter(pk=row.pk).update(**values)
         return list(self.subjects(first, last, previous))
 
 
@@ -1416,12 +1412,11 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         """Lock this retained statement row for history replay."""
 
         del members
-        manager = type(self)._base_manager.db_manager(hints={"instance": self})
-        return manager.all().select_for_update().get(pk=self.pk)
+        return type(self)._base_manager.select_for_update().get(pk=self.pk)
 
     @classmethod
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> None:
-        cls.objects.db_manager(rows.db).merge(reference, rows, survivor=survivor)
+        cls.objects.merge(reference, rows, survivor=survivor)
 
 
 class StatementPairQuerySet(TrashQuerySet, AngeeHistoryQuerySet):
@@ -1470,7 +1465,7 @@ class StatementPair(
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> None:
         """Union third-party stances while retaining the merged pair as evidence."""
 
-        cls.objects.db_manager(rows.db).merge(reference, rows, survivor=survivor)
+        cls.objects.merge(reference, rows, survivor=survivor)
 
     def apply_resolved(
         self,
