@@ -204,6 +204,7 @@ jobs:
             tests/test_extraction_steps.py \
             tests/test_extraction_models.py::test_extraction_rejects_targets_outside_file_and_message \
             tests/test_extraction_models.py::test_competing_revision_requests_allocate_exactly_one_successor \
+            tests/test_extraction_models.py::test_retention_waits_for_a_held_file_and_refuses_its_committed_change \
             tests/test_composed_extraction_workflow.py \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \

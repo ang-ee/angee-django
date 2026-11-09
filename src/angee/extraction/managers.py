@@ -418,8 +418,11 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
     ) -> Any:
         """Allocate one revision under the lineage lock from carriers verified beforehand.
 
-        Under the lock the sources must still carry their retained digests and
-        each verified carrier must still be the READY, untrashed bytes it read.
+        Locks are taken in one order: the lineage row; then, for a revision
+        without a base, its source and carrier ``storage.File`` rows together in
+        one key-ordered read; then its source message parts. Under those locks the
+        sources must still carry their retained digests and each verified carrier
+        must still be the READY, untrashed bytes it read.
         """
         lineage_model = self.model._meta.apps.get_model("extraction.ExtractionLineage")
         with transaction.atomic(), system_context(reason="retain authorized extraction snapshot"):
@@ -436,8 +439,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
             if existing is not None:
                 existing.require_request_digest(values["outcome"]["request_digest"])
                 return existing
-            if base is None:
-                self._require_unchanged_sources(sources)
+            files = self._lock_prepared_inputs(sources, verified) if base is None else {}
             previous = lineage.head
             if values["outcome"]["kind"] == ExtractionStatus.FAILED and (mapping or retirement):
                 raise ValidationError("A retained source hold cannot remap or retire identities.")
@@ -494,11 +496,8 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                     part["carrier_file_id"] = retained.carrier_file_id
                     part["carrier_digest"] = retained.carrier_digest
             else:
-                file_model = self.model._meta.apps.get_model("storage.File")
-                locked = file_model._base_manager.select_for_update().order_by("pk")
-                carriers = locked.in_bulk([pk for pk, _ in verified])
                 for part, (file_pk, digest) in zip(parts, verified, strict=True):
-                    carrier = carriers.get(file_pk)
+                    carrier = files.get(file_pk)
                     if (
                         carrier is None
                         or carrier.content_hash != digest
@@ -521,25 +520,43 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
             lineage.advance_head(extraction)
             return extraction
 
-    def _require_unchanged_sources(self, sources: Sequence[Mapping[str, Any]]) -> None:
-        """Lock the sources in key order and require the digests the carriers were prepared from."""
-        source_model = self.model._meta.apps.get_model("extraction.ExtractionSource")
-        for field in ("file", "message_part"):
-            expected = {
-                source[f"{field}_id"]: source["content_hash"] for source in sources if source[f"{field}_id"] is not None
-            }
-            if not expected:
-                continue
-            model: Any = source_model._meta.get_field(field).related_model
-            rows = model._base_manager.select_for_update().order_by("pk").in_bulk(list(expected))
-            for pk, digest in expected.items():
-                row = rows.get(pk)
-                if field == "file":
-                    current = None if row is None else row.content_hash
-                else:
-                    current = None if row is None or row.fragment is None else row.fragment.hash
-                if str(current) != digest:
-                    raise ValidationError("The source changed during carrier preparation.")
+    def _lock_prepared_inputs(
+        self,
+        sources: Sequence[Mapping[str, Any]],
+        verified: Sequence[tuple[Any, str]],
+    ) -> dict[Any, Any]:
+        """Lock the source and carrier files in one key-ordered read, then the source message parts.
+
+        Require each source to still carry the digest its carriers were prepared
+        from, and return the locked files by key for the carrier recheck.
+        """
+        file_model: Any = self.model._meta.apps.get_model("storage.File")
+        part_model: Any = (
+            self.model._meta.apps.get_model("extraction.ExtractionSource")._meta.get_field("message_part").related_model
+        )
+        file_digests = {
+            source["file_id"]: source["content_hash"] for source in sources if source["file_id"] is not None
+        }
+        part_digests = {
+            source["message_part_id"]: source["content_hash"]
+            for source in sources
+            if source["message_part_id"] is not None
+        }
+        files = (
+            file_model.system_queryset()
+            .lock_if_supported(no_key=True)
+            .order_by("pk")
+            .in_bulk([*file_digests, *(pk for pk, _digest in verified)])
+        )
+        parts = part_model._base_manager.select_for_update().order_by("pk").in_bulk(list(part_digests))
+        for pk, digest in file_digests.items():
+            if pk not in files or str(files[pk].content_hash) != digest:
+                raise ValidationError("The source changed during carrier preparation.")
+        for pk, digest in part_digests.items():
+            fragment = parts[pk].fragment if pk in parts else None
+            if fragment is None or str(fragment.hash) != digest:
+                raise ValidationError("The source changed during carrier preparation.")
+        return files
 
     @staticmethod
     def _preserve_authority(
