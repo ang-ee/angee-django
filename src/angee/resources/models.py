@@ -70,9 +70,7 @@ class Resource(AngeeModel, concrete=True):
             return None
 
         model = resolve_model(self.target_model)
-        return instance_from_public_id(
-            model, self.target_id, queryset=model._default_manager.using(self._state.db),
-        )
+        return instance_from_public_id(model, self.target_id)
 
     class Meta:
         """Django model options for the abstract resource ledger."""

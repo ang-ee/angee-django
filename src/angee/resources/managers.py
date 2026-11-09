@@ -123,7 +123,7 @@ def seeded_record_merge_guard(record: models.Model) -> str | None:
     """
 
     with system_context(reason="resources.seeded_record_merge_guard"):
-        ledger = apps.get_model("resources", "Resource").objects.db_manager(record._state.db).seeding(record).first()
+        ledger = apps.get_model("resources", "Resource").objects.seeding(record).first()
     if ledger is None:
         return None
     return f"{record} is loaded from {ledger.source_addon} resources, which would recreate it; keep it instead."
@@ -144,7 +144,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     def resolve(self, handle: str, *, model: type[models.Model] | None = None) -> models.Model:
         """Resolve a ledger handle under the current actor, optionally checking its type."""
 
-        return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model, using=self.db)
+        return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model)
 
     def resolve_config_references(self, value: Any, *, schema: dict[str, Any]) -> Any:
         """Resolve dotted xrefs only at schema-declared relation positions.
@@ -342,9 +342,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                     [group.source_rows[index]],
                 )
                 with transaction.atomic():
-                    resource = build_resource(
-                        model, group.entry, ledger_model=self.model, addon_aliases=aliases, using=self.db,
-                    )
+                    resource = build_resource(model, group.entry, ledger_model=self.model, addon_aliases=aliases)
                     with system_context(reason="resources.load_xref resolve existing target"):
                         resolved, _ = resource.resolve_existing(((selected.dataset, resource),))
                     resolution = resolved.get((resource, xref))
@@ -362,7 +360,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                         actor=actor,
                     )
                     with system_context(reason="resources.load_xref resolve imported target"):
-                        instance = resolve_xref(handle, self.model, aliases, using=self.db)
+                        instance = resolve_xref(handle, self.model, aliases)
                     if not isinstance(instance, model):
                         raise ResourceLoadError(f"Resource {handle!r} did not produce {model._meta.label}.")
                     if resolution is None or resolution.instance is None:
@@ -403,7 +401,6 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                     ledger_model=self.model,
                     addon_aliases=addon_aliases,
                     kind_declarations=kind_declarations,
-                    using=self.db,
                 ),
             )
             for group in row_groups
@@ -420,7 +417,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                 ExitStack() as contexts,
                 transaction.atomic(),
             ):
-                pre_load.send(sender=self.model, contexts=contexts, using=self.db)
+                pre_load.send(sender=self.model, contexts=contexts)
                 resource_classes = {
                     group.model.resource_class
                     for group, _ in loaded_groups
@@ -434,7 +431,6 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                             (grants_by_entry[entry.key],),
                             ledger_model=self.model,
                             addon_aliases=addon_aliases,
-                            using=self.db,
                         )
                         load_result = LoadResult(
                             created=load_result.created + created,
