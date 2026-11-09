@@ -242,14 +242,18 @@ def publish_bulk_update(
 ) -> None:
     """Observe an owner's bounded batch write (:data:`bulk_updated`) row by row.
 
-    A model may coalesce the batch onto the rows its readers observe through
-    ``change_batch_targets(instances, update_fields=...)``; those rows are
+    An Angee model may coalesce the batch onto the rows its readers observe
+    through its declared ``AngeeModel.change_batch_targets``; those rows are
     observed as full updates.
     """
 
     if changes_muted():
         return
-    coalesce = getattr(sender, "change_batch_targets", None)
+    # models.base declares models, which need a ready app registry; this
+    # signals module stays importable before apps load.
+    from angee.base.models.base import AngeeModel
+
+    coalesce = sender.change_batch_targets if issubclass(sender, AngeeModel) else None
     fields: Iterable[str] | None = update_fields
     if coalesce is not None:
         instances = coalesce(instances, update_fields=update_fields)
