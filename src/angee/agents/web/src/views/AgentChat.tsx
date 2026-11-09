@@ -19,12 +19,28 @@ import { code } from "@streamdown/code";
 import { Streamdown } from "streamdown";
 
 import { useAcpRuntime, type AcpRuntime } from "../useAcpRuntime";
-import { AgentChatProvider, useAgentChatContext, type AgentChatProps } from "../chat-context";
+import type { AcpSessionNavigation } from "../acp-session";
 import { useAgentsT } from "../i18n";
 import { AgentChooser } from "./AgentChooser";
 import { SlashCommandComposer } from "./slash-commands";
 import { AgentPermission } from "./AgentPermission";
-import type { AgentChatView, McpServerConfig } from "../documents";
+import type { AgentChatView, AgentRosterItem, McpServerConfig } from "../documents";
+
+/** The selected agent, the view it chats about and the chat surface's presentation inputs. */
+export interface AgentChatProps {
+  agentId: string;
+  view: AgentChatView;
+  modelHandle?: string;
+  agents?: readonly AgentRosterItem[];
+  selectedAgentId?: string;
+  onSelectAgent?: (id: string) => void;
+  fallbackName?: string;
+  sessionId?: string;
+  protocolVersion?: 1 | 2;
+  onSessionChange?: (id: string) => void;
+  /** The sessions page supplies its rail; the ACP runtime owns the session operations. */
+  renderSessionNavigation?: (sessions: AcpSessionNavigation) => React.ReactNode;
+}
 
 /**
  * Chat with a running agent over ACP; every agent speaks it. The
@@ -42,19 +58,16 @@ import type { AgentChatView, McpServerConfig } from "../documents";
  */
 export function AgentChat(props: AgentChatProps): React.ReactElement {
   return (
-    <AgentChatProvider value={props}>
-      <LazyBoundary pending={<LoadingPanel />}>
-        <AcpAgentChat />
-      </LazyBoundary>
-    </AgentChatProvider>
+    <LazyBoundary pending={<LoadingPanel />}>
+      <AcpAgentChat {...props} />
+    </LazyBoundary>
   );
 }
 
-/** The chat for every agent: each speaks ACP. */
-export function AcpAgentChat({ protocolVersion }: { protocolVersion?: 1 | 2 } = {}): React.ReactElement {
-  const props = useAgentChatContext();
+/** Bind the agent's ACP runtime, then render its session navigation and chat. */
+function AcpAgentChat(props: AgentChatProps): React.ReactElement {
   const runtimeState = useAcpRuntime({ agentId: props.agentId, view: props.view, knownSessionId: props.sessionId,
-    protocolVersion: protocolVersion ?? props.protocolVersion, showSessions: props.renderSessionNavigation !== undefined,
+    protocolVersion: props.protocolVersion, showSessions: props.renderSessionNavigation !== undefined,
     onSessionChange: props.onSessionChange });
   return <>
     {props.renderSessionNavigation?.(runtimeState.sessions)}

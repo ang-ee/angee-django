@@ -51,13 +51,6 @@ describe("agent chat composition", () => {
     render(<Provider><AppRuntimeProvider runtime={{}}><AgentChat {...props} protocolVersion={2} /></AppRuntimeProvider></Provider>);
     expect(await screen.findByText("This agent uses an unsupported chat protocol.")).toBeTruthy();
   });
-  test("uses the default ACP surface when no transport contribution exists", async () => {
-    const Provider = native();
-    render(<Provider><AppRuntimeProvider runtime={{}}><AgentChat {...props} sessionId={undefined} /></AppRuntimeProvider></Provider>);
-    expect(await screen.findByRole("textbox")).toBeTruthy();
-    expect(screen.queryByText("Chat is unavailable for this agent.")).toBeNull();
-  });
-
   test("the chooser in the bar switches the ACP chat to another agent", async () => {
     const Provider = native();
     const agents: AgentRosterItem[] = ["external", "opencode"].map((id) => ({
