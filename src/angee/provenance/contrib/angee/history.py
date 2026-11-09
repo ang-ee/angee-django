@@ -35,15 +35,9 @@ from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import candidate_relationships
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
-from angee.provenance.history import (
-    _UNLOADED,
-)
-from angee.provenance.history import (
-    HistoryMixin as CaptureHistoryMixin,
-)
-from angee.provenance.history import (
-    ModelHistory as CaptureHistory,
-)
+from angee.provenance.history import UNLOADED
+from angee.provenance.history import HistoryMixin as CaptureHistoryMixin
+from angee.provenance.history import ModelHistory as CaptureHistory
 from angee.provenance.querysets import model_history
 
 
@@ -166,8 +160,8 @@ class ModelHistory(CaptureHistory):
         version: Any,
         actor: Any,
         *,
-        current: Any = _UNLOADED,
-        retained: bool | object = _UNLOADED,
+        current: Any = UNLOADED,
+        retained: bool | object = UNLOADED,
     ) -> frozenset[str]:
         """Return fields hidden by the row's current or retained snapshot policy.
 
@@ -178,12 +172,12 @@ class ModelHistory(CaptureHistory):
         target = version.history_object
         model = type(target)
         row = current
-        if row is _UNLOADED:
+        if row is UNLOADED:
             row = model.objects.with_actor(actor).with_action("read").filter(pk=target.pk).first()
         if row is not None:
             return redacted_fields(row)
         hidden = frozenset(field.name for field in model._meta.concrete_fields)
-        if retained is _UNLOADED:
+        if retained is UNLOADED:
             retained = model._base_manager.filter(pk=target.pk).exists()
         if retained:
             return hidden

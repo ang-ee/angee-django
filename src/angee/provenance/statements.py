@@ -61,7 +61,7 @@ from angee.provenance.evidence import (
     readable_evidence_records,
     readable_records,
 )
-from angee.provenance.history import _ChangesetHistory
+from angee.provenance.history import ChangesetHistory
 
 
 def _statement_column(model: type[models.Model], name: str) -> models.Field:
@@ -1128,7 +1128,7 @@ class StatementPairHistory(ModelHistory):
             (previous or last).instance.require_statement_write(to_subject_ref(actor))
 
 
-class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, TimestampMixin, RebacMixin):
+class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, TimestampMixin, RebacMixin):
     """Retained shadow row; its canonical subject owns admission and field gates."""
 
     class StatementSnak(models.TextChoices):

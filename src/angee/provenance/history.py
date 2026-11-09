@@ -22,7 +22,8 @@ from simple_history.utils import get_change_reason_from_object, get_history_mana
 from angee.provenance.context import changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
 
-_UNLOADED = object()
+UNLOADED = object()
+"""Default for a history argument the caller has not loaded; the history owner reads it itself."""
 
 
 def _copy_history_metadata(source: models.Model, target: models.Model) -> None:
@@ -33,8 +34,8 @@ def _copy_history_metadata(source: models.Model, target: models.Model) -> None:
             setattr(target, name, getattr(source, name))
 
 
-class _ChangesetHistory(models.Model):
-    """Historical attribution shared by every native generated history model."""
+class ChangesetHistory(models.Model):
+    """The writing changeset's foreign key, shared by generated history models and retained statements."""
 
     changeset = models.ForeignKey(
         changeset_model_label(),
@@ -171,7 +172,7 @@ class ModelHistory(HistoricalRecords):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("history_manager", ModelHistoryManager)
         kwargs.setdefault("historical_queryset", ModelHistoricalQuerySet)
-        kwargs.setdefault("bases", (_ChangesetHistory,))
+        kwargs.setdefault("bases", (ChangesetHistory,))
         super().__init__(*args, **kwargs)
 
     def contribute_to_class(self, cls: Any, name: str) -> None:
@@ -209,7 +210,7 @@ class ModelHistory(HistoricalRecords):
             weak=False,
         )
 
-    def set_changeset(self, instance: models.Model, history_instance: _ChangesetHistory, **kwargs: Any) -> None:
+    def set_changeset(self, instance: models.Model, history_instance: ChangesetHistory, **kwargs: Any) -> None:
         """Set nullable attribution according to the storage owner's context policy."""
 
         context = current_changeset(required=True, record=True)
@@ -235,7 +236,7 @@ class ModelHistory(HistoricalRecords):
 
         transaction.on_commit(committed)
 
-    def diff(self, first: Any, last: Any, *, previous: Any = _UNLOADED) -> Any:
+    def diff(self, first: Any, last: Any, *, previous: Any = UNLOADED) -> Any:
         """Return the native field delta across one changeset boundary.
 
         Page assemblers pass their already loaded predecessor. Standalone callers
@@ -245,7 +246,7 @@ class ModelHistory(HistoricalRecords):
         target = last.history_object
         model = type(target)
         key = model._meta.pk.attname
-        if previous is _UNLOADED:
+        if previous is UNLOADED:
             previous = (
                 type(last)
                 .objects.filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
@@ -448,7 +449,7 @@ class ModelHistory(HistoricalRecords):
                 user = get_user_model()
                 extra["history_user"].remote_field.model = user
                 extra["history_user"].remote_field.field_name = user._meta.pk.name
-            field = _ChangesetHistory._meta.get_field("changeset").clone()
+            field = ChangesetHistory._meta.get_field("changeset").clone()
             field.remote_field.model = apps.get_model(changeset_model_label())
             field.remote_field.field_name = field.remote_field.model._meta.pk.name
             extra["changeset"] = field
