@@ -12,10 +12,12 @@ from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
+from django.db.models.query import EmptyQuerySet
 from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
 from rebac.backends import backend
 from rebac.managers import RebacQuerySet
+from rebac.relation_loading import relation_actor
 from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import Definition, PermArrow, PermBinOp, PermExpr, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
@@ -59,6 +61,26 @@ def require_rebac_queryset[M: models.Model](model: type[M], *, actor: Any = _AMB
     if actor is _AMBIENT:
         return queryset
     return queryset.with_actor(actor) if actor is not None else queryset.none()
+
+
+def relation_read_queryset[M: models.Model](model: type[M], source: models.QuerySet[Any]) -> RebacQuerySet[M]:
+    """``model``'s ``read`` queryset for the rows ``source`` relates to, read as ``source`` reads.
+
+    This is the one rule for an actorless relation read. The reader is REBAC's
+    ``relation_actor(source)``: the source's pinned actor, else the ambient one.
+    With neither, REBAC's ambient scope answers, as it does for ``source``
+    itself: system context reads unscoped and an actorless read fails closed.
+    An emptied ``source`` reads nothing, as it does itself. A read that names no
+    reader on purpose (``require_rebac_queryset(..., actor=None)``) is policy
+    only where its owner's docstring says so, as message pointers and permission
+    projections do.
+    """
+
+    if isinstance(source, EmptyQuerySet):
+        return require_rebac_queryset(model, actor=None).with_action("read")
+    actor = relation_actor(source)
+    related = require_rebac_queryset(model) if actor is None else require_rebac_queryset(model, actor=actor)
+    return related.with_action("read")
 
 
 @dataclass(frozen=True, slots=True)

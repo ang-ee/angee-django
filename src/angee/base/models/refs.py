@@ -32,7 +32,7 @@ from angee.base.identity import public_data_id_field
 from angee.base.models.identity import public_id_for
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy, RecordRefMergeContract
-from angee.base.permissions import effective_rebac_definition, require_rebac_queryset
+from angee.base.permissions import effective_rebac_definition, relation_read_queryset, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target
@@ -43,19 +43,18 @@ class _TargetTeardown(Protocol):
 
 
 class _RecordTargets(InstancePrefetch):
-    """A generic pointer's readable targets, one read per referenced type under the hint's reader.
+    """A generic pointer's readable targets, one read per referenced type, read as the hint reads.
 
     Django's generic prefetch reads a type it has no queryset for through the
-    target's base manager. Here every type is read through the reader's own read
-    scope, so a hidden, missing or stale-typed target answers ``None`` and nothing
-    is read without a reader. Pointer ids are coerced to the target's primary key
-    type, so the read is a plain key lookup; an id the key cannot hold names no row.
+    target's base manager. Here every type is read as the hint's queryset reads
+    (``relation_read_queryset``), so a hidden, missing or stale-typed target
+    answers ``None``. Pointer ids are coerced to the target's primary key type,
+    so the read is a plain key lookup; an id the key cannot hold names no row.
     """
 
     def related(
         self, instances: list[Any], queryset: models.QuerySet[Any],
     ) -> tuple[list[models.Model], Callable[[models.Model], object], Callable[[Any], object]]:
-        actor = self.reader(queryset)
         keys = {id(instance): instance.record_ref for instance in instances}
         wanted: dict[str, set[Any]] = {}
         for reference in keys.values():
@@ -63,15 +62,14 @@ class _RecordTargets(InstancePrefetch):
                 wanted.setdefault(reference.model_label, set()).add(reference.object_id)
         targets: list[models.Model] = []
         sources: dict[int, tuple[str, str]] = {}
-        if actor is not None:
-            for model_label in sorted(wanted):
-                model = apps.get_model(model_label)
-                pks = _target_pks(model, wanted[model_label])
-                if not pks:
-                    continue
-                for target in require_rebac_queryset(model, actor=actor).with_action("read").filter(pk__in=pks):
-                    targets.append(target)
-                    sources[id(target)] = (model_label, str(target.pk))
+        for model_label in sorted(wanted):
+            model = apps.get_model(model_label)
+            pks = _target_pks(model, wanted[model_label])
+            if not pks:
+                continue
+            for target in relation_read_queryset(model, queryset).filter(pk__in=pks):
+                targets.append(target)
+                sources[id(target)] = (model_label, str(target.pk))
         return (
             targets,
             lambda target: sources[id(target)],
@@ -120,12 +118,13 @@ class RecordRefMixin(RecordRefMergeContract):
     def record_targets_prefetch(cls, actor: Any, *, to_attr: str) -> models.Prefetch:
         """Batch the targets ``actor`` reads into ``to_attr``, one read per referenced type.
 
-        Each type is read through ``actor``'s own read scope. A hidden, missing or
-        stale-typed target lands as ``None``; no target is read through an
-        unscoped manager.
+        Each type is read through ``actor``'s own read scope; without an actor,
+        REBAC's ambient scope answers (``relation_read_queryset``). A hidden,
+        missing or stale-typed target lands as ``None``.
         """
 
-        return models.Prefetch("_record_targets", queryset=require_rebac_queryset(cls, actor=actor), to_attr=to_attr)
+        rows = require_rebac_queryset(cls) if actor is None else require_rebac_queryset(cls, actor=actor)
+        return models.Prefetch("_record_targets", queryset=rows, to_attr=to_attr)
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
