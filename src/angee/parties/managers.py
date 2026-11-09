@@ -75,6 +75,8 @@ _DISPLAY_OWN_AVATAR = "_display_own_avatar"
 """Where a page's prefetch parks each party's own avatar the actor can read."""
 _DISPLAY_AVATAR_HANDLES = "_display_avatar_handles"
 """Where a page's prefetch parks each party's ranked handles with an avatar the actor can read."""
+VISIBLE_CIRCLE_MEMBERS = "_angee_visible_circle_members"
+"""Where a read parks each party's actor-visible circle memberships (:meth:`PartyQuerySet.circle_members_prefetch`)."""
 
 class Signing(NamedTuple):
     """One sender's signature fragment: the evidence signature mining reads.
@@ -680,8 +682,8 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         circles = apps.get_model("parties", "Circle").objects.all()
         return circles.with_actor(actor) if (actor := self.actor()) else circles
 
-    def with_circle_names(self) -> Self:
-        """Prefetch actor-visible circle names for generic chip rendering.
+    def circle_members_prefetch(self) -> Prefetch:
+        """Hint the circle memberships this read's actor may see, by circle name.
 
         A scoped prefetch is portable across the supported database floor and,
         unlike a reverse-join aggregate, independently applies both the membership
@@ -691,13 +693,12 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         visible_memberships = (
             self._readable_circles().memberships().select_related("circle").order_by("circle__name", "sqid")
         )
-        return self.prefetch_related(
-            Prefetch(
-                "circle_members",
-                queryset=visible_memberships,
-                to_attr="_angee_visible_circle_members",
-            )
-        )
+        return Prefetch("circle_members", queryset=visible_memberships, to_attr=VISIBLE_CIRCLE_MEMBERS)
+
+    def with_circle_names(self) -> Self:
+        """Prefetch actor-visible circle names for generic chip rendering."""
+
+        return self.prefetch_related(self.circle_members_prefetch())
 
     def unassigned(self) -> Self:
         """Return canonical parties with no actor-visible circle membership."""

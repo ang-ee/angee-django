@@ -56,12 +56,14 @@ from angee.base.models.merge import MergeableMixin
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
+from angee.base.prefetch import prefetched
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.parties.backends import DirectoryBackend, ParsedAddressbook
 from angee.parties.connections import ConnectionHandle
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
+    VISIBLE_CIRCLE_MEMBERS,
     CircleManager,
     FolderManager,
     HandleManager,
@@ -493,19 +495,15 @@ class Party(
         """Return this party's actor-visible circle names, from its read's prefetch when present.
 
         Resource reads install :meth:`PartyQuerySet.with_circle_names`; any other read
-        composes the same readable memberships as this row's actor.
+        prefetches the same readable memberships for this row as its actor.
         """
 
-        prefetched = getattr(self, "_angee_visible_circle_members", None)
-        if prefetched is not None:
-            return list(dict.fromkeys(membership.circle.name for membership in prefetched))
-        circles = apps.get_model("parties", "Circle").objects.all()
-        if actor := self.actor():
-            circles = circles.with_actor(actor)
-        return list(
-            circles.memberships().filter(party_id=self.pk)
-            .order_by("circle__name").values_list("circle__name", flat=True).distinct()
-        )
+        def hint() -> models.Prefetch:
+            parties = type(self).objects.all()
+            return (parties.with_actor(actor) if (actor := self.actor()) else parties).circle_members_prefetch()
+
+        memberships = prefetched(self, VISIBLE_CIRCLE_MEMBERS, hint)
+        return list(dict.fromkeys(membership.circle.name for membership in memberships))
 
     def apply_pair(self, *, aspect: str, other: Any, statement: Any | None) -> None:
         """Identity survivorship selects a pending decision; merge chooses the survivor."""
