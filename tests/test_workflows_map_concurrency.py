@@ -131,10 +131,12 @@ def test_thousand_items_stay_within_concurrency_and_query_bound(
             # Since REBAC 0.31 the advance block and the pinned related read it
             # opens (``run.step_runs.system_context(...)``) are two bypass entries,
             # so the item that settles the map writes a second ``workflows.advance``
-            # audit row: 101 statements, 100 before.
+            # audit row: 101 statements, 100 before. Dispatch then reads the claimed
+            # rows' database ``dispatched_at`` back to anchor each execution copy's
+            # expiry on it (one ``SELECT`` per dispatch): 102.
             witnesses = sum(is_rebac_revision_read(query["sql"]) for query in queries)
             assert witnesses <= 11, (item.map_index, witnesses)
-            assert 0 < len(queries) - witnesses <= 101, (item.map_index, len(queries) - witnesses)
+            assert 0 < len(queries) - witnesses <= 102, (item.map_index, len(queries) - witnesses)
             completed += 1
             assert body_rows(run).exclude(status="succeeded").count() <= 4
     run_until(run, max_steps=1000)
