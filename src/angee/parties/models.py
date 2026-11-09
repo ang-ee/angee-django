@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -56,11 +57,13 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
 from angee.integrate.models import Bridge, IntegrationCreateMode
-from angee.parties.backends import DirectoryBackend
+from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
+from angee.parties.backends import DirectoryBackend, ParsedAddressbook
 from angee.parties.connections import ConnectionHandle
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
     CircleManager,
+    FolderManager,
     HandleManager,
     PartyManager,
     PartyStatementQuerySet,
@@ -68,7 +71,7 @@ from angee.parties.managers import (
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
-from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
+from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 from angee.provenance.statements import (
     Aspect,
     PairAspect,
@@ -1162,7 +1165,7 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
     )
     source_href = models.CharField(max_length=1024, blank=True, default="")
 
-    objects = AngeeHistoryManager()
+    objects = FolderManager()
 
     class Meta:
         """Django model options for the folder source model."""
@@ -1589,6 +1592,32 @@ class Directory(Bridge, inherits="integrate.Integration"):
         ordering = ("-updated_at",)
         verbose_name_plural = "directories"
         rebac_resource_type = "parties/directory"
+
+    def addressbook_stream(self, book: ParsedAddressbook) -> StreamDefinition:
+        """Mirror a discovered address book as a folder and declare its contacts stream.
+
+        The stream's deletion policy seeds from this directory's per-collection config.
+        """
+
+        apps.get_model("parties", "Folder").objects.sync_addressbook(self, book)
+        policy = {
+            "local_delete": "conflict",
+            "remote_delete": "retain",
+            **self.config.get("streams", {}).get("contacts", {}).get(book.href, {}),
+        }
+        if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
+            "retain",
+            "propagate",
+        }:
+            raise ValueError("Unknown Directory deletion policy.")
+        return StreamDefinition(
+            "contacts",
+            partition=book.href,
+            kind=StreamKind.RECORD_REPLICA,
+            direction=StreamDirection.BIDIRECTIONAL,
+            reconcile_interval=timedelta(days=1),
+            config=policy,
+        )
 
     @property
     def backend(self) -> DirectoryBackend:

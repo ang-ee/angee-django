@@ -47,7 +47,7 @@ from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
-from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
+from angee.parties.backends import AvatarReport, ParsedAddress, ParsedAddressbook, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     from angee.integrate.models import RecordLink
     from angee.parties.connections import ParsedConnection
     from angee.parties.mixins import PartyStatementMixin
-    from angee.parties.models import Circle, Handle, Party, Person, Relationship
+    from angee.parties.models import Circle, Directory, Folder, Handle, Party, Person, Relationship
 
 logger = logging.getLogger(__name__)
 
@@ -2195,3 +2195,17 @@ class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[R
                 "ended_at": None,
             },
         )
+
+
+class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):
+    """Own idempotent address-book folder persistence."""
+
+    def sync_addressbook(self, directory: Directory, book: ParsedAddressbook) -> FolderT:
+        """Mirror one discovered address book as a folder of ``directory``, owned by its owner."""
+
+        folder, _ = self.update_or_create(
+            directory_id=directory.pk,
+            source_href=book.href,
+            defaults={"name": book.name, "created_by_id": directory.owner_id},
+        )
+        return folder
