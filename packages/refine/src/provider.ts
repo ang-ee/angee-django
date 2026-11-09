@@ -3,15 +3,16 @@ import hasuraDataProvider, {
   graphqlWS,
   type HasuraDataProviderOptions,
 } from "@refinedev/hasura";
-import type {
-  DataProvider,
-  DataProviders,
-  LiveEvent,
-  LiveProvider,
-  MetaQuery,
+import {
+  keys,
+  type DataProvider,
+  type DataProviders,
+  type LiveEvent,
+  type LiveProvider,
+  type MetaQuery,
 } from "@refinedev/core";
 import { resourceMutationMeta, type ResourceMutationOperations, type ResourceMutationTarget } from "./operations";
-import type { QueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { ServerUnavailableError, type ServerConnection } from "./server-connection";
 import {
   graphQLWebSocketUrl,
@@ -25,9 +26,10 @@ import {
 } from "./dialect/wire";
 import {
   catchUpAuthoredQueries,
-  createAuthoredLiveInvalidation,
+  createLiveInvalidation,
   retainedAuthoredQueryHashes,
-  type AuthoredLiveChange,
+  type LiveChange,
+  type LiveDelivery,
 } from "./query-invalidation";
 
 type FetchFn = typeof globalThis.fetch;
@@ -75,7 +77,7 @@ export interface AngeeHasuraLiveProviderOptions {
   origin?: string;
   clientOptions?: AngeeHasuraWebSocketOptions;
   resources?: readonly AngeeLiveResource[];
-  queryClient?: AuthoredQueryInvalidationClient;
+  queryClient?: LiveQueryClient;
 }
 
 export interface AngeeHasuraSchemaConfig
@@ -90,6 +92,8 @@ export interface AngeeHasuraSchemaConfig
 export interface AngeeLiveResource {
   schemaName: string;
   modelLabel: string;
+  /** Registered Refine identifier; a resource without an alias uses its list root. */
+  identifier?: string;
   roots: {
     list?: string | null;
     changes?: string | null;
@@ -294,7 +298,13 @@ export function createAngeeHasuraLiveProvider(
   });
 }
 
-type ChangeConsumer = (data: unknown) => void;
+interface ChangeEvent extends LiveChange {
+  action: string;
+  changedFields: readonly string[];
+  changedValues: Record<string, unknown>;
+}
+
+type ChangeConsumer = LiveDelivery<ChangeEvent> | ((change: ChangeEvent) => void);
 
 interface ChangeSubscription {
   dispose: () => void;
@@ -307,12 +317,12 @@ export interface AngeeChangeLiveProvider extends LiveProvider {
   setEnabled: (enabled: boolean) => void;
 }
 
-type AuthoredQueryInvalidationClient = Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">;
+type LiveQueryClient = Pick<QueryClient, "invalidateQueries" | "getQueryCache">;
 
 export function createAngeeChangeLiveProvider(
   client: Pick<GraphQLWsClient, "subscribe" | "on">,
   resources: readonly AngeeLiveResource[],
-  options: { queryClient?: AuthoredQueryInvalidationClient } = {},
+  options: { queryClient?: LiveQueryClient } = {},
 ): AngeeChangeLiveProvider {
   const resourcesByList = resourcesByListRoot(resources);
   const resourcesByModel = resourcesByModelLabel(resources);
@@ -328,12 +338,11 @@ export function createAngeeChangeLiveProvider(
   let startedSubscriptions = 0;
   let retainedBeforeIdleReopen: Set<string> | undefined;
   let stopConnectionListener: () => void = noopSubscription;
-  const liveInvalidation = options.queryClient
-    ? createAuthoredLiveInvalidation(options.queryClient)
-    : undefined;
+  const liveInvalidation = createLiveInvalidation<ChangeEvent>(options.queryClient);
 
   function stopUnusedConnectionListener(): void {
     if (subscriptions.size === 0) {
+      liveInvalidation.clear();
       stopConnectionListener();
       stopConnectionListener = noopSubscription;
       retainedBeforeIdleReopen = undefined;
@@ -349,16 +358,21 @@ export function createAngeeChangeLiveProvider(
     resource: AngeeLiveResource,
     channel: string,
     callback: (event: LiveEvent) => void,
+    queryKey?: QueryKey,
   ): () => void {
-    const consumer: ChangeConsumer = (data) => {
-      const event = changeEventFromResult(data, changesRoot, channel, resource);
-      if (event) callback(event);
-    };
     const entry = subscriptions.get(changesRoot) ?? {
       dispose: noopSubscription,
       start: noopSubscription,
       consumers: new Set<ChangeConsumer>(),
     };
+    const deliver = (changes: readonly ChangeEvent[]) => {
+      if (enabled && entry.consumers.has(consumer)) callback(changeEvent(changes, channel, resource));
+    };
+    // Direct subscriptions consume individual event data (e.g. preferences).
+    // Only resource-hook callbacks initiate Refine's automatic invalidation.
+    const consumer: ChangeConsumer = queryKey
+      ? { queryKey, callback: deliver }
+      : (change) => deliver([change]);
     entry.consumers.add(consumer);
     if (!subscriptions.has(changesRoot)) {
       if (subscriptions.size === 0) {
@@ -398,8 +412,14 @@ export function createAngeeChangeLiveProvider(
             next: (result) => {
               if (!active || !enabled) return;
               // One upstream result is one change, however many consumers share it.
-              liveInvalidation?.push(liveChangeFromResult(result.data, changesRoot, resource));
-              entry.consumers.forEach((c) => c(result.data));
+              const change = liveChangeFromResult(result.data, changesRoot, resource);
+              const deliveries = [...entry.consumers].filter(
+                (consumer): consumer is LiveDelivery<ChangeEvent> => typeof consumer !== "function",
+              );
+              liveInvalidation.push(change, deliveries);
+              entry.consumers.forEach((consumer) => {
+                if (typeof consumer === "function") consumer(change);
+              });
             },
             error: (error) => {
               if (!active) return;
@@ -410,6 +430,7 @@ export function createAngeeChangeLiveProvider(
               );
               if (subscriptions.get(changesRoot) === entry) {
                 entry.dispose();
+                entry.consumers.clear();
                 subscriptions.delete(changesRoot);
                 stopUnusedConnectionListener();
               }
@@ -421,6 +442,9 @@ export function createAngeeChangeLiveProvider(
         entry.dispose = () => {
           if (active) {
             active = false;
+            entry.consumers.forEach((consumer) => {
+              if (typeof consumer !== "function") liveInvalidation.remove(consumer);
+            });
             startedSubscriptions--;
             dispose();
           }
@@ -430,6 +454,7 @@ export function createAngeeChangeLiveProvider(
     }
     return () => {
       entry.consumers.delete(consumer);
+      if (typeof consumer !== "function") liveInvalidation.remove(consumer);
       if (entry.consumers.size === 0 && subscriptions.get(changesRoot) === entry) {
         entry.dispose();
         subscriptions.delete(changesRoot);
@@ -443,14 +468,14 @@ export function createAngeeChangeLiveProvider(
       if (next === enabled) return;
       enabled = next;
       retainedBeforeIdleReopen = undefined;
-      if (!enabled) liveInvalidation?.clear();
+      if (!enabled) liveInvalidation.clear();
       else catchUpAfterEnable = true;
       subscriptions.forEach((entry) => {
         if (enabled) entry.start();
         else entry.dispose();
       });
     },
-    subscribe({ channel, callback, params }) {
+    subscribe({ channel, callback, params, meta }) {
       const targets = changeTargetsFromSubscribeParams(
         params,
         resourcesByList,
@@ -458,7 +483,11 @@ export function createAngeeChangeLiveProvider(
       );
       if (targets.length === 0) return noopSubscription;
       const disposers = targets.map(({ resource, changesRoot }) =>
-        joinChangesRoot(changesRoot, resource, channel, callback),
+        joinChangesRoot(changesRoot, resource, channel, callback,
+          typeof params?.resource === "string"
+            ? keys().data(meta?.dataProviderName ?? resource.schemaName)
+              .resource(resource.identifier ?? params.resource).get()
+            : undefined),
       );
       return () => disposers.forEach((dispose) => dispose());
     },
@@ -485,7 +514,7 @@ function liveChangeFromResult(
   data: unknown,
   changesRoot: string,
   resource: AngeeLiveResource,
-): AuthoredLiveChange {
+): ChangeEvent {
   const event = recordValue(recordValue(data)?.[changesRoot]);
   const relatedRecords = Array.isArray(event?.relatedRecords)
     ? event.relatedRecords.flatMap((value) => {
@@ -499,6 +528,11 @@ function liveChangeFromResult(
     model: stringValue(event?.model) ?? resource.modelLabel,
     id: stringValue(event?.id) || undefined,
     relatedRecords,
+    action: stringValue(event?.action) ?? "*",
+    changedFields: Array.isArray(event?.changedFields)
+      ? event.changedFields.filter((field): field is string => typeof field === "string")
+      : [],
+    changedValues: recordValue(event?.changedValues) ?? {},
   };
 }
 
@@ -565,7 +599,7 @@ function modelLabelsFromSubscribeParams(params: LiveSubscribeParams): string[] {
 function changeSubscriptionDocument(changesRoot: string): string {
   const root = operationName(changesRoot);
   // The schema's ChangeEvent fields are snake_case (Hasura naming); alias the
-  // multi-word ones to the camelCase keys `changeEventFromResult` reads.
+  // multi-word ones to the camelCase keys `liveChangeFromResult` reads.
   return (
     `subscription angee_${root} { ` +
     `${root} { model id action relatedRecords: related_records { model id } ` +
@@ -573,27 +607,35 @@ function changeSubscriptionDocument(changesRoot: string): string {
   );
 }
 
-function changeEventFromResult(
-  data: unknown,
-  changesRoot: string,
+function changeEvent(
+  changes: readonly ChangeEvent[],
   channel: string,
   resource: AngeeLiveResource,
-): LiveEvent | null {
-  const event = recordValue(recordValue(data)?.[changesRoot]);
-  const id = stringValue(event?.id);
-  const action = stringValue(event?.action) ?? "*";
+): LiveEvent {
+  // No ids means model-wide to Refine consumers; a later row must not narrow it.
+  const ids = changes.every((change) => change.id)
+    ? [...new Set(changes.flatMap((change) => change.id ? [change.id] : []))]
+    : undefined;
+  const id = ids?.length === 1 ? ids[0] : undefined;
+  const actions = new Set(changes.map((change) => change.action));
+  const action = actions.size === 1 ? changes[0]?.action ?? "*" : "*";
+  const relatedRecords = [...new Map(changes.flatMap((change) =>
+    (change.relatedRecords ?? []).map((record) => [JSON.stringify([record.model, record.id]), record] as const),
+  )).values()];
   return {
     channel,
     type: liveEventType(action),
     payload: {
-      ...(id ? { id, ids: [id] } : {}),
-      model: stringValue(event?.model) ?? resource.modelLabel,
+      ...(ids ? { ids } : {}),
+      ...(id ? { id } : {}),
+      model: changes[0]?.model ?? resource.modelLabel,
       action,
-      changedFields: Array.isArray(event?.changedFields) ? event.changedFields : [],
-      changedValues: recordValue(event?.changedValues) ?? {},
-      ...(Array.isArray(event?.relatedRecords) && event.relatedRecords.length > 0
-        ? { relatedRecords: event.relatedRecords }
-        : {}),
+      changedFields: [...new Set(changes.flatMap((change) => change.changedFields))],
+      // Values from different records cannot describe a single row patch.
+      changedValues: id || changes.length === 1
+        ? changes.reduce<Record<string, unknown>>((values, change) => ({ ...values, ...change.changedValues }), {})
+        : {},
+      ...(relatedRecords.length > 0 ? { relatedRecords } : {}),
     },
     date: new Date(),
     meta: {
