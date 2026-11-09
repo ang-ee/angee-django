@@ -5,6 +5,7 @@ import { SHELL_CONTAINERS } from "@angee/ui/chrome/index";
 import { CHATTER_CONTAINERS } from "@angee/ui/communication/index";
 
 import { LOGIN_CONTAINERS } from "./auth/LoginPage";
+import { CONNECTION_CONTAINERS } from "./providers/connection";
 
 /**
  * The containers the framework's render owners declare. Each owner adds its
@@ -17,4 +18,5 @@ export const CORE_CONTAINERS: readonly CoreContainer[] = [
   ...REFERENCE_CONTAINERS,
   ...CHATTER_CONTAINERS,
   ...LOGIN_CONTAINERS,
+  ...CONNECTION_CONTAINERS,
 ];

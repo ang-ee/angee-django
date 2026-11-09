@@ -381,6 +381,11 @@ export const enUiMessages: Record<string, string> = {
   "app.retry": "Retry",
   // Title of refine's generic error notification; the error's message is its description.
   "notifications.error": "Something went wrong",
+  "connection.eyebrow": "A little pause in the connection",
+  "connection.title": "Finding our way back",
+  "connection.description": "We’ve lost our connection to the server. We’re checking in gently and will reconnect as soon as it’s ready.",
+  "connection.retrying": "Reconnecting automatically",
+  "connection.resume": "Keep this tab open. We’ll bring you back to where you left off.",
   "app.startFailed": "Application could not start",
   "app.startFailedDescription": "Its configuration is invalid. The cause is below.",
   "app.reload": "Reload",
