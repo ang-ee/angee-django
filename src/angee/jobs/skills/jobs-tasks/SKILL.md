@@ -190,8 +190,7 @@ the dispatch test proves on-commit send with the expected `queue`/`expires`, the
 Docs: docs/stack.md #backend (Celery, channels, django-environ rows), #stack-serve-mode; docs/backend/guidelines.md sections Django-Native Rule, Composition owners, Integrations and workers, Persistence primitives, Naming (cited by anchor and bullet title); docs/composer.md #autoconfig; docs/checks.md #python-and-composition-contracts, #composition-and-schema, #browser-verification, #what-ci-actually-runs; docs/guidelines.md #put-behavior-on-the-owning-object; AGENTS.md (Run From The Root, Architecture Gate).
 Code: src/angee/jobs/{__init__.py,apps.py,pyproject.toml,autoconfig.py,celery.py,enqueue.py,scheduler.py,timeouts.py,management/commands/celery.py}; src/angee/base/locks.py;
 src/angee/provenance/{tasks.py,autoconfig.py}; src/angee/parties/{tasks.py,autoconfig.py}; src/angee/work/{tasks.py,autoconfig.py}; src/angee/messaging/{tasks.py,delivery.py,autoconfig.py};
-src/angee/workflows/tasks.py; src/angee/integrate/{tasks.py,scheduler.py,queue.py,constants.py,impl.py,session_runner.py};
+src/angee/workflows/tasks.py; src/angee/integrate/{tasks.py,scheduler.py,constants.py,impl.py,session_runner.py};
 tests/test_jobs.py; tests/test_changesets.py; tests/settings.py; templates/stacks/_shared/stack-body.yaml.jinja.
 Doc gaps: src/angee/jobs has no README.md; the only prose owner is the Celery row of docs/stack.md#backend plus the Integrations-and-workers bullets; queue naming and the threads-pool worker are documented only in the stack template comment.
-Mismatches: docs/stack.md#stack-serve-mode still says "Celery beat stays in its one separate worker service" while the Celery row of docs/stack.md#backend and the template embed it in the shared worker (`worker --beat`, templates/stacks/_shared/stack-body.yaml.jinja); owner: docs/stack.md.
 -->
