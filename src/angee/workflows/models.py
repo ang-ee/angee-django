@@ -616,7 +616,10 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                     if failure.timed_out:
                         error, stacktrace = failure.diagnostic_error or "", failure.stacktrace
                     else:
-                        error, stacktrace = (settlement.error, settlement.stacktrace) if settlement else ("", "")
+                        error, stacktrace = (
+                            (settlement.diagnostic_error or settlement.error, settlement.stacktrace)
+                            if settlement else ("", "")
+                        )
                     closed = step_run.attempts.close(failure.result, error, stacktrace)
                     if recorded_on_attempt or failure.timed_out and closed:
                         run_error = ""

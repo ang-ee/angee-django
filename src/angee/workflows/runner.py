@@ -7,6 +7,7 @@ import time
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from datetime import timedelta
 from functools import cached_property
 from typing import Any
@@ -79,10 +80,8 @@ class Runner:
             ):
                 raise
             logger.exception("Workflow run %s failed during advancement.", run.pk)
-            run.fail_advance(step_run, settlement, AttemptRecord.failure(
-                exception_text(failure), diagnostic_error=exception_text(failure, diagnostic=True),
-                stacktrace=traceback.format_exc(), timed_out=isinstance(failure, SoftTimeLimitExceeded),
-            ))
+            # An advancement failure fails the run; it never schedules a step retry.
+            run.fail_advance(step_run, settlement, replace(self._failure(failure), retryable=False))
 
     def execute(self, step_run_id: int) -> bool:
         """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""
@@ -143,9 +142,15 @@ class Runner:
 
     @staticmethod
     def _failure(failure: Exception) -> AttemptRecord:
+        """Classify a handled failure for its attempt.
+
+        The step keeps the resolved message; the attempt's diagnostic error names
+        each exception type along its cause chain, and its stacktrace keeps the trace.
+        """
         return AttemptRecord.failure(
-            exception_text(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
-            retryable=isinstance(failure, (Retryable,)) or (
+            exception_text(failure), diagnostic_error=exception_text(failure, diagnostic=True),
+            timed_out=isinstance(failure, SoftTimeLimitExceeded),
+            retryable=isinstance(failure, Retryable) or (
                 isinstance(failure, OperationalError)
                 and sqlstate(failure) in RETRYABLE_SQLSTATES
             ),
