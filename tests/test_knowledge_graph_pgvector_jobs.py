@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 from django.core.exceptions import PermissionDenied
 from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, system_context
 
@@ -158,6 +159,23 @@ def test_non_pgvector_saves_do_not_enqueue(passage_records, monkeypatch):
     monkeypatch.setattr("angee.knowledge_graph_pgvector.signals.enqueue_task", send)
     enqueue_embedding(MarkdownPage, passage_records.markdown, update_fields={"body"})
     send.assert_not_called()
+
+
+def test_creation_batch_checks_vault_selection_once(passage_records, monkeypatch):
+    records = passage_records
+    with actor_context(records.owner):
+        rows = tuple(Page.objects.create_in(records.vault, title=f"Batch {index}") for index in range(6))
+    send = Mock()
+    monkeypatch.setattr("angee.knowledge_graph_pgvector.signals.enqueue_task", send)
+    counts = []
+    for size in (1, len(rows)):
+        send.reset_mock()
+        with CaptureQueriesContext(connection) as queries:
+            for row in rows[:size]:
+                enqueue_embedding(Page, row, created_batch=rows[:size])
+        counts.append(len(queries))
+        assert [call.kwargs["kwargs"] for call in send.call_args_list] == [{"pk": row.pk} for row in rows[:size]]
+    assert counts[1] == counts[0]
 
 
 def test_reconciler_collects_only_unselected_model_vectors(passage_records):

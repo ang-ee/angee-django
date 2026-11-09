@@ -6,7 +6,7 @@ import hashlib
 from collections import defaultdict, deque
 from datetime import timedelta
 from itertools import batched
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
 from django.contrib.postgres.lookups import TrigramSimilar
@@ -47,8 +47,11 @@ from angee.knowledge_graph_pgvector.extraction import (
 from angee.knowledge_graph_pgvector.options import GraphOptions
 from angee.knowledge_graph_pgvector.retrieval import PgvectorRetrievalBackend
 
+if TYPE_CHECKING:
+    from angee.knowledge_graph_pgvector.models import Entity, EntityEdge, Passage, PassageEmbedding
 
-class PassageQuerySet(AngeeQuerySet):
+
+class PassageQuerySet[T: Passage](AngeeQuerySet[T]):
     """Read only evidence whose offsets still describe the current page body."""
 
     def indexed(self) -> Self:
@@ -99,10 +102,10 @@ class PassageQuerySet(AngeeQuerySet):
 _PassageManager = AngeeManager.from_queryset(PassageQuerySet)
 
 
-class PassageManager(_PassageManager):
+class PassageManager[T: Passage](_PassageManager[T]):
     """Own chunking, identity-preserving diffs and bounded reconciliation."""
 
-    def passages(self, markdown: Any, *, max_input_tokens: int | None = None) -> list[Any]:
+    def passages(self, markdown: Any, *, max_input_tokens: int | None = None) -> list[T]:
         """Split outline sections with native MarkdownSplitter character offsets.
 
         Without a tokenizer in the model contract, UTF-8 bytes conservatively
@@ -111,7 +114,7 @@ class PassageManager(_PassageManager):
         """
 
         budget = min(PASSAGE_BYTES, max_input_tokens) if max_input_tokens else PASSAGE_BYTES
-        rows = []
+        rows: list[T] = []
         source = {
             "source_body_hash": markdown.body_hash, "source_title": markdown.title,
             "source_vault_id": markdown.vault_id,
@@ -261,7 +264,7 @@ class PassageManager(_PassageManager):
         markdown_model = apps.get_model("knowledge", "MarkdownPage")
         entity_model = apps.get_model("knowledge_graph_pgvector", "Entity")
         mention_model = apps.get_model("knowledge_graph_pgvector", "EntityMention")
-        edge_model = apps.get_model("knowledge_graph_pgvector", "EntityEdge")
+        edge_model = cast("type[EntityEdge]", apps.get_model("knowledge_graph_pgvector", "EntityEdge"))
         options = GraphOptions.from_settings()
         with system_context(reason="knowledge_graph_pgvector.extract_passage"):
             passage = self.graph_stale().filter(pk=pk).first()
@@ -323,25 +326,25 @@ class PassageManager(_PassageManager):
                         for item, candidate in zip(graph.entities, candidates, strict=True)
                     ]
                     descriptions: dict[int, list[str]] = defaultdict(list)
-                    names = {}
+                    names: dict[int, str] = {}
                     for item, entity in zip(graph.entities, resolved, strict=True):
                         names.setdefault(entity.pk, item.name)
                         if item.description not in descriptions[entity.pk]:
                             descriptions[entity.pk].append(item.description)
-                    edges = {}
-                    for item in graph.edges:
-                        subject, target = resolved[item.subject], resolved[item.object]
+                    edges: dict[tuple[int, str, int], EntityEdge] = {}
+                    for edge in graph.edges:
+                        subject, target = resolved[edge.subject], resolved[edge.object]
                         if subject.pk == target.pk:
                             continue
-                        key = (subject.pk, item.predicate, target.pk)
-                        if key not in edges or edges[key].weight < item.strength:
+                        key = (subject.pk, edge.predicate, target.pk)
+                        if key not in edges or edges[key].weight < edge.strength:
                             edges[key] = edge_model(
                                 passage_id=pk,
                                 subject=subject,
-                                predicate=item.predicate,
+                                predicate=edge.predicate,
                                 object=target,
-                                description=item.description,
-                                weight=item.strength,
+                                description=edge.description,
+                                weight=edge.strength,
                             )
                     edge_model.objects.filter(passage_id=pk).delete()
                     mention_model.objects.filter(passage_id=pk).delete()
@@ -363,7 +366,7 @@ class PassageManager(_PassageManager):
                 raise
 
 
-class EntityManager(AngeeManager):
+class EntityManager[T: Entity](AngeeManager[T]):
     """Resolve within a vault and collect identities after their last mention dies."""
 
     def resolution_candidates(
@@ -459,7 +462,7 @@ class EntityManager(AngeeManager):
         return deleted
 
 
-class PassageEmbeddingManager(AngeeManager):
+class PassageEmbeddingManager[T: PassageEmbedding](AngeeManager[T]):
     """Call providers outside transactions and fence publication against live sources."""
 
     def collect_unused(self) -> int:

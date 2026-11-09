@@ -44,7 +44,8 @@ def provider(monkeypatch, *, output=GRAPH, during=None):
     def infer(self, messages, *, output_schema):
         assert not connection.in_atomic_block
         assert output_schema["title"] == "PassageGraph"
-        assert "enum" in output_schema["$defs"]["GraphEntity"]["properties"]["kind"]
+        kind = output_schema["$defs"]["GraphEntity"]["properties"]["kind"]
+        assert "enum" in kind or "const" in kind
         calls.append(messages)
         if during:
             during()
@@ -295,7 +296,8 @@ def test_vault_move_replaces_graph_evidence_even_when_text_is_unchanged(graph_re
     other = vault_for(records.owner, name="Moved graph")
     with system_context(reason="test.graph.move"):
         Vault.objects.filter(pk=other.pk).update(retrieval_class="pgvector", extraction_model=records.extraction_model)
-        Page.objects.filter(pk=records.page.pk).update(vault=other)
+        records.page.vault = other
+        records.page.save(update_fields=["vault"])
         markdown = MarkdownPage.objects.get(pk=records.page.pk)
     rows = Passage.objects.rebuild_for(markdown)
     assert {row.pk for row in rows}.isdisjoint(row.pk for row in records.passages)

@@ -14,8 +14,8 @@ from django.contrib.postgres.search import SearchQuery, SearchRank
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection
-from django.db.models import Avg, F, Q
-from pgvector.django import CosineDistance
+from django.db.models import Avg, F, FloatField, Func, Q, Value
+from pgvector.django import VectorField
 from rebac import system_context
 
 from angee.agents.models import InferenceModelUse
@@ -127,7 +127,7 @@ class PgvectorRetrievalBackend(RetrievalBackend):
         ids = {row.page_id for row in rows}
         pages = apps.get_model("knowledge", "Page").objects.untrashed().filter(pk__in=ids).in_bulk()
         bodies = apps.get_model("knowledge", "MarkdownPage").objects.untrashed().filter(pk__in=ids).in_bulk()
-        hits = []
+        hits: list[RetrievalHit] = []
         for row in rows:
             page, markdown = pages.get(row.page_id), bodies.get(row.page_id)
             if page is None or markdown is None or row.matches_source(markdown) is False:
@@ -167,7 +167,14 @@ class PgvectorRetrievalBackend(RetrievalBackend):
                 passage__in=cls._passages(pages),
                 model_id=model_id,
             )
-            .annotate(distance=CosineDistance("embedding", vector))
+            .annotate(
+                distance=Func(
+                    F("embedding"),
+                    Value(vector, output_field=VectorField()),
+                    function="cosine_distance",
+                    output_field=FloatField(),
+                )
+            )
             .first_per_group(
                 "passage__page_id",
                 order_by=("distance", "passage__ordinal", "pk"),

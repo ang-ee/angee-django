@@ -60,28 +60,44 @@ def enqueue_embedding(
     instance: Any,
     raw: bool = False,
     update_fields: Iterable[str] | None = None,
+    created_batch: tuple[Any, ...] | None = None,
     **kwargs: Any,
 ) -> None:
-    """Signals dispatch identifiers only; managers decide whether work is needed."""
+    """Admit selected vaults once per native batch; managers decide the index work."""
 
-    if raw:
+    if raw or (created_batch is not None and instance is not created_batch[-1]):
         return
-    vault_id = instance.pk if sender._meta.label_lower == "knowledge.vault" else instance.vault_id
-    with system_context(reason="knowledge_graph_pgvector.enqueue_selection"):
-        selected = apps.get_model("knowledge", "Vault").objects.filter(
-            pk=vault_id, retrieval_class=PgvectorRetrievalBackend.key,
-        ).exists()
-    if not selected:
-        return
-    if sender._meta.label_lower == "knowledge.vault":
-        if update_fields is None or {
+    vaults = sender._meta.label_lower == "knowledge.vault"
+    relevant = (
+        {
             "retrieval_class",
             "embedding_model",
             "embedding_model_id",
             "extraction_model",
             "extraction_model_id",
             "graph_entity_kinds",
-        }.intersection(update_fields):
-            enqueue_task(RECONCILE_TASK, kwargs={"vault_id": instance.pk}, expires=RECONCILE_SECONDS, robust=True)
-    elif update_fields is None or {"body", "title", "vault", "vault_id"}.intersection(update_fields):
-        enqueue_task(EMBED_PAGE_TASK, kwargs={"pk": instance.pk}, expires=RECONCILE_SECONDS, robust=True)
+        }
+        if vaults
+        else {"body", "title", "vault", "vault_id"}
+    )
+    if update_fields is not None and not relevant.intersection(update_fields):
+        return
+    rows = created_batch if created_batch is not None else (instance,)
+    vault_ids = {row.pk if vaults else row.vault_id for row in rows}
+    with system_context(reason="knowledge_graph_pgvector.enqueue_selection"):
+        selected = set(
+            apps.get_model("knowledge", "Vault")
+            .objects.filter(
+                pk__in=vault_ids,
+                retrieval_class=PgvectorRetrievalBackend.key,
+            )
+            .values_list("pk", flat=True)
+        )
+    for row in rows:
+        if (row.pk if vaults else row.vault_id) in selected:
+            enqueue_task(
+                RECONCILE_TASK if vaults else EMBED_PAGE_TASK,
+                kwargs={"vault_id" if vaults else "pk": row.pk},
+                expires=RECONCILE_SECONDS,
+                robust=True,
+            )

@@ -601,7 +601,7 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
         )
         return normalized
 
-    def is_transient_error(self, error: Exception) -> bool:
+    def is_transient_error(self, error: BaseException) -> bool:
         """Classify a failure through this model's native provider backend."""
 
         with system_context(reason="agents.inference_model.error"):

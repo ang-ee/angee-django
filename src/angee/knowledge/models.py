@@ -1177,7 +1177,7 @@ class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits=
         sections = []
         if not entries or entries[0].line:
             sections.append(MarkdownSection(0, offsets[entries[0].line] if entries else len(body), (), 0, len(offsets)))
-        ancestry = []
+        ancestry: list[OutlineEntry] = []
         for index, entry in enumerate(entries):
             while ancestry and ancestry[-1].level >= entry.level:
                 ancestry.pop()

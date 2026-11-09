@@ -817,7 +817,8 @@ def test_openai_backend_refresh_syncs_native_and_broker_models(
     }
     for name in ("text-embedding-3-large", "openai/text-embedding-3-large"):
         assert models[name].model_use == InferenceModelUse.EMBEDDING
-        assert models[name].capabilities["embedding_dimensions"] == 3072
+        assert "embedding_dimensions" not in models[name].capabilities
+        assert models[name].context_window == 8192
     assert models["gpt-4.1"].display_name == "gpt-4.1"
     assert models["gpt-4.1"].config == {
         "provider_model": "gpt-4.1",

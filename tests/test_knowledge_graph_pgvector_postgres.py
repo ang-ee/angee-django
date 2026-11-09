@@ -6,11 +6,11 @@ import pytest
 from django.db import connection
 from rebac import actor_context, system_context
 
-from angee.agents.testing.models import InferenceModel
+from angee.agents.testing.models import InferenceModel, InferenceProvider
 from angee.knowledge_graph_pgvector.retrieval import PgvectorRetrievalBackend
 from angee.knowledge_graph_pgvector.testing.models import Passage, PassageEmbedding
 from angee.mcp.graphql import _execute_sync
-from tests.conftest import MarkdownPage, Page, Vault, create_user, vault_for
+from tests.conftest import MarkdownPage, Page, Vault, create_user, make_integration, vault_for
 from tests.pgvector_fixtures import NativeEmbeddingBackend
 from tests.pgvector_fixtures import passage_records as passage_records
 from tests.test_knowledge_plugin import _merged_schemas
@@ -126,17 +126,17 @@ def test_related_pages_fuses_centroid_and_links_without_provider_call(passage_re
 
 
 
-def test_native_embedding_backend_indexes_and_searches_without_embed_monkeypatch(passage_records, settings):
+def test_native_embedding_backend_indexes_and_searches_without_embed_monkeypatch(passage_records):
     records = passage_records
-    settings.ANGEE_INFERENCE_BACKEND_CLASSES = {
-        **settings.ANGEE_INFERENCE_BACKEND_CLASSES,
-        NativeEmbeddingBackend.key: "tests.pgvector_fixtures.NativeEmbeddingBackend",
-    }
     NativeEmbeddingBackend.calls.clear()
+    provider = make_integration(
+        "native-embedding",
+        model=InferenceProvider,
+        backend_class=NativeEmbeddingBackend.key,
+    )
     with system_context(reason="test.pgvector.native_backend"):
-        provider = records.model.provider
-        provider.backend_class = NativeEmbeddingBackend.key
-        provider.save(update_fields=["backend_class"])
+        records.model.provider = provider
+        records.model.save(update_fields=["provider"])
     assert PassageEmbedding.objects.embed_page(records.page.pk) == 2
     with actor_context(records.owner):
         first = _execute_sync(_merged_schemas().build("public"), """query {

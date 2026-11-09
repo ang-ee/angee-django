@@ -139,7 +139,7 @@ class InferenceBackend(ImplBase):
     timeouts, rate limits, overload and server errors. Quota exhaustion and rejected
     requests are not among them."""
 
-    def is_transient_error(self, error: Exception) -> bool:
+    def is_transient_error(self, error: BaseException) -> bool:
         """Classify native provider failures; vendor adapters extend transport types."""
 
         if isinstance(error, (TransientInferenceError, *self.TRANSIENT_MODEL_ERRORS)):

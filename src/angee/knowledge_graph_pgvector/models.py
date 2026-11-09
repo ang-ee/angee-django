@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.contrib.postgres.indexes import GinIndex
@@ -21,6 +21,7 @@ from rebac import current_actor, system_context
 from angee.agents.models import InferenceModelUse, InferenceOutputError
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.models.base import AngeeDataModel
+from angee.base.querysets import AngeeQuerySet
 from angee.base.validators import validate_value
 from angee.integrate.errors import doubling_backoff
 from angee.knowledge.retrieval import RetrievalHit
@@ -144,13 +145,14 @@ class IndexState(models.Model):
         """Retain only failure type and input identity, never provider text or secrets."""
 
         with transaction.atomic():
-            row = type(self).objects.filter(pk=self.pk).lock_if_supported(no_key=True).first()
+            rows = cast(AngeeQuerySet[Self], type(self)._default_manager.get_queryset()).filter(pk=self.pk)
+            row = rows.lock_if_supported(no_key=True).first()
             if row is None:
                 return
             attempts = row.index_attempts + 1 if row.index_failure == snapshot else 1
             invalid_output = isinstance(error, (OutputValidationError, InferenceOutputError, UnexpectedModelBehavior))
             retry_at = None if invalid_output else timezone.now() + doubling_backoff(attempts, cap=timedelta(days=1))
-            type(self).objects.filter(pk=row.pk).update(
+            rows.update(
                 index_failure=snapshot, index_attempts=attempts, index_retry_at=retry_at,
                 index_error=type(error).__name__,
             )
@@ -263,6 +265,7 @@ class Entity(AngeeDataModel, concrete=True):
 
     class Meta:
         abstract = True
+        verbose_name_plural = "entities"
         ordering = ("key", "kind", "pk")
         rebac_resource_type = "knowledge_graph_pgvector/entity"
         constraints = (models.UniqueConstraint(fields=("vault", "key", "kind"), name="pgv_entity_vault_key_kind"),)

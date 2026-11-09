@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import unicodedata
-from typing import Annotated, Any, Literal, Self
+from types import GenericAlias
+from typing import Annotated, Any, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, create_model, model_validator
 from pydantic_ai.messages import ModelRequest, SystemPromptPart, UserPromptPart
@@ -65,8 +66,12 @@ class PassageGraph(BaseModel):
 
     @classmethod
     def extract(cls, model: Any, text: str, *, kinds: list[str], options: GraphOptions) -> Self:
-        entity = create_model("GraphEntity", __base__=GraphEntity, kind=(Literal[*kinds], ...))
-        response = create_model("PassageGraph", __base__=cls, entities=(list[entity], Field(max_length=64)))
+        entity = create_model("GraphEntity", __base__=GraphEntity, kind=(cast(Any, Literal[*kinds]), ...))
+        response = create_model(
+            "PassageGraph",
+            __base__=cls,
+            entities=(cast(Any, GenericAlias(list, entity)), Field(max_length=64)),
+        )
         schema = response.model_json_schema()
         instruction = (
             "Extract entities and their relationships supported by this passage only. "

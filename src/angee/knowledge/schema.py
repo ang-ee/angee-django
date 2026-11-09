@@ -12,7 +12,7 @@ import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch
-from graphql import get_named_type
+from graphql import GraphQLObjectType, get_named_type
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
@@ -409,6 +409,7 @@ class RetrievalResultType:
         raw = info._raw_info
         for field_name in ("hits", "page"):
             parent = get_named_type(raw.return_type)
+            assert isinstance(parent, GraphQLObjectType)
             selections = _get_selections(raw, parent)
             nodes = [node for group in selections.values() for node in group if node.name.value == field_name]
             if not nodes:

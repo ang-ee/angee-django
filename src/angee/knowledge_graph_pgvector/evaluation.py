@@ -78,7 +78,7 @@ def evaluate(golden: GoldenSet, vaults: Iterable[Any]) -> EvaluationResult:
     if missing:
         raise ValueError(f"Golden pages must be readable and untrashed: {', '.join(missing)}")
     measured = []
-    failures = []
+    failures: list[dict[str, str]] = []
     for case in golden.cases:
         expected = {by_title[title] for title in case.expected_pages}
         rankings = PgvectorRetrievalBackend.rankings(vaults, case.query, first=MAX_SEARCH_PAGE_SIZE)

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.expressions import Combinable
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast
+from django.db.models.lookups import Exact, In
 from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
@@ -84,30 +86,69 @@ class _ActorScopedSubquery(models.Expression):
         return []
 
 
+class _RecordReferenceAccess(models.Expression):
+    """Read retained targets independently of the edge's current write admissions.
+
+    Discover represented content types when SQL is compiled, so declaration and
+    optimizer probes remain query-free. Only represented tables join the guard;
+    evidence edges need no target relations in their own permission definition.
+    The source queryset stays outside the expression tree like the lazy scopes
+    above; the two pointer columns participate in Django's native alias relabeling.
+    """
+
+    contains_subquery = True
+
+    def __init__(self, queryset: models.QuerySet[Any]) -> None:
+        super().__init__(output_field=models.BooleanField())
+        self.queryset = queryset
+        reference = queryset.model.record_ref_field()
+        self.content_type_field = reference.ct_field
+        self.key_field = queryset.model._meta.get_field(reference.fk_field)
+        if not isinstance(self.key_field, models.Field):
+            raise ImproperlyConfigured("A record reference must store its object id in a forward field.")
+        self.columns = [models.F(reference.ct_field), models.F(reference.fk_field)]
+
+    def get_source_expressions(self) -> list[Any]:
+        return self.columns
+
+    def set_source_expressions(self, expressions: Sequence[Any]) -> None:
+        self.columns = list(expressions)
+
+    def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
+        rows = self.queryset
+        if isinstance(rows, RebacQuerySet):
+            rows = rows.scoped_for_aggregate()
+        content_types = ContentType.objects.filter(
+            pk__in=rows.order_by().values(self.content_type_field),
+        ).order_by("app_label", "model")
+        readable = models.Q()
+        for content_type in content_types:
+            model = content_type.model_class()
+            if model is None or model_resource_type(model) is None:
+                continue
+            keys = (
+                relation_read_queryset(model, self.queryset)
+                .order_by()
+                .annotate(
+                    _angee_reference_key=Cast("pk", output_field=self.key_field),
+                )
+            )
+            readable |= models.Q(
+                Exact(self.columns[0], models.Value(content_type.pk)),
+                In(self.columns[1], _ActorScopedSubquery(keys, "_angee_reference_key")),
+            )
+        expression = (
+            models.ExpressionWrapper(readable, output_field=self.output_field) if readable else models.Value(False)
+        )
+        return compiler.compile(expression.resolve_expression(compiler.query))
+
+
 def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
     """Annotate generic references with their targets' current read policy."""
 
     if not issubclass(queryset.model, RecordRefMixin):
         raise ImproperlyConfigured("Record-reference access requires RecordRefMixin.")
-    reference = queryset.model.record_ref_field()
-    key_field = queryset.model._meta.get_field(reference.fk_field)
-    if not isinstance(key_field, models.Field):
-        raise ImproperlyConfigured("A record reference must store its object id in a forward field.")
-    readable = models.Q(pk__in=[])
-    for _label, model in sorted(queryset.model.accepted_target_models().items()):
-        keys = (
-            relation_read_queryset(model, queryset)
-            .order_by()
-            .annotate(_angee_reference_key=Cast("pk", output_field=key_field))
-        )
-        readable |= models.Q(**{
-            f"{reference.ct_field}__app_label": model._meta.app_label,
-            f"{reference.ct_field}__model": model._meta.model_name,
-            f"{reference.fk_field}__in": _ActorScopedSubquery(keys, "_angee_reference_key"),
-        })
-    return queryset.annotate(_angee_record_readable=models.ExpressionWrapper(
-        readable, output_field=models.BooleanField(),
-    ))
+    return queryset.annotate(_angee_record_readable=_RecordReferenceAccess(queryset))
 
 
 def readable_record_references(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:

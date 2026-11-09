@@ -3593,7 +3593,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             raise IntegrationError("Connection discovery must finish before syncing.")
         recovering = self.sync_stage == self.SyncStage.QUEUED
         admitted = not (self.sync_is_dispatched or self.is_syncing)
-        fields = []
+        fields: list[str] = []
         if admitted:
             self.sync_stage = self.SyncStage.QUEUED
             self.sync_error = ""

@@ -90,7 +90,7 @@ def test_ollama_embedding_uses_openai_path_and_deployment_transport(monkeypatch)
 
     assert async_to_sync(request)().embeddings == [[0.5, 0.5]]
     assert transports == [{"trust_env": False, "follow_redirects": False}]
-    assert clients[0].is_closed()
+    assert clients[0].is_closed
     assert len(requests) == 1
     assert str(requests[0].url) == "http://localhost:11434/v1/embeddings"
     assert requests[0].headers["authorization"] == "Bearer not-required"

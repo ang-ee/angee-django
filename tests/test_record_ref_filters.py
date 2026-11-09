@@ -20,7 +20,7 @@ from angee.knowledge import schema as knowledge_schema
 from tests.conftest import Page, SchemaAddon, Vault, addon_schema, create_user, vault_for
 from tests.tables import model_tables
 
-pytestmark = pytest.mark.django_db(transaction=True, reset_sequences=True)
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def referenced_decisions(composed_tables):
     owner, outsider = create_user("reference-owner"), create_user("reference-outsider")
     vault = vault_for(owner)
     with actor_context(owner):
-        page = Page.objects.create_in(vault, title="Reference")
+        page = Page.objects.create_in(vault, pk=vault.pk, title="Reference")
     assert page.pk == vault.pk
     records = (vault, page)
     decisions = []
@@ -199,7 +199,8 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
                 guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
             assert len(queries) == 0
             assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False]
-            assert "CAST(" in str(guarded.query) and "varchar(63)" in str(guarded.query)
+            sql = str(guarded.query)
+            assert "varchar(63)" in sql and ("CAST(" in sql or "::varchar(63)" in sql)
         with actor_context(other):
             rebound = with_record_reference_access(guarded)
             assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True]
