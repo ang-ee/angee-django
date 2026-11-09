@@ -1602,6 +1602,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
     def end_unreadable_for_collections(self, collections: Sequence[models.QuerySet[Any]]) -> int:
         """Recheck record follows across several changed access collections in batches."""
 
+        # Models import their managers; the mixin is read only once the models module has loaded.
         from angee.messaging.models import ThreadedModelMixin
 
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
@@ -1626,6 +1627,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
     def _end_unreadable_attachments(self, attachments: Any, *, party_id: Any | None = None) -> int:
         """Use each model's native account read scope and delete revoked follows together."""
 
+        # Models import their managers; the mixin is read only once the models module has loaded.
         from angee.messaging.models import ThreadedModelMixin
 
         selected = [pk for pk, _content_type_id, _object_id in attachments]
@@ -2058,6 +2060,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         Record-less inbox rows have no record pointer.
         """
 
+        # Models import their managers; the mixin is read only once the models module has loaded.
         from angee.messaging.models import ThreadedModelMixin
 
         if not rows or actor is None:
@@ -2186,6 +2189,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         only matching explicit followers and directly addressed accounts are told.
         """
 
+        # Models import their managers; the mixin is read only once the models module has loaded.
         from angee.messaging.models import ThreadedModelMixin
 
         if message.thread_id is None:
@@ -2292,6 +2296,7 @@ def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type:
     invariant stated in :mod:`angee.base.refs`.
     """
 
+    # Models import their managers; the mixin is read only once the models module has loaded.
     from angee.messaging.models import ThreadedModelMixin
 
     if not isinstance(record, ThreadedModelMixin):
