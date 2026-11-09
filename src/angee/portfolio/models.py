@@ -448,9 +448,12 @@ class UpdateManager[UpdateT: Update](_UpdateManagerBase[UpdateT]):
 
 
 class Update(ImmutableFieldsMixin, HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
-    """A required-health report on a Project or Initiative, never a Product."""
+    """A required-health report on a Project or Initiative, never a Product.
 
-    merge_policy = MergePolicy.MOVE
+    Its target is write-once, so merging the target refuses rather than moving the report.
+    """
+
+    merge_policy = MergePolicy.BLOCK
     sqid_prefix = "upd_"
     immutable_fields = ("content_type_id", "object_id")
 
