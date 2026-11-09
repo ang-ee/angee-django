@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlsplit
 
@@ -10,10 +11,18 @@ from angee.agents.backends import InferenceModelSpec
 from angee.agents.sdk_backends import SDKInferenceBackend
 
 if TYPE_CHECKING:
+    from pydantic_ai.embeddings import EmbeddingModel
+    from pydantic_ai.embeddings.openai import OpenAIEmbeddingModel
     from pydantic_ai.models.openai import OpenAIChatModel
 
 DEFAULT_BROKER_NAME = "openai"
 _MAX_TOKEN_FIELDS = frozenset({"max_tokens", "max_completion_tokens"})
+_EMBEDDING_DIMENSIONS = {
+    "text-embedding-ada-002": 1536,
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+}
+"""Native sizes published in OpenAI's embedding model catalogue; unknown ids learn on use."""
 
 
 class OpenAIInferenceBackend(SDKInferenceBackend):
@@ -32,7 +41,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     client_class_path = "openai.OpenAI"
     async_client_class_path = "openai.AsyncOpenAI"
     # Empty is the explicit allow-all sentinel; deny prefixes are still evaluated first.
-    model_allow_prefixes: ClassVar[tuple[str, ...]] = ("gpt-", "chatgpt-", "o1", "o3", "o4")
+    model_allow_prefixes: ClassVar[tuple[str, ...]] = ("gpt-", "chatgpt-", "o1", "o3", "o4", "text-embedding-")
     model_deny_prefixes: ClassVar[tuple[str, ...]] = (
         "babbage-",
         "codex-",
@@ -42,7 +51,6 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         "gpt-4o-transcribe",
         "gpt-image-",
         "omni-moderation",
-        "text-embedding-",
         "tts-",
         "whisper-",
     )
@@ -80,7 +88,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
                 model_id = str(getattr(model, "id", "") or "").strip()
                 if not model_id:
                     continue
-                if not self._is_chat_model(model_id):
+                if not self._is_catalogue_model(model_id):
                     continue
                 config = {"provider_model": model_id, "source": self.key}
                 owned_by = str(getattr(model, "owned_by", "") or "").strip()
@@ -94,6 +102,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
                         display_name=model_id,
                         model_use=str(discovery.get("model_use", "")),
                         context_window=int(discovery.get("context_window", 0) or 0),
+                        capabilities=discovery.get("capabilities"),
                         config=config,
                     )
                 )
@@ -102,8 +111,38 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     def _model_discovery(self, client: Any, model_id: str) -> dict[str, Any]:
         """Return optional native discovery facts for one listed physical model."""
 
-        del client, model_id
+        del client
+        if model_id.startswith("text-embedding-"):
+            dimensions = _EMBEDDING_DIMENSIONS.get(model_id) if not self._is_compatible_endpoint else None
+            return {
+                "model_use": "embedding",
+                "capabilities": {"embedding_dimensions": dimensions} if dimensions else {},
+            }
         return {"model_use": "chat"}
+
+    def embedding_model(
+        self,
+        handle: str,
+        *,
+        credential: Any | None = None,
+    ) -> AbstractAsyncContextManager[EmbeddingModel]:
+        """Bind embeddings through the same owned credential and SDK client as chat."""
+
+        return self._bind_model(handle, self._build_embedding_model, credential=credential)
+
+    def _build_embedding_model(self, handle: str, client: Any) -> OpenAIEmbeddingModel:
+        """Use the native embedding protocol without assuming hosted limits on a gateway."""
+
+        from pydantic_ai.embeddings.openai import OpenAIEmbeddingModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+        from pydantic_ai.providers.openai_compatible import OpenAICompatibleProvider
+
+        provider = (
+            OpenAICompatibleProvider("openai-compatible", openai_client=client)
+            if self._is_compatible_endpoint
+            else OpenAIProvider(openai_client=client)
+        )
+        return OpenAIEmbeddingModel(handle, provider=provider)
 
     def _build_model(self, handle: str, client: Any) -> OpenAIChatModel:
         """Use native protocol conversion, including the configured token-limit field."""
@@ -121,11 +160,11 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
             ),
         )
 
-    def _is_chat_model(self, model_id: str) -> bool:
-        """Return whether a compatible model id should enter the chat catalogue.
+    def _is_catalogue_model(self, model_id: str) -> bool:
+        """Return whether a compatible model id should enter the inference catalogue.
 
         Deny prefixes win. Compatible endpoints default to all remaining ids;
-        hosted OpenAI keeps its chat prefixes. Explicit config overrides either.
+        hosted OpenAI keeps its chat and embedding prefixes. Explicit config overrides either.
         """
 
         denied = self._config_string_list("model_deny_prefixes", default=self.model_deny_prefixes)
