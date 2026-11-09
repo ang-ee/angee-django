@@ -1050,8 +1050,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   data is an invalid result, never an `ok` null sentinel.
 - Schema-driven forms import [createJsonSchemaResolver](../../packages/ui/src/views/form/json-schema.ts)
   from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
-  discriminator selection; RHF owns original and transformed values. Keep this
-  opt-in adapter out of the UI main entry so other forms do not load Ajv.
+  discriminator selection; RHF owns original and transformed values. Dialog
+  required/presence gates must let that resolver report value constraints and
+  their specific messages; a short value must not silently disable submission.
+  Keep this opt-in adapter out of the UI main entry so other forms do not load Ajv.
 - A widget that consumes a fixed array of object fields declares
   `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
   passes the parsed `rowTemplate` only through that seam and rejects a selected

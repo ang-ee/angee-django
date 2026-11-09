@@ -19,15 +19,16 @@ export function emptyValueForField(field: Pick<FieldDescriptor, "widget" | "kind
   return "";
 }
 
-/** Validate the explicit JSON-presence contract and its native constraints. */
+/** Validate JSON presence, optionally leaving value constraints to a schema resolver. */
 export function invalidPresenceValue(
   field: FieldDescriptor,
   value: unknown,
   present: boolean,
+  validateConstraints = true,
 ): boolean {
   if (!present || value === undefined) return true;
   if (value === null) return !field.nullable;
-  return invalidDescriptorConstraint(field, value);
+  return validateConstraints && invalidDescriptorConstraint(field, value);
 }
 
 function invalidDescriptorConstraint(field: FieldDescriptor, value: unknown): boolean {
@@ -50,6 +51,7 @@ function invalidDescriptorConstraint(field: FieldDescriptor, value: unknown): bo
 }
 
 /** Return exact dotted paths violating a structured FormSpec declaration.
+ * With `validateConstraints=false`, check only presence and nullability at every depth.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -58,9 +60,10 @@ export function structuredFieldErrorPaths(
   value: unknown,
   present: boolean,
   path = field.name,
+  validateConstraints = true,
 ): readonly string[] {
   const errors: string[] = [];
-  if ((field.presenceRequired || present) && invalidPresenceValue(field, value, present)) {
+  if ((field.presenceRequired || present) && invalidPresenceValue(field, value, present, validateConstraints)) {
     errors.push(path);
   }
   if (value && typeof value === "object" && !Array.isArray(value) && field.objectTemplate) {
@@ -71,12 +74,13 @@ export function structuredFieldErrorPaths(
         record[child.name],
         Object.hasOwn(record, child.name),
         `${path}.${child.name}`,
+        validateConstraints,
       ));
     }
   }
   if (Array.isArray(value) && field.itemTemplate) {
     value.forEach((item, index) => {
-      errors.push(...structuredFieldErrorPaths(field.itemTemplate!, item, true, `${path}.${index}`));
+      errors.push(...structuredFieldErrorPaths(field.itemTemplate!, item, true, `${path}.${index}`, validateConstraints));
     });
   }
   return errors;

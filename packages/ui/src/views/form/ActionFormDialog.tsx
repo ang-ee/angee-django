@@ -92,6 +92,7 @@ function ActionArgsDialog({
   const definition = isActionFormDefinition(declaredArgs) ? declaredArgs : undefined;
   const args = isActionFormDefinition(declaredArgs) ? EMPTY_ARGS : declaredArgs;
   const fields = React.useMemo(() => definition?.fields ?? args.map(actionArgField), [args, definition]);
+  const validateConstraints = !definition?.resolver;
   const argNames = React.useMemo(
     () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
       ? definition.fields.map((field) => field.name) : args.map((arg) => arg.name))),
@@ -100,7 +101,7 @@ function ActionArgsDialog({
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
     resolver: async (values, resolverContext, options) => {
-      const errors = requiredDialogErrors(fields, values, t("form.required"));
+      const errors = requiredDialogErrors(fields, values, t("form.required"), validateConstraints);
       if (Object.keys(errors).length) return { values: {}, errors };
       return definition?.resolver
         ? definition.resolver(values, resolverContext, options)
@@ -131,6 +132,7 @@ function ActionArgsDialog({
     <ActionSubmitButton
       control={form.control}
       fields={fields}
+      validateConstraints={validateConstraints}
       submitting={submitting}
       disabled={saveConflict}
       danger={action.danger}
@@ -183,6 +185,7 @@ function ActionArgsDialog({
 function ActionSubmitButton({
   control,
   fields,
+  validateConstraints,
   submitting,
   disabled,
   danger,
@@ -191,6 +194,7 @@ function ActionSubmitButton({
 }: {
   control: Control<ArgValues>;
   fields: ActionFormDefinition["fields"];
+  validateConstraints: boolean;
   submitting: boolean;
   disabled?: boolean;
   danger?: boolean;
@@ -201,7 +205,7 @@ function ActionSubmitButton({
   const values = useWatch({ control }) as ArgValues;
   const preview = useRuntimeViewAs();
   const t = useUiT();
-  const ready = Object.keys(requiredDialogErrors(fields, values, t("form.required"))).length === 0;
+  const ready = Object.keys(requiredDialogErrors(fields, values, t("form.required"), validateConstraints)).length === 0;
   return (
     <Button
       type={onSubmit ? "button" : "submit"}

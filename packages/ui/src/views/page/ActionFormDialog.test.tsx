@@ -387,6 +387,7 @@ describe("ActionFormDialog", () => {
     const reason = await screen.findByRole<HTMLInputElement>("textbox", { name: "Reason" });
     expect(reason.value).toBe("doc-1");
     fireEvent.change(reason, { target: { value: "no" } });
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review" }).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
     expect(await screen.findByText("Enter at least 3 characters.")).toBeTruthy();
     expect(submit).not.toHaveBeenCalled();
