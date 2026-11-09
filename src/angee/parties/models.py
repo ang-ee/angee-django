@@ -827,6 +827,9 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
 
         The handle, its competing parties and their statements are locked in the
         identity order first; this instance then carries the resolved party.
+        Because it relocks and reloads the handle under that lock, a caller holding
+        only the key may call it on a transient ``Handle(pk=...)``. A row verb that
+        reads its row without relocking it needs the row loaded through its manager.
         """
 
         party_model = apps.get_model("parties", "Party")
