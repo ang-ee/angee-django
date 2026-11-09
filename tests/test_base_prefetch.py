@@ -9,7 +9,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import SubjectRef, actor_context, system_context
 
-from angee.base.prefetch import InstancePrefetch, ReaderMemo, prefetched
+from angee.base.prefetch import InstancePrefetch, ReaderMemo, prefetched, prefetched_objects
 
 ALICE = SubjectRef.of("auth/user", "1")
 BOB = SubjectRef.of("auth/user", "2")
@@ -86,3 +86,23 @@ def test_prefetched_builds_its_hint_only_for_a_row_no_list_read_prefetched() -> 
     with pytest.raises(ValueError, match="needs a hint to it"):
         prefetched(SimpleNamespace(), "_answer", lambda: hint("_other"))
     assert built == ["_other"]
+
+
+def test_ordinary_prefetch_preserves_empty_answers_without_evaluating_querysets() -> None:
+    """A cache hit never re-enters the queryset's authorization or fetch path."""
+
+    class CachedQuery:
+        def __init__(self, rows):
+            self._result_cache = rows
+
+        def __iter__(self):
+            pytest.fail("A prefetch reader must use the already materialized answer")
+
+    row = get_user_model()()
+    assert prefetched_objects(row, "items") is None
+    row._prefetched_objects_cache = {"items": CachedQuery([])}
+    assert prefetched_objects(row, "items") == []
+    rows = [object()]
+    row._prefetched_objects_cache["items"] = CachedQuery(rows)
+    assert prefetched_objects(row, "items") is rows
+    assert prefetched_objects(row, "other") is None

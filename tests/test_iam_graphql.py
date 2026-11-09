@@ -40,6 +40,7 @@ from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
 from angee.base.identity import public_data_id_field
+from angee.base.managers import AngeeManager
 from angee.base.models.identity import instance_from_public_id, public_id_for, public_id_of
 from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
@@ -2195,7 +2196,7 @@ def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     admin = _platform_admin("preview-denied-admin")
-    monkeypatch.setattr(User._default_manager, "admit_view_as", None)
+    monkeypatch.setattr(User._default_manager, "admit_view_as", AngeeManager().admit_view_as)
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: None)
     request = RequestFactory().post(
         "/graphql/public/",

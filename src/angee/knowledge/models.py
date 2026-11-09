@@ -25,7 +25,6 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from django.db.models.query import EmptyQuerySet
 from django.db.models.signals import post_save
 from django.utils import timezone
 from django_compose.models import Composable
@@ -41,7 +40,6 @@ from rebac import (
 )
 from rebac.errors import MissingActorError
 from rebac.mixins import RebacModelBase
-from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.fields.implementation import ImplClassField
@@ -55,7 +53,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id, require_rebac_queryset
+from angee.base.permissions import actor_user_id, relation_read_queryset
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend
@@ -391,18 +389,9 @@ class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], 
         return models.Exists(children.filter(parent_id=models.OuterRef("pk")))
 
     def _related_pages(self, *, trashed: bool) -> Self:
-        """Scoped pages in one trash state, read as these rows are read (REBAC's ``relation_actor``).
+        """Scoped pages in one trash state, read through the shared relation policy."""
 
-        Without a reader, REBAC's ambient scope answers, as it does for these rows:
-        system context reads every page and an actorless read fails closed. Rows
-        already emptied (``none()``, as schema composition inspects an expression's
-        output field) relate to no page.
-        """
-
-        if isinstance(self, EmptyQuerySet):
-            return self.none()
-        actor = relation_actor(self)
-        pages = self.with_actor(actor) if actor is not None else cast(Self, require_rebac_queryset(self.model))
+        pages = cast(Self, relation_read_queryset(self.model, self))
         return (pages.trashed() if trashed else pages.untrashed()).scoped()
 
 _PageManagerBase = AngeeHistoryManager.from_queryset(PageQuerySet)

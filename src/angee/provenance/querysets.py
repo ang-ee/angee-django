@@ -80,7 +80,7 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
             current_changeset(required=True, record=True)
             with transaction.atomic(using=self.db, savepoint=False), write_group():
                 count = sum(super(HistoryQuerySet, rows).update(**kwargs) for rows in self.capture_batches(keys))
-                history.bulk_history_create(history_model, keys, "~", using=self.db)
+                history.bulk_history_create(history_model, keys, "~")
                 self._result_cache = None
                 return count
 
@@ -143,7 +143,6 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
                     history_model,
                     [row.pk for row in rows],
                     "~" if update_conflicts else "+",
-                    using=self.db,
                     batch_size=batch_size,
                 )
             return rows
@@ -165,7 +164,7 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
                 return 0, {}
             current_changeset(required=True, record=True)
             with transaction.atomic(using=self.db, savepoint=False), write_group():
-                history.bulk_history_create(history_model, keys, "-", using=self.db)
+                history.bulk_history_create(history_model, keys, "-")
                 counts: dict[str, int] = {}
                 for rows in self.capture_batches(keys):
                     _, deleted = super(HistoryQuerySet, rows).delete()

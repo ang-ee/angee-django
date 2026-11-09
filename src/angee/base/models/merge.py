@@ -106,7 +106,7 @@ class MergeableMixin(AngeeModel):
         return type(self)._base_manager.get(pk=pk)
 
     @classmethod
-    def canonical_ids(cls, ids: Iterable[Any], *, using: str | None = None) -> dict[Any, Any]:
+    def canonical_ids(cls, ids: Iterable[Any]) -> dict[Any, Any]:
         """Resolve existing identities in batches, without loading record bodies.
 
         Missing records are omitted; corrupt redirects fail closed, as on the
@@ -116,7 +116,7 @@ class MergeableMixin(AngeeModel):
         pending = set(ids)
         redirects: dict[Any, Any] = {}
         roots = pending.copy()
-        rows = cls._base_manager.using(using)
+        rows = cls._base_manager.all()
         while pending:
             found = dict(rows.filter(pk__in=pending).values_list("pk", "merged_into_id"))
             redirects.update(found)

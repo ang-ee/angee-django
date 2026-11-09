@@ -7,7 +7,6 @@ from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.expressions import Combinable
@@ -16,7 +15,6 @@ from django.db.models.functions import Cast
 from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
-from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 from strawberry import Info
 from strawberry_django.fields.field import StrawberryDjangoField
@@ -25,8 +23,8 @@ from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.models.base import record_display_label
 from angee.base.models.refs import RecordRefMixin
-from angee.base.permissions import require_rebac_queryset
-from angee.base.prefetch import prefetched
+from angee.base.permissions import relation_read_queryset
+from angee.base.prefetch import prefetched, prefetched_objects
 from angee.base.refs import RecordRef
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
@@ -55,21 +53,6 @@ _UNCACHED = object()
 _REFERENCE_TARGET = "_angee_reference_target"
 
 
-def relation_read_queryset[M: models.Model](model: type[M], source: models.QuerySet[Any]) -> RebacQuerySet[M]:
-    """``model``'s ``read`` queryset for the rows ``source`` relates to, read as ``source`` reads.
-
-    The reader is REBAC's ``relation_actor(source)``: the source's pinned actor, else
-    the ambient one. With neither, REBAC's ambient scope answers, as it does for
-    ``source`` itself: system context reads unscoped and an actorless read fails
-    closed. Relation guards, reference access and relation-id decoding read their
-    targets through it, never through an explicit ``None`` reader, which reads nothing.
-    """
-
-    actor = relation_actor(source)
-    related = require_rebac_queryset(model) if actor is None else require_rebac_queryset(model, actor=actor)
-    return related.with_action("read")
-
-
 class _ActorScopedSubquery(models.Expression):
     """An uncorrelated scope projected only when the containing SQL uses it.
 
@@ -94,7 +77,7 @@ class _ActorScopedSubquery(models.Expression):
         self.field_name = field_name
 
     def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
-        queryset = self.queryset.using(connection.alias).scoped_for_aggregate()
+        queryset = self.queryset.scoped_for_aggregate()
         return models.Subquery(queryset.order_by().values(self.field_name)).as_sql(compiler, connection)
 
     def get_group_by_cols(self) -> list[Any]:
@@ -110,22 +93,16 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
     key_field = queryset.model._meta.get_field(reference.fk_field)
     if not isinstance(key_field, models.Field):
         raise ImproperlyConfigured("A record reference must store its object id in a forward field.")
-    reference_rows = queryset.scoped_for_aggregate() if isinstance(queryset, RebacQuerySet) else queryset
-    content_types = ContentType.objects.filter(pk__in=reference_rows.order_by().values_list(
-        reference.ct_field, flat=True,
-    )).order_by("app_label", "model")
     readable = models.Q(pk__in=[])
-    for content_type in content_types:
-        model = content_type.model_class()
-        if model is None:
-            continue
+    for _label, model in sorted(queryset.model.accepted_target_models().items()):
         keys = (
             relation_read_queryset(model, queryset)
             .order_by()
             .annotate(_angee_reference_key=Cast("pk", output_field=key_field))
         )
         readable |= models.Q(**{
-            reference.ct_field_attname: content_type.pk,
+            f"{reference.ct_field}__app_label": model._meta.app_label,
+            f"{reference.ct_field}__model": model._meta.model_name,
             f"{reference.fk_field}__in": _ActorScopedSubquery(keys, "_angee_reference_key"),
         })
     return queryset.annotate(_angee_record_readable=models.ExpressionWrapper(
@@ -171,7 +148,7 @@ class RecordReferenceNode(AngeeNode):
         """
 
         row = cast(Any, self)
-        if current_actor() is None or not _record_readable(row):
+        if not _record_readable(row):
             return None
         target = prefetched(row, _REFERENCE_TARGET, lambda: record_reference_targets(info))
         return record_display_label(target) if target is not None else None
@@ -190,11 +167,8 @@ def _record_readable(row: Any) -> bool:
     """Return the row's batched target-read annotation, computing it once when absent."""
 
     if "_angee_record_readable" not in row.__dict__:
-        actor = current_actor()
         rows = with_record_reference_access(
-            type(row).objects.none()
-            if actor is None
-            else type(row).objects.with_actor(actor).with_action("read").filter(pk=row.pk)
+            relation_read_queryset(type(row), type(row)._default_manager.all()).filter(pk=row.pk)
         )
         row._angee_record_readable = bool(rows.values_list("_angee_record_readable", flat=True).first())
     return bool(row._angee_record_readable)
@@ -323,24 +297,16 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
             return None
 
         actor = current_actor()
-        if actor is None:
-            return None
-
-        cached = root._state.fields_cache.get(field.name, _UNCACHED)
-        if cached is None:
-            return None
-        if cached is not _UNCACHED and getattr(cached, "_rebac_actor", None) == actor:
-            return cached
+        if actor is not None:
+            cached = root._state.fields_cache.get(field.name, _UNCACHED)
+            if cached is None:
+                return None
+            if cached is not _UNCACHED and getattr(cached, "_rebac_actor", None) == actor:
+                return cached
 
         related_model = field.related_model
-        queryset = related_model._default_manager.all()
-        with_actor = getattr(queryset, "with_actor", None)
-        if not callable(with_actor):
-            raise ImproperlyConfigured(
-                f"{root._meta.label}.{field_name} targets {related_model._meta.label}, "
-                "whose default manager is not actor-scoped"
-            )
-        return with_actor(actor).filter(**{lookup: fk_id}).first()
+        queryset = relation_read_queryset(related_model, related_model._default_manager.all())
+        return queryset.filter(**{lookup: fk_id}).first()
 
     return resolve
 
@@ -369,9 +335,9 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
         if related_model is None:
             # A public-ID scalar has no nested model projection to optimize.
             return models.Prefetch(field_name)
-        queryset: models.QuerySet[models.Model] = require_rebac_queryset(
-            related_model, actor=current_actor(),
-        ).with_action("read")
+        queryset: models.QuerySet[models.Model] = relation_read_queryset(
+            related_model, related_model._default_manager.all(),
+        )
         queryset = run_type_get_queryset(queryset, field.django_type, info)
         assert field.origin_django_type is not None
         relation = field.origin_django_type.model._meta.get_field(field_name)
@@ -392,6 +358,7 @@ def actor_scoped_to_many(field_name: str) -> Any:
     to-many relation contains other protected rows. Resolve the relation through
     the target model's actor-scoped queryset instead of exposing the raw related
     manager. Both cached and queried rows retain their model's native ordering.
+    Without an actor, the native related queryset resolves ambient scope.
     """
 
     def resolve(root: models.Model) -> Any:
@@ -401,12 +368,8 @@ def actor_scoped_to_many(field_name: str) -> Any:
             raise ImproperlyConfigured(f"{root._meta.label}.{field_name} must be a forward or reverse to-many relation")
 
         actor = current_actor()
-        if actor is None:
-            return []
-
-        cached = getattr(root, "_prefetched_objects_cache", {}).get(field_name, _UNCACHED)
-        if cached is not _UNCACHED:
-            rows = list(cached)
+        rows = prefetched_objects(root, field_name)
+        if actor is not None and rows is not None:
             if all(getattr(row, "_rebac_actor", None) == actor for row in rows):
                 # Returning an evaluated list preserves the prefetch; a queryset
                 # would be cloned by Strawberry's relation ordering machinery.
@@ -418,7 +381,11 @@ def actor_scoped_to_many(field_name: str) -> Any:
                 f"{root._meta.label}.{field_name} targets {related_model._meta.label}, "
                 "whose related manager is not actor-scoped"
             )
-        return related_queryset.with_actor(actor)
+        if actor is not None:
+            return related_queryset.with_actor(actor)
+        # Reapply read scope to a fresh clone even if the manager returned its
+        # ordinary prefetch queryset; its evaluated cache cannot answer a new read.
+        return related_queryset.with_action("read")
 
     return strawberry_django.field(
         resolver=resolve,

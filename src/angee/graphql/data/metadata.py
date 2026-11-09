@@ -238,9 +238,9 @@ def finalize_data_resources(
                 )
             lines_declaration = _single_policy_value(model_label, contributions, "lines_declaration")
             if lines_declaration is not None:
-                from angee.graphql.data.hasura import HasuraLines, _line_metadata
+                from angee.graphql.data.hasura import HasuraLines, line_metadata
 
-                lines = _line_metadata(cast(HasuraLines, lines_declaration), native_resource, schema)
+                lines = line_metadata(cast(HasuraLines, lines_declaration), native_resource, schema)
         roots = _merge_description_values(
             model_label,
             contributions,

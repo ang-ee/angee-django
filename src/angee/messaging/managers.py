@@ -69,7 +69,7 @@ from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.permissions import actor_user_id, purpose_read_holds, require_rebac_queryset
-from angee.base.prefetch import InstancePrefetch, ReaderMemo
+from angee.base.prefetch import InstancePrefetch, ReaderMemo, prefetched_objects
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import STRINGIFIED_JSON, strip_null_bytes
@@ -2350,8 +2350,9 @@ class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
         user_id = getattr(user, "pk", None)
         if user_id is None:
             return False
-        if hasattr(message, "_prefetched_objects_cache") and "stars" in message._prefetched_objects_cache:
-            return any(star.user_id == user_id for star in message.stars.all())
+        stars = prefetched_objects(message, "stars")
+        if stars is not None:
+            return any(star.user_id == user_id for star in stars)
         return self.model._base_manager.filter(message=message, user_id=user_id).exists()
 
     def prefetch_for(self, user: Any | None) -> models.Prefetch:
@@ -4758,20 +4759,15 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
         follows a forward FK descriptor onto another message.
         """
 
-        parts: list[Part] | None = None
-        cache = getattr(message, "_prefetched_objects_cache", None)
-        if cache is not None and "parts" in cache:
-            # Native prefetch already materialized these rows under the caller's
-            # authorization. Re-evaluating its queryset would re-enter REBAC
-            # before this owner can reject incomplete rows.
-            parts = cache["parts"]._result_cache
+        parts = prefetched_objects(message, "parts")
+        if parts is not None:
             fragment_field = self.model.fragment.field
             file_field = self.model.file.field
             file_model = file_field.related_model
             assert file_model is not None
             mime_field = file_model._meta.get_field("mime_type")
             assert isinstance(mime_field, models.ForeignKey)
-            for part in parts if parts is not None else ():
+            for part in parts:
                 fragment = fragment_field.get_cached_value(part, default=None)
                 file = file_field.get_cached_value(part, default=None)
                 mime_type = mime_field.get_cached_value(file, default=None) if file is not None else None

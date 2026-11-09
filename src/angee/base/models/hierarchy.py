@@ -170,7 +170,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
                 temporary = column.get_temporary_ranks(rows, values)
                 for row, rank in zip(rows, temporary, strict=True):
                     setattr(row, column.attname, rank)
-            with model.initialize_rows(rows, using=self.db):
+            with model.initialize_rows(rows):
                 # Below the hierarchy guard and deferred observers: the creation version
                 # below records each row with its parent and path.
                 super(AngeeQuerySetMixin, cast(AngeeQuerySetMixin, self)).bulk_create(rows)
@@ -427,6 +427,20 @@ class HierarchyMixin(PersistenceMixin):
 
         return bool(self.path and other.path and self.path.startswith(other.path))
 
+    def validate_hierarchy_parent(self) -> None:
+        """Validate this row's parent against its scope and cycle rules before a write."""
+
+        parent = self._hierarchy_parent()
+        self._reject_cross_scope_parent(parent)
+        self._reject_cycle(parent)
+
+    def validate_hierarchy_move(self) -> None:
+        """Validate the rewritten subtree inside the move's transaction.
+
+        Capabilities extend this hook for invariants that depend on final paths;
+        a refusal rolls back the whole move and restores this row's path.
+        """
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row, maintaining ``path`` on create and reparent."""
 
@@ -438,7 +452,13 @@ class HierarchyMixin(PersistenceMixin):
             else:
                 self._validate_hierarchy_scope(kwargs.get("update_fields"))
                 if self._hierarchy_needs_repath():
-                    self._save_reparented(*args, **kwargs)
+                    path = self.path
+                    try:
+                        self._save_reparented(*args, **kwargs)
+                        self.validate_hierarchy_move()
+                    except Exception:
+                        self.path = path
+                        raise
                 else:
                     super().save(*args, **kwargs)
         if "parent_id" in self.__dict__:
@@ -470,7 +490,7 @@ class HierarchyMixin(PersistenceMixin):
     def _save_created(self, *args: Any, **kwargs: Any) -> None:
         """Insert the row in :meth:`save`'s transaction, then derive its ``path`` from the parent's committed path."""
 
-        with type(self).initialize_rows([self], using=kwargs["using"]) as deferred:
+        with type(self).initialize_rows([self]) as deferred:
             super().save(*args, **kwargs)
             parent = self._hierarchy_parent()
             if parent is not None:

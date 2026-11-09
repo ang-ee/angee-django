@@ -3,13 +3,14 @@
 import copy
 from collections.abc import Callable, Mapping
 from functools import cache
-from typing import Any, get_args
+from typing import Annotated, Any, get_args
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import RegexValidator
+from django.db import models
 from jsonschema import Draft202012Validator, FormatChecker, SchemaError, validators
 from jsonschema._utils import find_additional_properties
-from pydantic import BaseModel, TypeAdapter
+from pydantic import AfterValidator, BaseModel, InstanceOf, TypeAdapter, ValidationInfo
 from pydantic import ValidationError as PydanticValidationError
 from referencing import Registry
 from referencing.jsonschema import UnknownDialect
@@ -19,6 +20,18 @@ from angee.base.serialization import canonical_json
 
 HEX_COLOR_VALIDATOR = RegexValidator(r"^#[0-9a-fA-F]{6}$", "Enter a colour as #rrggbb.")
 """The one colour form a colour column stores and the colour chooser writes."""
+
+
+def _saved_row(row: models.Model, info: ValidationInfo) -> models.Model:
+    """Require the identity of a row named by a typed field."""
+
+    if row.pk is None:
+        raise ValueError(f"{info.field_name or 'Value'} must name a saved row.")
+    return row
+
+
+SavedRow = Annotated[InstanceOf[models.Model], AfterValidator(_saved_row)]
+"""A model row with a primary key; validation errors name the containing field."""
 
 
 @cache

@@ -18,7 +18,13 @@ from angee.agents.testing.models import Agent, AgentSession, AgentTurn, Inferenc
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeModel
-from angee.base.models.transitions import StateTransitions, get_transition_save_field, save_state, transition
+from angee.base.models.transitions import (
+    StateTransitions,
+    StateTransitionsMixin,
+    get_transition_save_field,
+    save_state,
+    transition,
+)
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.testing.integration import Integration
 from tests.conftest import make_integration
@@ -908,3 +914,75 @@ def test_lock_subject_preparation_hydrates_guarded_state_without_transition():
     assert "body_state" not in candidate.__dict__
     with pytest.raises(TransitionNotAllowed):
         candidate.state = TransitionTask.State.DONE
+
+
+@isolate_apps()
+def test_a_donor_guards_only_hosts_that_compose_it() -> None:
+    """A foreign abstract field declaration never changes the source or a sibling host."""
+
+    class Source(AngeeModel):
+        state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    class Donor(StateTransitionsMixin):
+        state_transitions = StateTransitions(Source._meta.get_field("state"), {})
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    class Guarded(Donor, Source):
+        class Meta:
+            app_label = "tests"
+
+    class Unguarded(Source):
+        class Meta:
+            app_label = "tests"
+
+    class Child(Guarded):
+        class Meta:
+            app_label = "tests"
+
+    assert Source._meta.get_field("state").transition_guard is None
+    plain = Unguarded()
+    plain.state = TransitionTask.State.DONE
+    assert StateTransitions.get_field_names(Unguarded) == frozenset()
+    for model in (Guarded, Child):
+        row = model()
+        with pytest.raises(TransitionNotAllowed, match="direct assignment"):
+            row.state = TransitionTask.State.DONE
+        row.state_transitions.write_state(row, TransitionTask.State.DONE, reason="tests.projection")
+        assert row.state == TransitionTask.State.DONE
+        assert StateTransitions.get_field_names(model) == {"state"}
+
+
+@isolate_apps()
+def test_donor_guards_refuse_competing_declarations() -> None:
+    class Source(AngeeModel):
+        state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    class First(StateTransitionsMixin):
+        first = StateTransitions(Source._meta.get_field("state"), {})
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    class Second(StateTransitionsMixin):
+        second = StateTransitions(Source._meta.get_field("state"), {})
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    with pytest.raises(ImproperlyConfigured, match="competing transition guards"):
+        class Conflicting(First, Second, Source):
+            class Meta:
+                app_label = "tests"

@@ -22,12 +22,13 @@ from django.db import connection, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from django.utils import timezone
-from rebac import actor_context, anonymous_actor
+from rebac import actor_context, anonymous_actor, system_context
 from strawberry import auto
 from strawberry_django.fields.types import field_type_map
 
 from angee.base import signals
 from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_for
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.refs import RecordRef
@@ -463,17 +464,19 @@ def test_related_records_project_without_view_expansion() -> None:
 
     from tests.mtidemo.models import MtiParent
 
-    class ConcernGroup(Group):
+    class ConcernGroup(AngeeModel):
+        name = models.CharField(max_length=40)
+
         class Meta:
-            proxy = True
             app_label = "auth"
 
         def change_related_records(self) -> tuple[RecordRef, ...]:
             return (RecordRef.from_model(MtiParent, 5),)
 
-    class WireConcernGroup(Group):
+    class WireConcernGroup(AngeeModel):
+        name = models.CharField(max_length=40)
+
         class Meta:
-            proxy = True
             app_label = "auth"
 
         def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
@@ -487,23 +490,24 @@ def test_related_records_project_without_view_expansion() -> None:
         ChangePayload.from_instance(WireConcernGroup(id=2, name="wire"), action="update", update_fields=None)
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_a_broken_feed_projection_fails_the_write(group_feed: Any) -> None:
     """A related-records hook that breaks its contract aborts the save that observed it."""
 
-    class BrokenConcernGroup(Group):
+    class BrokenConcernGroup(AngeeModel):
+        name = models.CharField(max_length=40)
+
         class Meta:
-            proxy = True
             app_label = "auth"
 
         def change_related_records(self) -> tuple[str, ...]:
             return ("not-a-record-ref",)
 
     group_feed(BrokenConcernGroup, readable_fields=("name",))
-    with pytest.raises(TypeError, match="RecordRef"), transaction.atomic():
-        BrokenConcernGroup.objects.create(name="broken-feed")
-
-    assert not Group.objects.filter(name="broken-feed").exists()
+    with model_tables((BrokenConcernGroup,)), system_context(reason="tests.broken_feed"):
+        with pytest.raises(TypeError, match="RecordRef"), transaction.atomic():
+            BrokenConcernGroup.objects.create(name="broken-feed")
+        assert not BrokenConcernGroup.objects.filter(name="broken-feed").exists()
 
 
 def test_publish_change_robust_receivers_log_and_continue(

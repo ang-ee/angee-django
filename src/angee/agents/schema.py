@@ -286,7 +286,6 @@ class AgentChatTarget:
     agent_name: str
     status: str
     model_handle: str
-    runtime_class: AgentRuntimeImpl  # type: ignore[valid-type]
     runs_in_process: bool
     session_id: PublicID | None = None
 
@@ -551,7 +550,6 @@ class AgentSessionQuery:
             agent_name=str(agent.name),
             status=str(agent.runtime_status),
             model_handle=agent.readable_model_handle(current_actor()),
-            runtime_class=agent.runtime_class,
             runs_in_process=agent.runs_in_process,
             session_id=PublicID(str(session.sqid)) if session is not None else None,
         )

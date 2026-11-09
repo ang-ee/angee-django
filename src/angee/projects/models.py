@@ -285,7 +285,7 @@ class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
         for name in self.model.ORDERING_RANK_FIELDS:
             field = self.model._meta.get_field(name)
             assert isinstance(field, FractionalRankField)
-            field.allocate_missing_ranks(rows, using=self.db)
+            field.allocate_missing_ranks(rows)
 
     def bulk_create(
         self, objs: Any, batch_size: int | None = None, ignore_conflicts: bool = False,
@@ -1584,7 +1584,7 @@ class Task(
             if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
                 return self
             self.validate_action("complete")
-            cast(Any, self).status = str(self.TaskStatus.DONE)
+            self._write_status(self.TaskStatus.DONE)
             self.done_at = self.done_at or timezone.now()
             cast(Any, self).dropped_reason = None
             self.dropped_at = None
@@ -1597,14 +1597,15 @@ class Task(
 
         if self.pk is None:
             return
-        stored = (
-            type(self)
-            .system_queryset(lock=("self",))
-            .values("status", "done_at", "dropped_at", "dropped_reason")
-            .get(pk=self.pk)
+        self.refresh_from_db(
+            fields=("status", "done_at", "dropped_at", "dropped_reason"),
+            from_queryset=type(self).system_queryset(lock=("self",)),
         )
-        for name, value in stored.items():
-            setattr(self, name, value)
+
+    def _write_status(self, status: TaskStatus) -> None:
+        """Write the lifecycle state; a projecting capability may guard this field."""
+
+        self.status = status
 
     def post_completion(self, feedback: str = "") -> None:
         """Announce this record task's completion, with ``feedback``, on its record's chatter.
@@ -1647,7 +1648,7 @@ class Task(
             if self.status == self.TaskStatus.DROPPED and self.dropped_reason == reason_member and self.dropped_at:
                 return self
             self.validate_action("drop")
-            cast(Any, self).status = str(self.TaskStatus.DROPPED)
+            self._write_status(self.TaskStatus.DROPPED)
             cast(Any, self).dropped_reason = str(reason_member)
             self.dropped_at = self.dropped_at or timezone.now()
             self.done_at = None
@@ -1667,7 +1668,7 @@ class Task(
             ):
                 return self
             self.validate_action("reopen")
-            cast(Any, self).status = str(self.TaskStatus.OPEN)
+            self._write_status(self.TaskStatus.OPEN)
             self.done_at = None
             cast(Any, self).dropped_reason = None
             self.dropped_at = None

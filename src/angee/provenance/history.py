@@ -101,28 +101,17 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
         history = model_history(tracked)
         if history is None:
             raise ImproperlyConfigured(f"{self.model._meta.label}: no native history capture owner.")
-        by_database: dict[str, list[models.Model]] = {}
-        for obj in objects:
-            alias = router.db_for_write(tracked, instance=obj)
-            by_database.setdefault(alias, []).append(obj)
-        captured = []
-        for alias, sources in by_database.items():
-            captured.extend(
-                history.bulk_history_create(
-                    tracked,
-                    [obj.pk for obj in sources],
-                    history_type or ("~" if update else "+"),
-                    using=alias,
-                    history_using=self._db,
-                    instances={obj.pk: obj for obj in sources},
-                    batch_size=batch_size,
-                    default_user=default_user,
-                    default_change_reason=default_change_reason,
-                    default_date=default_date,
-                    custom_historical_attrs=custom_historical_attrs,
-                )
-            )
-        return captured
+        return history.bulk_history_create(
+            tracked,
+            [obj.pk for obj in objects],
+            history_type or ("~" if update else "+"),
+            instances={obj.pk: obj for obj in objects},
+            batch_size=batch_size,
+            default_user=default_user,
+            default_change_reason=default_change_reason,
+            default_date=default_date,
+            custom_historical_attrs=custom_historical_attrs,
+        )
 
     def _construct_history(
         self,
@@ -279,8 +268,6 @@ class ModelHistory(HistoricalRecords):
         keys: Iterable[Any],
         history_type: str,
         *,
-        using: str,
-        history_using: str | None = None,
         instances: Mapping[Any, models.Model] | None = None,
         batch_size: int | None = None,
         default_user: models.Model | None = None,
@@ -290,9 +277,7 @@ class ModelHistory(HistoricalRecords):
     ) -> list[models.Model]:
         """Batch stored snapshots of this model and its tracked MTI descendants.
 
-        ``using`` selects the stored source rows. An explicit ``history_using``
-        binds the historical destination; otherwise its native routing policy
-        applies. ``instances`` supplies only native history metadata overrides.
+        ``instances`` supplies only native history metadata overrides.
         Each batch records pending receiver keys, consumed by native receivers.
         """
 
@@ -303,8 +288,7 @@ class ModelHistory(HistoricalRecords):
         with write_group() as group:
             keys = list(dict.fromkeys(keys))
             names = [field.attname for field in self.fields_included(model)]
-            destination = history_using or (using if self.use_base_model_db else router.db_for_write(manager.model))
-            for rows in cast(HistoryQuerySet, model._base_manager.using(using)).capture_batches(keys):
+            for rows in cast(HistoryQuerySet, model._base_manager.all()).capture_batches(keys):
                 snapshots = list(rows.only(*names).order_by())
                 if not snapshots:
                     continue
@@ -312,7 +296,7 @@ class ModelHistory(HistoricalRecords):
                     if instances is not None and snapshot.pk in instances:
                         _copy_history_metadata(instances[snapshot.pk], snapshot)
                 context = current_changeset(required=True, record=True)
-                records = manager.db_manager(destination)._construct_history(
+                records = manager._construct_history(
                     snapshots,
                     batch_size=batch_size,
                     history_type=history_type,
@@ -334,8 +318,6 @@ class ModelHistory(HistoricalRecords):
                         child,
                         keys,
                         history_type,
-                        using=using,
-                        history_using=history_using,
                         instances=instances,
                         batch_size=batch_size,
                         default_user=default_user,

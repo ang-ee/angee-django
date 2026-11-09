@@ -295,13 +295,14 @@ def test_graphql_stage_create_keeps_system_category_guard(
 
 
 def test_noop_refresh_preserves_authored_work_state_and_loaded_queue() -> None:
-    task = Task()
-    task.status = "done"
+    task = Task(status="done")
     task.queue_id = 2
     task._work_loaded_queue_id = 1
     task.refresh_from_db(fields=[])
-    assert task._work_status_assigned is True
+    assert task.status == AbstractTask.TaskStatus.DONE
     assert task._work_loaded_queue_id == 1
+    with pytest.raises(ValidationError, match="Set stage instead"):
+        task.save()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -359,3 +360,12 @@ def test_bulk_snooze_wake_clears_only_the_selected_snoozes() -> None:
     selected, other = (Task._base_manager.get(pk=row.pk) for row in rows)
     assert (selected.snoozed_until, selected.snoozed_by_id) == (None, None)
     assert (other.snoozed_until, other.snoozed_by_id) == (now, owner.pk)
+
+
+@pytest.mark.parametrize("status", ["open", "done", "dropped"])
+def test_work_constructor_status_cannot_be_cleaned_or_saved(status) -> None:
+    task = Task(status=status)
+    assert task.status == status
+    for write in (task.clean, task.save):
+        with pytest.raises(ValidationError, match="Set stage instead"):
+            write()

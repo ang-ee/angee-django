@@ -1056,7 +1056,7 @@ def test_writes_delegate_prepared_values_and_reload_after_owner_lock(composed_ta
     observed = []
 
     def lock(instance, members=None):
-        observed.append((instance.title, instance._state.db))
+        observed.append(instance.title)
         locked = original(instance, members)
         with system_context(reason="simulate current data after owner wait"):
             Document.objects.filter(pk=instance.pk).update(note="Current after wait")
@@ -1070,7 +1070,7 @@ def test_writes_delegate_prepared_values_and_reload_after_owner_lock(composed_ta
         else:
             backend.save(None, doc.public_id, {"title": "After"}, None)
     doc.refresh_from_db()
-    assert observed == [("After", doc._state.db)]
+    assert observed == ["After"]
     assert (doc.title, doc.note) == ("After", "Current after wait")
 
 

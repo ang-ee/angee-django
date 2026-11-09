@@ -20,14 +20,14 @@ class PersistenceMixin(models.Model):
 
     @classmethod
     @contextmanager
-    def initialize_rows(cls, rows: Sequence[models.Model], *, using: str) -> Iterator[bool]:
+    def initialize_rows(cls, rows: Sequence[models.Model]) -> Iterator[bool]:
         """Bracket final derived creation values; observers may defer intermediate writes.
 
         The terminal lifecycle has no observer. A cooperative capability yields
         true while it owns one final observation after successful initialization.
         """
 
-        del rows, using
+        del rows
         yield False
 
     @classmethod

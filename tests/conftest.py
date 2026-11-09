@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import pytest
 import tomlkit
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.db import models
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
@@ -24,6 +24,7 @@ from rebac.roles import grant as grant_role
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
+from angee.base.testing.fixtures import installed_app_registry as installed_app_registry
 from angee.base.testing.packages import write_addon_distribution
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -108,51 +109,6 @@ def source_change_publishers() -> Iterator[None]:
     finally:
         for model in connected:
             disconnect_publishers(model)
-
-
-@contextmanager
-def installed_app_registry_restored() -> Iterator[None]:
-    """Return Django's installed app registry to its state before the block.
-
-    Django cannot unregister a model, so a model class a test creates on an installed
-    app label would stay in ``apps.all_models`` for every later test in the process,
-    where system checks, the deletion collector and resource-type lookups meet it in
-    file order. A model from a module already imported when the block began was
-    created by the block and is unregistered, with its auto-created through models; a
-    module first imported in the block keeps its models registered, as its import does.
-    Installed app configs the block adds, replaces or removes are put back.
-    """
-
-    registered = {label: dict(entries) for label, entries in apps.all_models.items()}
-    configs = dict(apps.app_configs)
-    imported = set(sys.modules)
-    try:
-        yield
-    finally:
-        restored = apps.app_configs != configs
-        if restored:
-            apps.app_configs.clear()
-            apps.app_configs.update(configs)
-        for label, entries in apps.all_models.items():
-            kept = registered.get(label, {}) | {
-                name: model
-                for name, model in entries.items()
-                if model.__module__ in sys.modules and model.__module__ not in imported
-            }
-            if entries != kept:
-                entries.clear()
-                entries.update(kept)
-                restored = True
-        if restored:
-            apps.clear_cache()
-
-
-@pytest.fixture(autouse=True)
-def installed_app_registry() -> Iterator[None]:
-    """Give every test the installed app registry it started with."""
-
-    with installed_app_registry_restored():
-        yield
 
 
 @pytest.fixture

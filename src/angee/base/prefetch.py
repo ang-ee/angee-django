@@ -75,6 +75,18 @@ def prefetched(row: models.Model, to_attr: str, build: Callable[[], models.Prefe
     return getattr(row, to_attr)
 
 
+def prefetched_objects(row: models.Model, relation: str) -> list[Any] | None:
+    """Read an ordinary Django to-many prefetch without evaluating a queryset.
+
+    ``None`` is a cache miss; an empty list is a prefetched empty relation.
+    Authorization and completeness belong to the reader of these materialized
+    rows, which may reject them and fall back to its own queryset.
+    """
+
+    queryset = getattr(row, "_prefetched_objects_cache", {}).get(relation)
+    return queryset._result_cache if queryset is not None else None
+
+
 class ReaderMemo:
     """Answers one reader's batch read remembered on each row it answers.
 

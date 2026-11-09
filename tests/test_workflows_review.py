@@ -454,7 +454,7 @@ def test_proposal_uses_prepared_subject_lock_and_rechecks_permission(review, mon
     observed = []
 
     def lock(instance, members=None):
-        observed.append((instance.name, instance._state.db))
+        observed.append(instance.name)
         return original_lock(instance, members)
 
     def access(instance, action, **kwargs):
@@ -466,5 +466,5 @@ def test_proposal_uses_prepared_subject_lock_and_rechecks_permission(review, mon
     monkeypatch.setattr(model, "has_access", access)
     assert apply_proposals(decision, actor=actor) == "approved"
     question.review_subject.refresh_from_db()
-    assert observed == [("Applied", question.review_subject._state.db)]
+    assert observed == ["Applied"]
     assert question.review_subject.name == "Applied"

@@ -104,7 +104,7 @@ class FractionalRankField(models.FloatField):
             for field in self._unique_context_fields(self.model)
         }
 
-    def allocate_missing_ranks(self, instances: Sequence[models.Model], *, using: str | None = None) -> None:
+    def allocate_missing_ranks(self, instances: Sequence[models.Model]) -> None:
         """Allocate omitted ranks before a native multirow INSERT under its owner's lock.
 
         One INSERT cannot see its own earlier rows during field preparation.
@@ -129,7 +129,7 @@ class FractionalRankField(models.FloatField):
                 continue
             previous = (
                 None if any(pending) else
-                self.model._base_manager.using(using).filter(**self._context_values(rows[0]))
+                self.model._base_manager.filter(**self._context_values(rows[0]))
                 .order_by(f"-{self.name}").values_list(self.name, flat=True).first()
             )
             for row in rows:

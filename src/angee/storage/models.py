@@ -642,9 +642,7 @@ class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=
 
         super().clean()
         self._validate_drive()
-        parent = self._hierarchy_parent()
-        self._reject_cross_scope_parent(parent)
-        self._reject_cycle(parent)
+        self.validate_hierarchy_parent()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate folder kinds; native hierarchy owns parent and drive moves."""

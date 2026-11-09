@@ -59,7 +59,7 @@ class HistoryDocumentMixin(models.Model):
 
     @classmethod
     def history_related_scopes(
-        cls, predicate: Q, root_pk: Any, *, direct: bool, using: str | None = None
+        cls, predicate: Q, root_pk: Any, *, direct: bool
     ) -> dict[type[models.Model], Q]:
         """Predicates on owned representations admitted with this document."""
 
@@ -116,7 +116,7 @@ class ModelHistory(CaptureHistory):
         return concrete_child_models(model)
 
     def changeset_states(
-        self, model: Any, changeset: Any, *, using: str | None = None
+        self, model: Any, changeset: Any
     ) -> Iterable[tuple[Any, Any, Any]]:
         """Yield first, last and pre-boundary versions; sequence IDs break date ties.
 
@@ -124,7 +124,7 @@ class ModelHistory(CaptureHistory):
         The caller holds the operational row locks throughout restoration.
         """
 
-        history = model.history.using(using)
+        history = model.history
         key = model._meta.pk.attname
         rows = history.filter(changeset_id=changeset.pk).order_by(key, "history_id")
         seen = set()
@@ -146,7 +146,7 @@ class ModelHistory(CaptureHistory):
             table._meta.label_lower for table in concrete_lineage(model)
         }:
             pk = model._meta.pk.to_python(origin.object_id)
-            if pk not in seen and model._base_manager.using(using).filter(pk=pk).exists():
+            if pk not in seen and model._base_manager.filter(pk=pk).exists():
                 timeline = history.filter(**{key: pk})
                 boundary = timeline.order_by("-history_id").first()
                 if boundary is None:
@@ -366,12 +366,12 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
 
     @classmethod
     @contextmanager
-    def initialize_rows(cls, rows: Sequence[models.Model], *, using: str) -> Iterator[bool]:
+    def initialize_rows(cls, rows: Sequence[models.Model]) -> Iterator[bool]:
         """Capture one complete creation after all model-owned derived values land."""
 
         history = model_history(cls)
         if history is None:
-            with super().initialize_rows(rows, using=using) as deferred:
+            with super().initialize_rows(rows) as deferred:
                 yield deferred
             return
         absent = object()
@@ -379,7 +379,7 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
         for row, _previous in prior:
             row.__dict__["skip_history_when_saving"] = True
         try:
-            with super().initialize_rows(rows, using=using):
+            with super().initialize_rows(rows):
                 yield True
         finally:
             for row, previous in prior:

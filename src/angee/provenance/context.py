@@ -93,8 +93,7 @@ class _ChangesetBoundary:
     actors, such as a per-event trigger loop. Every row closes with the boundary.
     """
 
-    def __init__(self, facts: dict[str, object], *, defaults: bool, using: str | None = None) -> None:
-        self.using = using
+    def __init__(self, facts: dict[str, object], *, defaults: bool) -> None:
         self.facts = facts
         self.explicit = set() if defaults else set(facts)
         self.rows: dict[tuple[threading.Thread, str], _ChangesetRow] = {}
@@ -156,7 +155,7 @@ class _ChangesetBoundary:
             ):
                 instance._set_pk_val(None)
                 instance._state.adding = True
-                instance.save(force_insert=True, using=self.using)
+                instance.save(force_insert=True)
 
                 def mark_persisted() -> None:
                     row.persisted = True
@@ -267,9 +266,7 @@ class ChangesetScope:
     so an async entrypoint never hops threads for the request itself.
     """
 
-    def __init__(self, facts: dict[str, object], *, fresh: bool, process: bool = False,
-                 using: str | None = None) -> None:
-        self.using = using
+    def __init__(self, facts: dict[str, object], *, fresh: bool, process: bool = False) -> None:
         self.facts = facts
         self.fresh = fresh
         self.process = process
@@ -282,13 +279,10 @@ class ChangesetScope:
         global _process_boundary
         existing = _open_boundary()
         if existing is not None and not self.fresh:
-            if self.using is not None:
-                if existing.using != self.using:
-                    raise ValueError('Joined changeset must use its existing database; open a fresh boundary')
             existing.refine(self.facts)
             self.joined = existing
             return existing.mark_failed
-        self.boundary = _ChangesetBoundary(self.facts, defaults=self.fresh, using=self.using)
+        self.boundary = _ChangesetBoundary(self.facts, defaults=self.fresh)
         self.token = _current_changeset.set(self.boundary)
         if self.process:
             self.previous_process, _process_boundary = _process_boundary, self.boundary
@@ -336,7 +330,6 @@ def changeset(
     occurred_at: datetime | None = None,
     fresh: bool = False,
     process: bool = False,
-    using: str | None = None,
 ) -> ChangesetScope:
     """Open logical attribution, yielding a callback to mark a handled failure.
 
@@ -349,9 +342,8 @@ def changeset(
     Asynchronous entrypoints use ``async with``. ``process=True`` is for an
     entrypoint that owns the whole process (a management command, a test): threads
     it starts without copying the context write under this boundary too. Angee runs
-    on one database, so callers omit ``using`` and Django places the rows; an
-    explicit alias still passes through to fresh attribution rows. Nested scopes
-    restore the previous boundary.
+    on one database; Django places the rows. Nested scopes restore the previous
+    boundary.
     """
 
     facts: dict[str, object] = {
@@ -366,7 +358,7 @@ def changeset(
         )
         if value is not None
     }
-    return ChangesetScope(facts, fresh=fresh, process=process, using=using)
+    return ChangesetScope(facts, fresh=fresh, process=process)
 
 
 @dataclass

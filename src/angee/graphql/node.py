@@ -7,7 +7,7 @@ from typing import cast
 import strawberry
 from django.db import models
 
-from angee.base.models.base import record_display_label
+from angee.base.models.base import AngeeModel, record_display_label
 from angee.base.models.identity import public_id_of
 from angee.graphql.ids import PublicID
 
@@ -43,5 +43,4 @@ class AngeeNode:
         """Project the REBAC redaction ledger already attached to this row."""
 
         record = cast(models.Model, self)
-        redacted = getattr(record, "redacted_fields", None)
-        return sorted(redacted()) if callable(redacted) else []
+        return sorted(record.redacted_fields()) if isinstance(record, AngeeModel) else []

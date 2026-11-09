@@ -224,6 +224,7 @@ Use these owners instead of maintaining another contract in an addon:
   the hint's attribute through `prefetched(row, to_attr, build)`, which builds the
   hint only for a row loaded another way, so it reads its own value through the
   same prefetch; each hint factory declares its `to_attr` once.
+- Actorless relation reads use [`relation_read_queryset`](../../src/angee/base/permissions.py): ambient system scope reads unscoped; no actor outside system scope fails closed; read-nothing exceptions require a documented policy.
 - Model-backed `hasura_model_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
   that Angee exposes but does not own, pass an explicit sqid public identity

@@ -108,9 +108,8 @@ def count_related(record: models.Model, declarations: Sequence[RelatedCount]) ->
 
     Every count is :meth:`AngeeQuerySet.readable_count_subquery` of the group's
     read under REBAC's eager aggregate scope, the row authorization the aggregate
-    roots use. Building a read may run statements before that one: reference-type
-    discovery of record-reference access, a ``require_access`` check on the
-    record, the ancestor walk of a run selection. A group that does not apply to
+    roots use. Building a read may run statements before that one: a
+    ``require_access`` check on the record, the ancestor walk of a run selection. A group that does not apply to
     the record counts zero.
     """
 
@@ -120,7 +119,7 @@ def count_related(record: models.Model, declarations: Sequence[RelatedCount]) ->
         return counts
     expressions = {f"group_{index}": _count(declaration, record) for index, declaration in enumerate(applicable)}
     # The record was just read under the actor; its row only hosts the subqueries.
-    host = models.QuerySet[models.Model](model=type(record), using=record._state.db).filter(pk=record.pk)
+    host = models.QuerySet[models.Model](model=type(record)).filter(pk=record.pk)
     row = host.values(**expressions).get()
     counts.update({declaration.id: int(row[f"group_{index}"]) for index, declaration in enumerate(applicable)})
     return counts

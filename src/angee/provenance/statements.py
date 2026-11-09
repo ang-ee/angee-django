@@ -819,7 +819,6 @@ class Aspect:
         key: dict[str, Any],
         *,
         kind: SourceKind,
-        using: str | None = None,
     ) -> dict[str, Any]:
         """Consume this aspect's complete identity through native field ownership."""
 
@@ -835,7 +834,7 @@ class Aspect:
                     if kind == SourceKind.PERSON and not is_sudo()
                     else field.remote_field.model._base_manager.all()
                 )
-                members[name] = rows.using(using).get(**{field.target_field.name: pk})
+                members[name] = rows.get(**{field.target_field.name: pk})
             else:
                 members[name] = field.to_python(value)
         return members
@@ -858,12 +857,12 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
 
     @classmethod
     def history_related_scopes(
-        cls, predicate: Q, root_pk: Any, *, direct: bool, using: str | None = None
+        cls, predicate: Q, root_pk: Any, *, direct: bool
     ) -> dict[type[models.Model], Q]:
         """Contribute assertions for direct subjects or the document's retained owned lines."""
 
-        scopes = super().history_related_scopes(predicate, root_pk, direct=direct, using=using)
-        subjects = get_history_manager_for_model(cls).using(using).filter(predicate).values(cls._meta.pk.attname)
+        scopes = super().history_related_scopes(predicate, root_pk, direct=direct)
+        subjects = get_history_manager_for_model(cls).filter(predicate).values(cls._meta.pk.attname)
         subject_scope = Q(subject_id=root_pk) if direct else Q(subject_id__in=models.Subquery(subjects))
         for statement in cls.statement_models():
             scopes[statement] = scopes[statement] | subject_scope if statement in scopes else subject_scope

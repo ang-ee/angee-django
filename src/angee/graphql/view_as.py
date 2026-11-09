@@ -17,6 +17,7 @@ from strawberry.extensions import SchemaExtension
 from strawberry.types.graphql import OperationType
 
 from angee.base.exceptions import DomainError
+from angee.base.managers import AngeeManager
 from angee.base.models.identity import public_id_of
 
 if TYPE_CHECKING:
@@ -39,9 +40,9 @@ class ViewAsReadOnly(DomainError):
 class ViewAs:
     """Typed ``request.view_as`` carrier shared with identity resolvers.
 
-    The composed user manager may implement ``admit_view_as(actor, public_id)``:
-    return an authorized target with no pinned actor or elevation, or ``None``.
-    IAM owns that admission policy. Without the hook previews are refused.
+    The composed user manager's ``admit_view_as(actor, public_id)`` returns an
+    authorized target with no pinned actor or elevation, or ``None``. IAM owns
+    admission; the base manager's default refuses previews.
     This adapter owns request binding and rollback only.
     """
 
@@ -57,8 +58,8 @@ class ViewAs:
         real_user = getattr(request, "user", None)
         if real_user is None or not real_user.is_authenticated or is_sudo():
             raise PermissionDenied(_DENIED)
-        admit = getattr(get_user_model()._default_manager, "admit_view_as", None)
-        target = admit(real_user, target_id) if callable(admit) else None
+        manager = get_user_model()._default_manager
+        target = manager.admit_view_as(real_user, target_id) if isinstance(manager, AngeeManager) else None
         if target is None:
             raise PermissionDenied(_DENIED)
         return cls(real_user=real_user, target=target)

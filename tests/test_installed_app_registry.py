@@ -7,7 +7,7 @@ import pytest
 from django.apps import apps
 from django.db import models
 
-from tests.conftest import installed_app_registry_restored
+from angee.base.testing.fixtures import installed_app_registry_restored
 
 
 def test_models_a_test_creates_are_unregistered_with_their_through_models() -> None:
@@ -47,3 +47,17 @@ def test_an_installed_app_config_a_test_removes_is_put_back() -> None:
         del apps.app_configs["sessions"]
 
     assert apps.get_app_config("sessions") is sessions
+
+
+def test_a_temporary_module_removed_before_restoration_does_not_keep_its_models() -> None:
+    """The native monkeypatch lifetime ends inside the registry guard's lifetime."""
+
+    with installed_app_registry_restored():
+        with pytest.MonkeyPatch.context() as patch:
+            module = ModuleType("tests.temporary_registry_models")
+            patch.setitem(sys.modules, module.__name__, module)
+            type(
+                "TemporaryRegistryModel", (models.Model,),
+                {"__module__": module.__name__, "Meta": type("Meta", (), {"app_label": "auth"})},
+            )
+    assert "temporaryregistrymodel" not in apps.get_app_config("auth").models

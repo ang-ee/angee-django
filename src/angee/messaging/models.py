@@ -77,7 +77,7 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, require_rebac_queryset
-from angee.base.prefetch import prefetched
+from angee.base.prefetch import prefetched, prefetched_objects
 from angee.base.refs import RecordRef, generic_pointer_model
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
@@ -2444,10 +2444,8 @@ class Message(
         is the single owner of the grouping fact; the GraphQL resolver only projects it.
         """
 
-        cache = getattr(self, "_prefetched_objects_cache", None)
-        if cache is not None and "reactions" in cache:
-            reactions = list(self.reactions.all())
-        else:
+        reactions = prefetched_objects(self, "reactions")
+        if reactions is None:
             reactions = list(
                 apps.get_model("messaging", "Reaction")
                 ._base_manager.filter(message=self)
@@ -2584,9 +2582,9 @@ class Message(
             # A list-scale read annotated the title in SQL (with_title_text) —
             # Coalesce makes "" the no-title value, so None only means unannotated.
             return str(annotated)
-        cache = getattr(self, "_prefetched_objects_cache", None)
-        if cache is not None and "parts" in cache:
-            for part in self.parts.all():
+        parts = prefetched_objects(self, "parts")
+        if parts is not None:
+            for part in parts:
                 if part.role == Part.PartRole.TITLE:
                     fragment = part.fragment
                     return fragment.text if fragment is not None else ""

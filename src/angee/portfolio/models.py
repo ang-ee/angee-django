@@ -222,27 +222,11 @@ class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concr
             ),
         )
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the Initiative, rejecting ancestry-unsafe subtree moves."""
+    def validate_hierarchy_move(self) -> None:
+        """Refuse a subtree move that breaks project ancestry before it commits."""
 
-        parent_changed = False
-        saved_parent_id = None
-        saved_path = self.path
-        if not self._state.adding:
-            if hasattr(self, "_hierarchy_saved_parent_id"):
-                saved_parent_id = self._hierarchy_saved_parent_id
-            else:
-                saved_parent_id = self._hierarchy_committed_parent_id()
-            parent_changed = saved_parent_id != self.parent_id
-        with transaction.atomic():
-            super().save(*args, **kwargs)
-            if parent_changed:
-                try:
-                    self._validate_subtree_project_ancestry()
-                except ValidationError:
-                    self.path = saved_path
-                    self._hierarchy_saved_parent_id = saved_parent_id
-                    raise
+        super().validate_hierarchy_move()
+        self._validate_subtree_project_ancestry()
 
     def _validate_subtree_project_ancestry(self) -> None:
         """Reject a move that makes a subtree Project placement conflict."""

@@ -14,6 +14,7 @@ from rebac import ObjectRef
 from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
+from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_of
 from angee.base.refs import RecordRef
 from angee.base.serialization import json_safe
@@ -214,10 +215,7 @@ def _change_read_resource(instance: models.Model) -> ObjectRef | None:
     create, update, and delete events on the same authorization boundary.
     """
 
-    resolver = getattr(instance, "change_read_resource", None)
-    if not callable(resolver):
-        return None
-    resource = resolver()
+    resource = instance.change_read_resource() if isinstance(instance, AngeeModel) else None
     if resource is not None and not isinstance(resource, ObjectRef):
         raise TypeError("change_read_resource() must return rebac.ObjectRef or None")
     return resource
@@ -231,10 +229,7 @@ def _change_related_records(instance: models.Model) -> tuple[ChangeRelatedRecord
     views widens its own references with ``record_view_refs``.
     """
 
-    resolver = getattr(instance, "change_related_records", None)
-    if not callable(resolver):
-        return ()
-    records = tuple(resolver())
+    records = tuple(instance.change_related_records()) if isinstance(instance, AngeeModel) else ()
     if any(not isinstance(record, RecordRef) for record in records):
         raise TypeError("change_related_records() must return RecordRef values")
     return tuple(ChangeRelatedRecord(record.model_label, record.public_id) for record in records)

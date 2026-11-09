@@ -155,7 +155,7 @@ or `-p no:xdist` for serial debugging. `--dist loadfile` keeps each test module 
 one worker. Pytest-django isolates worker databases; custom database and composed
 host fixtures must use process-local connections or pytest's worker-local
 `tmp_path`/`tmp_path_factory`, and restore registry changes after each test; the
-installed app registry is restored for every test under `tests/` (see
+installed app registry is restored for every host loading the base fixtures (see
 [Source-addon Test Models](#source-addon-test-models)).
 
 ### Source-addon Test Models
@@ -188,13 +188,13 @@ Declare a test-local model under Django's `isolate_apps` when the code under tes
 accepts a registry. When its owner reads the installed registry (content types, the
 deletion collector, system checks), create the model inside the test on an
 installed app label: the autouse `installed_app_registry` fixture in
-[`tests/conftest.py`](../tests/conftest.py) returns the installed registry to its
+[`angee.base.testing.fixtures`](../src/angee/base/testing/fixtures.py) returns the installed registry to its
 state before each test, so a model the test creates is unregistered, with its
 through models, when the test ends, while a model module the test imports first
 keeps its models registered. Installed app configs a test changes are put back too.
-The `monkeypatch` fixture undoes its changes after this restore, so a module a test
-adds to `sys.modules` through it still counts as imported: create models in such a
-module under `isolate_apps`.
+The plugin's `monkeypatch` fixture composes native `pytest.MonkeyPatch` inside the
+registry guard, so temporary modules disappear before restoration; their models
+are removed too.
 
 Workflow tests reach execution states through the shared `load_workflow`,
 `start_run`, `run_until`, `decide` and `run_factory(...).at(...)` drivers. These compose
