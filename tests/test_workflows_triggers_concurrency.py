@@ -10,7 +10,7 @@ from rebac.models import active_relationship_model
 
 from angee.workflows.testing.models import Trigger, TriggerEvent, WorkflowRun
 from tests.conftest import Vault, create_user, vault_for
-from tests.test_workflows_review_concurrency import submit, wait_for_lock
+from tests.lock_waits import submit, wait_for_lock
 from tests.test_workflows_triggers import capture
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.test_workflows_triggers import trigger_setup as trigger_setup

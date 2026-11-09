@@ -28,7 +28,7 @@ from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from angee.workflows_integrate.steps import StreamStage, StreamStageOutput
 from angee.workflows_integrate.testing.models import SyncCycleTestBridge
 from tests.conftest import make_integration
-from tests.test_workflows_review_concurrency import submit, wait_for_lock
+from tests.lock_waits import submit, wait_for_lock
 from tests.workflow_steps import Echo, document
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
