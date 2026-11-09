@@ -24,7 +24,6 @@ The sync runs under ``system_context``; ``created_by`` is set to the channel own
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -73,7 +72,7 @@ from angee.base.permissions import actor_user_id, purpose_read_holds, require_re
 from angee.base.prefetch import InstancePrefetch, ReaderMemo
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
+from angee.base.serialization import STRINGIFIED_JSON, strip_null_bytes
 from angee.base.signals import mute_changes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.integrate.errors import IntegrationError, doubling_backoff, safe_integration_failure
@@ -637,79 +636,6 @@ def _first_body_text(part: ParsedPart | None, *, html: bool) -> str:
 # The key under which a message stores the digest of what its last sync wrote, so an
 # identical re-sync is recognised as a no-op (see ``MessageManager._ingest_one``).
 _SYNC_HASH_KEY = "sync_hash"
-
-
-def _parsed_part_digest(part: ParsedPart | None) -> Any:
-    """Return a JSON-safe digest of a parsed body node and its children."""
-
-    if part is None:
-        return None
-    return {
-        "type": part.type,
-        "disposition": part.disposition,
-        "role": part.role,
-        "text": part.text,
-        "name": part.name,
-        "cid": part.cid,
-        # Attachment bytes are hashed, not carried, so a large file does not inflate
-        # the digest while a changed byte still flips it.
-        "content": hashlib.sha256(part.content).hexdigest() if part.content is not None else None,
-        "children": [_parsed_part_digest(child) for child in part.children],
-    }
-
-
-def _parsed_sync_hash(
-    parsed: ParsedMessage,
-    *,
-    channel_id: Any,
-    metadata: dict[str, Any],
-    received_at: datetime | None = None,
-) -> str:
-    """Return a stable digest of everything an ingest of ``parsed`` would write.
-
-    Covers the message columns, its Part tree, and its participants for the given
-    channel, so an identical re-sync hashes equal and can skip the rewrite. The thread
-    is excluded — a re-thread must still reconcile counters even when nothing else
-    changed — and is compared separately by the caller. ``received_at`` is the
-    effective receipt time ingest writes; it defaults to the parsed one.
-    """
-
-    received_at = received_at if received_at is not None else parsed.received_at
-    payload = {
-        "channel_id": str(channel_id) if channel_id is not None else None,
-        "direction": parsed.direction,
-        "subject": strip_null_bytes(parsed.subject),
-        "headers": [[name, value] for name, value in strip_null_bytes(list(parsed.headers))],
-        "sent_at": parsed.sent_at.isoformat() if parsed.sent_at is not None else None,
-        "received_at": received_at.isoformat() if received_at is not None else None,
-        "metadata": metadata,
-        "sender": (
-            None
-            if parsed.sender is None
-            else {
-                "platform": parsed.sender.platform,
-                "value": parsed.sender.value,
-                "display_name": parsed.sender.display_name,
-            }
-        ),
-        "recipients": [
-            {
-                "platform": recipient.handle.platform,
-                "value": recipient.handle.value,
-                "display_name": recipient.handle.display_name,
-                "role": recipient.role,
-            }
-            for recipient in parsed.recipients
-        ],
-        "body": _parsed_part_digest(parsed.body),
-    }
-    if parsed.in_reply_to:
-        # Present only when set: non-reply hashes stay stable across the reply-pointer
-        # rollout, so a full re-import rewrites exactly the rows that gain a parent.
-        payload["in_reply_to"] = parsed.in_reply_to
-    # Existing source hashes include native JSON's spaces; preserve that persisted spelling.
-    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
-    return canonical_json_sha256(chunks=(canonical,))
 
 
 class FragmentManager[FragmentT: Fragment](AngeeManager[FragmentT]):
@@ -4116,9 +4042,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             .first()
         )
         received_at = parsed.received_at if parsed.received_at is not None else prior.received_at if prior else None
-        content_hash = _parsed_sync_hash(
-            parsed, channel_id=channel.pk, metadata=envelope_metadata, received_at=received_at,
-        )
+        content_hash = parsed.sync_hash(channel_id=channel.pk, metadata=envelope_metadata, received_at=received_at)
         unchanged = (
             prior is not None and prior.thread_id is not None
             and (explicit_thread is not None or prior.thread.channel_id == channel.pk)
