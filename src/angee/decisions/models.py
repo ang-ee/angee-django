@@ -58,7 +58,10 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
 
     @classmethod
     def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
-        """Owner records annotated with ``_decision_id``, in contribution order."""
+        """Structural base-manager rows annotated with ``_decision_id``, in contribution order.
+
+        These queries supply membership predicates, never the viewer's read.
+        """
         return ()
 
     def requesting_records(self) -> Iterable[models.Model]:

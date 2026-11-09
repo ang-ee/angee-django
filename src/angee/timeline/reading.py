@@ -5,14 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cached_property
-from typing import Any, cast
+from typing import Any
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Cast
 from django_cte import CTE, with_cte
 from rebac import to_subject_ref
-from rebac.managers import RebacQuerySet
 
 from angee.base.models.identity import public_id_for
 from angee.base.pagination import KeysetOrder, keyset_signer
@@ -126,6 +125,8 @@ class Timeline:
         self.sources: dict[str, models.QuerySet] = {}
         branches = []
         for kind in self.kinds:
+            if not kind.occurs(record):
+                continue
             rows = kind.queryset(record, actor).order_by()
             if isinstance(rows, models.query.EmptyQuerySet):
                 continue
@@ -133,10 +134,7 @@ class Timeline:
             fold_type, fold_pk = kind.fold(record) or (models.Value(None), models.Value(None))
             # The outer branch already authorizes this row. Only its attention
             # boolean crosses this boundary; do not repeat the read scope inside it.
-            waiting = kind.waiting_on(
-                cast(RebacQuerySet, rows.model._default_manager.all()).system_context(reason="timeline.attention"),
-                actor,
-            ).filter(pk=models.OuterRef("pk"))
+            waiting = kind.waiting_on(actor)
             branches.append(rows.annotate(
                 _timeline_kind=models.Value(kind.id, output_field=models.CharField()),
                 _timeline_type=models.Value(
@@ -144,7 +142,8 @@ class Timeline:
                 ),
                 _timeline_at=kind.at,
                 _timeline_pk=Cast("pk", output_field=models.BigIntegerField()),
-                _timeline_needs=models.Exists(waiting),
+                _timeline_needs=(models.Exists(waiting.filter(pk=models.OuterRef("pk")))
+                                 if waiting is not None else models.Value(False)),
                 # Typed, so a leading NULL operand cannot resolve the union column as text.
                 _timeline_fold_type=Cast(fold_type, output_field=models.IntegerField()),
                 _timeline_fold_pk=Cast(fold_pk, output_field=models.BigIntegerField()),

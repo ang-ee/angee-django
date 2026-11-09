@@ -24,6 +24,10 @@ class ChangeKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return record_history(model) is not None and timeline_subject(model)
 
+    def occurs(self, record: Any) -> bool:
+        model = apps.get_model("provenance", "Changeset")
+        return model._base_manager.filter(model.objects.closed_for_record_filter(record)).exists()
+
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         model = apps.get_model("provenance", "Changeset")
         return model.objects.sudo(reason="provenance.record_history").closed_for_record(record).scoped()

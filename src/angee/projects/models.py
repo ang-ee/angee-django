@@ -378,15 +378,21 @@ class TaskQuerySet[TaskT: Task](
     def waiting_on(self, actor: Any) -> Self:
         """Open, untrashed tasks assigned to this actor, within the caller's scope."""
 
+        return self.filter(self.waiting_on_filter(actor))
+
+    def waiting_on_filter(self, actor: Any) -> models.Q:
+        """Assignment attention on an already readable task, without another read scope."""
+
         identity = actor_user_id(to_subject_ref(actor)) if actor is not None else None
-        return (
-            self.none()
-            if identity is None
-            else self.untrashed().filter(
-                status=self.model.TaskStatus.OPEN,
-                assignee_id=identity,
-            )
+        return models.Q(pk__in=[]) if identity is None else self.untrashed_q() & models.Q(
+            status=self.model.TaskStatus.OPEN, assignee_id=identity,
         )
+
+    def for_record_filter(self, record: Any, *, include_done: bool = True) -> models.Q:
+        """Subject membership and optional open state, independent of task authorization."""
+
+        predicate = models.Q(**generic_target(record).lookups(self.model, "subject"))
+        return predicate if include_done else predicate & models.Q(status=self.model.TaskStatus.OPEN)
 
     def for_record(self, record: Any, *, include_done: bool = True) -> Self:
         """Return ``record``'s tasks this queryset reads: open first, then by due date and title.
@@ -395,9 +401,7 @@ class TaskQuerySet[TaskT: Task](
         """
 
         self.model.validate_target(record)
-        tasks = self.filter(**generic_target(record).lookups(self.model, "subject"))
-        if not include_done:
-            tasks = tasks.filter(status=self.model.TaskStatus.OPEN)
+        tasks = self.filter(self.for_record_filter(record, include_done=include_done))
         closed = models.Case(
             models.When(status=self.model.TaskStatus.OPEN, then=models.Value(0)),
             default=models.Value(1),

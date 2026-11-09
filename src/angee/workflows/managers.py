@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -17,7 +17,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value
+from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, Sum, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
 from pydantic import Field, TypeAdapter
@@ -63,6 +63,7 @@ from angee.workflows.transactions import database_timeout, isolate_failure, sqls
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
 if TYPE_CHECKING:
+    from angee.base.querysets import AngeeUnscopedQuerySet
     from angee.workflows.models import (
         StepAttempt,
         StepRecord,
@@ -402,9 +403,13 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         """Select the canonical subject without changing this queryset's read scope."""
         return self.filter(self.model.record_filter(record))
 
-    def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
-              limit: int | None = None) -> Any:
-        """Runs that worked on readable records and all readable ancestors, oldest first."""
+    def about_filter(self, records: Any, *, operations: tuple[str, ...] | None = None,
+                     limit: int | None = None) -> Q:
+        """Subject/evidence membership; a bounded selection retains this queryset's scope.
+
+        Without a limit this is a structural predicate usable by the base manager.
+        Ancestry expansion and authorization belong to ``about``'s caller scope.
+        """
         if not isinstance(records, (list, tuple)):
             records = (records,)
         subject_filter = Q(pk__in=[])
@@ -413,29 +418,32 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         for record in records:
             targets |= evidence_model.record_filter(record)
             subject_filter |= self.model.record_filter(record)
-        links = evidence_model.system_queryset().filter(targets)
+        links = evidence_model._base_manager.filter(targets)
         if operations is not None:
             links = links.filter(operation__in=operations)
-        subjects: QuerySet[WorkflowRun, Mapping[str, object]] = self.filter(subject_filter).values("pk")
-        link_runs: QuerySet[StepRecord, Mapping[str, object]] = links.values("run_id")
-        if limit is not None:
-            subjects = self.filter(subject_filter).first_per_group(
-                "subject_content_type_id", "subject_object_id", order_by=["-created_at", "-pk"], limit=limit,
-            ).values("pk")
-            # django-stubs types values() as the base QuerySet; Django keeps StepRecord's queryset class.
-            per_run = cast("AngeeQuerySet[StepRecord]", links.values("content_type_id", "object_id", "run_id").annotate(
-                _created=Max("run__created_at"),
-            ))
-            link_runs = per_run.first_per_group(
-                "content_type_id", "object_id", order_by=[F("_created").desc(), F("run_id").desc()], limit=limit,
-            ).values("run_id")
+        if limit is None:
+            return subject_filter | Q(pk__in=links.order_by().values("run_id"))
+        subjects = self.filter(subject_filter).first_per_group(
+            "subject_content_type_id", "subject_object_id", order_by=["-created_at", "-pk"], limit=limit,
+        ).values("pk")
+        # django-stubs widens values(); Django retains the base queryset's window methods.
+        per_run = cast("AngeeUnscopedQuerySet[StepRecord]", links.values(
+            "content_type_id", "object_id", "run_id",
+        ).annotate(_created=Max("run__created_at")))
+        link_runs = per_run.first_per_group(
+            "content_type_id", "object_id", order_by=[F("_created").desc(), F("run_id").desc()], limit=limit,
+        ).values("run_id")
+        return Q(pk__in=subjects) | Q(pk__in=link_runs)
+
+    def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
+              limit: int | None = None) -> Any:
+        """Runs that worked on readable records and all readable ancestors, oldest first."""
+
+        rows = self.filter(self.about_filter(records, operations=operations, limit=limit))
         if not ancestors:
-            return self.filter(Q(pk__in=subjects) | Q(pk__in=link_runs)).order_by(
-                "created_at", "pk",
-            ).distinct()
-        ids = set(subjects.values_list("pk", flat=True))
-        ids.update(self.filter(pk__in=link_runs).values_list("pk", flat=True))
-        frontier = ids.copy() if ancestors else set()
+            return rows.order_by("created_at", "pk").distinct()
+        ids = set(rows.values_list("pk", flat=True))
+        frontier = ids.copy()
         while frontier:
             parents = set(self.filter(pk__in=frontier).exclude(parent_step=None)
                           .values_list("parent_step__run_id", flat=True))

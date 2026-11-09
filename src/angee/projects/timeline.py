@@ -19,14 +19,23 @@ class TaskKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return apps.get_model("projects", "Task").declares_target(model)
 
+    def occurs(self, record: Any) -> bool:
+        task = apps.get_model("projects", "Task")
+        return task._base_manager.filter(self._record_filter(record)).exists()
+
+    def _record_filter(self, record: Any) -> models.Q:
+        tasks = apps.get_model("projects", "Task").objects
+        return tasks.for_record_filter(record) & tasks.untrashed_q()
+
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        rows = apps.get_model("projects", "Task").objects.with_actor(actor).for_record(record)
-        return rows.untrashed().scoped().select_related(
+        rows = apps.get_model("projects", "Task").objects.with_actor(actor).filter(self._record_filter(record))
+        return rows.scoped().select_related(
             "assignee",
         )
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        return rows.waiting_on(actor)
+    def waiting_on(self, actor: Any) -> models.QuerySet:
+        task = apps.get_model("projects", "Task")
+        return task._base_manager.filter(task.objects.waiting_on_filter(actor))
 
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         result = {}

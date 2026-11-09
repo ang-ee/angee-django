@@ -47,11 +47,17 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
     def for_records(self, *records: Any) -> Any:
         """Select decisions retaining any of the supplied canonical records."""
 
+        return self.filter(self.for_records_filter(*records))
+
+    @staticmethod
+    def for_records_filter(*records: Any) -> Q:
+        """Structural concern membership, independent of the decision's read policy."""
+
         link = apps.get_model("decisions", "DecisionRecord")
         concerns = Q(pk__in=[])
         for record in records:
             concerns |= link.record_filter(record)
-        return self.filter(pk__in=link.system_queryset().filter(concerns).order_by().values("decision_id"))
+        return Q(pk__in=link._base_manager.filter(concerns).order_by().values("decision_id"))
 
     def attention_expression(self, queryset: Any) -> Exists:
         model = generic_pointer_model(queryset.model)

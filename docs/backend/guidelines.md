@@ -1604,13 +1604,15 @@ open fresh evaluator scopes for authorization and change-feed reads.
   combines their common columns with Django's `union(all=True)` in one
   statement-local `django-cte` relation. Each branch keeps its permissions and
   attention; one statement applies folding, cursors and the page limit and reads
-  every kind's totals and the page's children. A kind may omit an empty source
-  through its own structural `_base_manager` existence check; the read owner
-  never probes a kind's permission scope. Other empty branches resolve in the
-  statement.
-  Attention is computed on the already-readable branch without repeating its
-  read scope; only the boolean crosses that boundary. Decision attention uses
-  the decision owner's `waiting_on` act scope.
+  every kind's totals and the page's children. Each eligible kind's `occurs(record)`
+  checks the same owner-declared record predicate as its readable queryset through
+  `_base_manager` before the read owner builds any scoped branch: one structural
+  existence query, no REBAC scope or
+  system-context audit row. Rows elsewhere in the source table do not admit a
+  branch. A positive probe still requires the kind's normal read authorization.
+  The kind owns its attention population on structural rows without an audit
+  bypass or repeated read scope; only the boolean crosses to the already-readable
+  branch. Decision attention uses the decision owner's `waiting_on` act scope.
   Display payloads are hydrated only for selected rows, through the kind's own
   queryset. There is no event projection table or backfill requirement. Folding
   hides a child only when a readable parent target occurs on the same record;

@@ -866,10 +866,10 @@ class WorkflowDecision(Composable, extends="decisions.Decision"):
 
     @classmethod
     def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
-        runs = apps.get_model("workflows", "WorkflowRun").system_queryset().annotate(
+        runs = apps.get_model("workflows", "WorkflowRun")._base_manager.annotate(
             _decision_id=models.F("step_runs__decision_id"),
         )
-        retained = apps.get_model("workflows", "WorkflowRun").system_queryset().filter(
+        retained = apps.get_model("workflows", "WorkflowRun")._base_manager.filter(
             records__content_type__app_label=cls._meta.app_label,
             records__content_type__model=cls._meta.model_name,
             records__operation=RecordOperation.CREATED,

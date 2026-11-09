@@ -30,6 +30,12 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
     def touching(self, record: HistoryMixin) -> Self:
         """Return changesets belonging to ``record``'s declared history document."""
 
+        return self.filter(self.touching_filter(record))
+
+    @staticmethod
+    def touching_filter(record: HistoryMixin) -> Q:
+        """Structural document membership, shared by history reads and existence probes."""
+
         rows = [
             get_history_manager_for_model(table)
             .filter(predicate, changeset_id__isnull=False)
@@ -38,7 +44,7 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
             for table, predicate in record.history_scopes().items()
         ]
         membership = Q(pk__in=models.Subquery(rows[0].union(*rows[1:]))) if rows else Q(pk__in=())
-        return self.filter(membership | self._merge_touching(record))
+        return membership | ChangesetQuerySet._merge_touching(record)
 
     def closed_for_record(self, record: HistoryMixin) -> Self:
         """Return the closed changesets touching an admitted record's document.
@@ -47,7 +53,12 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
         closed changesets; an open one stays behind the changeset's own read.
         """
 
-        return self.touching(record).filter(state=cast(Any, self.model).State.CLOSED)
+        return self.filter(self.closed_for_record_filter(record))
+
+    def closed_for_record_filter(self, record: HistoryMixin) -> Q:
+        """Closed document membership for both authorized reads and structural probes."""
+
+        return self.touching_filter(record) & Q(state=cast(Any, self.model).State.CLOSED)
 
     @staticmethod
     def _merge_touching(record: HistoryMixin) -> Q:

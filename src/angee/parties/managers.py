@@ -137,11 +137,17 @@ class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQu
         members = member_model.objects.all()
         if actor := self.actor():
             members = members.with_actor(actor)
-        members = members.scoped_for_aggregate()
-        members = members.filter(circle_id__in=Subquery(self.scoped_for_aggregate().order_by().values("pk")))
+        return members.scoped_for_aggregate().filter(self.memberships_filter(
+            self.scoped_for_aggregate(), confirmed_only=confirmed_only,
+        ))
+
+    @staticmethod
+    def memberships_filter(circles: models.QuerySet, *, confirmed_only: bool = False) -> Q:
+        """Membership edges within the caller's readable or structural circles."""
+        predicate = Q(circle_id__in=Subquery(circles.order_by().values("pk")))
         if confirmed_only:
-            members = members.filter(is_confirmed=True, is_dismissed=False)
-        return members
+            predicate &= Q(is_confirmed=True, is_dismissed=False)
+        return predicate
 
     def containing_parties(self, parties: Any, *, confirmed_only: bool = False) -> Self:
         """Readable circles containing these parties through readable memberships."""

@@ -45,6 +45,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import DEFAULT_DB_ALIAS, IntegrityError, NotSupportedError, models, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import MD5, Coalesce, Greatest
+from django.db.models.lookups import In
 from django.utils import timezone
 from django.utils.html import strip_tags
 from rebac import (
@@ -1116,16 +1117,23 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
 
         return strip_null_bytes(value)[: self.model._meta.get_field("label").max_length]
 
+    @staticmethod
+    def for_record_filter(record: Any, *, role: str = "chatter") -> models.Q:
+        """Saved attachment identity, usable on structural or authorized rows."""
+        if record.pk is None:
+            return models.Q(pk__in=[])
+        content_type, object_id = generic_pointer_target(record)
+        return models.Q(content_type=content_type, object_id=object_id, role=role)
+
     def for_record(self, record: Any, *, role: str = "chatter") -> ThreadAttachmentT | None:
         """Return the existing thread attachment for ``record`` and ``role``."""
 
         if record.pk is None:
             return None
         edges = self.model._base_manager
-        content_type, object_id = generic_pointer_target(record)
         attachment = (
             edges.select_related("thread")
-            .filter(content_type=content_type, object_id=object_id, role=role)
+            .filter(self.for_record_filter(record, role=role))
             .first()
         )
         if (
@@ -1170,6 +1178,12 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
 
         _READABLE_ATTACHMENTS.forget(record)
 
+    def source_record_filter(self, record: Any) -> models.Q:
+        """All source edges on the target's canonical permission identity."""
+        if record.pk is None:
+            return models.Q(pk__in=[])
+        return models.Q(**generic_target(record).lookups(self.model, "target"), role="source")
+
     def source_threads_for_record(self, record: Any) -> Any:
         """Return every source-conversation edge attached to ``record``."""
 
@@ -1182,8 +1196,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             .scoped()
             .select_related("thread")
             .filter(
-                **generic_target(record).lookups(self.model, "target"),
-                role="source",
+                self.source_record_filter(record),
                 thread_id__in=models.Subquery(visible_threads),
             )
         )
@@ -2667,17 +2680,22 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
 
         handle_model = apps.get_model("parties", "Handle")
         participant_model = apps.get_model("messaging", "Participant")
-        visible_handle_ids = handle_model.objects.all().scoped_for_aggregate().filter(party__in=parties).values("pk")
-        visible_message_ids = (
-            participant_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                handle_id__in=models.Subquery(visible_handle_ids),
-                message_id__isnull=False,
-            )
-            .values("message_id")
-        )
-        return self.filter(pk__in=models.Subquery(visible_message_ids))
+        return self.filter(self.involving_parties_filter(
+            parties,
+            handles=handle_model.objects.all().scoped_for_aggregate(),
+            participants=participant_model.objects.all().scoped_for_aggregate(),
+        ))
+
+    @staticmethod
+    def involving_parties_filter(
+        parties: Any, *, handles: models.QuerySet, participants: models.QuerySet,
+    ) -> models.Q:
+        """Participant membership within the caller's authorized or structural populations."""
+        handle_ids = handles.filter(party__in=parties).order_by().values("pk")
+        message_ids = participants.filter(
+            handle_id__in=models.Subquery(handle_ids), message_id__isnull=False,
+        ).order_by().values("message_id")
+        return models.Q(pk__in=models.Subquery(message_ids))
 
     def for_feed(self, search: str = "", *, all_copies: bool = False, anchor: str = "") -> Self:
         """Apply read/search scope and tuple order, retaining an explicitly addressed occurrence.
@@ -2795,6 +2813,27 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             "absent_ids": [value for value in unique if value not in survivors],
         }
 
+    @staticmethod
+    def record_filter(
+        record: Any, *, role: str = "chatter", trashed: bool = False, attachment: ThreadAttachment | None = None,
+    ) -> models.Q:
+        """Messages in the record's attached thread, including its retained redirects.
+
+        Match ``for_record``'s first attachment for the role. This is structural
+        membership only; ``record_scope`` also authorizes the record and any
+        redirected or source attachment before exposing the transcript, and pins
+        the filter to that authorized attachment rather than resolving it again.
+        """
+        threads = apps.get_model("messaging", "Thread")._base_manager.all()
+        if attachment is None:
+            edge = apps.get_model("messaging", "ThreadAttachment")
+            edges = edge._base_manager.filter(edge.objects.for_record_filter(record, role=role))
+            threads = threads.filter(pk__in=edges.values("thread_id")[:1])
+        else:
+            threads = threads.filter(pk=attachment.thread_id)
+        survivors = threads.survivor_ids()
+        return models.Q(In(MergeableQuerySet.survivor_id("thread__"), models.Subquery(survivors)), is_trashed=trashed)
+
     def record_scope(
         self,
         record: Any,
@@ -2814,8 +2853,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         # and compose the chainable read predicates.
         queryset = (
             self.sudo(reason="messaging.message.for_record")
-            .for_thread(attachment.thread)
-            .filter(is_trashed=trashed)
+            .filter(self.record_filter(record, role=role, trashed=trashed, attachment=attachment))
             .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
             .prefetch_related(
                 models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.all()),

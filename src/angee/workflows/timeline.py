@@ -70,14 +70,20 @@ class RunKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return True
 
+    def occurs(self, record: Any) -> bool:
+        run = apps.get_model("workflows", "WorkflowRun")
+        return run._base_manager.filter(self._record_filter(record)).exists()
+
+    def _record_filter(self, record: Any) -> models.Q:
+        run = apps.get_model("workflows", "WorkflowRun")
+        predicate = run.objects.about_filter(record)
+        if isinstance(record, run):
+            predicate = (predicate | models.Q(parent_step__run=record)) & ~models.Q(pk=record.pk)
+        return predicate
+
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor)
-        if not runs.model._base_manager.exists():
-            return runs.none()
-        rows = runs.about(record, ancestors=False)
-        if isinstance(record, rows.model):
-            rows = (rows | runs.filter(parent_step__run=record).distinct()).exclude(pk=record.pk)
-        rows = rows.scoped()
+        rows = runs.filter(self._record_filter(record)).distinct().scoped()
         waiting = apps.get_model("workflows", "StepRun").system_queryset().filter(
             status=StepRunStatus.WAITING,
         ).defer("input", "output", "state", "notes").order_by("rank", "map_index")
@@ -85,9 +91,9 @@ class RunKind(TimelineKind):
             models.Prefetch("step_runs", queryset=waiting, to_attr="timeline_waits"),
         )
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
+    def waiting_on(self, actor: Any) -> models.QuerySet:
         decisions = apps.get_model("decisions", "Decision").objects.waiting_on(actor)
-        return rows.filter(
+        return apps.get_model("workflows", "WorkflowRun")._base_manager.filter(
             status=RunStatus.WAITING,
             step_runs__status=StepRunStatus.WAITING,
             step_runs__waiting_kind=WaitingKind.DECISION,

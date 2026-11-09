@@ -81,9 +81,12 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
         whole table.
         """
 
-        if not node.path:
-            return cast(Self, self.none())
-        return cast(Self, self.filter(path__startswith=node.path))
+        return cast(Self, self.filter(self.subtree_filter(node)))
+
+    @staticmethod
+    def subtree_filter(node: HierarchyMixin) -> models.Q:
+        """Inclusive path membership, also usable on structural base-manager rows."""
+        return models.Q(path__startswith=node.path) if node.path else models.Q(pk__in=[])
 
     def ancestors_of(self, node: HierarchyMixin | Iterable[HierarchyMixin]) -> Self:
         """Return proper ancestors of one node or a batch, in one query."""

@@ -30,6 +30,10 @@ class CommentKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return issubclass(model, ThreadedModelMixin)
 
+    def occurs(self, record: Any) -> bool:
+        message = apps.get_model("messaging", "Message")
+        return message._base_manager.filter(message.objects.record_filter(record)).exists()
+
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         """The record's chatter, gated in SQL on the viewer's thread read of the record."""
 
@@ -75,6 +79,10 @@ class ConversationKind(TimelineKind):
 
     def eligible(self, model: type[models.Model]) -> bool:
         return True
+
+    def occurs(self, record: Any) -> bool:
+        attachment = apps.get_model("messaging", "ThreadAttachment")
+        return attachment._base_manager.filter(attachment.objects.source_record_filter(record)).exists()
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         with actor_context(actor):

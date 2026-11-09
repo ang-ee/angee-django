@@ -31,18 +31,23 @@ class DecisionKind(TimelineKind):
                 scope |= models.Q(pk__in=rows.filter(pk=record.pk).order_by().values("_decision_id"))
         return scope
 
+    def occurs(self, record: Any) -> bool:
+        decision = apps.get_model("decisions", "Decision")
+        return decision._base_manager.filter(self._record_filter(record)).exists()
+
+    def _record_filter(self, record: Any) -> models.Q:
+        return apps.get_model("decisions", "Decision").objects.for_records_filter(record) | self._requested_by(record)
+
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         rows = apps.get_model("decisions", "Decision").objects.with_actor(actor)
-        if not rows.model._base_manager.exists():
-            return rows.none()
-        return (rows.for_records(record) | rows.filter(self._requested_by(record))).scoped().select_related(
+        return rows.filter(self._record_filter(record)).scoped().select_related(
             "answered_by",
         ).prefetch_related(
             models.Prefetch("assignees", queryset=get_user_model().system_queryset()),
         )
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        return rows.waiting_on(actor)
+    def waiting_on(self, actor: Any) -> models.QuerySet:
+        return apps.get_model("decisions", "Decision").objects.waiting_on(actor)
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         types, ids = [], []

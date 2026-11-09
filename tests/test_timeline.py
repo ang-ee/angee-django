@@ -145,7 +145,7 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
 @pytest.mark.django_db(transaction=True, reset_sequences=True)
 @pytest.mark.usefixtures("activity_catalog")
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)
-def test_member_reading_by_grant_pays_a_fixed_rail_cost(composed_permissions: None) -> None:
+def test_member_reading_by_grant_pays_a_fixed_rail_cost(composed_permissions: None, record_property) -> None:
     """A member granted read on the record reads the rail at a fixed cost, however many lines it has."""
     owner, member = create_user("timeline-grant-owner"), create_user("timeline-grant-member")
     with open_changeset(fresh=True, change_reason="vault"):
@@ -166,15 +166,20 @@ def test_member_reading_by_grant_pays_a_fixed_rail_cost(composed_permissions: No
         return measure_graphql_document(schema, QUERY, variables, actor=member)
 
     few = edit_then_read(range(2))
+    record_property("few_statements", few.statements)
+    record_property("few_sql_bytes", few.sql_bytes)
     counts = {kind["id"]: kind["count"] for kind in few.data["timeline"]["kinds"]}
     assert counts["provenance.change"] >= 3 and counts["projects.task"] == 1
     assert few.data["timeline"]["entries"][0]["detail"] == "Edit 1"
     assert few.data["timeline"]["needs_me"] == few.data["timeline_attention"] == 0
-    few.assert_ceiling(statements=15, sql_kb=552)
+    # Structural attention removes its audit write; occurrence probes keep empty branches out.
+    few.assert_ceiling(statements=15, sql_kb=257)
     many = edit_then_read(range(2, 10))
+    record_property("many_statements", many.statements)
+    record_property("many_sql_bytes", many.sql_bytes)
     assert len(many.data["timeline"]["entries"]) == len(few.data["timeline"]["entries"]) + 8
     assert many.statements == few.statements
-    many.assert_ceiling(statements=15, sql_kb=552)
+    many.assert_ceiling(statements=15, sql_kb=257)
 
 
 def timeline_entries(record, actor=None, *, kind=None):
