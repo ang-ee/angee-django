@@ -40,9 +40,9 @@ from zoneinfo import ZoneInfo
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.postgres.search import SearchQuery, SearchVector
+from django.contrib.postgres.search import SearchQuery
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, NotSupportedError, connection, models, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, NotSupportedError, models, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
@@ -72,6 +72,7 @@ from angee.base.permissions import actor_user_id, purpose_read_holds, require_re
 from angee.base.prefetch import InstancePrefetch, ReaderMemo, prefetched_objects
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
+from angee.base.search import SEARCH_CONFIG, stamp_search_vector
 from angee.base.serialization import STRINGIFIED_JSON, strip_null_bytes
 from angee.base.signals import mute_changes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
@@ -232,15 +233,6 @@ def derived_part_name(*, mime: str, cid: str, external_id: str, is_email: bool, 
             return f"{message_id}{suffix}{extension}"
     return fallback_attachment_name(mime)
 
-
-# The text-search configuration for fragment vectors: mail is multilingual, so the
-# non-stemming config keeps one language's stemmer from skewing every other.
-_SEARCH_CONFIG = "simple"
-
-# Postgres's to_tsvector rejects input over 1 MiB; vectorise at most this many
-# UTF-8 bytes of a fragment (half the limit — headroom for the vector itself).
-# The regression fixture was a 1.6 MB text part that failed every sync retry.
-_SEARCH_MAX_BYTES = 512 * 1024
 
 # Parsed metadata is an externally controlled JSON envelope. Bound its canonical
 # UTF-8 representation at the same conservative size as fragment vector input;
@@ -644,7 +636,7 @@ class FragmentManager[FragmentT: Fragment](AngeeManager[FragmentT]):
     def search_query(self, term: str, *, search_type: str = "plain") -> SearchQuery:
         """Build a query with the same configuration as this store's vectors."""
 
-        return SearchQuery(strip_null_bytes(term or "").strip(), search_type=search_type, config=_SEARCH_CONFIG)
+        return SearchQuery(strip_null_bytes(term or "").strip(), search_type=search_type, config=SEARCH_CONFIG)
 
     def upsert(self, *, text: str, kind: str = "paragraph", created_by_id: Any = None) -> FragmentT:
         """Get-or-create a fragment by the SHA-256 of its cleaned (null-stripped, trimmed) text.
@@ -662,18 +654,8 @@ class FragmentManager[FragmentT: Fragment](AngeeManager[FragmentT]):
                 hash=digest,
                 defaults={"text": text, "kind": kind, "created_by_id": created_by_id},
             )
-            if created and connection.vendor == "postgresql":
-                # tsvector is a Postgres type; on other vendors (the SQLite test
-                # backend) the column stays NULL and full-text search is unavailable.
-                # Postgres rejects to_tsvector input over 1MiB ("string is too long
-                # for tsvector") and a text that size is a pathological payload, not
-                # prose — vectorise a bounded prefix; the row keeps the full text.
-                searchable: Any = "text"
-                if len(encoded) > _SEARCH_MAX_BYTES:
-                    searchable = models.Value(encoded[:_SEARCH_MAX_BYTES].decode("utf-8", errors="ignore"))
-                self.model._base_manager.filter(pk=fragment.pk).update(
-                    search=SearchVector(searchable, config=_SEARCH_CONFIG)
-                )
+            if created:
+                stamp_search_vector(self.model._base_manager.filter(pk=fragment.pk), text)
         return fragment
 
 

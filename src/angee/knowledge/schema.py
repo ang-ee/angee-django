@@ -80,6 +80,7 @@ class VaultType(TrashedRefMixin, AngeeNode):
     description: auto
     icon: auto
     accent: auto
+    retrieval_class: auto
     created_at: auto
     updated_at: auto
 
@@ -368,6 +369,19 @@ def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
     return PageBodyPayload(ok=True, markdown=cast(MarkdownPageType, markdown))
 
 
+@strawberry.type
+class RetrievalHitType:
+    """A ranked page with optional passage evidence from its retrieval backend."""
+
+    page: PageType
+    rank: int
+    heading_path: list[str]
+    start: int | None
+    end: int | None
+    text: str | None
+    score: float | None
+
+
 class VaultWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
@@ -418,6 +432,7 @@ _VAULT_RESOURCE = hasura_model_resource(
         "description",
         "icon",
         "accent",
+        "retrieval_class",
         *declared_hasura_resource_fields(Vault, "hasura_insertable_fields"),
     ],
     updatable=[
@@ -425,6 +440,7 @@ _VAULT_RESOURCE = hasura_model_resource(
         "description",
         "icon",
         "accent",
+        "retrieval_class",
         *declared_hasura_resource_fields(Vault, "hasura_updatable_fields"),
     ],
     write_backend=VaultWriteBackend(Vault, public_id_fields=_VAULT_EXTENSION_PUBLIC_ID_FIELDS),
@@ -499,8 +515,27 @@ class KnowledgeQuery:
         return cast(VaultType, Vault.objects.for_resource(reference))
 
     @strawberry.field
+    def search_passages(
+        self,
+        query: str,
+        vault: PublicID | None = None,
+        first: int = 20,
+    ) -> list[RetrievalHitType]:
+        """Return each matching page's best passage, where its backend supplies one."""
+
+        rows = Vault.objects.all()
+        if vault is not None:
+            target = require_instance_for_id(Vault, vault)
+            rows = rows.filter(pk=target.pk)
+        return cast("list[RetrievalHitType]", rows.search_passages(query, first=first))
+
+    @strawberry.field
     def search_pages(
-        self, info: strawberry.Info, query: str, vault: PublicID | None = None, first: int = 20,
+        self,
+        info: strawberry.Info,
+        query: str,
+        vault: PublicID | None = None,
+        first: int = 20,
     ) -> list[PageType]:
         """Search a selected readable vault, or bounded readable backend groups."""
         rows = Vault.objects.all()

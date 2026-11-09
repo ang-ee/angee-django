@@ -1,0 +1,45 @@
+// @rebac_package: knowledge_graph_pgvector
+// @rebac_package_version: 3.0.0
+// @rebac_schema_revision: 2
+
+definition knowledge_graph_pgvector/passage {
+    relation page: knowledge/page // rebac:field=page
+    relation live_page: knowledge/page // rebac:field={"path":"page","filters":{"page__is_trashed":false,"page__vault__is_trashed":false}}
+
+    permission read = page->read
+    permission graph_read = live_page->read
+    permission write = page->write
+    permission delete = page->write
+}
+
+definition knowledge_graph_pgvector/passage_embedding {
+    relation passage: knowledge_graph_pgvector/passage // rebac:field=passage
+
+    permission read = passage->read
+    permission write = passage->write
+    permission delete = passage->write
+}
+
+definition knowledge_graph_pgvector/entity {
+    relation vault: knowledge/vault // rebac:field=vault
+    // Live reverse-FK reach compiles the existential evidence test for lists
+    // and point checks. Even a vault deleter cannot see trash-only identities.
+    relation evidence: knowledge_graph_pgvector/passage // rebac:field=mentions__passage
+
+    permission read = vault->read & evidence->graph_read
+    permission delete = vault->delete
+}
+
+definition knowledge_graph_pgvector/entity_mention {
+    relation passage: knowledge_graph_pgvector/passage // rebac:field=passage
+
+    permission read = passage->graph_read
+    permission delete = passage->delete
+}
+
+definition knowledge_graph_pgvector/entity_edge {
+    relation passage: knowledge_graph_pgvector/passage // rebac:field=passage
+
+    permission read = passage->graph_read
+    permission delete = passage->delete
+}

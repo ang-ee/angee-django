@@ -1,0 +1,8 @@
+{
+  "cases": [
+    {"query": "Orion launch date", "expected_pages": ["Orion launch"], "category": "factoid"},
+    {"query": "Who leads Atlas?", "expected_pages": ["Atlas team"], "category": "factoid"},
+    {"query": "Which team builds the sensor used by Orion?", "expected_pages": ["Orion design", "Lyra sensor", "Atlas team"], "category": "multi_hop"},
+    {"query": "Where is the team responsible for Orion's sensor based?", "expected_pages": ["Atlas team", "Atlas location"], "category": "multi_hop"}
+  ]
+}
