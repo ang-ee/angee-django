@@ -13,8 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
-from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import OperationalError, connection, transaction
 from django.db.models.functions import Now
 from django.utils import timezone
@@ -27,11 +26,9 @@ from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
 from angee.workflows.states import (
-    AttemptResult,
     RecordOperation,
     RunStatus,
     StepRunStatus,
-    WaitingKind,
 )
 from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _AttemptRecord
 
@@ -264,21 +261,25 @@ class Runner:
         candidates = self.step_model.objects.terminal_runs()
         if run_id is not None:
             candidates = candidates.filter(awaited_run_id=run_id)
-        return self._each_candidate(candidates, self._wake)
+        return self._each_candidate(candidates, self.step_model.wake)
 
     def wake_decisions(self, decision_id: Any = None) -> int:
         """Worker delivery and the tick sweep share the run-lock owner."""
         candidates = self.step_model.objects.answered_decisions()
         if decision_id is not None:
             candidates = candidates.filter(decision_id=decision_id)
-        return self._each_candidate(candidates, self._wake)
+        return self._each_candidate(candidates, self.step_model.wake)
 
     def wake_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> int:
         """Share after-commit delivery and pending-watch tick recovery with every wake kind."""
         candidates = self.step_model.objects.changed_records(content_type_id=content_type_id, object_id=object_id)
-        return self._each_candidate(candidates, self._wake)
+        return self._each_candidate(candidates, self.step_model.wake)
 
-    def _each_candidate(self, candidates: Any, action: Callable[[Any, Any], None]) -> int:
+    def _each_candidate(self, candidates: Any, transition: Callable[[Any], bool]) -> int:
+        """Hold each bounded candidate's run, then lock its row and apply the row's transition.
+
+        The run is advanced when the transition reports that it changed the plan.
+        """
         count = 0
         with system_context(reason="workflows.tick"):
             candidates = candidates.exclude(run__status__in=RunStatus.terminal_values())
@@ -290,7 +291,9 @@ class Runner:
                                 continue
                             step_run = candidates.filter(pk=pk).lock_if_supported(no_key=True).first()
                             if step_run is not None:
-                                action(run, step_run)
+                                step_run.run = run
+                                if transition(step_run):
+                                    self.advance(run)
                                 count += 1
                 except Superseded:
                     continue
@@ -298,43 +301,15 @@ class Runner:
 
     def wake(self) -> int:
         """Make each still-due candidate ready after locking its run, then its row."""
-        return self._each_candidate(self.step_model.objects.due(), self._wake)
-
-    def _wake(self, run: Any, step_run: Any) -> None:
-        run.step_runs.filter(pk=step_run.pk).to_ready()
-        step_run.watches.all().delete()
-        self.advance(run)
+        return self._each_candidate(self.step_model.objects.due(), self.step_model.wake)
 
     def redispatch(self) -> int:
         """Bound tick redelivery; exhaustion waits for an operator without routing."""
-        return self._each_candidate(self.step_model.objects.undispatched(), self._redispatch)
-
-    def _redispatch(self, run: Any, step_run: Any) -> None:
-        run.step_runs.filter(pk=step_run.pk).count_redispatch()
-        if step_run.dispatches + 1 >= settings.ANGEE_WORKFLOW_MAX_DISPATCHES:
-            run.step_runs.filter(pk=step_run.pk).to_waiting(
-                kind=WaitingKind.ERROR, reason="Task delivery exhausted its retry allowance.",
-            )
-            self.advance(run)
+        return self._each_candidate(self.step_model.objects.undispatched(), self.step_model.redispatch)
 
     def reap(self) -> int:
         """Recover expired committed claims while holding the effect marker's lock."""
-        return self._each_candidate(self.step_model.objects.expired(), self._reap)
-
-    def _reap(self, run: Any, step_run: Any) -> None:
-        step_run.run = run
-        try:
-            with transaction.atomic():
-                run.step_runs.expire(step_run, _AttemptRecord.failure(
-                    "The attempt deadline expired.", retryable=True, timed_out=True,
-                ))
-        except ImproperlyConfigured as failure:
-            step_run.attempts.filter(number=step_run.attempt).close(AttemptResult.TIMED_OUT, exception_text(failure))
-            run.step_runs.filter(pk=step_run.pk).to_waiting(
-                kind=WaitingKind.ERROR,
-                reason="The step implementation is unavailable; restore its registration before retrying.",
-            )
-        self.advance(run)
+        return self._each_candidate(self.step_model.objects.expired(), self.step_model.reap)
 
 
 runner = Runner()

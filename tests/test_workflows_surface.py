@@ -71,6 +71,7 @@ EXPECTED_VERBS = {
 
 EXPECTED_ROW_VERBS = {
     "workflows.WorkflowRun": "advance cancel_on_commit fail_advance reopen",
+    "workflows.StepRun": "reap redispatch wake",
 }
 """Transitions the rows own; their managers no longer carry them."""
 

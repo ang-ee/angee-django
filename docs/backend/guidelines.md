@@ -2138,8 +2138,9 @@ bridge advisory lock as polling and delivery settlement.
   discard a successful body write. The runner owns the tick, dispatch and failure
   classification: [`Runner.advance`](../../src/angee/workflows/runner.py) wraps
   every advancement, lets lost fences and transient database errors roll back,
-  and hands any other failure to `WorkflowRun.fail_advance` to record. Managers
-  and querysets own row-set verbs.
+  and hands any other failure to `WorkflowRun.fail_advance` to record. Each tick
+  candidate's transition is a `StepRun` verb (`wake`, `redispatch`, `reap`) that
+  reports whether its run must replan; managers and querysets own row-set verbs.
 - **Queryset verbs own transitions and companion fields.** `StepRunQuerySet`
   owns `claim`, `settle`, `to_succeeded`, `fail_attempt`, `to_waiting`,
   `to_ready`, `cancel_open`, `dispatch` and `count_redispatch`;

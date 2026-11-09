@@ -21,6 +21,7 @@ from django_compose.models import Composable
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.exceptions import exception_text
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField, ModelLabelField
@@ -935,6 +936,44 @@ class StepRun(AngeeDataModel, concrete=True):
             assert decision is not None
             records.append(RecordRef.from_model(decision, self.decision_id))
         return tuple(records)
+
+    def wake(self) -> bool:
+        """Make this held waiter ready and drop its watches; its run replans."""
+        self.run.step_runs.filter(pk=self.pk).to_ready()
+        self.watches.all().delete()
+        return True
+
+    def redispatch(self) -> bool:
+        """Count one tick redelivery of this held ready row.
+
+        Return whether exhausting the delivery allowance parked it for an operator,
+        which replans its run.
+        """
+        rows = self.run.step_runs.filter(pk=self.pk)
+        rows.count_redispatch()
+        if self.dispatches + 1 < settings.ANGEE_WORKFLOW_MAX_DISPATCHES:
+            return False
+        rows.to_waiting(kind=WaitingKind.ERROR, reason="Task delivery exhausted its retry allowance.")
+        return True
+
+    def reap(self) -> bool:
+        """Fail this held expired claim as a retryable timeout; its run replans.
+
+        An unregistered step implementation closes the attempt and waits for an operator.
+        """
+        try:
+            with transaction.atomic():
+                self.run.step_runs.expire(self, _AttemptRecord.failure(
+                    "The attempt deadline expired.", retryable=True, timed_out=True,
+                ))
+        except ImproperlyConfigured as failure:
+            self.attempts.filter(number=self.attempt).close(AttemptResult.TIMED_OUT, exception_text(failure))
+            self.run.step_runs.filter(pk=self.pk).to_waiting(
+                kind=WaitingKind.ERROR,
+                reason="The step implementation is unavailable; restore its registration before retrying.",
+            )
+        return True
+
     hold_states = {
         (StepRunStatus.FAILED, None): "error",
         (StepRunStatus.WAITING, WaitingKind.ERROR): "error",
