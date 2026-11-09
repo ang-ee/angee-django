@@ -327,16 +327,87 @@ class Party(
         proposed: Mapping[str, Any] | None = None,
         choices: Mapping[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        """Apply a proposed identity through the directory's conflict-checking owner."""
+        """Apply plain reviewed identity values while the locked identity basis still matches.
+
+        ``expected_facts_hash`` is :attr:`IdentityBasis.facts_hash` from review; it
+        is compared with the complete basis locked here, and exact-replace
+        expectations come from that same basis. Every write stays authorized as
+        this row's actor. A replay after a successful change returns conflict
+        because the retained basis hash no longer matches; unchanged choices are
+        idempotent no-ops.
+        """
+
         if proposed is None or choices is None or not expected_facts_hash:
             raise ValidationError("An identity application needs its proposed values, choices and facts hash.")
-        return type(self).objects.apply_identity(
-            party_id=public_id_of(self),
-            expected_facts_hash=expected_facts_hash,
-            proposed=proposed,
-            choices=choices,
-            actor=instance_actor(self),
-        )
+        allowed = {
+            "name_action": {"keep", "replace"},
+            "address_action": {"keep", "add", "replace"},
+            "handle_action": {"keep", "confirm", "dismiss"},
+        }
+        if set(choices) != set(allowed) or any(value not in allowed[name] for name, value in choices.items()):
+            raise ValidationError({"choices": "Identity choices are invalid."})
+        actor = instance_actor(self)
+        parties = type(self).objects
+        with transaction.atomic(), actor_context(actor):
+            basis = parties.identity_basis(public_id_of(self), actor=actor, lock=True)
+            party, current = basis.party, basis.complete
+            party.require_access("write")
+            if basis.facts_hash != expected_facts_hash:
+                return "conflict", {}
+            results = {"name_result": "kept", "address_result": "kept", "handle_result": "kept"}
+            if choices["name_action"] == "replace":
+                results["name_result"] = party.replace_name_exact(
+                    expected=current["name"], proposed=str(proposed["name"]), actor=actor,
+                )
+            addresses = apps.get_model("parties", "Address").objects
+            if choices["address_action"] == "add":
+                results["address_result"], _ = addresses.attach_exact(
+                    party=party,
+                    values=proposed["address"],
+                    actor=actor,
+                    label=proposed["address"]["label"],
+                    conflict="append",
+                )
+            elif choices["address_action"] == "replace":
+                primary = next((row for row in current["addresses"] if row["is_primary"]), None)
+                expected = (
+                    addresses.system_context(reason="parties.party.apply_identity").from_public_id(primary["id"])
+                    if primary
+                    else None
+                )
+                results["address_result"], _ = addresses.replace_primary_exact(
+                    party=party,
+                    values=proposed["address"],
+                    actor=actor,
+                    expected_id=expected.pk if expected else None,
+                    label=proposed["address"]["label"],
+                )
+            if choices["handle_action"] != "keep":
+                link = parties.handle_statements().for_reader(actor).from_public_id(proposed["handle"]["statement_id"])
+                if link is None or link.subject_id != party.pk:
+                    raise ValidationError({"handle_action": "The proposed statement changed during review."})
+                getattr(link.with_actor(actor), choices["handle_action"])()
+                results["handle_result"] = f"{choices['handle_action']}ed"
+            outcome = "applied" if any(value not in {"kept", "matched"} for value in results.values()) else "unchanged"
+            return outcome, results
+
+    def replace_name_exact(self, *, expected: str, proposed: str, actor: Any) -> str:
+        """Apply a reviewed name only while this party's frozen name still matches."""
+
+        normalized = " ".join(proposed.split()).strip()
+        if not normalized:
+            raise ValidationError({"name": "A replacement Party name must not be empty."})
+        with transaction.atomic(), actor_context(actor):
+            locked = type(self).objects.with_actor(actor).locked_get(pk=self.pk)
+            if locked.display_name != expected:
+                raise ValidationError({"name": "The Party name changed during review."})
+            if not locked.has_access("write"):
+                raise PermissionDenied("write access to the Party is required")
+            if locked.display_name == normalized:
+                return "matched"
+            locked.display_name = normalized
+            locked.save(update_fields=["display_name", "updated_at"])
+            return "replaced"
 
     def identity_differs(self, current: Mapping[str, Any], proposed: Mapping[str, Any]) -> bool:
         """Compare proposed native identity values with a retained read projection."""
