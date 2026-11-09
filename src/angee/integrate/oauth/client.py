@@ -7,9 +7,11 @@ extends this in ``angee.iam_integrate_oidc.protocol.OAuthClientOidcProtocol``.
 
 The OAuth2 protocol mechanism (token request, client authentication, PKCE, and
 the token-response parsing) is owned by Authlib's ``OAuth2Client`` over httpx2;
-this module is the thin per-row adapter behind a stable seam. The authorization
-URL is still built here (a deterministic string the OIDC layer extends), and the
-small ``token_request_format == "json"`` provider quirk — a non-standard JSON
+this module is the thin per-row adapter behind a stable seam. Authlib's
+``prepare_grant_uri`` also builds the authorization URL from the row's endpoint
+and client id, with no client session or secret (the OIDC layer adds its
+nonce), and the small
+``token_request_format == "json"`` provider quirk — a non-standard JSON
 token body Authlib does not emit, plus Anthropic's required ``state`` echo —
 keeps a documented shim.
 
@@ -28,6 +30,7 @@ from urllib import parse
 import httpx2
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.httpx_client import OAuth2Client
+from authlib.oauth2.rfc6749.parameters import prepare_grant_uri
 
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import PinnedTransport
@@ -63,6 +66,8 @@ _TOKEN_MATERIAL_KEYS = ("access_token", "refresh_token", "id_token", "expires_in
 # access token cannot call the provider's userinfo endpoint (Anthropic's long-lived
 # inference-only token is one such case).
 _TOKEN_RESPONSE_IDENTITY_KEYS = ("account", "organization")
+_GRANT_URI_ARGUMENTS = frozenset({"uri", "client_id", "response_type", "redirect_uri", "scope", "state"})
+"""``prepare_grant_uri``'s own arguments, which a provider's authorize extras never replace."""
 
 
 class OAuthClientProtocol:
@@ -93,13 +98,7 @@ class OAuthClientProtocol:
     ) -> str:
         """Return the provider authorization URL for one OAuth code flow."""
 
-        query = self._authorize_query(
-            state=state,
-            redirect_uri=redirect_uri,
-            scopes=scopes,
-            code_challenge=code_challenge,
-        )
-        return with_query(self._endpoint("authorize_endpoint"), query)
+        return self._grant_uri(state=state, redirect_uri=redirect_uri, scopes=scopes, code_challenge=code_challenge)
 
     def exchange_code(
         self,
@@ -378,36 +377,45 @@ class OAuthClientProtocol:
             status,
         )
 
-    def _authorize_query(
+    def _grant_uri(
         self,
         *,
         state: str,
         redirect_uri: str,
         scopes: Iterable[str],
         code_challenge: str | None,
-    ) -> dict[str, str]:
-        """Return the shared authorize query parameters (OIDC adds ``nonce``/``openid``).
+        **extras: str,
+    ) -> str:
+        """Build the authorization URL with Authlib's ``prepare_grant_uri`` (OIDC adds ``nonce``).
 
-        A flow needs PKCE or a client secret: with neither, nothing would
-        authenticate the code exchange, so a misconfigured confidential client
-        is refused before the provider redirect.
+        Provider authorize parameters and the flow's ``extras`` ride as extra
+        query parameters and never replace the grant's own arguments; an empty
+        scope is omitted. A flow needs PKCE or a client secret: with neither,
+        nothing would authenticate the code exchange, so a misconfigured
+        confidential client is refused before the provider redirect. With PKCE
+        the secret is never read.
         """
 
         challenge = code_challenge if getattr(self.oauth_client, "supports_pkce", False) else None
         if not challenge and not self._client_secret():
             raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client needs PKCE or a client secret.")
-        query: dict[str, str] = {
-            **_string_param_values(self.oauth_client, "authorize_param_values"),
-            "client_id": str(getattr(self.oauth_client, "client_id", "")),
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(scopes),
-            "state": state,
+        params = {
+            key: value
+            for key, value in _string_param_values(self.oauth_client, "authorize_param_values").items()
+            if key not in _GRANT_URI_ARGUMENTS
         }
         if challenge:
-            query["code_challenge"] = challenge
-            query["code_challenge_method"] = "S256"
-        return query
+            params.update(code_challenge=challenge, code_challenge_method="S256")
+        params.update(extras)
+        return prepare_grant_uri(
+            self._endpoint("authorize_endpoint"),
+            str(self.oauth_client.client_id),
+            "code",
+            redirect_uri,
+            list(scopes),
+            state,
+            **params,
+        )
 
     def _endpoint(self, field: str) -> str:
         """Return a configured endpoint value, or raise when the row omits it."""

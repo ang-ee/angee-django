@@ -23,7 +23,6 @@ from angee.integrate.oauth.client import (
     HTTP_TIMEOUT_SECONDS,
     USER_AGENT,
     OAuthClientProtocol,
-    with_query,
 )
 from angee.integrate.oauth.errors import (
     INVALID_ID_TOKEN,
@@ -63,14 +62,13 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
         effective_scopes = list(scopes)
         if "openid" not in effective_scopes:
             effective_scopes.insert(0, "openid")
-        query = self._authorize_query(
+        return self._grant_uri(
             state=state,
             redirect_uri=redirect_uri,
             scopes=effective_scopes,
             code_challenge=code_challenge,
+            nonce=nonce,
         )
-        query["nonce"] = nonce
-        return with_query(self._endpoint("authorize_endpoint"), query)
 
     def exchange_code(
         self,
@@ -135,8 +133,8 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
         A no-op when the client carries no ``discovery_url`` (endpoints are then
         configured explicitly). The discovery document is cached per URL, so an
         explicitly-configured provider that also sets a discovery URL fetches at
-        most once. In-memory only: the fetched endpoints serve the current request
-        and are not persisted unless the caller saves the client.
+        most once. In-memory only: the fetched endpoints serve the current request;
+        the operator's discovery action persists them (``discover_endpoints(persist=True)``).
         """
 
         return dict(self.oauth_client.discover_endpoints())

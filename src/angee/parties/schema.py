@@ -125,6 +125,12 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 
         return parent.concrete_kind
 
+    @strawberry.field
+    def merge_scalar_fields(parent: strawberry.Parent[PartyModel]) -> list[str]:
+        """Return the scalar merge choices this party projection carries."""
+
+        return list(parent.merge_common_scalar_fields)
+
     handles: list["HandleType"]
 
     @strawberry_django.field(
@@ -150,6 +156,12 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 class PersonType(PartyType):
     """GraphQL projection of a person."""
 
+    @strawberry.field
+    def merge_scalar_fields(parent: strawberry.Parent[PartyModel]) -> list[str]:
+        """Return the scalar merge choices the person projection carries, its name parts included."""
+
+        return list(parent.merge_scalar_fields)
+
     name_prefix: auto
     given_name: auto
     additional_name: auto
@@ -161,9 +173,9 @@ class PersonType(PartyType):
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
-        """Return manager-prefetched, actor-visible circle names as chip values."""
+        """Return the person's actor-visible circle names as chip values."""
 
-        return cast("list[str]", Person.objects.circle_names_for(cast(Any, self)))
+        return cast("list[str]", cast(Any, self).circle_names())
 
     @strawberry_django.field(only=["user_id"])
     def user(self) -> strawberry.ID | None:

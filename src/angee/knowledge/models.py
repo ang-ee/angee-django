@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
 from itertools import islice
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 from urllib.parse import quote, unquote
 
 from django.apps import apps
@@ -608,7 +608,33 @@ class Page(
 
 
 
-class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT]):
+class RecordBindingQuerySet[BindingT: RecordBinding](AngeeHistoryQuerySet[BindingT]):
+    """Binding selections that keep the selected population and its actor."""
+
+    def for_record(self, record: models.Model, *, role: str | None = None) -> Self:
+        """Return the selected bindings on one canonical record."""
+
+        target = generic_target(self.model.require_saved(record, "record"))
+        queryset = self.filter(**target.lookups(self.model, "target")).select_related("page", "vault")
+        return queryset if role is None else queryset.filter(role=self.model.normalize_role(role))
+
+    def pages_for_record(self, record: models.Model, *, role: str | None = None) -> Self:
+        """Return page bindings on ``record`` without loading gated page content."""
+
+        return self.for_record(record, role=role).filter(page__isnull=False)
+
+    def for_knowledge(self, knowledge: models.Model, *, role: str | None = None) -> Self:
+        """Return the selected bindings from one page or vault."""
+
+        knowledge, owner_field = self.model.knowledge_owner_instance(knowledge)
+        queryset = self.filter(**{owner_field: knowledge})
+        return queryset if role is None else queryset.filter(role=self.model.normalize_role(role))
+
+
+_RecordBindingManagerBase = AngeeHistoryManager.from_queryset(RecordBindingQuerySet)
+
+
+class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[BindingT]):
     """Own polymorphic knowledge-to-record binding writes and reverse reads.
 
     Bindings are stored at :func:`rebac.generic_target` and written under the
@@ -617,7 +643,6 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
     """
 
     DEFAULT_ROLE = "related"
-    KNOWLEDGE_MODELS = frozenset({"knowledge.page", "knowledge.vault"})
 
     def create_note(
         self, *, target: models.Model, vault: Vault, body: str,
@@ -632,8 +657,8 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         body = body.strip()
         if not body:
             raise ValidationError("Write a note before posting.")
-        role = self._role(role)
-        target = self._saved(target, "target")
+        role = self.model.normalize_role(role)
+        target = self.model.require_saved(target, "target")
         using = self._db or router.db_for_write(self.model, instance=target)
         bindings = self.db_manager(using, hints={"instance": target})
         boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
@@ -689,7 +714,7 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         deletion wins, the locked lookup refuses the now-absent target.
         """
 
-        target = self._saved(target, "target")
+        target = self.model.require_saved(target, "target")
         using = self._db or router.db_for_write(self.model, instance=target)
         bindings = self.db_manager(using, hints={"instance": target})
         with transaction.atomic():
@@ -732,65 +757,6 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         deleted, _by_model = self.filter(**self._key(target, page=page, vault=vault, role=role)).delete()
         return deleted
 
-    def for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
-        """Return actor-readable bindings on one canonical record."""
-
-        target = generic_target(self._saved(record, "record"))
-        queryset = self.get_queryset().filter(**target.lookups(self.model, "target"))
-        queryset = queryset.select_related("page", "vault")
-        return queryset if role is None else queryset.filter(role=self._role(role))
-
-    def pages_for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
-        """Return page bindings on ``record`` without loading gated page content."""
-
-        return self.for_record(record, role=role).filter(page__isnull=False)
-
-    def for_knowledge(
-        self,
-        knowledge: models.Model,
-        *,
-        role: str | None = None,
-    ) -> models.QuerySet[Any]:
-        """Return bindings from one readable page/vault to actor-readable targets."""
-
-        knowledge, owner_field = self._knowledge_owner_instance(knowledge)
-        queryset = self.get_queryset().filter(**{owner_field: knowledge})
-        return queryset if role is None else queryset.filter(role=self._role(role))
-
-    @classmethod
-    def _knowledge_owner(
-        cls,
-        *,
-        page: models.Model | None,
-        vault: models.Model | None,
-    ) -> tuple[models.Model, str]:
-        if (page is None) == (vault is None):
-            raise ValidationError("Exactly one of page or vault is required.")
-        return cls._knowledge_owner_instance(page if page is not None else cast(models.Model, vault))
-
-    @classmethod
-    def _knowledge_owner_instance(cls, knowledge: models.Model) -> tuple[models.Model, str]:
-        knowledge = cls._saved(knowledge, "knowledge owner")
-        label = knowledge._meta.label_lower
-        if label not in cls.KNOWLEDGE_MODELS:
-            raise ValidationError("Knowledge bindings may originate only from a Page or Vault.")
-        return knowledge, "page" if label == "knowledge.page" else "vault"
-
-    @staticmethod
-    def _saved(instance: models.Model, name: str) -> models.Model:
-        if instance is None or instance.pk is None:
-            raise ValidationError(f"A saved {name} is required.")
-        return instance
-
-    @staticmethod
-    def _role(role: str) -> str:
-        value = str(role or "").strip()
-        if not value:
-            raise ValidationError("A non-empty binding role is required.")
-        field = RecordBinding._meta.get_field("role")
-        field.run_validators(value)
-        return value
-
     def _key(
         self,
         target: models.Model,
@@ -801,9 +767,13 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
     ) -> dict[str, Any]:
         """Return a binding's unique key; ``ValueError`` for a target without a REBAC type."""
 
-        knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
-        canonical = generic_target(self._saved(target, "target"))
-        return {owner_field: knowledge, **canonical.lookups(self.model, "target"), "role": self._role(role)}
+        knowledge, owner_field = self.model.knowledge_owner(page=page, vault=vault)
+        canonical = generic_target(self.model.require_saved(target, "target"))
+        return {
+            owner_field: knowledge,
+            **canonical.lookups(self.model, "target"),
+            "role": self.model.normalize_role(role),
+        }
 
 
 class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, concrete=True):
@@ -821,6 +791,8 @@ class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, co
     on_target_delete = models.CASCADE
     merge_identity = (("page", "content_type", "object_id", "role"), ("vault", "content_type", "object_id", "role"))
     sqid_prefix = "krb_"
+    KNOWLEDGE_MODELS = frozenset({"knowledge.page", "knowledge.vault"})
+    """Model labels a binding may originate from."""
 
     page = models.ForeignKey(
         "knowledge.Page",
@@ -868,6 +840,42 @@ class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, co
             ),
         )
         indexes = (models.Index(fields=("content_type", "object_id", "role")),)
+
+    @classmethod
+    def knowledge_owner(cls, *, page: models.Model | None, vault: models.Model | None) -> tuple[models.Model, str]:
+        """Return the one saved page or vault a binding originates from, with its field name."""
+
+        if (page is None) == (vault is None):
+            raise ValidationError("Exactly one of page or vault is required.")
+        return cls.knowledge_owner_instance(page if page is not None else cast(models.Model, vault))
+
+    @classmethod
+    def knowledge_owner_instance(cls, knowledge: models.Model) -> tuple[models.Model, str]:
+        """Return a saved page or vault and the binding field that points at it."""
+
+        knowledge = cls.require_saved(knowledge, "knowledge owner")
+        label = knowledge._meta.label_lower
+        if label not in cls.KNOWLEDGE_MODELS:
+            raise ValidationError("Knowledge bindings may originate only from a Page or Vault.")
+        return knowledge, "page" if label == "knowledge.page" else "vault"
+
+    @staticmethod
+    def require_saved(instance: models.Model, name: str) -> models.Model:
+        """Return ``instance`` when it is saved; refuse an unsaved binding end."""
+
+        if instance is None or instance.pk is None:
+            raise ValidationError(f"A saved {name} is required.")
+        return instance
+
+    @classmethod
+    def normalize_role(cls, role: str) -> str:
+        """Return the stripped role after the role field's own validators accept it."""
+
+        value = str(role or "").strip()
+        if not value:
+            raise ValidationError("A non-empty binding role is required.")
+        cls._meta.get_field("role").run_validators(value)
+        return value
 
     def clean(self) -> None:
         """Require exactly one knowledge owner."""
@@ -1312,13 +1320,20 @@ class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits=
 # ---------------------------------------------------------------------------
 
 
-class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
-    """Owns the wikilink edge set derived from page bodies."""
+class LinkQuerySet[LinkT: Link](AngeeHistoryQuerySet[LinkT]):
+    """Backlink selections over the wikilink edge set."""
 
-    def backlinks_to(self, page: Any) -> models.QuerySet[LinkT]:
+    def backlinks_to(self, page: Any) -> Self:
         """Resolved links into ``page`` from untrashed source pages the actor reads."""
 
         return self.filter(target_page_id=page.pk, is_resolved=True, source_page__is_trashed=False).scoped()
+
+
+_LinkManagerBase = AngeeHistoryManager.from_queryset(LinkQuerySet)
+
+
+class LinkManager[LinkT: Link](_LinkManagerBase[LinkT]):
+    """Owns the wikilink edge set derived from page bodies."""
 
     def rebuild_for(self, markdown: Any) -> None:
         """Replace the source page's outgoing links from its current body.

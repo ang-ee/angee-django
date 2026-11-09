@@ -168,7 +168,7 @@ class RecognizePageStep(_IOStep, Step[RecognizePageInput, RecognitionOutput, Inf
             duration_ms=response.duration_ms, metadata=response.provider_metadata,
         )
         ctx.heartbeat()
-        carrier = PartCarrier.retain(part, actor=ctx.actor, drive_id=str(file.drive.sqid))
+        carrier, _created = PartCarrier.retain(part, actor=ctx.actor, drive_id=str(file.drive.sqid))
         return ctx.done(RecognitionOutput(page=value.page, part=carrier), outcome="recognized")
 
 
@@ -397,24 +397,17 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
                 ),
                 outcome="superseded",
             )
-        profile = base.get_profile_impl()()
         output = ProcessEvidenceOutput.from_extraction(base).model_dump()
-        # A held candidate the mapping model has not read still owes its
-        # inference; correspondence is judged on the inferred candidate.
-        corresponding = base.awaiting_correspondence and not (
-            value.allow_inference and not value.identity_mapping
-            and ExtractionRole.MAPPING not in base.used_model_roles
-            and profile.inference_required(base.result, base.unresolved_reasons)
+        admission = base.inference_admission(
+            allow_inference=value.allow_inference,
+            identity_mapping=value.identity_mapping,
         )
-        if corresponding and not value.identity_mapping:
-            return ctx.done(InferEvidenceOutput(**output), outcome="correspondence_required")
-        if not base.awaiting_correspondence and (
-            not value.allow_inference or not profile.inference_required(base.result, base.unresolved_reasons)
-        ):
-            return ctx.done(InferEvidenceOutput(**output), outcome="unchanged")
+        if admission in {"correspondence_required", "unchanged"}:
+            return ctx.done(InferEvidenceOutput(**output), outcome=admission)
+        corresponding = admission == "correspondence"
         sources = type(base).objects.authorized_document_sources(base, actor=ctx.actor)
-        parts = base.document_parts()
-        if base.outcome.get("code") == "source_hold" or not parts:
+        parts = base.retained_inference_parts()
+        if not parts:
             return ctx.done(
                 InferEvidenceOutput(
                     **output, inference_failure={"stage": "acquisition", "code": RETAINED_CARRIER_UNAVAILABLE}
@@ -459,7 +452,7 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
                 ctx.heartbeat()
                 ctx.begin_effect()
                 mapped = map_parts(parts, base.schema, inference_model, config=ctx.config.request)
-                result = profile.normalize_inference_candidate(
+                result = base.get_profile_impl()().normalize_inference_candidate(
                     sources,
                     parts,
                     base.schema,

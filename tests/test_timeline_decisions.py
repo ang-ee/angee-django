@@ -62,7 +62,7 @@ def test_ask_then_decide_updates_the_line_and_live_attention(people) -> None:
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 1
     assert not read_timeline(subject, requester, needsMe=True)["timeline"]["entries"]
 
-    Decision.objects.decide(question, actor=reviewer, chosen=["complete"], revision=question.revision)
+    question.decide(actor=reviewer, chosen=["complete"], revision=question.revision)
     original_key = event.key
     event, = timeline_entries(subject, reviewer)
     assert event.key == original_key
@@ -94,7 +94,7 @@ def test_unassigned_attention_uses_answer_permission_without_claiming_others_ass
     assert read_timeline(subject, admin)["timeline_attention"] == 1
     assert read_timeline(subject, requester)["timeline_attention"] == 0
     assert read_timeline(subject, bystander)["timeline"]["entries"] == []
-    Decision.objects.decide(decision, actor=admin, revision=decision.revision, chosen=["done"])
+    decision.decide(actor=admin, revision=decision.revision, chosen=["done"])
     ask(people)
     assert read_timeline(subject, admin)["timeline_attention"] == 0
     assert read_timeline(subject, reviewer)["timeline_attention"] == 1
@@ -118,7 +118,7 @@ def test_withdraw_publishes_the_owner_update_and_clears_attention(people) -> Non
     requester, reviewer, _, subject = people
     question = ask(people)
     with system_context(reason="test.timeline.withdraw"):
-        Decision.objects.withdraw(question, actor=requester)
+        question.withdraw(actor=requester)
     assert timeline_entries(subject, reviewer)[0].detail == "Withdrawn"
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
 
@@ -142,7 +142,7 @@ def test_merge_keeps_one_occurrence_on_the_survivor(composed_permissions, both_r
     with actor_context(requester):
         survivor.with_actor(requester).merge(records=[public_id_of(duplicate)])
     event, = timeline_entries(survivor, reviewer)
-    Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
+    question.decide(actor=reviewer, chosen=["complete"])
     current, = timeline_entries(survivor, reviewer)
     assert current.key == event.key
     assert current.detail == "Complete"
@@ -161,7 +161,7 @@ def test_rollback_discards_invalidations_and_source_rows(people, monkeypatch):
         assert timeline_entries(subject, reviewer) == []
         assert broadcasts == []
         question = ask(people)
-        Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
+        question.decide(actor=reviewer, chosen=["complete"])
         assert broadcasts == []
     assert broadcasts
     assert timeline_entries(subject, reviewer)[0].detail == "Complete"

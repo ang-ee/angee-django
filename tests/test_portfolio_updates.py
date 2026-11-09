@@ -77,3 +77,64 @@ def test_report_refuses_phasal_and_undeclared_targets(reportable: dict[str, Any]
         row = Update.objects.create(target=reportable["initiative"], health="on_track", body="Seeded")
         assert row.content_type == generic_target(reportable["initiative"]).content_type
         assert Update.objects.count() == 1
+
+
+def test_report_and_target_health_share_one_graphql_enum() -> None:
+    """A report's health and its target's projection are one vocabulary with one GraphQL name."""
+
+    from angee.portfolio import schema
+
+    report_health = next(
+        field for field in schema.PortfolioUpdateType.__strawberry_definition__.fields if field.python_name == "health"
+    )
+    initiative_health = next(
+        field for field in schema.InitiativeType.__strawberry_definition__.fields if field.python_name == "health"
+    )
+    assert report_health.type is schema.HealthChoice.__strawberry_definition__
+    assert initiative_health.type.of_type is schema.HealthChoice.__strawberry_definition__
+    assert schema.HealthChoice.__strawberry_definition__.name == "Health"
+
+
+def test_partial_save_and_collector_delete_project_persisted_health(reportable: dict[str, Any]) -> None:
+    """Unsaved health never reaches the target; instance and queryset deletes re-project the survivors."""
+
+    initiative = reportable["initiative"]
+    with actor_context(reportable["manager"]):
+        first = Update.objects.report(target=initiative, health="on_track")
+        second = Update.objects.report(target=initiative, health="at_risk")
+        second.health = "off_track"
+        second.body = "Body only"
+        second.save(update_fields=("body", "updated_at"))
+        initiative.refresh_from_db()
+        assert (initiative.health, initiative.health_updated_at) == ("at_risk", second.updated_at)
+        # A queryset delete goes through the collector's receivers, never Django's fast delete.
+        Update.objects.filter(pk=second.pk).delete()
+        initiative.refresh_from_db()
+        assert (initiative.health, initiative.health_updated_at) == ("on_track", first.updated_at)
+        first.delete()
+        initiative.refresh_from_db()
+        assert (initiative.health, initiative.health_updated_at) == (None, None)
+
+
+def test_bulk_projection_writes_require_the_report_owner(reportable: dict[str, Any]) -> None:
+    with actor_context(reportable["manager"]):
+        report = Update.objects.report(target=reportable["initiative"], health="on_track", body="Kept")
+        with pytest.raises(ValidationError, match="instance save"):
+            Update.objects.filter(pk=report.pk).update(health="off_track")
+        with pytest.raises(ValidationError, match="instance save"):
+            Update.objects.bulk_create([Update(target=reportable["initiative"], health="off_track")])
+        assert Update.objects.filter(pk=report.pk).update(body="Edited") == 1
+    reportable["initiative"].refresh_from_db()
+    assert reportable["initiative"].health == "on_track"
+
+
+def test_report_target_is_write_once(reportable: dict[str, Any]) -> None:
+    with system_context(reason="test.updates.other_target"):
+        moved_to = Initiative.objects.create(name="Other")
+    with actor_context(reportable["manager"]):
+        report = Update.objects.report(target=reportable["initiative"], health="on_track")
+        report.target = moved_to
+        with pytest.raises(ValidationError) as refused:
+            report.save()
+    assert set(refused.value.message_dict) == {"object"}
+    assert Update._base_manager.get(pk=report.pk).object_id == reportable["initiative"].pk

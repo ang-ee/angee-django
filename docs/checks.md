@@ -89,9 +89,12 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
 [comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
-knowledge, messaging, proposals, sequences, spaces, storage, the system
-queryset, work and task ordering locks, integrate streams and workflow
-integrate steps, the [grouped rows](../tests/test_group_rows.py) partitions, the
+knowledge, messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py)
+and [webform submission](../tests/test_messaging_webform_submission.py) races,
+[portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
+sequences, spaces, storage, the system queryset, work and task ordering locks,
+integrate streams and workflow integrate steps, the
+[grouped rows](../tests/test_group_rows.py) partitions, the
 messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 [thread and message reads](../tests/test_messaging_inbox_read.py) and
 [part reads](../tests/test_inbox_part_reads.py), and the composed
@@ -101,7 +104,8 @@ messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 [projects access campaign](../tests/test_projects_wave3_campaign.py).
 `test_connections.py` and `test_system_queryset.py` contribute only their
 PostgreSQL test nodes because each also has SQLite-only tests; the PostgreSQL
-branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`
+branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`,
+and the [resource ledger's](../tests/test_resource_ledger.py) concurrent upsert,
 also run by node. Every other listed file runs whole, which keeps the SQLite
 floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
 by pytest-split's `least_duration` algorithm over the

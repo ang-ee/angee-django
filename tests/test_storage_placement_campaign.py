@@ -63,9 +63,14 @@ def test_identical_bytes_in_separate_bound_drives_keep_distinct_rows(drive: Any)
         for index, target in enumerate((drive, second)):
             project = Project.objects.create(title=f"Project {index}")
             ProjectBinding.objects.bind(project=project, target=target.with_actor(drive.alice))
-            rows.append(File.objects.ingest_bytes(
-                PNG_BYTES, filename="same.png", drive_id=str(target.sqid), owner_id=drive.alice.pk,
-            ))
+            rows.append(
+                File.objects.ingest_bytes(
+                    PNG_BYTES,
+                    filename="same.png",
+                    drive_id=str(target.sqid),
+                    owner_id=drive.alice.pk,
+                )[0]
+            )
     assert rows[0].pk != rows[1].pk
     assert rows[0].storage_path != rows[1].storage_path
     assert rows[0].content_hash == rows[1].content_hash == PNG_SHA256

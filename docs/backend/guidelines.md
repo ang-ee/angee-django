@@ -826,7 +826,7 @@ data through REBAC, never a queryset bypass.
   from `with_actor()`, `require_access()` or a fetch under an ambient actor. So
   system work on a row that a factory or an authorization check bound reads
   `run.step_runs.system_context(reason="workflows.advance")`, never `run.step_runs`;
-  [`Runner.advance`](../../src/angee/workflows/runner.py) is the reference.
+  [`WorkflowRun.advance`](../../src/angee/workflows/models.py) is the reference.
 - **Elevated destructive work keeps its dependents' authorization.** A verb that
   checks the public `delete` permission itself and then runs the owned
   destructive work under `system_context` (storage's soft delete, messaging's
@@ -1041,7 +1041,7 @@ per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — prefe
 rank, the aspect's source precedence (`Aspect.priority`), confidence, the row
 class's `tie_break()`, the stance's update time (bookkeeping — `applied`,
 supersession, a merge move — keeps it), primary key — shared by survivorship,
-cross-subject member resolution (`Handle.objects.resolve`) and merge collapse;
+cross-subject member resolution (`Handle.resolve`) and merge collapse;
 `trust_ordering` is the SQL display order of the same stances. The model owns
 one source-priority rule; there is no separate strategy enum.
 Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
@@ -1297,8 +1297,9 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   [upgrade cutoff](#migration-history) must preflight
   unknown/colliding subtype labels before canonicalizing them on its
   pre-refactor snapshot, preserving IDs/keys and global blank semantics. Those
-  completed transition bodies are absent from current source. The persisted subtype business key `activity_done` remains current;
-  renaming it requires mapping subtype rows, follower choices and callers together.
+  completed transition bodies are absent from current source. Projects declares its completion subtype `activity_done` as a
+  master resource row adopted by `(model_label, key)`, so existing rows keep their identity; renaming the key requires
+  mapping subtype rows, follower choices and callers together.
   Never replace these rules with a database trigger or function.
 - **Row locks must keep the SQLite floor.** Call the Angee queryset/manager
   `lock_if_supported()` method to name lock intent, delegating `of`,
@@ -2130,15 +2131,22 @@ bridge advisory lock as polling and delivery settlement.
   belong to the runner's attempt record, not to consumer settlements.
   A failed IO attempt cannot roll back writes already committed by its body.
 - **`WorkflowRunQuerySet.hold` owns the run lock and transaction.** It registers
-  ready-row dispatch on successful commit. [`Runner.advance`](../../src/angee/workflows/runner.py)
-  requires that lock and composes `Definition` with the persistence owners.
-  The runner owns execution and the tick; managers and querysets own row-set
-  verbs. It isolates settlement,
-  planning and failure recording with savepoints so a later planning failure
-  does not discard a successful body write.
+  ready-row dispatch on successful commit. The run row owns its state:
+  [`WorkflowRun.advance`](../../src/angee/workflows/models.py) requires that lock,
+  settles the attempt, composes `Definition` to plan the graph and writes the
+  run's status, each in its own savepoint, so a later planning failure does not
+  discard a successful body write. The runner owns the tick, dispatch and failure
+  classification: [`Runner.advance`](../../src/angee/workflows/runner.py) wraps
+  every advancement, lets lost fences and transient database errors roll back,
+  and hands any other failure to `WorkflowRun.fail_advance` to record. Each tick
+  candidate's transition is a `StepRun` verb (`wake`, `redispatch`, `reap`) that
+  reports whether its run must replan; managers and querysets own row-set verbs
+  and act on a held run only through its verbs (`admit_subject`, `reopen`,
+  `interrupt`, `cancel_owned_work`).
 - **Queryset verbs own transitions and companion fields.** `StepRunQuerySet`
-  owns `claim`, `settle`, `to_waiting`, `to_ready`, `cancel_open`, `dispatch` and
-  `count_redispatch`; `StepAttemptQuerySet.close` owns attempt closure.
+  owns `claim`, `settle`, `to_succeeded`, `fail_attempt`, `to_waiting`,
+  `to_ready`, `cancel_open`, `dispatch` and `count_redispatch`;
+  `StepAttemptQuerySet.close` owns attempt closure.
   Conditional updates check the attempt fence. The runner's periodic tick
   rechecks due waits, expired claims and stale deliveries under `hold`, then delegates to
   those verbs. The effect marker and heartbeat check the same attempt fence

@@ -919,7 +919,7 @@ def test_data_error_quarantines_record_after_savepoint_rollback(
             assert [outcome.bound_target.key for outcome in outcomes] == ["first", "last"]
 
     if stage == "settle":
-        resolve_applied = stream_driver._resolve_applied
+        resolve_applied = SyncStream.resolve_applied
 
         def fail_settlement(stream: Any, record: Any) -> None:
             key = record.external_key if isinstance(record, RecordChange) else record
@@ -928,7 +928,7 @@ def test_data_error_quarantines_record_after_savepoint_rollback(
                 raise DataError("private record payload and database details")
             resolve_applied(stream, record)
 
-        monkeypatch.setattr(stream_driver, "_resolve_applied", fail_settlement)
+        monkeypatch.setattr(SyncStream, "resolve_applied", fail_settlement)
 
     stream = current_stream(
         stream_bridge,

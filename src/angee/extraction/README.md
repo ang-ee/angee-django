@@ -22,7 +22,11 @@ pages once, maps recognition over raster pages, collects partial results, and
 retains processed evidence or a source hold. `infer_evidence` consumes that
 snapshot, using a pinned revision and explicit identity correspondence when
 structure changes. Retention serializes revision allocation on the lineage head
-and checks exact request reuse.
+and checks exact request reuse. Part carriers are stored and read back before
+that transaction; under the lineage lock, retention rechecks the source digests
+and each carrier's READY bytes. A failed allocation offers the carriers it
+created to storage's `File.purge_if_unretained`, which keeps any that another
+revision, share or edit retains.
 Inference preserves source-grounded facts and retained
 carriers. Revisions reference the same digest-bound part files instead of copying
 the full carrier value into each part row. It rechecks source access before model work; explicit correspondence

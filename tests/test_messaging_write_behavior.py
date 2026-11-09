@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import actor_context, system_context
 
@@ -99,3 +100,45 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
         message.refresh_from_db()
         assert message.status == Message.MessageStatus.SENT
         assert message.sent_at is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reserve_delivery_leases_a_due_draft_once_and_publishes_nothing(
+    channel: Any, composed_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row reserves a due draft under its lock; a live lease refuses a second reservation."""
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "angee.jobs.enqueue.celery_app.send_task",
+        lambda _name, *, kwargs, **_options: sent.append(kwargs),
+    )
+    with system_context(reason="messaging reservation setup"), mute_changes():
+        message = Message.objects.create(
+            channel_id=channel.pk,
+            platform="email",
+            direction="outbound",
+            status="draft",
+            external_id="reserved-delivery",
+        )
+        row = message.reserve_delivery()
+        assert row is not None and row.pk == message.pk
+        assert message.status == Message.MessageStatus.QUEUED
+        assert message.scheduled_at is None and message.delivery_lease_until is not None
+        assert message.delivery_claim is None
+        assert message.reserve_delivery() is None
+        message.refresh_from_db()
+        assert message.status == Message.MessageStatus.QUEUED
+    assert sent == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reserve_delivery_refuses_an_unsaved_or_inbound_message(channel: Any, composed_tables: None) -> None:
+    """Reservation requires the persisted outbound envelope every delivery entrypoint shares."""
+    with system_context(reason="messaging reservation refusal"), mute_changes():
+        with pytest.raises(ValidationError, match="unsaved message"):
+            Message(channel_id=channel.pk, direction="outbound", external_id="unsaved").reserve_delivery()
+        inbound = Message.objects.create(
+            channel_id=channel.pk, platform="email", direction="inbound", status="draft", external_id="inbound-row",
+        )
+        with pytest.raises(ValidationError, match="outbound message"):
+            inbound.reserve_delivery()

@@ -142,6 +142,34 @@ def test_source_refresh_materializes_templates(composed_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_failed_source_completion_rolls_back_template_reconciliation(
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused completion stamp leaves the previous inventory and stamp in place."""
+
+    del composed_tables
+    vcs = _vcs_bridge("tpl-rollback", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
+    vcs.discover_repositories()
+    with system_context(reason="test rollback setup"):
+        repository = Repository.objects.get(name="acme/widgets")
+        source = Source.objects.create(repository=repository, kind="template", path="templates")
+        Template.objects.create(source=source, path="templates/old", name="Old", kind="workspace")
+    complete_sync = Source.complete_sync
+
+    def refuse(row: Any, *, now: Any = None) -> None:
+        complete_sync(row, now=now)
+        raise ValueError("completion refused")
+
+    monkeypatch.setattr(Source, "complete_sync", refuse)
+    with pytest.raises(ValueError, match="completion refused"):
+        source.refresh()
+    with system_context(reason="test rollback read"):
+        assert list(Template.objects.filter(source=source).values_list("path", flat=True)) == ["templates/old"]
+        assert Source.objects.get(pk=source.pk).last_synced_at is None
+
+
+@pytest.mark.django_db(transaction=True)
 def test_run_sync_refreshes_sources_and_records_lifecycle(composed_tables: None) -> None:
     """The Bridge sync owner refreshes sources and records lifecycle telemetry."""
 

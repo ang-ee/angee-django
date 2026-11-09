@@ -43,9 +43,10 @@ ToolRegistrar = Callable[[FastMCP], None]
 Non-GraphQL tools must explicitly declare ``ToolAnnotations.readOnlyHint``.
 Compiled GraphQL tools carry their root ``op_type`` as the structural actor-posture
 fact (their annotation must agree). Builtins also run through the in-process
-pydantic runtime, so their callable may not depend on FastMCP's request-scoped
-``Context`` or ``get_access_token``; the native toolset asserts these contracts
-when it advertises a granted tool.
+pydantic runtime, outside FastMCP's request-scoped ``Context`` and
+``get_access_token``: they declare ``meta=ACTOR_EXECUTION_META``, and the runtime
+admits a granted tool only through ``angee.mcp.graphql.require_actor_tool``.
+Compiled GraphQL tools declare it by construction.
 """
 
 MOUNT_PATH = "/mcp"

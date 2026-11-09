@@ -286,10 +286,10 @@ def test_channel_reader_reads_only_message_attachment_file_content(
         channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
         message = Message.objects.create(channel=channel, created_by=owner, updated_by=owner)
         drive = _storage_drive(tmp_path, owner=owner)
-        attached = File.objects.ingest_bytes(
+        attached, _created = File.objects.ingest_bytes(
             content, filename="attached.txt", owner_id=owner.pk, drive_id=str(drive.sqid),
         )
-        unrelated = File.objects.ingest_bytes(
+        unrelated, _created = File.objects.ingest_bytes(
             b"Private content", filename="private.txt", owner_id=owner.pk, drive_id=str(drive.sqid),
         )
         part = Part.objects.create(message=message, file=attached, created_by=owner, updated_by=owner)

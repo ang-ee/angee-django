@@ -8,6 +8,77 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — domain and capability owners on their rows, managers and querysets
+
+- Storage: `FileManager.ingest_bytes`/`ingest_stream` (and `PartCarrier.retain`)
+  return `(row, created)`, as `get_or_create` does. Metadata merge, placement,
+  dedup reach and `purge_if_unretained` live on `File`; prune, trash and purge
+  selections on the folder and file querysets. Extraction retention locks its
+  lineage, then its source and carrier files in one key-ordered
+  `FOR NO KEY UPDATE` read, then message parts. Mounts provision through
+  `MountManager.provision`; iPhone backups close their backend after a sync.
+- Integrate: `Bridge.request_sync(*, now, persist) -> bool` sends an admitted
+  sync and `Integration.request_sync` fans out; `angee.integrate.queue` and its
+  `queue_bridge_sync` are removed. `Source.complete_sync`,
+  `Integration.preview_push`, `Integration.load_connection_credential`,
+  `RecordLink.resolve_conflict` and the stream/absence querysets own their
+  rules. Credential refresh runs behind a blocking fence and refuses to run
+  inside a transaction (`ensure_fresh` raises `RuntimeError` there), and a forced
+  refresh of an inactive credential is refused (`ValueError`; the admin
+  mutation answers "reconnect it"). Authlib's `prepare_grant_uri` builds the
+  authorization URL without a client session or secret and omits an empty
+  `scope`. `OAuthClient.discover_endpoints(*, persist=False)` saves what it
+  discovers when asked.
+- Messaging: `angee.messaging.connect` is removed. Pairing verbs live on
+  `Channel` (`pairing`, `resume_pairing`, `submit_pairing_password`,
+  `skip_pairing_password`, `reset_pairing`, `disconnect_pairing`) and
+  `ChannelManager.resume_or_create_pairing`; `PairingActionError` moves to
+  `messaging/backends.py`. `Message.reserve_delivery`, delivery limits in
+  `messaging/constants.py`, `Channel.outbound_sender` and
+  `ChannelQuerySet.outbound_email` (IMAP admitted when configured),
+  `ChannelWebform.submit_webform`, `MessageSubtypeManager.resolve` and
+  `PartManager.attach_file`. IMAP credential refusals answer `VALIDATION`
+  instead of `BAD_USER_INPUT`. The pairing GraphQL names are unchanged
+  (`disconnect_channel` → `Channel.disconnect_pairing`, `reset_channel_pairing` →
+  `Channel.reset_pairing`, and so on), and the owner lock is
+  `FOR NO KEY UPDATE`. Projects declares the `activity_done` subtype as a master
+  resource row: stacks run `resources load`.
+- Posts: `MessagePublic` owns the public payload, provider moderation and
+  `PROVIDER_TRASH_REASON`; `PostMetricsManager.reply_counts`.
+- Agents: `angee.agents.deployments` and `agents/skills.py` are removed
+  (`InferenceDeploymentIdentity` lives in `agents.models`; `Skill.parse_manifest`
+  replaces `parse_skill_meta`). The built-in MCP server and catalogue are
+  `MCPServerManager.builtin` and `MCPToolManager.sync_builtin`. Provisioning
+  verbs take a saved `Agent`, return their message and raise
+  `ProvisioningError`. Hand-written built-in MCP tools declare
+  `meta=ACTOR_EXECUTION_META`; a tool without it fails closed.
+  `InstallResult.reconciliation_pending` reports a failed catalogue refresh.
+  A nested `OperatorTransportProvider` passes through. The actor-tool check is
+  `angee.mcp.graphql.require_actor_tool`; `RESOURCE_READER_TOOL_TAG` lives in
+  `angee.mcp.tool_tags`.
+- Domains: `Decision.decide`/`withdraw` are row verbs. `Currency.convert` refuses
+  non-finite or non-positive operands. Portfolio health is one `Health` enum and
+  one GraphQL name; `Update` saves under its target lock and repairs health on
+  delete; `Update` rows do not merge (`MergePolicy.BLOCK`). Topic keys normalize
+  once (`proposals.validators.normalize_topic_key`).
+  Donor querysets are separately named managers (`Thread.spaces`, `Task.work`).
+  Triage tasks are audited as `work.task.capture_triage` (was
+  `intake.need.create_triage_task`); chatter wakes as `work.chatter.wake`.
+- Workflows: the run row owns its state. `WorkflowRun.advance` settles, plans
+  and writes status; `Runner` keeps the tick, dispatch and failure
+  classification and hands classified failures to `WorkflowRun.fail_advance`
+  (`AttemptRecord`, `isolate_failure`). `WorkflowRun.admit_subject`, `interrupt`
+  and `cancel_owned_work` are the held-run verbs managers compose.
+  `StepRun.wake`/`redispatch`/`reap` report whether to replan. `reopen()` no
+  longer replans; callers advance through the runner.
+- Parties: `Handle.resolve`, `Party.apply_identity`, `PartyManager.ingest_connections`
+  (`parties.connections` keeps only its parsed value types),
+  `CircleQuerySet.memberships`, `PartyQuerySet.circle_members_prefetch`,
+  `Party.circle_names()` and the GraphQL
+  `merge_scalar_fields` on PartyType and PersonType, which the merge page reads.
+- Tests: PostgreSQL lock races share `tests/lock_waits.py`.
+- Consumers: arp, bridges, odoo and phrogg companions move to these owners.
+
 ## Unreleased — one database, base-owned observation and locks, model-owned lines and service users
 
 - One database is the contract. `transaction.atomic()` and `on_commit()` are

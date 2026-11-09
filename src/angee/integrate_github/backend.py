@@ -174,15 +174,9 @@ class GitHubBackend(VCSBackend):
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "angee-integrate-github",
         }
-        credential_field = self.bridge._meta.get_field("credential")
-        if not credential_field.is_cached(self.bridge):
-            credential_field.set_cached_value(
-                self.bridge,
-                credential_field.related_model._base_manager.select_related("oauth_client").get(
-                    pk=self.bridge.credential_id
-                ),
-            )
-        credential: Any = self.bridge.credential
+        credential = self.bridge.load_connection_credential()
+        if credential is None:
+            raise GitHubApiError("GitHub requests require an attached credential", status=0)
         headers.update(credential.auth_headers())
         return headers
 

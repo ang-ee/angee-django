@@ -49,7 +49,7 @@ def test_message_only_reader_gets_null_for_every_private_to_one_relation(compose
         Participant.objects.create(message=message, thread=thread, handle=sender)
         hidden_parent = Part.objects.create(message=parent, position=0)
         _storage_drive(tmp_path, owner=owner)
-        private_file = StorageFile.objects.ingest_bytes(b"Private attachment", filename="private.txt")
+        private_file, _created = StorageFile.objects.ingest_bytes(b"Private attachment", filename="private.txt")
         Part.objects.create(message=message, parent=hidden_parent, position=0, file=private_file)
     grant(message, "reader", viewer)
     result = result_data(execute_schema(campaign_schema, """

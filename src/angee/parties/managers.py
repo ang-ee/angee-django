@@ -17,12 +17,14 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
+from datetime import date, datetime
 from itertools import chain, combinations, groupby, islice
 from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
 
 from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
@@ -45,7 +47,7 @@ from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
-from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
+from angee.parties.backends import AvatarReport, ParsedAddress, ParsedAddressbook, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -53,6 +55,8 @@ from angee.provenance.evidence import EvidenceReference
 from angee.provenance.statements import (
     SourceKind,
     StatementQuerySet,
+    StatementSourceMixin,
+    StatementSubjectManager,
     StatementSubjectQuerySet,
 )
 from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
@@ -61,8 +65,9 @@ if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
     from angee.integrate.models import RecordLink
+    from angee.parties.connections import ParsedConnection
     from angee.parties.mixins import PartyStatementMixin
-    from angee.parties.models import Circle, Handle, Party, Person
+    from angee.parties.models import Circle, Directory, Folder, Handle, Party, Person, Relationship
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +75,8 @@ _DISPLAY_OWN_AVATAR = "_display_own_avatar"
 """Where a page's prefetch parks each party's own avatar the actor can read."""
 _DISPLAY_AVATAR_HANDLES = "_display_avatar_handles"
 """Where a page's prefetch parks each party's ranked handles with an avatar the actor can read."""
+VISIBLE_CIRCLE_MEMBERS = "_angee_visible_circle_members"
+"""Where a read parks each party's actor-visible circle memberships (:meth:`PartyQuerySet.circle_members_prefetch`)."""
 
 class Signing(NamedTuple):
     """One sender's signature fragment: the evidence signature mining reads.
@@ -143,28 +150,17 @@ class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQu
         return self.filter(pk__in=Subquery(members.order_by().values("circle_id")))
 
     def with_member_counts(self) -> Self:
-        """Annotate each circle with its distinct-party count across its subtree."""
+        """Annotate each circle with its distinct readable-person count across its readable subtree."""
 
-        circle_model = apps.get_model("parties", "Circle")
-        circle_member_model = apps.get_model("parties", "CircleMember")
-        person_model = apps.get_model("parties", "Person")
-        visible_person_ids = person_model.objects.all().scoped_for_aggregate().canonical().values("pk")
-        visible_subtree_circle_ids = (
-            circle_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                owner_id=OuterRef(OuterRef("owner_id")),
-                path__startswith=OuterRef(OuterRef("path")),
-            )
-            .values("pk")
-        )
+        circles = apps.get_model("parties", "Circle").objects.all()
+        people = apps.get_model("parties", "Person").objects.all()
+        if actor := self.actor():
+            circles, people = circles.with_actor(actor), people.with_actor(actor)
+        visible_person_ids = people.scoped_for_aggregate().canonical().values("pk")
+        subtree = circles.filter(owner_id=OuterRef(OuterRef("owner_id")), path__startswith=OuterRef(OuterRef("path")))
         subtree_count = (
-            circle_member_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                circle_id__in=Subquery(visible_subtree_circle_ids),
-                party_id__in=Subquery(visible_person_ids),
-            )
+            subtree.memberships()
+            .filter(party_id__in=Subquery(visible_person_ids))
             .order_by()
             .values("circle__owner_id")
             .annotate(total=Count("party_id", distinct=True))
@@ -541,71 +537,15 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             )
         return handle
 
-    def resolve(self, handle: Any) -> None:
-        """Materialize the applied, eligible cross-party winner and both counters."""
-        handle_id = handle.pk if isinstance(handle, models.Model) else handle
-        using = (handle._state.db if isinstance(handle, models.Model) else None) or self.db
-        owner = apps.get_model("parties", "Party").objects.db_manager(using)
-        with transaction.atomic(), system_context(reason="parties.handle.resolve"):
-            handles, parties = owner.lock_identity_rows(party_ids=(), handle_ids=(handle_id,))
-            handle = handles[handle_id]
-            candidates = list(
-                owner.handle_statements()
-                .applied()
-                .filter(
-                    handle=handle,
-                    subject__is_trashed=False,
-                )
-                .select_related("subject", "link__stream")
-            )
-            winner = min(candidates, key=lambda row: row.sort_key(), default=None)
-            previous = handle.party_id
-            resolved = winner.subject_id if winner else None
-            confirmed = bool(winner and winner.is_confirmed)
-            if handle.party_id != resolved or handle.party_link_confirmed != confirmed:
-                handle.party_id, handle.party_link_confirmed = resolved, confirmed
-                handle.save(using=using, update_fields=("party", "party_link_confirmed", "updated_at"))
-            for pk in sorted({value for value in (previous, resolved) if value is not None}):
-                self.recount(parties[pk])
-            handle._party_links_resolved()
-
-    def recount(self, party: Any) -> None:
-        owner = self.db_manager(hints={"instance": party})
-        count = owner.filter(party=party).count()
-        if party.handle_count != count:
-            party.handle_count = count
-            party.save_without_historical_record(using=party._state.db, update_fields=("handle_count",))
-
     def resolve_stale_owners(self) -> int:
-        owner = apps.get_model("parties", "Party").objects.db_manager(self.db)
-        decisive = (
-            owner.handle_statements().applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
-        )
+        statements = apps.get_model("parties", "Party").objects.handle_statements()
+        decisive = statements.applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
         stale = self.filter(party__isnull=False).exclude(Exists(decisive)).order_by("pk")
         repaired = 0
         for handle in stale.iterator():
-            self.resolve(handle)
+            handle.resolve()
             repaired += 1
         return repaired
-
-    def set_avatar(self, handle: Any, avatar: Any | None) -> bool:
-        """Set the avatar ``handle``'s own network shows for it; return whether it changed.
-
-        The one write path of :attr:`Handle.avatar`: a source reports the avatar
-        (:meth:`fill_avatar`), never writes the column itself. ``avatar`` is a stored
-        image (``File.objects.ingest_image``), or ``None`` when the network shows none.
-        """
-
-        avatar_id = getattr(avatar, "pk", None)
-        owner = self.db_manager(hints={"instance": handle})
-        with system_context(reason="parties.handle.set_avatar"), transaction.atomic():
-            locked = owner.filter(pk=handle.pk).lock_if_supported().first()
-            if locked is None or locked.avatar_id == avatar_id:
-                return False
-            locked.avatar_id = avatar_id
-            locked.save(update_fields=["avatar", "updated_at"])
-        handle.avatar_id = avatar_id
-        return True
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
@@ -629,7 +569,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             except UploadTooLarge, UploadTypeRefused:
                 logger.info("A reported %s handle avatar was not an accepted image.", report.platform)
                 return False
-        return self.set_avatar(handle, avatar)
+        return handle.set_avatar(avatar)
 
 class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[StatementT]):
     """Party handle scopes; serving callers explicitly authorize both endpoints."""
@@ -736,46 +676,34 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
             Q(display_name__iregex=pattern) | Q(pk__in=Subquery(legal_name_ids)),
         )
 
-    def with_circle_names(self) -> Self:
-        """Prefetch actor-visible circle names for generic chip rendering.
+    def _readable_circles(self) -> Any:
+        """Circles read as this queryset's actor, else the ambient one."""
+
+        circles = apps.get_model("parties", "Circle").objects.all()
+        return circles.with_actor(actor) if (actor := self.actor()) else circles
+
+    def circle_members_prefetch(self) -> Prefetch:
+        """Hint the circle memberships this read's actor may see, by circle name.
 
         A scoped prefetch is portable across the supported database floor and,
         unlike a reverse-join aggregate, independently applies both the membership
         and circle row policies before projecting names.
         """
 
-        circle_model = apps.get_model("parties", "Circle")
-        circle_member_model = apps.get_model("parties", "CircleMember")
-        visible_circle_ids = circle_model.objects.all().scoped_for_aggregate().values("pk")
         visible_memberships = (
-            circle_member_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(circle_id__in=Subquery(visible_circle_ids))
-            .select_related("circle")
-            .order_by("circle__name", "sqid")
+            self._readable_circles().memberships().select_related("circle").order_by("circle__name", "sqid")
         )
-        return self.prefetch_related(
-            Prefetch(
-                "circle_members",
-                queryset=visible_memberships,
-                to_attr="_angee_visible_circle_members",
-            )
-        )
+        return Prefetch("circle_members", queryset=visible_memberships, to_attr=VISIBLE_CIRCLE_MEMBERS)
+
+    def with_circle_names(self) -> Self:
+        """Prefetch actor-visible circle names for generic chip rendering."""
+
+        return self.prefetch_related(self.circle_members_prefetch())
 
     def unassigned(self) -> Self:
         """Return canonical parties with no actor-visible circle membership."""
 
-        circle_model = apps.get_model("parties", "Circle")
-        circle_member_model = apps.get_model("parties", "CircleMember")
-        visible_circle_ids = circle_model.objects.all().scoped_for_aggregate().values("pk")
-        visible_membership = (
-            circle_member_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                party_id=OuterRef("pk"),
-                circle_id__in=Subquery(visible_circle_ids),
-            )
-        )
+        visible_membership = self._readable_circles().memberships().filter(party_id=OuterRef("pk"))
         return (
             self.canonical()
             .annotate(
@@ -805,12 +733,8 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
     def in_circle(self, circle: Any, *, confirmed_only: bool = False) -> Self:
         """Return canonical parties in ``circle`` or any of its descendants."""
 
-        circle_model = apps.get_model("parties", "Circle")
-        circles = circle_model.objects.all()
-        if actor := self.actor():
-            circles = circles.with_actor(actor)
         visible_subtree_membership = (
-            circles.subtree_of(circle)
+            self._readable_circles().subtree_of(circle)
             .memberships(confirmed_only=confirmed_only)
             .filter(party_id=OuterRef("pk"))
         )
@@ -1593,82 +1517,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         basis = self.identity_basis(party_id, actor=actor, lock=lock)
         return basis.party, basis.current
 
-    def apply_identity(
-        self,
-        *,
-        party_id: str,
-        expected_facts_hash: str,
-        proposed: Mapping[str, Any],
-        choices: Mapping[str, str],
-        actor: Any,
-    ) -> tuple[str, dict[str, str]]:
-        """Apply plain reviewed values while the locked identity basis still matches.
-
-        ``expected_facts_hash`` is :attr:`IdentityBasis.facts_hash` from review;
-        it is compared with the complete basis locked here, and exact-replace
-        expectations come from that same basis. Every write stays authorized as
-        ``actor``. A replay after a successful change returns conflict because
-        the retained basis hash no longer matches; unchanged choices are
-        idempotent no-ops.
-        """
-
-        allowed = {
-            "name_action": {"keep", "replace"},
-            "address_action": {"keep", "add", "replace"},
-            "handle_action": {"keep", "confirm", "dismiss"},
-        }
-        if set(choices) != set(allowed) or any(value not in allowed[name] for name, value in choices.items()):
-            raise ValidationError({"choices": "Identity choices are invalid."})
-        with transaction.atomic(), actor_context(actor):
-            basis = self.identity_basis(party_id, actor=actor, lock=True)
-            party, current = basis.party, basis.complete
-            party.require_access("write")
-            if basis.facts_hash != expected_facts_hash:
-                return "conflict", {}
-            results = {"name_result": "kept", "address_result": "kept", "handle_result": "kept"}
-            if choices["name_action"] == "replace":
-                results["name_result"] = self.replace_name_exact(
-                    party=party,
-                    expected=current["name"],
-                    proposed=str(proposed["name"]),
-                    actor=actor,
-                )
-            addresses = apps.get_model("parties", "Address").objects
-            if choices["address_action"] == "add":
-                results["address_result"], _ = addresses.attach_exact(
-                    party=party,
-                    values=proposed["address"],
-                    actor=actor,
-                    label=proposed["address"]["label"],
-                    conflict="append",
-                )
-            elif choices["address_action"] == "replace":
-                primary = next((row for row in current["addresses"] if row["is_primary"]), None)
-                expected = (
-                    addresses.system_context(reason="parties.party.apply_identity").from_public_id(primary["id"])
-                    if primary
-                    else None
-                )
-                results["address_result"], _ = addresses.replace_primary_exact(
-                    party=party,
-                    values=proposed["address"],
-                    actor=actor,
-                    expected_id=expected.pk if expected else None,
-                    label=proposed["address"]["label"],
-                )
-            if choices["handle_action"] != "keep":
-                link = (
-                    self.handle_statements()
-                    .for_reader(actor)
-                    .from_public_id(proposed["handle"]["statement_id"])
-                )
-                if link is None or link.subject_id != party.pk:
-                    raise ValidationError({"handle_action": "The proposed statement changed during review."})
-                getattr(link.with_actor(actor), choices["handle_action"])()
-                results["handle_result"] = f"{choices['handle_action']}ed"
-            outcome = "applied" if any(value not in {"kept", "matched"} for value in results.values()) else "unchanged"
-            return outcome, results
-
     def apply_same_as_pair(self, *, left_id: str, right_id: str, survivor: str, action: str, actor: Any) -> str:
         """Apply one merge or durable dismissal using plain values and an explicit actor."""
 
@@ -1690,51 +1538,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 return "already_merged"
             into.merge(records=[source.public_id])
             return "already_merged" if already_merged else "merged"
-
-    def replace_name_exact(self, *, party: Any, expected: str, proposed: str, actor: Any) -> str:
-        """Apply a reviewed name only while the frozen Party name still matches."""
-
-        normalized = " ".join(proposed.split()).strip()
-        if not normalized:
-            raise ValidationError({"name": "A replacement Party name must not be empty."})
-        with transaction.atomic(), actor_context(actor):
-            locked = self.with_actor(actor).locked_get(pk=party.pk)
-            if locked.display_name != expected:
-                raise ValidationError({"name": "The Party name changed during review."})
-            if not locked.has_access("write"):
-                raise PermissionDenied("write access to the Party is required")
-            if locked.display_name == normalized:
-                return "matched"
-            locked.display_name = normalized
-            locked.save(update_fields=["display_name", "updated_at"])
-            return "replaced"
-
-    def circle_names_for(self, party: Any) -> list[str]:
-        """Return one party's actor-visible circle names through the fast projection.
-
-        Resource reads install :meth:`PartyQuerySet.with_circle_names`; alternate
-        authored paths fall back to the same independently scoped membership and
-        circle collections instead of silently presenting an empty list.
-        """
-
-        prefetched = getattr(party, "_angee_visible_circle_members", None)
-        if prefetched is not None:
-            return list(dict.fromkeys(membership.circle.name for membership in prefetched))
-
-        circle_model = apps.get_model("parties", "Circle")
-        circle_member_model = apps.get_model("parties", "CircleMember")
-        visible_circle_ids = circle_model.objects.all().scoped_for_aggregate().values("pk")
-        return list(
-            circle_member_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                party_id=party.pk,
-                circle_id__in=Subquery(visible_circle_ids),
-            )
-            .order_by("circle__name")
-            .values_list("circle__name", flat=True)
-            .distinct()
-        )
 
     def for_user(self, user: Any) -> Any:
         """Return the :class:`Person` linked to ``user``, get-or-created on the ``user`` O2O.
@@ -1793,6 +1596,154 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """
 
         return self.sudo(reason="parties.party.user_for").account_for_party(party.pk)
+
+    def ingest_connections(
+        self, parsed_connections: Iterable[tuple[ParsedConnection, Any]], *, created_by_id: Any, asserted_by: Any
+    ) -> list[Any]:
+        """Idempotently land parsed social connections and return their Person rows.
+
+        The batch entry point: the source user, its anchor Party, and each required
+        ``RelationshipKind`` resolve once for the whole run — a friends export is
+        thousands of records and must not repeat loop-invariant lookups.
+        Each item pairs the parsed value with its observed RecordLink. Records land
+        in separate transactions, so one bad record fails alone. Organization names
+        in social exports are free text, not stable identities, so an employer
+        lands as ``Relationship.other_name`` exactly like directory employment.
+        """
+
+        if StatementSourceMixin.source_kind_for(to_subject_ref(asserted_by)) != SourceKind.IMPORT:
+            raise ValidationError("Connection exports require an identified IMPORT integration.")
+        user_model = apps.get_model(settings.AUTH_USER_MODEL)
+        with system_context(reason="parties.connection.ingest"):
+            user = user_model._base_manager.get(pk=created_by_id)
+            anchor_party = self.for_user(user)
+            kinds: dict[Any, Any] = {}
+            return [
+                self._ingest_connection(
+                    parsed, link=link, anchor_party=anchor_party, kinds=kinds,
+                    created_by_id=created_by_id, asserted_by=asserted_by,
+                )
+                for parsed, link in parsed_connections
+            ]
+
+    def _ingest_connection(
+        self,
+        parsed: ParsedConnection,
+        *,
+        link: Any,
+        anchor_party: Any,
+        kinds: dict[Any, Any],
+        created_by_id: Any,
+        asserted_by: Any,
+    ) -> Any:
+        """Land one parsed connection and return its Person.
+
+        The source account's user is the relationship anchor. The imported person
+        becomes its ``acquaintance`` from ``connected_at`` onward; normal handle
+        assertions name the supplied IMPORT integration and are never preferred: an
+        export is a source, not the person's decision. It decides the handle's party
+        (confidence 1.0) only when the handle names an account by a real identifier
+        (:meth:`Handle.identified_connection`); a name alone lands at 0.4, for review.
+        Optional email and employment facts compose the same Handle, PartyStatement
+        and Relationship owners.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        relationships = apps.get_model("parties", "Relationship").objects
+        if to_subject_ref(link.stream.integration) != to_subject_ref(asserted_by):
+            raise ValidationError("The connection link must belong to its asserting integration.")
+        with transaction.atomic():
+            handle = handle_model.objects.upsert(
+                platform=parsed.handle.platform,
+                value=parsed.handle.value,
+                external_id=parsed.handle.external_id,
+                display_name=parsed.handle.display_name,
+                metadata=parsed.handle.metadata,
+                created_by_id=created_by_id,
+            )
+            person = self._connection_person(
+                handle,
+                display_name=parsed.handle.display_name or parsed.handle.value,
+                asserted_by=asserted_by,
+                created_by_id=created_by_id,
+            )
+            parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
+            apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
+            self.assert_handle(
+                person,
+                handle,
+                confidence=1.0 if handle_model.identified_connection(parsed.handle) else 0.4,
+                asserted_by=asserted_by,
+                link=link,
+                evidence=[handle],
+            )
+            if parsed.email:
+                email = handle_model.objects.upsert(
+                    platform=handle_model.Platform.EMAIL,
+                    value=parsed.email,
+                    display_name=person.display_name,
+                    created_by_id=created_by_id,
+                )
+                self.assert_handle(
+                    person, email, confidence=1.0, asserted_by=asserted_by, link=link, evidence=[handle],
+                )
+            relationships.land_acquaintance(
+                anchor_party,
+                person,
+                connected_at=parsed.connected_at,
+                kinds=kinds,
+                created_by_id=created_by_id,
+                asserted_by=asserted_by,
+                link=link,
+                evidence=handle,
+            )
+            relationships.land_employment(
+                person,
+                organization=parsed.organization,
+                title=parsed.title,
+                kinds=kinds,
+                created_by_id=created_by_id,
+                asserted_by=asserted_by,
+                link=link,
+                evidence=handle,
+            )
+            parent.statements.set(
+                aspect="identity",
+                values={"display_name": parsed.handle.display_name or parsed.handle.value},
+                asserted_by=asserted_by,
+                link=link,
+                evidence=[EvidenceReference.of(handle)],
+            )
+            person.refresh_from_db()
+            return person
+
+    @staticmethod
+    def _connection_person(handle: Any, *, display_name: str, asserted_by: Any, created_by_id: Any) -> Any:
+        """Return the handle's Person; identity statements own subsequent names.
+
+        The handle's party when it has one; otherwise the party an earlier run of the
+        same import linked it to, since a claim awaiting review, or one the person
+        dismissed, resolves nothing; a re-import therefore never mints a second person.
+        An existing name is never overwritten: it may be user-curated, and export
+        text must not clobber curation on every re-run.
+        """
+
+        person_model = apps.get_model("parties", "Person")
+        party_id = handle.party_id or (
+            apps.get_model("parties", "PartyStatement")
+            ._base_manager.filter(handle=handle, aspect="handle", asserted_by=str(to_subject_ref(asserted_by)))
+            .order_by("pk")
+            .values_list("subject_id", flat=True)
+            .first()
+        )
+        if party_id is not None:
+            person = person_model._base_manager.filter(pk=party_id).first()
+            if person is not None:
+                return person
+        return person_model.objects.create(
+            display_name=display_name or person_model.PLACEHOLDER_NAME,
+            created_by_id=created_by_id,
+        )
 
     def contact_person(self, link: RecordLink) -> Person | None:
         """Resolve a contact through its native generic target and Person relation."""
@@ -2140,12 +2091,119 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
 
 def _user_display_name(user: Any) -> str:
-    """Return a human display name for a user's Person, falling back to a stable id."""
+    """Return a human display name for a user's Person from the native account, else its stable id."""
 
-    full_name = user.get_full_name() if hasattr(user, "get_full_name") else ""
-    username = user.get_username() if hasattr(user, "get_username") else getattr(user, "username", "")
-    for candidate in (full_name, username, getattr(user, "email", "")):
-        text = (candidate or "").strip()
-        if text:
+    for candidate in (user.get_full_name(), user.get_username(), user.email):
+        if text := (candidate or "").strip():
             return text
     return str(user.pk)
+
+
+class RelationshipManager[RelationshipT: Relationship](StatementSubjectManager[RelationshipT]):
+    """Own imported connection edges and their source statements."""
+
+    def _connection_kind(self, slug: str, kinds: dict[Any, Any]) -> Any:
+        """Return a required relationship kind, resolved once per batch."""
+
+        if slug not in kinds:
+            kind_model = self.model._meta.get_field("kind").related_model
+            try:
+                kinds[slug] = kind_model.objects.get(slug=slug)
+            except kind_model.DoesNotExist as error:
+                raise ValidationError(
+                    f"Social connection import requires the {slug!r} RelationshipKind master row."
+                ) from error
+        return kinds[slug]
+
+    def land_acquaintance(
+        self,
+        anchor_party: Any,
+        person: Any,
+        *,
+        connected_at: date | datetime | None,
+        kinds: dict[Any, Any],
+        created_by_id: Any,
+        asserted_by: Any,
+        link: Any,
+        evidence: Any,
+    ) -> None:
+        """Record the source account's idempotent connection to ``person``."""
+
+        if anchor_party.pk == person.pk:
+            return
+        edge, _ = self.get_or_create(
+            party=anchor_party,
+            other_party=person,
+            kind=self._connection_kind("acquaintance", kinds),
+            defaults={"created_by_id": created_by_id},
+        )
+        edge.statements.set(
+            aspect="relationship",
+            asserted_by=asserted_by,
+            link=link,
+            evidence=[EvidenceReference.of(evidence)],
+            values={
+                "other_name": "",
+                "title": "",
+                "started_at": connected_at.date() if isinstance(connected_at, datetime) else connected_at,
+                "ended_at": None,
+                "notes": "",
+            },
+        )
+
+    def land_employment(
+        self,
+        person: Any,
+        *,
+        organization: str,
+        title: str,
+        kinds: dict[Any, Any],
+        created_by_id: Any,
+        asserted_by: Any,
+        link: Any,
+        evidence: Any,
+    ) -> None:
+        """Land the free-text employee relationship shape when an employer is named."""
+
+        organization = str(organization or "").strip()
+        if not organization:
+            return
+        if "employee" not in kinds:
+            kinds["employee"] = self.model._meta.get_field("kind").related_model.employee()
+        kind = kinds["employee"]
+        if kind is None:
+            raise ValidationError("The employee RelationshipKind master row is required.")
+        edge, _ = self.get_or_create(
+            party=person,
+            other_party=None,
+            other_name=organization,
+            kind=kind,
+            defaults={"created_by_id": created_by_id},
+        )
+        edge.statements.set(
+            aspect="relationship",
+            asserted_by=asserted_by,
+            link=link,
+            evidence=[EvidenceReference.of(evidence)],
+            values={
+                "other_name": organization,
+                "title": str(title or ""),
+                "notes": "",
+                "started_at": None,
+                "ended_at": None,
+            },
+        )
+
+
+class FolderManager[FolderT: Folder](AngeeHistoryManager[FolderT]):
+    """Own idempotent address-book folder persistence."""
+
+    def sync_addressbook(self, directory: Directory, book: ParsedAddressbook) -> FolderT:
+        """Mirror one discovered address book as a folder of ``directory``, owned by its owner."""
+
+        folder, _ = self.update_or_create(
+            directory_id=directory.pk,
+            source_href=book.href,
+            defaults={"name": book.name, "created_by_id": directory.owner_id},
+        )
+        return folder

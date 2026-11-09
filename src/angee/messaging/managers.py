@@ -61,6 +61,7 @@ from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
+from angee.base.locks import task_locks_are_cross_process
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instances_from_public_ids
@@ -76,11 +77,12 @@ from angee.base.signals import mute_changes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.integrate.errors import IntegrationError, doubling_backoff, safe_integration_failure
 from angee.integrate.impl import LiveBridgeImpl
+from angee.integrate.live import session_store_path
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
 from angee.integrate.net import AddressNotAllowedError
 from angee.jobs.timeouts import task_claim_lease
-from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedPart
-from angee.messaging.delivery import (
+from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, PairingActionError, ParsedPart
+from angee.messaging.constants import (
     DELIVERY_TASK_EXPIRES,
     MAX_DELIVERY_ATTEMPTS,
     MAX_RECONCILE_ATTEMPTS,
@@ -107,6 +109,7 @@ if TYPE_CHECKING:
         Message,
         MessageEdge,
         MessageStar,
+        MessageSubtype,
         NotificationPolicy,
         Part,
         Reaction,
@@ -241,6 +244,40 @@ _MESSAGE_METADATA_MAX_BYTES = 512 * 1024
 class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
     """Chainable scopes over messaging channels and their pairing attempts."""
 
+    def for_backend(self, backend_class: str) -> Self:
+        """Constrain this channel selection to one declared backend."""
+
+        return self.filter(backend_class=backend_class)
+
+    def published_webforms(self, slug: str) -> Self:
+        """Published webform channels at ``slug``, the anonymous description and submission scope."""
+
+        return self.for_backend("webform").filter(slug=slug, is_published=True)
+
+    def outbound_email(self) -> Self:
+        """Connected channels whose declared backend currently offers configured outbound email."""
+
+        field = self.model.backend_class.field
+        keys = [key for key in field.registered_keys() if field.resolve_class(key).outbound_email_configured()]
+        return self.filter(backend_class__in=keys, lifecycle=IntegrationLifecycle.CONNECTED)
+
+    def require_backend_target(self, public_id: str, *, backend_class: str) -> ChannelT:
+        """Resolve an explicit import target, refusing a missing or other-backend channel uniformly.
+
+        The caller already authorized the import; the target is read elevated and
+        only its backend and public id decide it.
+        """
+
+        backend = self.model.backend_class.field.resolve_class(backend_class)
+        channel = (
+            self.system_context(reason="messaging.channel.confirm_target")
+            .for_backend(backend_class)
+            .from_public_id(public_id)
+        )
+        if channel is None:
+            raise ValidationError({"target": f"No {backend.label} channel {public_id!r}."})
+        return channel
+
     def unfinished_pairing(self, user: Any, backend_class: str) -> Self:
         """Return the user's empty, never-claimed, non-paused channels, newest first.
 
@@ -307,11 +344,74 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
             vendor_id=vendor_model.objects.seeded(backend_class).pk,
             owner_id=user.pk,
             backend_class=backend_class,
-            display_name=name,
+            display_name=self.normalized_name(name),
             lifecycle=IntegrationLifecycle.DISCONNECTED,
             created_by_id=user.pk,
             **extra,
         )
+
+    def resume_or_create_pairing(self, user: Any, *, name: str, backend_class: str) -> Any:
+        """Restart the user's newest unfinished pairing channel, or create one.
+
+        A reused channel keeps its display name; ``name`` applies only to creation.
+        Reuse resets an existing session store: a released claim can follow a
+        duplicate-account rejection while the store still holds that linked
+        account. Without a store there is nothing to wipe, so the channel simply
+        resumes. A process-local lock backend cannot prove the reset safe, so there
+        a channel with a store is left alone and a new one is created. Reset errors
+        propagate without creating another channel, so an unproven shutdown leaves
+        the store intact and the caller can retry shortly. The owner's row lock,
+        taken before any channel row, serializes concurrent attempts so they reuse
+        one channel instead of each creating its own.
+        """
+
+        field = self.model.live_implementation_field()
+        if field is None:
+            raise PairingActionError("This action requires a live channel.")
+        if not issubclass(field.resolve_class(backend_class), LiveBridgeImpl):
+            raise PairingActionError("This action requires a live channel.")
+        actor = current_actor() or user
+        with system_context(reason="messaging.resume_or_create_channel"), transaction.atomic():
+            get_user_model().system_queryset().lock_if_supported(no_key=True).get(pk=user.pk)
+            channel = self.unfinished_pairing(user, backend_class).first()
+            if channel is not None and session_store_path(channel).exists() and not task_locks_are_cross_process():
+                channel = None
+            reused = channel is not None
+            if channel is None:
+                channel = self.create_disconnected(user, name=name, backend_class=backend_class)
+        if reused and session_store_path(channel).exists():
+            channel.reset_pairing()
+        else:
+            channel.resume_pairing()
+        return channel.with_actor(actor)
+
+    @staticmethod
+    def normalized_name(name: str) -> str:
+        """Return a channel display name stripped of surrounding space, refusing a blank one."""
+
+        value = str(name or "").strip()
+        if not value:
+            raise ValueError("A channel name is required.")
+        return value
+
+    def named_import_channel(self, user: Any, *, name: str, backend_class: str) -> Any:
+        """Return the owner's import channel with this name and backend, creating it once.
+
+        Ordinary channels may share names; only this import factory promises
+        reuse. The owner's row lock serializes concurrent first creation.
+        """
+
+        name = self.normalized_name(name)
+        with system_context(reason="messaging.channel.named_import"), transaction.atomic():
+            get_user_model().system_queryset().lock_if_supported(no_key=True).get(pk=user.pk)
+            existing = (
+                self.model._base_manager.filter(owner_id=user.pk, backend_class=backend_class, display_name=name)
+                .order_by("pk")
+                .first()
+            )
+            if existing is not None:
+                return existing
+            return self.create_disconnected(user, name=name, backend_class=backend_class)
 
     def inventory(self, channel: Any) -> dict[type[models.Model], int]:
         """Return ``{model: count}`` for every row a purge of ``channel`` would delete.
@@ -677,6 +777,34 @@ class ThreadQuerySet[ThreadT: Thread](
 ):
     """Chainable read scopes for message threads."""
 
+    def name_untitled(self, names: Mapping[Any, str], *, created_by_id: Any = None) -> int:
+        """Title this selection's untitled threads from source names; never rename one.
+
+        ``names`` maps thread pks to names; a pk outside this selection is left
+        alone. Each row is re-read under its lock, so a title set concurrently (a
+        racing ingest) always wins. Returns the number of threads named.
+        """
+
+        fragment_model = apps.get_model("messaging", "Fragment")
+        named = 0
+        for pk, name in names.items():
+            text = str(name or "").strip()
+            if not text:
+                continue
+            with transaction.atomic():
+                thread = (
+                    self.sudo(reason="messaging.thread.name_untitled")
+                    .lock_if_supported()
+                    .filter(pk=pk, title__isnull=True)
+                    .first()
+                )
+                if thread is None:
+                    continue
+                thread.title_id = fragment_model.objects.upsert(text=text, created_by_id=created_by_id).pk
+                thread.save(update_fields=["title"])
+                named += 1
+        return named
+
     def inbox(self) -> Self:
         """Return channel/inbox threads — those not attached to a record — under ``read_inbox``.
 
@@ -789,34 +917,6 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
         """The external-id namespace of one channel's named chat threads."""
 
         return f"chat:{channel.pk if channel is not None else ''}:"
-
-    def name_untitled(self, names: Mapping[Any, str], *, created_by_id: Any = None) -> int:
-        """Title threads that have none from source names; never rename one.
-
-        ``names`` maps thread pks to names. Each row is re-read under its lock, so
-        a title set concurrently (a racing ingest) always wins. Returns the number
-        of threads named.
-        """
-
-        fragment_model = apps.get_model("messaging", "Fragment")
-        named = 0
-        for pk, name in names.items():
-            text = str(name or "").strip()
-            if not text:
-                continue
-            with transaction.atomic():
-                thread = (
-                    self.sudo(reason="messaging.thread.name_untitled")
-                    .lock_if_supported()
-                    .filter(pk=pk, title__isnull=True)
-                    .first()
-                )
-                if thread is None:
-                    continue
-                thread.title_id = fragment_model.objects.upsert(text=text, created_by_id=created_by_id).pk
-                thread.save(update_fields=["title"])
-                named += 1
-        return named
 
     def fill_chat_titles(self, channel: Any, titles: Mapping[str, str], *, created_by_id: Any = None) -> int:
         """Name a channel's untitled chat threads from source conversation names.
@@ -2285,48 +2385,45 @@ def _normalise_user_ids(user_ids: tuple[Any, ...]) -> tuple[Any, ...]:
     return tuple(unique)
 
 
-def _file_mime_type(file: Any) -> str:
-    """Return the MIME type string for a storage file part."""
-
-    mime = file.mime_type
-    value = getattr(mime, "mime_type", "")
-    return value or "application/octet-stream"
-
-
-def _message_subtype(
-    *,
-    subtype_key: str,
-    model_label: str = "",
-    created_by_id: Any = None,
-    using: str | None = None,
-) -> Any | None:
-    """Return/create the subtype row that classifies a chatter message."""
-
-    subtype_key = strip_null_bytes(subtype_key or "").strip()
-    if not subtype_key:
-        return None
-    model_label = _subtype_scope_label(model_label)
-    subtype_model = apps.get_model("messaging", "MessageSubtype")
-    name, description = subtype_model.builtin_default(subtype_key) or (
-        _humanize_key(subtype_key),
-        _humanize_key(subtype_key),
-    )
-    subtype, _created = subtype_model.objects.db_manager(using).get_or_create(
-        model_label=model_label,
-        key=subtype_key,
-        defaults={
-            "name": name,
-            "description": description,
-            "created_by_id": created_by_id,
-        },
-    )
-    return subtype
-
-
 def _humanize_key(value: str) -> str:
     """Return a human label from a subtype key."""
 
     return value.replace("_", " ").replace("-", " ").strip().capitalize() or "Message"
+
+
+class MessageSubtypeManager[MessageSubtypeT: MessageSubtype](AngeeManager[MessageSubtypeT]):
+    """Resolve chatter subtypes by catalogue identity, creating a missing one once."""
+
+    def resolve(
+        self,
+        key: str,
+        *,
+        model_label: str = "",
+        name: str | None = None,
+        description: str | None = None,
+        internal: bool = False,
+        created_by_id: Any = None,
+    ) -> MessageSubtypeT | None:
+        """Return the ``(model_label, key)`` subtype, creating it from the catalogue when missing.
+
+        A built-in key takes its shipped name and description; another key takes
+        the supplied labels, else a humanized key. An existing row keeps the
+        metadata it was first declared with. A blank key classifies nothing.
+        """
+
+        key = strip_null_bytes(key or "").strip()
+        if not key:
+            return None
+        label, detail = self.model.builtin_default(key) or (
+            _humanize_key(key) if name is None else name,
+            _humanize_key(key) if description is None else description,
+        )
+        subtype, _created = self.get_or_create(
+            model_label=_subtype_scope_label(model_label),
+            key=key,
+            defaults={"name": label, "description": detail, "internal": internal, "created_by_id": created_by_id},
+        )
+        return subtype
 
 
 class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
@@ -2807,6 +2904,132 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             "messages": queryset.filter(sqid__in=survivors),
             "absent_ids": [value for value in unique if value not in survivors],
         }
+
+    def record_scope(
+        self,
+        record: Any,
+        *,
+        role: str = "chatter",
+        search: str = "",
+        message_types: tuple[str, ...] = (),
+        trashed: bool = False,
+    ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
+        """The record-gated, hydrated message scope shared by transcript windows."""
+
+        attachment = _record_attachment(record, role=role)
+        if attachment is None:
+            return self.none().annotate(_order_at=self.chronological_time())
+        # Chatter reads bypass per-row REBAC: the record-level gate (and, for any other
+        # role, the thread's read) already authorised the whole feed, so scope with sudo
+        # and compose the chainable read predicates.
+        queryset = (
+            self.sudo(reason="messaging.message.for_record")
+            .for_thread(attachment.thread)
+            .filter(is_trashed=trashed)
+            .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
+            .prefetch_related(
+                models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.all()),
+                models.Prefetch(
+                    "parts__fragment", queryset=apps.get_model("messaging", "Fragment")._base_manager.all()
+                ),
+                models.Prefetch(
+                    "parts__file",
+                    queryset=apps.get_model("storage", "File")._base_manager.select_related("mime_type"),
+                ),
+                models.Prefetch("reactions", queryset=apps.get_model("messaging", "Reaction").objects.all()),
+                models.Prefetch(
+                    "reactions__handle",
+                    queryset=apps.get_model("parties", "Handle")._base_manager.all(),
+                ),
+                models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.all()),
+            )
+            .annotate(_order_at=MessageQuerySet.chronological_time())
+        )
+        kinds = {
+            strip_null_bytes(value or "").strip().lower()
+            for value in message_types
+            if strip_null_bytes(value or "").strip()
+        }
+        allowed_kinds = {value for value, _label in self.model.MessageKind.choices}
+        if not kinds.issubset(allowed_kinds):
+            raise ValueError("Message type filter contains an unsupported value.")
+        if kinds:
+            queryset = queryset.filter(message_type__in=kinds)
+        search = strip_null_bytes(search or "").strip()
+        for term in (item for item in _WS_RE.split(search) if item):
+            queryset = queryset.searching(term)
+        return queryset.distinct()
+
+    def for_record(
+        self,
+        record: Any,
+        *,
+        role: str = "chatter",
+        search: str = "",
+        limit: int = 50,
+        before: Any | None = None,
+        after: Any | None = None,
+        around: Any | None = None,
+        message_types: tuple[str, ...] = (),
+        trashed: bool = False,
+    ) -> tuple[list[Any], int]:
+        """Return fetched chatter messages for a record, optionally search-filtered.
+
+        Trashed messages never join the transcript; ``trashed=True`` returns only
+        them, for a caller that already required the record's moderation.
+        """
+
+        limit = max(1, min(int(limit or 50), 200))
+        queryset = self.record_scope(
+            record, role=role, search=search, message_types=message_types, trashed=trashed,
+        )
+        count = int(queryset.count())
+        # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
+        # return the page chronological ascending so the client renders it verbatim.
+        ascending = MESSAGE_ORDER.ordering(oldest_first=True)
+        descending = MESSAGE_ORDER.ordering()
+        if around not in (None, ""):
+            anchor = self._record_message_anchor(queryset, around)
+            if anchor is None:
+                return [], count
+            before_limit = max(1, limit // 2)
+            after_limit = max(0, limit - before_limit)
+            page = [
+                *queryset.filter(MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
+                *queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
+            ]
+        elif before not in (None, ""):
+            anchor = self._record_message_anchor(queryset, before)
+            if anchor is None:
+                return [], count
+            page = list(queryset.filter(MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
+        elif after not in (None, ""):
+            anchor = self._record_message_anchor(queryset, after)
+            if anchor is None:
+                return [], count
+            page = list(queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
+        else:
+            page = list(queryset.order_by(*descending)[:limit])
+        return sorted(page, key=lambda message: message.chronological_key), count
+
+    def record_window_continues(
+        self, record: Any, messages: list[Any], *, newer: bool,
+        role: str = "chatter", search: str = "", message_types: tuple[str, ...] = (),
+    ) -> bool:
+        """Whether a record-gated window has matching rows beyond its chronological edge."""
+
+        if not messages:
+            return False
+        edge = messages[-1] if newer else messages[0]
+        scope = self.record_scope(record, role=role, search=search, message_types=message_types)
+        boundary = (MESSAGE_ORDER.after(edge.chronological_key) if newer
+                    else MESSAGE_ORDER.before(edge.chronological_key))
+        return bool(scope.filter(boundary).exists())
+
+    def _record_message_anchor(self, queryset: Any, value: Any) -> tuple[Any, Any] | None:
+        """Resolve a public message id to its ``(order_at, pk)`` cursor in the window."""
+
+        return queryset.filter(**self.model.public_id_lookup(str(value))).values_list("_order_at", "pk").first()
 
 
 _MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
@@ -3314,134 +3537,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     )
         return count
 
-    def record_scope(
-        self,
-        record: Any,
-        *,
-        role: str = "chatter",
-        search: str = "",
-        message_types: tuple[str, ...] = (),
-        trashed: bool = False,
-    ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
-        """The record-gated, hydrated message scope shared by transcript windows."""
-
-        rows = self.db_manager(hints={"instance": record}).all()
-        using = rows.db
-        attachment = _record_attachment(record, role=role)
-        if attachment is None:
-            return rows.none().annotate(_order_at=self.chronological_time())
-        # Chatter reads bypass per-row REBAC: the record-level gate (and, for any other
-        # role, the thread's read) already authorised the whole feed, so scope with sudo
-        # and compose the chainable read predicates.
-        queryset = (
-            rows.sudo(reason="messaging.message.for_record")
-            .for_thread(attachment.thread)
-            .filter(is_trashed=trashed)
-            .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
-            .prefetch_related(
-                models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.using(using)),
-                models.Prefetch(
-                    "parts__fragment", queryset=apps.get_model("messaging", "Fragment")._base_manager.using(using)
-                ),
-                models.Prefetch(
-                    "parts__file",
-                    queryset=apps.get_model("storage", "File")._base_manager.using(using).select_related("mime_type"),
-                ),
-                models.Prefetch("reactions", queryset=apps.get_model("messaging", "Reaction").objects.using(using)),
-                models.Prefetch(
-                    "reactions__handle",
-                    queryset=apps.get_model("parties", "Handle")._base_manager.using(using),
-                ),
-                models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.using(using)),
-            )
-            .annotate(_order_at=MessageQuerySet.chronological_time())
-        )
-        kinds = {
-            strip_null_bytes(value or "").strip().lower()
-            for value in message_types
-            if strip_null_bytes(value or "").strip()
-        }
-        allowed_kinds = {value for value, _label in self.model.MessageKind.choices}
-        if not kinds.issubset(allowed_kinds):
-            raise ValueError("Message type filter contains an unsupported value.")
-        if kinds:
-            queryset = queryset.filter(message_type__in=kinds)
-        search = strip_null_bytes(search or "").strip()
-        for term in (item for item in _WS_RE.split(search) if item):
-            queryset = queryset.searching(term)
-        return queryset.distinct()
-
-    def for_record(
-        self,
-        record: Any,
-        *,
-        role: str = "chatter",
-        search: str = "",
-        limit: int = 50,
-        before: Any | None = None,
-        after: Any | None = None,
-        around: Any | None = None,
-        message_types: tuple[str, ...] = (),
-        trashed: bool = False,
-    ) -> tuple[list[Any], int]:
-        """Return fetched chatter messages for a record, optionally search-filtered.
-
-        Trashed messages never join the transcript; ``trashed=True`` returns only
-        them, for a caller that already required the record's moderation.
-        """
-
-        limit = max(1, min(int(limit or 50), 200))
-        queryset = self.record_scope(
-            record, role=role, search=search, message_types=message_types, trashed=trashed,
-        )
-        count = int(queryset.count())
-        # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
-        # return the page chronological ascending so the client renders it verbatim.
-        ascending = MESSAGE_ORDER.ordering(oldest_first=True)
-        descending = MESSAGE_ORDER.ordering()
-        if around not in (None, ""):
-            anchor = self._record_message_anchor(queryset, around)
-            if anchor is None:
-                return [], count
-            before_limit = max(1, limit // 2)
-            after_limit = max(0, limit - before_limit)
-            page = [
-                *queryset.filter(MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
-                *queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
-            ]
-        elif before not in (None, ""):
-            anchor = self._record_message_anchor(queryset, before)
-            if anchor is None:
-                return [], count
-            page = list(queryset.filter(MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
-        elif after not in (None, ""):
-            anchor = self._record_message_anchor(queryset, after)
-            if anchor is None:
-                return [], count
-            page = list(queryset.filter(MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
-        else:
-            page = list(queryset.order_by(*descending)[:limit])
-        return sorted(page, key=lambda message: message.chronological_key), count
-
-    def record_window_continues(
-        self, record: Any, messages: list[Any], *, newer: bool,
-        role: str = "chatter", search: str = "", message_types: tuple[str, ...] = (),
-    ) -> bool:
-        """Whether a record-gated window has matching rows beyond its chronological edge."""
-
-        if not messages:
-            return False
-        edge = messages[-1] if newer else messages[0]
-        scope = self.record_scope(record, role=role, search=search, message_types=message_types)
-        boundary = (MESSAGE_ORDER.after(edge.chronological_key) if newer
-                    else MESSAGE_ORDER.before(edge.chronological_key))
-        return bool(scope.filter(boundary).exists())
-
-    def _record_message_anchor(self, queryset: Any, value: Any) -> tuple[Any, Any] | None:
-        """Resolve a public message id to its ``(order_at, pk)`` cursor in the window."""
-
-        return queryset.filter(**self.model.public_id_lookup(str(value))).values_list("_order_at", "pk").first()
-
     def post_to_thread(
         self,
         thread: Any,
@@ -3523,10 +3618,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     if message.is_trashed:
                         raise ValidationError("This idempotency key belongs to a discarded message.")
                     return message
-            subtype = _message_subtype(
-                subtype_key=subtype_key,
-                model_label=subtype_model_label,
-                created_by_id=created_by_id, using=using,
+            subtype = apps.get_model("messaging", "MessageSubtype").objects.resolve(
+                subtype_key, model_label=subtype_model_label, created_by_id=created_by_id,
             )
 
             sender = None
@@ -3564,15 +3657,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 )
                 position += 1
             for file in attachments:
-                part_model.objects.db_manager(using).create(
-                    message_id=message.pk,
-                    position=position,
-                    type=_file_mime_type(file),
-                    disposition=part_model.Disposition.ATTACHMENT,
-                    role=part_model.PartRole.BODY,
-                    name=getattr(file, "filename", "") or "attachment",
-                    file_id=file.pk if file is not None else None,
-                    created_by_id=created_by_id,
+                part_model.objects.attach_file(
+                    message, file, position=position, name=file.filename or "attachment", created_by_id=created_by_id,
                 )
                 position += 1
             notification_model.objects.db_manager(using).fanout_for_message(
@@ -4410,11 +4496,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if parsed.content is None:
             return None
         file_model = apps.get_model("storage", "File")
-        return file_model.objects.ingest_bytes(
+        file, _created = file_model.objects.ingest_bytes(
             parsed.content,
             filename=filename or fallback_attachment_name(parsed.type),
             owner_id=created_by_id,
         )
+        return file
 
     def _write_participants(
         self,
@@ -4567,6 +4654,44 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
     Incomplete caches fall back to that single joined read. Prefetch the relation with
     those joins for repeated queries without SQL; no separate tree cache is kept.
     """
+
+    def attach_file(
+        self,
+        message: Message,
+        file: Any,
+        *,
+        position: int | None = None,
+        name: str | None = None,
+        created_by_id: Any = None,
+    ) -> PartT:
+        """Return ``file``'s attachment part on ``message``, appending it once under the message lock.
+
+        The caller owns admission and source membership. An explicit ``position``
+        or ``name`` preserves a protocol's envelope; otherwise the part appends
+        after the last one and takes the file's name. Absent MIME metadata is
+        ``application/octet-stream``; attribution defaults to the message's author.
+        """
+
+        with transaction.atomic():
+            type(message).system_queryset(lock=("self",)).get(pk=message.pk)
+            existing = self.model._base_manager.filter(message=message, file=file).first()
+            if existing is not None:
+                return existing
+            if position is None:
+                last = self.model._base_manager.filter(message=message).aggregate(value=models.Max("position"))["value"]
+                position = 1 if last is None else last + 1
+            file = type(file)._base_manager.select_related("mime_type").get(pk=file.pk)
+            mime = file.mime_type
+            return self.create(
+                message=message,
+                file=file,
+                position=position,
+                type=mime.mime_type if mime is not None else "application/octet-stream",
+                name=(file.filename or file.title or "attachment") if name is None else name,
+                disposition=self.model.Disposition.ATTACHMENT,
+                role=self.model.PartRole.BODY,
+                created_by_id=message.created_by_id if created_by_id is None else created_by_id,
+            )
 
     BODY_SEPARATOR = "\n\n"
 

@@ -455,6 +455,22 @@ class DashboardQuerySet[DashboardT: Dashboard](
 ):
     """Actor-scoped dashboards with removal reserved for personal snapshots."""
 
+    def catalogue(self, owner: Any) -> Self:
+        """Readable personal, owned and installed dashboards, including removed personal ones."""
+
+        return self.filter(
+            models.Q(scope="personal") | models.Q(owner=owner) | models.Q(is_baseline=True)
+        ).order_by("sqid")
+
+    def target_candidates(self, owner: Any, scope: str, scope_key: str | None) -> Self:
+        """Readable dashboards for one scoped target: the owner's authored snapshot before the baseline."""
+
+        if scope == "personal":
+            raise ValueError("Personal dashboards resolve by public id.")
+        return self.filter(
+            models.Q(owner=owner) | models.Q(is_baseline=True), scope=scope, scope_key=scope_key
+        ).order_by(models.F("owner").desc(nulls_last=True))
+
     def trash_targets(self) -> Self:
         """Installed and scoped snapshots reset through their owning verb."""
 
@@ -470,13 +486,7 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
     def for_target(self, owner: Any, scope: str, scope_key: str | None) -> DashboardT | None:
         """Return the readable target, preferring the actor's authored snapshot."""
 
-        if scope == "personal":
-            raise ValueError("Personal dashboards resolve by public id.")
-        return (
-            self.filter(models.Q(owner=owner) | models.Q(is_baseline=True), scope=scope, scope_key=scope_key)
-            .order_by(models.F("owner").desc(nulls_last=True))
-            .first()
-        )
+        return self.target_candidates(owner, scope, scope_key).first()
 
     def may_create(self, owner: Any, actor: Any = None) -> Any:
         """Authorize the actor to create an ordinary (non-baseline) dashboard owned by ``owner``.
@@ -516,6 +526,40 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
             dashboard.sudo(reason="dashboards.create_personal").save()
             require_changeset().record_created(dashboard)
             return dashboard.with_actor(actor)
+
+    def duplicate_personal(
+        self, owner: Any, *, source: DashboardT, name: str, idempotency_key: str, snapshot: Any
+    ) -> DashboardT:
+        """Copy the displayed snapshot of a readable source into one personal dashboard.
+
+        The displayed snapshot may carry newer declarations than the persisted
+        source. Archived widgets and definition identities stay out of the copy.
+        Creation and widget persistence share one transaction and replay key.
+        """
+
+        source.require_access("read", current_actor())
+        visible = canonical_dashboard_snapshot(snapshot)
+        widgets = []
+        for index, widget in enumerate(visible["widgets"]):
+            if widget["isArchived"]:
+                continue
+            duplicate = {**widget, "id": f"copy-{index + 1}"}
+            duplicate.pop("definitionRef", None)
+            widgets.append(duplicate)
+        visible["widgets"] = widgets
+        with transaction.atomic():
+            created = self.create_personal(owner, name=name, idempotency_key=idempotency_key)
+            if created.revision > 1:
+                return created
+            return self.save_snapshot(
+                owner,
+                scope="personal",
+                scope_key=None,
+                persisted_id=created.pk,
+                expected_revision=created.revision,
+                snapshot=visible,
+                name=created.name,
+            )
 
     def save_snapshot(
         self,
@@ -649,15 +693,6 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
                 )
             return current.with_actor(actor)
 
-    def reset_snapshot(self, dashboard: DashboardT, *, expected_revision: int) -> None:
-        actor = current_actor()
-        with transaction.atomic(), system_context(reason="dashboards.reset_snapshot"):
-            locked = self.model.system_queryset(lock=("self",)).get(pk=dashboard.pk)
-            locked.require_revision(expected_revision)
-            if locked.scope == "personal" or actor is None or to_subject_ref(locked.owner) != actor:
-                raise PermissionDenied("Only the owner can reset a scoped dashboard.")
-            locked.sudo(reason="dashboards.reset_snapshot").delete()
-
 
 DashboardObjects: DashboardManager[Dashboard] = DashboardManager()
 
@@ -748,6 +783,17 @@ class Dashboard(
         if self.is_baseline:
             return None
         return super().insert_owner_default()
+
+    def reset_snapshot(self, *, expected_revision: int) -> None:
+        """Remove the acting owner's scoped override at its expected revision, under its row lock."""
+
+        actor = current_actor()
+        with transaction.atomic(), system_context(reason="dashboards.reset_snapshot"):
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            locked.require_revision(expected_revision)
+            if locked.scope == "personal" or actor is None or to_subject_ref(locked.owner) != actor:
+                raise PermissionDenied("Only the owner can reset a scoped dashboard.")
+            locked.sudo(reason="dashboards.reset_snapshot").delete()
 
     def snapshot(self) -> dict[str, Any]:
         """Return the complete persisted snapshot in the public wire shape."""

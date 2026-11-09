@@ -4,7 +4,7 @@ import type {
 } from "@angee/metadata";
 import { useOne, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  OperatorTransportProvider, ServiceLogs, ServiceRow, WorkspaceSources, WorkspaceRow, useWorkspaceStatus, type WorkspaceStatusResult, } from "@angee/operator/runtime";
+  ServiceLogs, ServiceRow, WorkspaceSources, WorkspaceRow, useWorkspaceStatus, type WorkspaceStatusResult, } from "@angee/operator/runtime";
 import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
@@ -106,20 +106,16 @@ export function AgentProvisioning({
         <>
           {agent.last_error ? <ErrorBanner description={String(agent.last_error)} /> : null}
           {conflictName && conflictKind ? (
-            <OperatorTransportProvider>
-              <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
-            </OperatorTransportProvider>
+            <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
           ) : null}
           {showRuntime ? (
-            <OperatorTransportProvider>
-              <AgentOperatorRuntime
-                expectsService={expectsService}
-                pane={pane}
-                service={service}
-                lifecycle={lifecycle}
-                workspace={workspace}
-              />
-            </OperatorTransportProvider>
+            <AgentOperatorRuntime
+              expectsService={expectsService}
+              pane={pane}
+              service={service}
+              lifecycle={lifecycle}
+              workspace={workspace}
+            />
           ) : conflictName ? null : (
             <div className="flex flex-col items-start gap-2">
               <p className={textRoleVariants({ role: "meta" })}>

@@ -65,7 +65,7 @@ from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.net import is_unsafe_address, resolved_addresses
 from angee.integrate.states import StreamDefinition
-from angee.integrate.streams import CursorInvalid, StreamPage, open_stream, reset_stream
+from angee.integrate.streams import CursorInvalid, StreamPage
 from angee.integrate.sync import current_bridge_progress
 from angee.messaging.backends import ParsedMessage
 from angee.messaging.email import AnymailEmailChannelBackend
@@ -436,7 +436,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             self._load_credentials()
             client = self._connect()
             names = sorted(self._select_mailboxes(client))
-            return tuple(self._mailbox_stream(name) for name in names)
+            return tuple(self.mailbox_stream(name) for name in names)
         except _DeadlineReached:
             self._report_progress(
                 "syncing", "IMAP mailbox discovery unfinished; resuming next run after its time budget",
@@ -446,7 +446,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             return ()
 
     @staticmethod
-    def _mailbox_stream(name: str) -> StreamDefinition:
+    def mailbox_stream(name: str) -> StreamDefinition:
         """Declare one mailbox's event feed."""
 
         return StreamDefinition(key="messages", partition=name)
@@ -463,16 +463,11 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
     # --- discovery ---
 
     def prepare_new_mail_boundary(self) -> ImapDeliveryBoundary:
-        """Return a durable boundary that excludes every currently selected message.
+        """Snapshot each selected mailbox's epoch and its last allocated UID.
 
         The read-only STATUS/SELECT pair pins each mailbox epoch and captures its
-        next allocatable UID. A repeated call against the same selected set and
-        epochs returns the retained boundary unchanged: losing the first action's
-        response can never make a retry skip mail that arrived after it committed.
-
-        The snapshot precedes opening any missing stream. The Channel action
-        locks and validates its configuration before installing the boundaries;
-        all remote IO has finished before that transaction begins.
+        next allocatable UID. All remote IO finishes here; the channel row then
+        selects retained intent and installs the boundaries under its own lock.
         """
 
         self._deadline = None
@@ -501,38 +496,14 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                 }
         finally:
             self.close()
-
-        try:
-            # The mailboxes were just discovered: each opens against its declaration without listing again.
-            streams = tuple(
-                open_stream(self.bridge, "messages", name, self, definition=self._mailbox_stream(name))
-                for name in sorted(snapshot)
-            )
-        finally:
-            self.close()
-        retained = {stream.partition: stream.cursor for stream in streams}
-        same_epochs = (
-            self.bridge.config.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE
-            and self.bridge.config.get("source_identity") == source_identity
-            and self.bridge.config.get("mailbox_selection") == sorted(snapshot)
-            and all(retained[name].get("uidvalidity") == value["uidvalidity"] for name, value in snapshot.items())
-        )
-        return ImapDeliveryBoundary(source_identity, retained if same_epochs else snapshot, streams, not same_epochs)
-
-    def apply_new_mail_boundary(self, boundary: ImapDeliveryBoundary) -> None:
-        """Install mailbox boundaries through the driver's stream and epoch owners."""
-
-        for stream in boundary.streams:
-            cursor = boundary.cursors[stream.partition]
-            if stream.cursor != cursor:
-                reset_stream(stream, cursor=cursor)
+        return ImapDeliveryBoundary(source_identity, snapshot, (), True)
 
     def _discover(self, name: str) -> deque[_MailboxWork]:
         """Plan the selected partition after validating its mailbox epoch."""
 
         client = self._client if self._client is not None else self._connect()
         self._own_addresses = self._resolve_own_addresses()
-        boundary = self.delivery_boundary()
+        boundary = self.bridge.imap_delivery_boundary()
         new_only = bool(boundary)
         if new_only and boundary.get("source_identity") != self._source_identity_digest():
             raise ImapError("The IMAP account changed. Pause the channel and set the starting point again.")
@@ -574,19 +545,12 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             found.extend(sorted(uid for uid in answer if start <= uid <= end))
         return found
 
-    def delivery_boundary(self) -> dict[str, Any]:
-        """Read the bridge's future-only delivery policy."""
-
-        if self.bridge.config.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE:
-            return self.bridge.config
-        return {}
-
     def _invalidate_cursor(self, name: str, *, uidvalidity: int, uidnext: int | None = None) -> None:
         """Force a new epoch while preserving a future-only exclusion of history."""
 
         self._selected = ""
         cursor: dict[str, Any] = {}
-        if self.delivery_boundary():
+        if self.bridge.imap_delivery_boundary():
             if uidnext is None:
                 uidnext = self._uidnext(
                     name, self._request(partial(self._client_or_fail().folder_status, name, [b"UIDNEXT"])),

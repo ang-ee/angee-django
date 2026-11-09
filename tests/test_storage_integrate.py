@@ -21,10 +21,7 @@ from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.storage_integrate.connect import create_local_folder_mount
 from angee.storage_integrate.models import MountMode
-from angee.storage_integrate.mounts import (
-    LocalFolderMountBackend,
-    browse_mount_source,
-)
+from angee.storage_integrate.mounts import LocalFolderMountBackend
 from tests.conftest import (
     Backend,
     Drive,
@@ -38,7 +35,6 @@ from tests.conftest import (
     make_mount,
 )
 
-storage_integrate_connect = importlib.import_module("angee.storage_integrate.connect")
 storage_integrate_schema = importlib.import_module("angee.storage_integrate.schema")
 
 BASE_MTIME_NS = 1_700_000_000_000_000_000
@@ -95,11 +91,7 @@ def queued_mounts(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """Capture eager connect queues without dispatching a worker task."""
 
     queued: list[Any] = []
-    monkeypatch.setattr(
-        storage_integrate_connect,
-        "queue_bridge_sync",
-        lambda mount, **kwargs: queued.append((mount, kwargs)),
-    )
+    monkeypatch.setattr(Mount, "request_sync", lambda mount, **kwargs: queued.append((mount, kwargs)))
     return queued
 
 
@@ -282,9 +274,10 @@ def test_browse_mount_source_dispatches_local_neutral_locations(
     assert len(queued_mounts) == 1
 
     direct = LocalFolderMountBackend.browse()
-    listing = browse_mount_source("local_folder")
+    listing = Mount.objects.browse_source("local_folder")
 
-    assert direct == listing
+    assert direct.location == listing.location
+    assert all(entry.blocked_reason != "Already mounted" for entry in direct.entries)
     assert listing.location.token == str(home.resolve())
     assert listing.location.label == "home"
     assert listing.parent_token == str(home.parent.resolve())
@@ -303,7 +296,7 @@ def test_browse_mount_source_dispatches_local_neutral_locations(
     assert not entries[".Library"].is_mountable
 
     with pytest.raises(ValidationError) as unknown_backend:
-        browse_mount_source("missing")
+        Mount.objects.browse_source("missing")
     assert "backend_class" in unknown_backend.value.message_dict
 
 
@@ -822,11 +815,7 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
         sync_calls.append((row, kwargs))
         return True
 
-    monkeypatch.setattr(
-        storage_integrate_schema,
-        "queue_bridge_sync",
-        queue_sync,
-    )
+    monkeypatch.setattr(Mount, "request_sync", queue_sync)
     synced = result_data(
         execute_schema(
             schema,
@@ -892,3 +881,29 @@ def test_failed_directory_enumeration_never_becomes_a_missing_file_inventory(
     with pytest.raises(PermissionError):
         _run_sync(mount)
     assert not _file_map(mount.drive)["kept.txt"].is_trashed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_mount_sync_closes_its_backend_after_success_and_failure(
+    mount_env: SimpleNamespace,
+    queued_mounts: list[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sync owns the backend it opened for the cycle and releases it however the cycle ends."""
+
+    root = mount_env.tmp_path / "closed-source"
+    root.mkdir()
+    _write(root / "kept.txt", b"keep", mtime_ns=BASE_MTIME_NS)
+    mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Closed source")
+    closed: list[Any] = []
+    monkeypatch.setattr(LocalFolderMountBackend, "close", lambda self: closed.append(self))
+    assert _run_sync(mount) == 1
+    assert len(closed) == 1
+
+    def refuse(self: Any) -> Any:
+        raise PermissionError("source unavailable")
+
+    monkeypatch.setattr(LocalFolderMountBackend, "iter_directories", refuse)
+    with pytest.raises(PermissionError):
+        _run_sync(mount)
+    assert len(closed) == 2

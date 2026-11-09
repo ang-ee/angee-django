@@ -14,6 +14,10 @@ dynamic = ["entry-points"]
 path = "master/010_projects.activitytype.yaml"
 adopt = "key"
 
+[[tool.angee.resources.master]]
+path = "master/020_messaging.messagesubtype.yaml"
+adopt = ["model_label", "key"]
+
 [[tool.angee.resources.demo]]
 path = "demo/010_projects.project.yaml"
 depends_on = "iam:demo/010_iam.user.yaml"

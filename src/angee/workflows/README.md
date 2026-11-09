@@ -112,9 +112,13 @@ inputs, and calls `start_workflow_run` with a client-generated UUID request key.
 The workflow resource's `subject_model`, `can_start` and `is_published` filters
 own discovery; run admission owns authorization, validation and replay.
 
-[`Runner`](runner.py) owns execution and the tick. The run and step managers and
-querysets in [`managers.py`](managers.py) own admission, locked row transitions,
-cancellation and retention. A database step holds its run lock for its
+[`Runner`](runner.py) owns the tick, dispatch and failure classification. The run
+row owns its state: [`WorkflowRun`](models.py) settles, plans and writes its status
+in `advance`, and its verbs `admit_subject`, `reopen`, `interrupt` and
+`cancel_owned_work` admit, retry, settle after a restart and cancel a held run. The
+run and step managers and querysets in [`managers.py`](managers.py) own the run lock
+(`hold`), admission, row-set transitions and retention, and act on a held run only
+through those verbs. A database step holds its run lock for its
 whole transaction. The domain writes, fenced result and successor planning
 commit together. After commit, every ready row of an active run is sent to the job
 queue, including parallel branches whose earlier message encountered a busy run.

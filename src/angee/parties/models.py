@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -39,7 +40,7 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, actor_context
+from rebac import PermissionDenied, actor_context, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
@@ -55,18 +56,24 @@ from angee.base.models.merge import MergeableMixin
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
+from angee.base.prefetch import prefetched
 from angee.integrate.models import Bridge, IntegrationCreateMode
-from angee.parties.backends import DirectoryBackend
+from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
+from angee.parties.backends import DirectoryBackend, ParsedAddressbook
+from angee.parties.connections import ConnectionHandle
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
+    VISIBLE_CIRCLE_MEMBERS,
     CircleManager,
+    FolderManager,
     HandleManager,
     PartyManager,
     PartyStatementQuerySet,
+    RelationshipManager,
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
-from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
+from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 from angee.provenance.statements import (
     Aspect,
     PairAspect,
@@ -105,7 +112,8 @@ class Party(
         return [row for row in candidates if row.confidence >= self.REVIEW_CONFIDENCE]
 
     def apply_handle(self, *, member: Mapping[str, Any], **kwargs: Any) -> None:
-        apps.get_model("parties", "Handle").objects.db_manager(self._state.db).resolve(member["handle"])
+        # The member carries the handle's key; resolution locks and reloads that row itself.
+        apps.get_model("parties", "Handle")(pk=member["handle"]).resolve()
 
     record_links = RetainedGenericRelation(
         "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
@@ -238,7 +246,7 @@ class Party(
         The import placeholder and letterless names (a phone number or other
         handle spelling promoted into the name slot) do not count. When links tie,
         a handle resolves to a party that passes
-        (:meth:`~angee.parties.managers.HandleManager.resolve`).
+        (:meth:`Handle.resolve`).
         """
 
         name = (self.display_name or "").strip()
@@ -263,15 +271,29 @@ class Party(
                         return cast(RelationshipKind.PartyKind, kind)
         return None
 
+    @property
+    def merge_common_scalar_fields(self) -> tuple[str, ...]:
+        """Scalar merge choices the parent party projection carries for every subtype."""
+
+        return self._merge_scalar_fields
+
+    @property
+    def merge_scalar_fields(self) -> tuple[str, ...]:
+        """Scalar merge choices this party's native subtype admits; a person adds its name parts and birthday."""
+
+        if self.concrete_kind == "person":
+            return self._merge_scalar_fields + self._person_merge_scalar_fields
+        return self._merge_scalar_fields
+
     def apply_merge_field_overrides(
         self,
         source: Party,
         field_overrides: Any,
     ) -> None:
-        """Apply the allow-listed scalar overrides selected for a merge survivor.
+        """Apply the scalar overrides both merge endpoints admit to the survivor.
 
         Common human fields live on ``Party``. Person-only name and birthday
-        fields are accepted only when both endpoints materialize a ``Person``
+        fields are admitted only when both endpoints materialize a ``Person``
         child; the child owns coercion and persistence for those columns.
         """
 
@@ -280,17 +302,14 @@ class Party(
         if not isinstance(field_overrides, Mapping):
             raise ValidationError({"field_overrides": "Expected an object of field values."})
 
-        both_people = self.concrete_kind == "person" and source.concrete_kind == "person"
-        allowed = set(self._merge_scalar_fields)
-        if both_people:
-            allowed.update(self._person_merge_scalar_fields)
+        allowed = set(self.merge_scalar_fields).intersection(source.merge_scalar_fields)
         unknown = set(field_overrides) - allowed
         if unknown:
             names = ", ".join(sorted(str(name) for name in unknown))
             raise ValidationError({"field_overrides": f"Unsupported merge field(s): {names}."})
 
         self._apply_merge_scalar_values(field_overrides, self._merge_scalar_fields)
-        if both_people and any(name in field_overrides for name in self._person_merge_scalar_fields):
+        if any(name in field_overrides for name in self._person_merge_scalar_fields):
             person_model = apps.get_model("parties", "Person")
             person = person_model.objects.filter(pk=self.pk).first()
             if person is None or not person.has_access("write"):
@@ -326,16 +345,87 @@ class Party(
         proposed: Mapping[str, Any] | None = None,
         choices: Mapping[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        """Apply a proposed identity through the directory's conflict-checking owner."""
+        """Apply plain reviewed identity values while the locked identity basis still matches.
+
+        ``expected_facts_hash`` is :attr:`IdentityBasis.facts_hash` from review; it
+        is compared with the complete basis locked here, and exact-replace
+        expectations come from that same basis. Every write stays authorized as
+        this row's actor. A replay after a successful change returns conflict
+        because the retained basis hash no longer matches; unchanged choices are
+        idempotent no-ops.
+        """
+
         if proposed is None or choices is None or not expected_facts_hash:
             raise ValidationError("An identity application needs its proposed values, choices and facts hash.")
-        return type(self).objects.apply_identity(
-            party_id=public_id_of(self),
-            expected_facts_hash=expected_facts_hash,
-            proposed=proposed,
-            choices=choices,
-            actor=instance_actor(self),
-        )
+        allowed = {
+            "name_action": {"keep", "replace"},
+            "address_action": {"keep", "add", "replace"},
+            "handle_action": {"keep", "confirm", "dismiss"},
+        }
+        if set(choices) != set(allowed) or any(value not in allowed[name] for name, value in choices.items()):
+            raise ValidationError({"choices": "Identity choices are invalid."})
+        actor = instance_actor(self)
+        parties = type(self).objects
+        with transaction.atomic(), actor_context(actor):
+            basis = parties.identity_basis(public_id_of(self), actor=actor, lock=True)
+            party, current = basis.party, basis.complete
+            party.require_access("write")
+            if basis.facts_hash != expected_facts_hash:
+                return "conflict", {}
+            results = {"name_result": "kept", "address_result": "kept", "handle_result": "kept"}
+            if choices["name_action"] == "replace":
+                results["name_result"] = party.replace_name_exact(
+                    expected=current["name"], proposed=str(proposed["name"]), actor=actor,
+                )
+            addresses = apps.get_model("parties", "Address").objects
+            if choices["address_action"] == "add":
+                results["address_result"], _ = addresses.attach_exact(
+                    party=party,
+                    values=proposed["address"],
+                    actor=actor,
+                    label=proposed["address"]["label"],
+                    conflict="append",
+                )
+            elif choices["address_action"] == "replace":
+                primary = next((row for row in current["addresses"] if row["is_primary"]), None)
+                expected = (
+                    addresses.system_context(reason="parties.party.apply_identity").from_public_id(primary["id"])
+                    if primary
+                    else None
+                )
+                results["address_result"], _ = addresses.replace_primary_exact(
+                    party=party,
+                    values=proposed["address"],
+                    actor=actor,
+                    expected_id=expected.pk if expected else None,
+                    label=proposed["address"]["label"],
+                )
+            if choices["handle_action"] != "keep":
+                link = parties.handle_statements().for_reader(actor).from_public_id(proposed["handle"]["statement_id"])
+                if link is None or link.subject_id != party.pk:
+                    raise ValidationError({"handle_action": "The proposed statement changed during review."})
+                getattr(link.with_actor(actor), choices["handle_action"])()
+                results["handle_result"] = f"{choices['handle_action']}ed"
+            outcome = "applied" if any(value not in {"kept", "matched"} for value in results.values()) else "unchanged"
+            return outcome, results
+
+    def replace_name_exact(self, *, expected: str, proposed: str, actor: Any) -> str:
+        """Apply a reviewed name only while this party's frozen name still matches."""
+
+        normalized = " ".join(proposed.split()).strip()
+        if not normalized:
+            raise ValidationError({"name": "A replacement Party name must not be empty."})
+        with transaction.atomic(), actor_context(actor):
+            locked = type(self).objects.with_actor(actor).locked_get(pk=self.pk)
+            if locked.display_name != expected:
+                raise ValidationError({"name": "The Party name changed during review."})
+            if not locked.has_access("write"):
+                raise PermissionDenied("write access to the Party is required")
+            if locked.display_name == normalized:
+                return "matched"
+            locked.display_name = normalized
+            locked.save(update_fields=["display_name", "updated_at"])
+            return "replaced"
 
     def identity_differs(self, current: Mapping[str, Any], proposed: Mapping[str, Any]) -> bool:
         """Compare proposed native identity values with a retained read projection."""
@@ -392,6 +482,28 @@ class Party(
                 for link in links
             ],
         }
+
+    def recount_handles(self) -> None:
+        """Refresh this party's derived handle count without inventing history."""
+
+        count = apps.get_model("parties", "Handle").objects.filter(party=self).count()
+        if self.handle_count != count:
+            self.handle_count = count
+            self.save_without_historical_record(update_fields=("handle_count",))
+
+    def circle_names(self) -> list[str]:
+        """Return this party's actor-visible circle names, from its read's prefetch when present.
+
+        Resource reads install :meth:`PartyQuerySet.with_circle_names`; any other read
+        prefetches the same readable memberships for this row as its actor.
+        """
+
+        def hint() -> models.Prefetch:
+            parties = type(self).objects.all()
+            return (parties.with_actor(actor) if (actor := self.actor()) else parties).circle_members_prefetch()
+
+        memberships = prefetched(self, VISIBLE_CIRCLE_MEMBERS, hint)
+        return list(dict.fromkeys(membership.circle.name for membership in memberships))
 
     def apply_pair(self, *, aspect: str, other: Any, statement: Any | None) -> None:
         """Identity survivorship selects a pending decision; merge chooses the survivor."""
@@ -577,7 +689,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
     )
     """The avatar the handle's own network shows for it (a messenger profile picture).
 
-    Written only by :meth:`HandleManager.set_avatar`, onto storage's image drive every signed-in user reads.
+    Written only by :meth:`Handle.set_avatar`, onto storage's image drive every signed-in user reads.
     """
 
     objects = HandleManager()
@@ -604,6 +716,18 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         """Return the handle value for Django displays."""
 
         return self.value
+
+    @classmethod
+    def identified_connection(cls, parsed: ConnectionHandle) -> bool:
+        """Whether a connection names its account by a real identifier, not by a display name only.
+
+        An email address, a phone number or a platform id identifies one account.
+        An adapter may override that inference with its typed confidence.
+        """
+
+        if parsed.confidence is not None:
+            return parsed.confidence >= 1.0
+        return bool(parsed.external_id) or parsed.platform in {cls.Platform.EMAIL, cls.Platform.PHONE}
 
     @classmethod
     def normalize_value(cls, platform: str, value: str) -> str:
@@ -685,18 +809,68 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
             self.save(using=self._state.db, update_fields=(*values, "updated_at"))
         for row in merged:
             if self.avatar_id is None and row.avatar_id is not None:
-                type(self).objects.db_manager(self._state.db).set_avatar(self, row.avatar)
+                self.set_avatar(row.avatar)
 
     def retire_merged(self, merged: Any) -> None:
-        """Recompute identity projections after shared reference moves, then redirect."""
+        """Recompute identity projections after shared reference moves, then redirect.
 
-        owner = type(self).objects.db_manager(self._state.db)
-        owner.resolve(merged)
-        owner.resolve(self)
-        # Resolution wrote the party on its own locked row; the redirect's history
-        # snapshot must carry that party, not this instance's stale one.
-        merged.refresh_from_db(using=self._state.db, fields=("party", "party_link_confirmed"))
+        Resolution carries each handle's resolved party onto its instance, so the
+        redirect's history snapshot records that party.
+        """
+
+        merged.resolve()
+        self.resolve()
         super().retire_merged(merged)
+
+    def resolve(self) -> None:
+        """Materialize the applied, eligible cross-party winner and both parties' handle counts.
+
+        The handle, its competing parties and their statements are locked in the
+        identity order first; this instance then carries the resolved party.
+        Because it relocks and reloads the handle under that lock, a caller holding
+        only the key may call it on a transient ``Handle(pk=...)``. A row verb that
+        reads its row without relocking it needs the row loaded through its manager.
+        """
+
+        party_model = apps.get_model("parties", "Party")
+        with transaction.atomic(), system_context(reason="parties.handle.resolve"):
+            handles, parties = party_model.objects.lock_identity_rows(party_ids=(), handle_ids=(self.pk,))
+            handle = handles[self.pk]
+            candidates = list(
+                party_model.objects.handle_statements().applied()
+                .filter(handle=handle, subject__is_trashed=False)
+                .select_related("subject", "link__stream")
+            )
+            winner = min(candidates, key=lambda row: row.sort_key(), default=None)
+            previous = handle.party_id
+            resolved = winner.subject_id if winner else None
+            confirmed = bool(winner and winner.is_confirmed)
+            if handle.party_id != resolved or handle.party_link_confirmed != confirmed:
+                handle.party_id, handle.party_link_confirmed = resolved, confirmed
+                handle.save(update_fields=("party", "party_link_confirmed", "updated_at"))
+            for pk in sorted({value for value in (previous, resolved) if value is not None}):
+                parties[pk].recount_handles()
+            handle._party_links_resolved()
+        self.party_id, self.party_link_confirmed = handle.party_id, handle.party_link_confirmed
+
+    def set_avatar(self, avatar: Any | None) -> bool:
+        """Set the avatar this handle's own network shows for it; return whether it changed.
+
+        The one write path of :attr:`avatar`: a source reports the avatar
+        (:meth:`HandleManager.fill_avatar`), never writes the column itself. ``avatar``
+        is a stored image (``File.objects.ingest_image``), or ``None`` when the network
+        shows none.
+        """
+
+        avatar_id = avatar.pk if avatar is not None else None
+        with system_context(reason="parties.handle.set_avatar"), transaction.atomic():
+            locked = type(self).objects.filter(pk=self.pk).lock_if_supported().first()
+            if locked is None or locked.avatar_id == avatar_id:
+                return False
+            locked.avatar_id = avatar_id
+            locked.save(update_fields=["avatar", "updated_at"])
+        self.avatar_id = avatar_id
+        return True
 
     def _party_links_resolved(self) -> None:
         """Run addon contributions after this handle's party is fully resolved.
@@ -1003,7 +1177,7 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
     )
     source_href = models.CharField(max_length=1024, blank=True, default="")
 
-    objects = AngeeHistoryManager()
+    objects = FolderManager()
 
     class Meta:
         """Django model options for the folder source model."""
@@ -1292,7 +1466,7 @@ class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, Angee
     ``ended_at``. ``title`` carries the vCard ``TITLE`` ("CTO", "Godmother of").
     """
 
-    objects = StatementSubjectManager()
+    objects = RelationshipManager()
     sqid_prefix = "rel_"
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -1430,6 +1604,32 @@ class Directory(Bridge, inherits="integrate.Integration"):
         ordering = ("-updated_at",)
         verbose_name_plural = "directories"
         rebac_resource_type = "parties/directory"
+
+    def addressbook_stream(self, book: ParsedAddressbook) -> StreamDefinition:
+        """Mirror a discovered address book as a folder and declare its contacts stream.
+
+        The stream's deletion policy seeds from this directory's per-collection config.
+        """
+
+        apps.get_model("parties", "Folder").objects.sync_addressbook(self, book)
+        policy = {
+            "local_delete": "conflict",
+            "remote_delete": "retain",
+            **self.config.get("streams", {}).get("contacts", {}).get(book.href, {}),
+        }
+        if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
+            "retain",
+            "propagate",
+        }:
+            raise ValueError("Unknown Directory deletion policy.")
+        return StreamDefinition(
+            "contacts",
+            partition=book.href,
+            kind=StreamKind.RECORD_REPLICA,
+            direction=StreamDirection.BIDIRECTIONAL,
+            reconcile_interval=timedelta(days=1),
+            config=policy,
+        )
 
     @property
     def backend(self) -> DirectoryBackend:

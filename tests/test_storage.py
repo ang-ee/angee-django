@@ -6,13 +6,14 @@ import hashlib
 import importlib
 import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -22,8 +23,8 @@ from django.db import close_old_connections, connection, connections, models, tr
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from django.test import Client, RequestFactory
+from django.utils import timezone
 from rebac import (
-    RebacMixin,
     RelationshipTuple,
     SubjectRef,
     actor_context,
@@ -52,7 +53,7 @@ from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
 from tests.conftest import Backend, Drive, File, FileAttachment, Folder, MimeType, addon_schema, create_platform_admin
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.tables import model_tables
+from tests.scopedemo.models import NativeAttachmentTarget
 
 # A real 1x1 PNG — libmagic classifies it as image/png; a fake signature would not.
 PNG_BYTES = bytes.fromhex(
@@ -367,28 +368,34 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
 
 @pytest.mark.django_db(transaction=True)
 def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> None:
-    """The generic target lock does not require an Angee queryset or model base.
-
-    The probe joins the installed storage registry, where the lock resolves its
-    content type, and leaves it afterwards: a left-over ``storage/file`` model
-    without the owner column would fail every later all-models ownership check.
-    """
+    """The generic target lock does not require an Angee queryset or model base."""
 
     del composed_tables
-    class NativeTarget(RebacMixin):
-        class Meta:
-            app_label = "storage"
-            db_table = "test_storage_native_attachment_target"
-            rebac_resource_type = "storage/file"
+    with system_context(reason="test native attachment target"):
+        target = NativeAttachmentTarget.objects.create()
+        with transaction.atomic():
+            FileAttachment.objects._lock_target(generic_target(target))
 
-    try:
-        with model_tables((NativeTarget,)), system_context(reason="test native attachment target"):
-            target = NativeTarget.objects.create()
-            with transaction.atomic():
-                FileAttachment.objects._lock_target(generic_target(target))
-    finally:
-        del apps.all_models["storage"][NativeTarget._meta.model_name]
-        apps.clear_cache()
+
+@pytest.mark.django_db(transaction=True)
+def test_file_attachment_scopes_chain_on_a_narrowed_selection(drive: Any) -> None:
+    """Record and same-content scopes are queryset predicates, so a filtered selection keeps them."""
+
+    with system_context(reason="test storage attachment scopes"):
+        record = MtiChild.objects.create(title="Holder", detail="record")
+        other = MtiChild.objects.create(title="Other", detail="record")
+        live, _created = File.objects.ingest_bytes(b"live", filename="live.txt", drive_id=str(drive.sqid))
+        gone, _created = File.objects.ingest_bytes(b"gone", filename="gone.txt", drive_id=str(drive.sqid))
+        edges = {file.pk: FileAttachment.objects.attach(file, record, label=file.filename) for file in (live, gone)}
+        same = FileAttachment.objects.attach(live, other)
+        gone.delete()
+
+        assert list(FileAttachment.objects.for_record(record)) == [edges[live.pk]]
+        assert not FileAttachment.objects.filter(label="gone.txt").for_record(record).exists()
+        assert set(FileAttachment.objects.with_same_content(live, record)) == {edges[live.pk], same}
+        assert set(FileAttachment.objects.filter(pk=same.pk).with_same_content(live, record)) == {same}
+        draft = File(content_hash="", upload_state=UploadState.DRAFT)
+        assert not FileAttachment.objects.with_same_content(draft, record).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -981,26 +988,63 @@ def test_dedup_restores_a_trashed_hit(drive: Any) -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_ingest_dedup_grants_read_reach_to_second_owner(drive: Any) -> None:
-    """A dedup hit grants the requested owner reach to the existing READY row."""
+    """A dedup hit reports no creation and grants the requested owner reach to the existing READY row."""
 
     bob = get_user_model().objects.create_user(username="storage-dedup-bob", email="dedup-bob@example.com")
     with system_context(reason="test storage dedup ingest"):
-        first = File.objects.ingest_bytes(
+        first, created = File.objects.ingest_bytes(
             PNG_BYTES,
             filename="first.png",
             owner_id=drive.alice.pk,
             drive_id=str(drive.sqid),
         )
-        second = File.objects.ingest_bytes(
+        second, created_again = File.objects.ingest_bytes(
             PNG_BYTES,
             filename="second.png",
             owner_id=bob.pk,
             drive_id=str(drive.sqid),
         )
 
+    assert (created, created_again) == (True, False)
     assert second.pk == first.pk
     with actor_context(bob):
         assert File.objects.filter(pk=first.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_purge_if_unretained_removes_only_an_unshared_unchanged_unattached_row(drive: Any) -> None:
+    """A creation flag never authorizes the purge alone: an edit, a dedup share or an attachment keeps the row."""
+
+    bob = get_user_model().objects.create_user(username="storage-retained-bob")
+    with system_context(reason="test storage unretained purge"):
+        ingest = {"drive_id": str(drive.sqid), "owner_id": drive.alice.pk}
+        lone, lone_created = File.objects.ingest_bytes(b"lone", filename="lone.txt", **ingest)
+        edited, _created = File.objects.ingest_bytes(b"edited", filename="edited.txt", **ingest)
+        shared, shared_created = File.objects.ingest_bytes(b"shared", filename="shared.txt", **ingest)
+        attached, _created = File.objects.ingest_bytes(b"attached", filename="attached.txt", **ingest)
+        current = File.objects.get(pk=edited.pk)
+        current.title = "Kept by another caller"
+        current.save(update_fields=["title", "updated_at"])
+        File.objects.ingest_bytes(b"shared", filename="again.txt", drive_id=str(drive.sqid), owner_id=bob.pk)
+        FileAttachment.objects.attach(attached, MtiChild.objects.create(title="Holder", detail="record"))
+
+        assert lone_created and shared_created
+        assert lone.purge_if_unretained()
+        assert [row.purge_if_unretained() for row in (edited, shared, attached)] == [False, False, False]
+        remaining = set(File._base_manager.filter(drive=drive).values_list("pk", flat=True))
+    assert remaining == {edited.pk, shared.pk, attached.pk}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_purge_if_unretained_requires_delete_outside_a_system_scope(drive: Any) -> None:
+    """An actor without delete on the file cannot discard it, and the row stays."""
+
+    outsider = get_user_model().objects.create_user(username="storage-purge-outsider")
+    with system_context(reason="test storage unretained purge setup"):
+        row, _created = File.objects.ingest_bytes(b"kept", filename="kept.txt", drive_id=str(drive.sqid))
+    with actor_context(outsider), pytest.raises(PermissionDenied):
+        File._base_manager.get(pk=row.pk).purge_if_unretained()
+    assert File._base_manager.filter(pk=row.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1097,7 +1141,7 @@ def test_every_signed_in_user_reads_an_image_and_nothing_else_the_drive_opens(im
 
     with system_context(reason="test storage image reach"):
         image = File.objects.ingest_image(PNG_BYTES)
-        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
+        private, _created = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
     stranger = get_user_model().objects.create_user(username="storage-bob", email="bob@example.com")
     with actor_context(stranger):
         assert list(File.objects.filter(pk__in=[image.pk, private.pk]).values_list("pk", flat=True)) == [image.pk]
@@ -1113,13 +1157,16 @@ def test_drive_and_file_listings_leave_out_the_image_drive(image_drive: Any) -> 
 
     with system_context(reason="test storage image listings"):
         image = File.objects.ingest_image(PNG_BYTES)
-        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
+        private, _created = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
     schema = addon_schema(storage_schema.schemas, "public")
     listed = result_data(execute_schema(schema, "{ drives { slug } files { id } }", user=image_drive.alice))
     assert [row["slug"] for row in listed["drives"]] == [image_drive.assets.slug]
     assert [row["id"] for row in listed["files"]] == [public_id_of(private)]
     with actor_context(image_drive.alice):
         assert File.objects.filter(pk=image.pk).exists()
+        assert list(Drive.objects.filter(pk__in=[image_drive.pk, image_drive.assets.pk]).browsable()) == [
+            image_drive.assets
+        ]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1127,7 +1174,7 @@ def test_an_image_never_deduplicates_onto_a_users_file_with_the_same_bytes(image
     """Deduplication stays within the image drive, so an avatar never shares a row with a private upload."""
 
     with system_context(reason="test storage image isolation"):
-        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
+        private, _created = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
         image = File.objects.ingest_image(PNG_BYTES)
         again = File.objects.ingest_image(PNG_BYTES)
     assert image.pk != private.pk
@@ -1141,7 +1188,7 @@ def test_read_image_passes_on_only_an_image_the_image_rule_admits(image_drive: A
 
     with system_context(reason="test storage read image"):
         image = File.objects.ingest_image(PNG_BYTES)
-        script = File.objects.ingest_bytes(SVG_BYTES, filename="old.svg", owner_id=image_drive.alice.pk)
+        script, _created = File.objects.ingest_bytes(SVG_BYTES, filename="old.svg", owner_id=image_drive.alice.pk)
         assert image.read_image(expected_digest=image.content_hash) == PNG_BYTES
         with pytest.raises(exceptions.UploadTypeRefused):
             script.read_image()
@@ -1165,6 +1212,34 @@ def test_create_folder_factory_gates_on_drive_write(drive: Any) -> None:
     stranger = get_user_model().objects.create_user(username="storage-dora", email="dora@example.com")
     with actor_context(stranger), pytest.raises(exceptions.UploadError):
         Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="Sneaky")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_placement_requires_a_real_folder_of_the_files_drive(drive: Any) -> None:
+    """One placement rule refuses a row's folder and answers a draft's folder with its upload error."""
+
+    with system_context(reason="test storage placement"):
+        other = Drive._base_manager.create(
+            backend=drive.backend,
+            slug="other",
+            name="Other",
+            prefix="other",
+            created_by=drive.alice,
+        )
+        foreign = Folder.objects.create(drive=other, name="Elsewhere")
+        smart = Folder._base_manager.get(owner=drive.alice, is_virtual=True)
+        row = File(drive=drive, folder=foreign, filename="placed.png")
+        with pytest.raises(ValidationError) as wrong_drive:
+            row.clean()
+        assert list(wrong_drive.value.message_dict) == ["folder"]
+        row.folder = smart
+        with pytest.raises(ValidationError, match="real folder"):
+            row.clean()
+    with actor_context(drive.alice):
+        with pytest.raises(exceptions.UploadConflict, match="does not belong"):
+            File.objects.draft(filename="x.png", drive_id=str(drive.sqid), folder_id=str(foreign.sqid))
+        with pytest.raises(exceptions.UploadTargetNotFound, match="folder not found"):
+            File.objects.draft(filename="x.png", drive_id=str(drive.sqid), folder_id=str(smart.sqid))
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1470,7 +1545,7 @@ def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
 
     digest = hashlib.sha256(b"same bytes").hexdigest()
     with system_context(reason="test storage stream ingest"):
-        first = File.objects.ingest_stream(
+        first, created = File.objects.ingest_stream(
             BytesIO(b"same bytes"),
             filename="first.bin",
             content_hash=digest,
@@ -1484,7 +1559,7 @@ def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
                 del size
                 raise AssertionError("dedup must not consume the reader")
 
-        duplicate = File.objects.ingest_stream(
+        duplicate, duplicate_created = File.objects.ingest_stream(
             UnreadableStream(b"same bytes"),
             filename="duplicate.bin",
             content_hash=digest,
@@ -1494,6 +1569,7 @@ def test_ingest_stream_dedup_does_not_consume_the_reader(drive: Any) -> None:
         )
 
     assert duplicate.pk == first.pk
+    assert (created, duplicate_created) == (True, False)
     assert File._base_manager.filter(drive=drive).count() == 1
 
 
@@ -1534,7 +1610,7 @@ def test_ingest_stream_reads_in_chunks_instead_of_materializing(drive: Any) -> N
             return super().read(size)
 
     with system_context(reason="test streaming ingest"):
-        row = File.objects.ingest_stream(
+        row, _created = File.objects.ingest_stream(
             ChunkOnlyStream(payload),
             filename="stream.bin",
             content_hash=hashlib.sha256(payload).hexdigest(),
@@ -1546,6 +1622,57 @@ def test_ingest_stream_reads_in_chunks_instead_of_materializing(drive: Any) -> N
     assert row.upload_state == UploadState.READY
     assert len(read_sizes) >= 3
     assert set(read_sizes) == {64 * 1024}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_metadata_merge_keeps_the_keys_a_stale_writer_never_read(drive: Any) -> None:
+    """Each merge reads the stored metadata under the row lock, so an older instance drops no other owner's keys."""
+
+    file = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="test storage metadata merge"):
+        stale = File.objects.get(pk=file.pk)
+        file.merge_metadata({"first": {"a": 1}})
+        stale.merge_metadata({"second": {"b": 2}})
+        file.merge_metadata({"first": {"c": 3}})
+        stored = File._base_manager.get(pk=file.pk).metadata
+    assert stored == {"first": {"a": 1, "c": 3}, "second": {"b": 2}}
+    assert file.metadata == stored
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_metadata_merge_requires_write_on_the_file(drive: Any) -> None:
+    """Outside a system scope the merge is the actor's own file write."""
+
+    file = _proxy_upload(drive, PNG_BYTES)
+    outsider = get_user_model().objects.create_user(username="storage-metadata-outsider")
+    with actor_context(outsider), pytest.raises(PermissionDenied):
+        File._base_manager.get(pk=file.pk).merge_metadata({"outsider": True})
+    with actor_context(drive.alice):
+        File._base_manager.get(pk=file.pk).merge_metadata({"owner": True})
+    assert File._base_manager.get(pk=file.pk).metadata == {"owner": True}
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL file metadata row-lock contract")
+def test_concurrent_file_metadata_merges_keep_both_writers_keys(drive: Any) -> None:
+    """Two writers that read the same row both land: the row lock orders their merges."""
+
+    file = _proxy_upload(drive, PNG_BYTES)
+    barrier = Barrier(2, timeout=5)
+
+    def merge(key: str) -> None:
+        close_old_connections()
+        try:
+            with system_context(reason="test storage concurrent metadata merge"):
+                row = File.objects.get(pk=file.pk)
+                barrier.wait()
+                row.merge_metadata({key: {"seen": True}})
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(merge, ("first", "second")))
+    assert File._base_manager.get(pk=file.pk).metadata == {"first": {"seen": True}, "second": {"seen": True}}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1682,6 +1809,185 @@ def test_trash_missing_external_only_trashes_absent_live_paths(drive: Any) -> No
     assert rows["old.txt"].is_trashed
 
 
+def _expired_trash(drive: Any, *contents: bytes) -> list[Any]:
+    """Ingest, trash and backdate rows so the trash TTL has lapsed for each."""
+
+    rows = []
+    with system_context(reason="test storage expired trash"):
+        for index, content in enumerate(contents):
+            row, _created = File.objects.ingest_bytes(content, filename=f"{index}.txt", drive_id=str(drive.sqid))
+            row.delete()
+            rows.append(row)
+        File._base_manager.filter(pk__in=[row.pk for row in rows]).update(
+            trashed_at=timezone.now() - timedelta(days=365),
+        )
+    return rows
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_purge_reports_a_failing_row_and_purges_the_rest(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One row's failure goes to ``on_error``; the selection's other rows are still purged."""
+
+    rows = _expired_trash(drive, b"first", b"broken", b"last")
+    purge = File.purge
+
+    def refuse_one(self: Any) -> None:
+        if self.pk == rows[1].pk:
+            raise RuntimeError("backend refused")
+        purge(self)
+
+    monkeypatch.setattr(File, "purge", refuse_one)
+    failures: list[tuple[Any, str]] = []
+    with system_context(reason="test storage selected purge"):
+        purged = File.objects.expired_trash(timezone.now()).purge(
+            chunk_size=1,
+            on_error=lambda pk, error: failures.append((pk, str(error))),
+        )
+    assert purged == 2
+    assert failures == [(rows[1].pk, "backend refused")]
+    assert list(File._base_manager.filter(drive=drive).values_list("pk", flat=True)) == [rows[1].pk]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_purge_rereads_each_row_under_its_lock(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row restored after the selection was listed no longer matches it and survives."""
+
+    (row,) = _expired_trash(drive, b"restored")
+    queryset = type(File.objects.all())
+    lock = queryset.lock_if_supported
+
+    def restore_then_lock(self: Any, **kwargs: Any) -> Any:
+        File._base_manager.get(pk=row.pk).restore()
+        return lock(self, **kwargs)
+
+    with system_context(reason="test storage selected purge recheck"):
+        selection = File.objects.expired_trash(timezone.now())
+        monkeypatch.setattr(queryset, "lock_if_supported", restore_then_lock)
+        assert selection.purge() == 0
+    assert not File._base_manager.get(pk=row.pk).is_trashed
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL selected file purge row-lock contract")
+def test_file_purge_against_a_concurrent_restore_skips_the_row(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Another connection restores the listed row before the purge locks it; the purge leaves it."""
+
+    (row,) = _expired_trash(drive, b"contested")
+    queryset = type(File.objects.all())
+    lock = queryset.lock_if_supported
+
+    def restore() -> None:
+        close_old_connections()
+        try:
+            with system_context(reason="test storage concurrent restore"):
+                File._base_manager.get(pk=row.pk).restore()
+        finally:
+            connections.close_all()
+
+    def restore_elsewhere_then_lock(self: Any, **kwargs: Any) -> Any:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(restore).result(timeout=10)
+        return lock(self, **kwargs)
+
+    with system_context(reason="test storage concurrent selected purge"):
+        selection = File.objects.expired_trash(timezone.now())
+        monkeypatch.setattr(queryset, "lock_if_supported", restore_elsewhere_then_lock)
+        assert selection.purge() == 0
+    monkeypatch.undo()
+    assert not File._base_manager.get(pk=row.pk).is_trashed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_folder_prune_names_a_narrowed_selection_by_its_full_path(drive: Any) -> None:
+    """Native ancestry names the selected folders; only the selection is ever deleted, deepest first."""
+
+    with system_context(reason="test storage scoped folder prune"):
+        parent = Folder.objects.ensure_path(drive, ("parent",))
+        child = Folder.objects.ensure_path(drive, ("parent", "child"))
+        assert Folder.objects.filter(pk=parent.pk).prune_missing(drive, ()) == 0
+        assert Folder.objects.filter(pk=child.pk).prune_missing(drive, (("parent", "child"),)) == 0
+        assert Folder.objects.filter(pk=child.pk).prune_missing(drive, ()) == 1
+        assert Folder.objects.filter(pk=parent.pk).exists()
+        assert Folder.objects.prune_missing(drive, ()) == 1
+        assert not Folder.objects.filter(drive=drive, is_virtual=False).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_folder_prune_keeps_the_parent_of_a_trashed_file(drive: Any) -> None:
+    """A trashed file still names its folder, so pruning never detaches it."""
+
+    with system_context(reason="test storage retained folder"):
+        folder = Folder.objects.ensure_path(drive, ("retained",))
+        file, _created = File.objects.ingest_bytes(
+            b"retained file",
+            filename="retained.txt",
+            drive_id=str(drive.sqid),
+            folder_id=str(folder.sqid),
+        )
+        file.delete()
+        assert Folder.objects.prune_missing(drive, ()) == 0
+        file.refresh_from_db()
+    assert file.is_trashed and file.folder_id == folder.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_folder_prune_rechecks_an_empty_candidate_under_its_lock(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file placed after the inventory keeps its folder: the locked recheck decides, not the snapshot."""
+
+    queryset = type(Folder.objects.all())
+    lock = queryset.lock_if_supported
+
+    def file_arrives_then_lock(self: Any, **kwargs: Any) -> Any:
+        File.objects.ingest_bytes(b"late", filename="late.txt", drive_id=str(drive.sqid), folder_id=str(folder.sqid))
+        return lock(self, **kwargs)
+
+    with system_context(reason="test storage folder prune recheck"):
+        folder = Folder.objects.ensure_path(drive, ("late",))
+        monkeypatch.setattr(queryset, "lock_if_supported", file_arrives_then_lock)
+        assert Folder.objects.prune_missing(drive, ()) == 0
+        monkeypatch.undo()
+        assert File.objects.get(filename="late.txt").folder_id == folder.pk
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL folder prune row-lock contract")
+def test_folder_prune_against_a_concurrent_file_create_keeps_the_folder(
+    drive: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Another connection commits a file into the empty candidate before the prune locks it; the folder stays."""
+
+    queryset = type(Folder.objects.all())
+    lock = queryset.lock_if_supported
+
+    def place(folder_id: str) -> None:
+        close_old_connections()
+        try:
+            with system_context(reason="test storage concurrent file create"):
+                File.objects.ingest_bytes(
+                    b"concurrent",
+                    filename="concurrent.txt",
+                    drive_id=str(drive.sqid),
+                    folder_id=folder_id,
+                )
+        finally:
+            connections.close_all()
+
+    def commit_elsewhere_then_lock(self: Any, **kwargs: Any) -> Any:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(place, str(folder.sqid)).result(timeout=10)
+        return lock(self, **kwargs)
+
+    with system_context(reason="test storage concurrent folder prune"):
+        folder = Folder.objects.ensure_path(drive, ("contested",))
+    monkeypatch.setattr(queryset, "lock_if_supported", commit_elsewhere_then_lock)
+    with system_context(reason="test storage concurrent folder prune"):
+        assert Folder.objects.prune_missing(drive, ()) == 0
+    monkeypatch.undo()
+    with system_context(reason="test storage concurrent folder prune inspect"):
+        assert File.objects.get(filename="concurrent.txt").folder_id == folder.pk
+
+
 @pytest.mark.django_db(transaction=True)
 def test_ensure_path_is_idempotent_and_reuses_the_prefix_cache(drive: Any) -> None:
     """One caller-owned cache shares ancestors across neighboring paths."""
@@ -1798,7 +2104,7 @@ def test_ingest_dedup_restores_and_merges_metadata(drive: Any) -> None:
     with system_context(reason="storage dedup setup"):
         row.delete()
     with system_context(reason="storage dedup"):
-        result = File.objects.ingest_stream(
+        result, created = File.objects.ingest_stream(
             BytesIO(PNG_BYTES),
             filename="same.png",
             content_hash=PNG_SHA256,
@@ -1808,7 +2114,7 @@ def test_ingest_dedup_restores_and_merges_metadata(drive: Any) -> None:
             metadata={"source": {"indexed": True}},
         )
     stored = File._base_manager.get(pk=row.pk)
-    assert result.pk == row.pk
+    assert (result.pk, created) == (row.pk, False)
     assert stored.is_trashed is False
     assert stored.metadata == {"source": {"indexed": True}}
 
@@ -1935,8 +2241,12 @@ def test_backend_cache_includes_selected_implementation(tmp_path: Path, drive: A
 
 def test_drive_local_file_path_uses_readable_live_file_and_native_location(drive, tmp_path):
     with system_context(reason="test local file location fixtures"):
-        file = File.objects.ingest_bytes(b"Manifest placeholder", filename="Manifest.db", owner_id=drive.alice.pk,
-                                        drive_id=drive.sqid)
+        file, _created = File.objects.ingest_bytes(
+            b"Manifest placeholder",
+            filename="Manifest.db",
+            owner_id=drive.alice.pk,
+            drive_id=drive.sqid,
+        )
     with actor_context(drive.alice):
         assert drive.with_actor(drive.alice).local_file_path("Manifest.db") == file.local_path()
         file.trash(reason="local file lookup excludes trash")

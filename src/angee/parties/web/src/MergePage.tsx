@@ -2,8 +2,8 @@ import * as React from "react";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
   Avatar, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Chip, Collapsible, ComparisonRows, CountBadge, EmptyState, ErrorBanner,
-  LoadingPanel, MetaGrid, Page, PageBody, PageFooter, PageHeader, RadioGroup, RailPanel, avatarInitials, optionLabel, useConfirm,
-  useEnumOptions, useRouteHref, useRouteParam, type WidgetOption,
+  LoadingPanel, MetaGrid, Page, PageBody, PageFooter, PageHeader, RadioGroup, RailPanel, avatarInitials, optionLabel,
+  rowValueAtPath, useConfirm, useEnumOptions, useRouteHref, useRouteParam, type WidgetOption,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -21,24 +21,10 @@ type MergeSide = "left" | "right";
 type MergeHandle = MergePartyRecord["handles"][number];
 type MergeCircleMember = MergePartyRecord["circle_members"][number];
 type Provenance = MergeSide | "both";
+type MergeRecord = MergePartyRecord | MergePersonRecord;
 
-const COMMON_FIELDS = ["display_name", "notes", "first_met_note"] as const;
-const PERSON_FIELDS = [
-  "name_prefix",
-  "given_name",
-  "additional_name",
-  "family_name",
-  "name_suffix",
-  "nickname",
-  "birthday",
-] as const;
-
-type CommonField = (typeof COMMON_FIELDS)[number];
-type PersonField = (typeof PERSON_FIELDS)[number];
-type MergeField = CommonField | PersonField;
-
-interface FieldComparison {
-  name: MergeField;
+export interface FieldComparison {
+  name: string;
   left: string | null;
   right: string | null;
 }
@@ -49,26 +35,33 @@ interface UnionItem<T> {
   provenance: Provenance;
 }
 
-function fieldComparisons(
+/** A declared merge scalar's value in the generated record; undefined when its document does not select it. */
+function mergeScalar(record: MergeRecord, name: string): string | null | undefined {
+  const value = rowValueAtPath(record, name);
+  return value === undefined ? undefined : typeof value === "string" ? value : null;
+}
+
+function compareScalars(names: readonly string[], left: MergeRecord, right: MergeRecord): FieldComparison[] {
+  return names.flatMap((name) => {
+    const [leftValue, rightValue] = [mergeScalar(left, name), mergeScalar(right, name)];
+    // A scalar a consumer admits beyond this page's document stays mergeable through the API only.
+    return leftValue === undefined || rightValue === undefined ? [] : [{ name, left: leftValue, right: rightValue }];
+  });
+}
+
+/** Compare the scalars both records admit, as each projection's `merge_scalar_fields` declares them. */
+export function fieldComparisons(
   left: MergePartyRecord,
   right: MergePartyRecord,
   leftPerson: MergePersonRecord | null | undefined,
   rightPerson: MergePersonRecord | null | undefined,
 ): readonly FieldComparison[] {
-  const common = COMMON_FIELDS.map((name) => ({
-    name,
-    left: left[name],
-    right: right[name],
-  }));
-  if (!leftPerson || !rightPerson) return common;
-  return [
-    ...common,
-    ...PERSON_FIELDS.map((name) => ({
-      name,
-      left: leftPerson[name],
-      right: rightPerson[name],
-    })),
-  ];
+  const common = left.merge_scalar_fields.filter((name) => right.merge_scalar_fields.includes(name));
+  if (!leftPerson || !rightPerson) return compareScalars(common, left, right);
+  const personal = leftPerson.merge_scalar_fields.filter(
+    (name) => !common.includes(name) && rightPerson.merge_scalar_fields.includes(name),
+  );
+  return [...compareScalars(common, left, right), ...compareScalars(personal, leftPerson, rightPerson)];
 }
 
 function sameScalar(left: string | null, right: string | null): boolean {
@@ -181,7 +174,7 @@ export function MergePage(): React.ReactElement {
     invalidateModels: PARTY_MERGE_INVALIDATES,
   });
   const [survivor, setSurvivor] = React.useState<MergeSide>("left");
-  const [fieldChoices, setFieldChoices] = React.useState<Partial<Record<MergeField, MergeSide>>>({});
+  const [fieldChoices, setFieldChoices] = React.useState<Partial<Record<string, MergeSide>>>({});
   const platforms = useEnumOptions("parties.Handle", "platform", { casing: "upper" });
   const confirm = useConfirm();
 
