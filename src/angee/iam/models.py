@@ -26,7 +26,7 @@ from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core import checks
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, router, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import Exists, F, OuterRef, Q, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
@@ -494,9 +494,8 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
     ) -> UserT:
         """Own validation, uniqueness, persistence and the transactional event."""
 
-        using = self._db or router.db_for_write(self.model)
         with transaction.atomic():
-            if self.db_manager(using)._person_email_matches(email).exists():
+            if self._person_email_matches(email).exists():
                 raise AccountExists
             user = self.model(
                 username=self.model.normalize_username(username),
@@ -508,15 +507,14 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                 is_superuser=False,
                 is_active=True,
             )
-            user._state.db = using
             user.set_password(password)
             try:
                 with transaction.atomic():
                     with system_context(reason="iam.person.validate"):
                         user.full_clean()
-                    user.sudo(reason=reason).save(using=using)
+                    user.sudo(reason=reason).save()
             except IntegrityError, ValidationError:
-                if self.db_manager(using)._person_email_matches(email).exists():
+                if self._person_email_matches(email).exists():
                     raise AccountExists from None
                 raise
             if actor is not None:
@@ -629,11 +627,9 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
         if not role:
             raise ValueError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
-        using = self._db or router.db_for_write(self.model)
-        manager = self.db_manager(using)
         with system_context(reason="iam.bootstrap_admin"), transaction.atomic():
             try:
-                user = manager.system_context(reason="iam.bootstrap_admin").get(
+                user = self.system_context(reason="iam.bootstrap_admin").get(
                     **{self.model.USERNAME_FIELD: username},
                 )
             except self.model.DoesNotExist:
@@ -642,7 +638,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                         "bootstrap_admin needs ANGEE_BOOTSTRAP_ADMIN_PASSWORD "
                         "or --password when creating a new admin."
                     )
-                user = manager.create_superuser(username=username, email=email, password=password)
+                user = self.create_superuser(username=username, email=email, password=password)
                 created = True
             else:
                 created = False
@@ -658,7 +654,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                     user.set_password(password)
                     update_fields.add("password")
                 if update_fields:
-                    user.save(using=using, update_fields=sorted(update_fields))
+                    user.save(update_fields=sorted(update_fields))
             grant_membership(subject=user, container=ObjectRef.parse(role))
         return user, created
 
