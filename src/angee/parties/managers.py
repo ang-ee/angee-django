@@ -2090,13 +2090,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
 
 def _user_display_name(user: Any) -> str:
-    """Return a human display name for a user's Person, falling back to a stable id."""
+    """Return a human display name for a user's Person from the native account, else its stable id."""
 
-    full_name = user.get_full_name() if hasattr(user, "get_full_name") else ""
-    username = user.get_username() if hasattr(user, "get_username") else getattr(user, "username", "")
-    for candidate in (full_name, username, getattr(user, "email", "")):
-        text = (candidate or "").strip()
-        if text:
+    for candidate in (user.get_full_name(), user.get_username(), user.email):
+        if text := (candidate or "").strip():
             return text
     return str(user.pk)
 
