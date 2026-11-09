@@ -21,7 +21,7 @@ from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRunt
 from angee.integrate.registry import models_with
 from angee.integrate.scheduler import enqueue_due_bridges
 from angee.integrate.states import StreamDefinition
-from angee.integrate.sync import BridgeProgressReporter, current_bridge_progress
+from angee.integrate.sync import current_progress_bridge
 from tests.conftest import (
     Integration,
     make_integration,
@@ -50,16 +50,16 @@ class SchedulerBridge(Bridge, Integration):
         if self.config.get("assert_locked"):
             assert self.is_syncing is True
         if self.config.get("progress"):
-            reporter = current_bridge_progress()
-            assert reporter is not None
-            reporter.report(
+            progress = current_progress_bridge()
+            assert progress is not None
+            progress.report_progress(
                 "discovering",
                 message="Scanning vendor rows",
                 details={"items": items, "source": "fixture"},
             )
         if self.config.get("detached_progress"):
             detached = type(self).objects.sudo(reason="test detached bridge progress").get(pk=self.pk)
-            BridgeProgressReporter(detached).report(
+            detached.report_progress(
                 "discovering",
                 message="Reached the sync budget",
                 details={"items": items, "budget_exhausted": True, "cursor": {"seen": items}},
@@ -380,7 +380,7 @@ def test_enqueued_due_bridge_success_recovers_bridge_and_integration_runtime_sta
 
 
 @pytest.mark.django_db(transaction=True)
-def test_bridge_progress_reporter_persists_progress_payload(transactional_db: None) -> None:
+def test_bridge_sync_persists_its_progress_report(transactional_db: None) -> None:
     """Bridge.sync can publish generic progress without knowing the storage fields."""
 
     del transactional_db
@@ -484,11 +484,11 @@ def test_declined_sync_run_never_clears_the_holder_stage(transactional_db: None)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_sync_markers_keep_a_reporters_details(transactional_db: None) -> None:
+def test_sync_markers_keep_reported_progress_details(transactional_db: None) -> None:
     """Queueing a sync must not drop a live session's pairing report.
 
     ``sync_progress`` has disjoint owners: the scheduler owns the lifecycle marker,
-    a reporter owns ``details``. Replacing the dict dropped the QR the operator was
+    a progress report owns ``details``. Replacing the dict dropped the QR the operator was
     looking at when Sync was pressed mid-pairing.
     """
 
@@ -496,7 +496,7 @@ def test_sync_markers_keep_a_reporters_details(transactional_db: None) -> None:
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("marker-merge", model=SchedulerBridge)
-        BridgeProgressReporter(bridge).report(
+        bridge.report_progress(
             Bridge.SyncStage.SYNCING, details={"pairing": {"state": "awaiting_scan", "qr": "data:png"}}
         )
 
@@ -514,12 +514,12 @@ def test_sync_markers_keep_a_reporters_details(transactional_db: None) -> None:
 def test_progress_report_during_queued_stage_keeps_the_queue_marker(transactional_db: None) -> None:
     """A report firing while the row is QUEUED must not clobber the queue claim.
 
-    The scheduler owns the ``QUEUED`` stage/marker; a reporter owns ``details``.
+    The scheduler owns the ``QUEUED`` stage/marker; a progress report owns ``details``.
     A progress report arriving mid-queue (a live session publishing a pairing QR
     after Sync was pressed) merges its details without demoting the stage or
     dropping ``queued_at`` — otherwise the stale-queue recovery cannot tell a
     genuine queue claim from a run that has already advanced, and re-queues it
-    forever. This pins the locked-merge guard in ``BridgeProgressReporter``.
+    forever. This pins the locked-merge guard in ``Bridge.report_progress``.
     """
 
     del transactional_db
@@ -528,7 +528,7 @@ def test_progress_report_during_queued_stage_keeps_the_queue_marker(transactiona
         bridge = make_integration("queued-report", model=SchedulerBridge)
         bridge.mark_sync_queued(now=now)
 
-        payload = BridgeProgressReporter(bridge).report(
+        payload = bridge.report_progress(
             Bridge.SyncStage.SYNCING,
             message="Scanning vendor rows",
             details={"items": 3},
@@ -708,13 +708,50 @@ def test_active_sync_keeps_its_progress_when_another_sync_is_requested(
         bridge.refresh_from_db()
         assert bridge.sync_stage == Bridge.SyncStage.SYNCING
         assert bridge.sync_progress == progress
-        assert bridge.next_sync_at == now - timedelta(minutes=10)
+        assert bridge.next_sync_at == now + timedelta(seconds=bridge.poll_interval)
         assert sent == []
 
     # A dead worker's stale syncing marker does not strand the connection.
     assert bridge.request_sync(now=now) is True
     bridge.refresh_from_db()
     assert bridge.sync_stage == Bridge.SyncStage.QUEUED
+    assert len(sent) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_declined_scheduled_admission_waits_for_the_next_interval(
+    transactional_db: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poll declined by a live sync lock leaves the due set until its next interval."""
+
+    del transactional_db
+    now = timezone.now()
+    later = now + timedelta(seconds=120)
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr("angee.integrate.models.enqueue_task", lambda _name, **kwargs: sent.append(kwargs))
+    with system_context(reason="test declined admission setup"):
+        bridge = make_integration(
+            "declined-due",
+            model=SchedulerBridge,
+            poll_interval=120,
+            next_sync_at=now - timedelta(seconds=1),
+        )
+
+    with bridge_advisory_lock(bridge) as acquired:
+        assert acquired
+        assert enqueue_due_bridges(now=now) == {"enqueued": 0, "skipped": 1}
+        bridge.refresh_from_db()
+        assert bridge.next_sync_at == later
+        assert bridge.sync_stage == Bridge.SyncStage.IDLE
+        # The declined bridge is no longer selected, so its lock is not probed again.
+        assert enqueue_due_bridges(now=now + timedelta(seconds=60)) == {"enqueued": 0, "skipped": 0}
+
+    assert sent == []
+    assert enqueue_due_bridges(now=later) == {"enqueued": 1, "skipped": 0}
+    bridge.refresh_from_db()
+    assert bridge.sync_stage == Bridge.SyncStage.QUEUED
+    assert bridge.next_sync_at == later + timedelta(seconds=120)
     assert len(sent) == 1
 
 

@@ -220,7 +220,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             # actor on the instance rather than wrapping the whole save in the
             # queryset insertion scope: that scope would also pin the nested write
             # and defeat the instance-local elevation.
-            need.with_actor(actor).save(force_insert=True, using=self.db)
+            need.with_actor(actor).save(force_insert=True)
             return need
 
     def capture_from_message(

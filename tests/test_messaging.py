@@ -2264,6 +2264,21 @@ def test_email_identity_columns_are_unbounded_and_subject_columns_are_gone() -> 
             model._meta.get_field(field_name)
 
 
+def test_parsed_message_sync_hash_follows_what_ingest_writes() -> None:
+    """Equal envelopes hash equal; another channel, attachment byte or reply pointer flips the digest."""
+
+    attachment = ParsedPart(type="image/png", disposition="attachment", content=b"first")
+    parsed = replace(_parsed("m1", sent_at=_AT), body=ParsedPart(text="Body", children=(attachment,)))
+    digest = parsed.sync_hash(channel_id=1, metadata={})
+    assert digest == replace(parsed).sync_hash(channel_id=1, metadata={})
+    assert digest != parsed.sync_hash(channel_id=2, metadata={})
+    changed = replace(attachment, content=b"second")
+    assert digest != replace(parsed, body=ParsedPart(text="Body", children=(changed,))).sync_hash(
+        channel_id=1, metadata={},
+    )
+    assert digest != replace(parsed, in_reply_to="m0").sync_hash(channel_id=1, metadata={})
+
+
 @pytest.mark.django_db(transaction=True)
 def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     """A second identical ingest rewrites nothing — no re-save, stable Part PKs (M3).
@@ -2278,7 +2293,9 @@ def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     parsed = _parsed("m1", sent_at=_AT)
     assert _ingest([parsed], channel=channel) == 1
     message = Message._base_manager.get(external_id="m1")
-    assert message.metadata.get("sync_hash")
+    assert message.metadata["sync_hash"] == parsed.sync_hash(
+        channel_id=channel.pk, metadata=Message.ingest_metadata(parsed.metadata),
+    )
     first_updated_at = message.updated_at
     part_pks = set(Part._base_manager.filter(message=message).values_list("pk", flat=True))
     fragment_count = Fragment._base_manager.count()

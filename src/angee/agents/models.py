@@ -28,6 +28,8 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import models, transaction
 from django_compose.models import Composable
+from pydantic_ai.embeddings import EmbeddingResult, EmbedInputType
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -516,6 +518,83 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
         provider: Any = self.provider
         backend = provider.backend
         return backend.model(self.provider_model_name, credential=credential)
+
+    @property
+    def embedding_dimensions(self) -> int | None:
+        """Native vector size reported at discovery or learned from a successful request."""
+
+        value = self.capabilities.get("embedding_dimensions")
+        return value if type(value) is int and value > 0 else None
+
+    def max_input_tokens(self) -> int | None:
+        """Return the discovered input budget, or the native embedding adapter's budget.
+
+        Unknown budgets remain ``None``; this never probes by embedding text.
+        """
+
+        if self.context_window:
+            return int(self.context_window)
+        if self.model_use != InferenceModelUse.EMBEDDING:
+            return None
+        provider: Any = self.provider
+        binding = provider.backend.embedding_model(self.provider_model_name)
+
+        async def budget() -> int | None:
+            async with binding as model:
+                return await model.max_input_tokens()
+
+        return async_to_sync(budget)()
+
+    def embed(self, texts: Sequence[str], *, input_type: EmbedInputType, role: str) -> list[list[float]]:
+        """Embed a batch after re-checking its use, lifecycle and exact deployment role.
+
+        Callers admit actor access through ``require_usable`` when selecting a
+        model. Each request re-checks the caller's approval role before binding
+        credentials. The provider owns the native protocol and client lifetime;
+        this model records dimensions in its existing capabilities after success.
+        """
+
+        self.require_capability({InferenceModelUse.EMBEDDING})
+        self.require_approved(role)
+        if input_type not in {"document", "query"}:
+            raise ValueError("Embedding input_type must be 'document' or 'query'.")
+        if isinstance(texts, str | bytes) or not all(isinstance(text, str) for text in texts):
+            raise TypeError("Embedding texts must be a sequence of strings.")
+        if not texts:
+            return []
+        provider: Any = self.provider
+        binding = provider.backend.embedding_model(self.provider_model_name)
+
+        async def request() -> EmbeddingResult:
+            async with binding as model:
+                return await model.embed(texts, input_type=input_type)
+
+        result = async_to_sync(request)()
+        vectors = [list(vector) for vector in result.embeddings]
+        if len(vectors) != len(texts):
+            raise UnexpectedModelBehavior("Embedding response must contain one vector per input text.")
+        dimensions = len(vectors[0])
+        if not dimensions or any(len(vector) != dimensions for vector in vectors):
+            raise UnexpectedModelBehavior("Embedding response must contain vectors of one positive dimension.")
+        if dimensions != self.embedding_dimensions:
+            self._record_embedding_dimensions(dimensions)
+        return vectors
+
+    def _record_embedding_dimensions(self, dimensions: int) -> None:
+        """Learn an unknown size under a row lock; refuse changes to an existing vector space."""
+
+        with (
+            system_context(reason="agents.inference_model.embedding_dimensions"),
+            transaction.atomic() if not self._state.adding else nullcontext(),
+        ):
+            model = self if self._state.adding else type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            if model.embedding_dimensions is not None and model.embedding_dimensions != dimensions:
+                raise UnexpectedModelBehavior("Embedding dimensions differ from the model's recorded capabilities.")
+            if model.embedding_dimensions is None:
+                model.capabilities = {**model.capabilities, "embedding_dimensions": dimensions}
+                if not model._state.adding:
+                    model.save(update_fields=["capabilities"])
+            self.capabilities = model.capabilities
 
     def is_transient_error(self, error: Exception) -> bool:
         """Classify a failure through this model's native provider backend."""

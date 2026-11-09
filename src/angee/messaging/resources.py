@@ -56,7 +56,6 @@ class _ChatterResource(AngeeResource):
         for field in instance._meta.concrete_fields:
             setattr(instance, field.attname, getattr(written, field.attname))
         instance._state.adding = False
-        instance._state.db = written._state.db
         self.after_save_instance(instance, row, **kwargs)
 
     def write(self, record: Any, author: Any, instance: Any, row: Mapping[str, Any]) -> models.Model:
@@ -69,7 +68,7 @@ class _ChatterResource(AngeeResource):
         if not isinstance(value, str) or not value:
             raise ValidationError({column: "This column needs an xref."})
         try:
-            return resolve_xref(value, self.ledger_model, self.addon_aliases, using=self.get_db_connection_name())
+            return resolve_xref(value, self.ledger_model, self.addon_aliases)
         except ValueError as error:
             raise ValidationError({column: str(error)}) from error
 

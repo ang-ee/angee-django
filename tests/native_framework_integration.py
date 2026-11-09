@@ -23,7 +23,6 @@ from angee.integrate.locks import bridge_advisory_lock
 from angee.knowledge.mcp_tools import register
 from angee.messaging.backends import ParsedHandle
 from angee.posts.backends import FeedBackend
-from angee.posts.ingest import land_posts
 from angee.posts.models import CommentAnswered
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.native_messaging_delivery import Channel, DeliveryFixtures, Feed, Message
@@ -55,7 +54,7 @@ class ReplyJoins(DeliveryFixtures):
                     sender=ParsedHandle(platform="youtube", value="publisher"),
                 ),
             )
-            land_posts(self.feed, [native], owner_id=self.operator.pk)
+            Message.posts.land(self.feed, [native], owner_id=self.operator.pk)
             self.assertTrue(comment.reply_state())
             with self.assertRaisesMessage(CommentAnswered, "already answered"):
                 comment.reply_to_comment(body="Stale inference", actor=self.agent, idempotency_key="late-run")

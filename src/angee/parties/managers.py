@@ -387,16 +387,15 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
 
         if not is_sudo():
             raise PermissionDenied("Handle identity rewrites require an admitted system boundary.")
-        using = self.db
         while True:
             try:
                 with transaction.atomic():
-                    source = self.model.system_queryset().using(using).filter(pk=handle.pk).first()
+                    source = self.model.system_queryset().filter(pk=handle.pk).first()
                     if source is None or source.merged_into_id is not None or source.value != expected_value:
                         return None
                     target = self.find_identity(platform=source.platform, value=value)
                     ids = (source.pk, target.pk) if target is not None else (source.pk,)
-                    handles, _parties = apps.get_model("parties", "Party").objects.db_manager(using).lock_identity_rows(
+                    handles, _parties = apps.get_model("parties", "Party").objects.lock_identity_rows(
                         party_ids=(), handle_ids=ids,
                     )
                     source = handles.get(source.pk)
@@ -416,12 +415,12 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         if dry_run:
                             return False, bool(display_name and not source.display_name)
                         source.value = value
-                        source.save(using=using, update_fields=("value", "updated_at"))
+                        source.save(update_fields=("value", "updated_at"))
                         kept, folded = source, False
                     named = bool(display_name and not kept.display_name)
                     if named:
                         kept.display_name = display_name
-                        kept.save(using=using, update_fields=("display_name", "updated_at"))
+                        kept.save(update_fields=("display_name", "updated_at"))
                     return folded, named
             except IntegrityError:
                 target = self.find_identity(platform=handle.platform, value=value)
@@ -496,14 +495,12 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
 
         evidence = tuple(evidence)
         person_model = apps.get_model("parties", "Person")
-        handles_owner = self.db_manager(self._db or user._state.db, hints={"instance": user})
-        using = handles_owner.db
-        link_owner = apps.get_model("parties", "Party").objects.db_manager(using)
+        link_owner = apps.get_model("parties", "Party").objects
         with (
             system_context(reason="parties.handle.claim_control"),
             transaction.atomic(),
         ):
-            handle = handles_owner.upsert(
+            handle = self.upsert(
                 platform=platform,
                 value=value,
                 created_by_id=user.pk,
@@ -515,7 +512,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 handle_ids=(handle.pk,),
             )
             handle = handles[handle.pk]
-            person = person_model.objects.db_manager(using).for_user(user)
+            person = person_model.objects.for_user(user)
             if handle.controller_id is not None and handle.controller_id != user.pk:
                 link_owner.assert_handle(
                     person,
@@ -527,7 +524,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 return handle
             if handle.controller_id is None:
                 handle.controller = user
-                handle.save(using=using, update_fields=["controller", "updated_at"])
+                handle.save(update_fields=["controller", "updated_at"])
             link_owner.assert_handle(
                 person,
                 handle,
@@ -580,7 +577,7 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
     def members(self) -> Self:
         """One strongest current stance per subject/member, including weak claims."""
         representative = (
-            self.model._base_manager.using(self.db)
+            self.model._base_manager
             .current()
             .filter(aspect="handle")
             .filter(
@@ -595,7 +592,7 @@ class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[
 
     def to_review(self) -> Self:
         decision = (
-            self.model._base_manager.using(self.db)
+            self.model._base_manager
             .current()
             .filter(aspect="handle")
             .filter(
@@ -767,7 +764,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         """Return this queryset's Person id linked to ``user_id``, without creating it."""
 
         person_model = apps.get_model("parties", "Person")
-        people = person_model._base_manager.using(self.db).filter(user_id=user_id).values("pk")
+        people = person_model._base_manager.filter(user_id=user_id).values("pk")
         return self.filter(pk__in=Subquery(people)).values_list("pk", flat=True).first()
 
     def account_for_party(self, party_id: Any) -> Any | None:
@@ -776,7 +773,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         if self.filter(pk=party_id).values_list("pk", flat=True).first() is None:
             return None
         person_model = apps.get_model("parties", "Person")
-        person = person_model._base_manager.using(self.db).select_related("user").filter(pk=party_id).first()
+        person = person_model._base_manager.select_related("user").filter(pk=party_id).first()
         return person.user if person is not None and person.user_id is not None else None
 
     def same_as_pairs(self, *, limit: int = 50) -> list[SameAsPair]:
@@ -903,7 +900,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def handle_statements(self) -> Any:
         """Return the unscoped handle-statement owner for internal composition."""
 
-        return apps.get_model("parties", "Party").statements.db_manager(self.db).handles()
+        return apps.get_model("parties", "Party").statements.handles()
 
     @staticmethod
     def rule_source(key: str) -> Any:
@@ -921,11 +918,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         link: Any = None,
     ) -> Any:
         """Assert normal handle facts from native supporting records, preserving person decisions."""
-        owner = self.db_manager(self._db or party._state.db, hints={"instance": party})
-        using = owner.db
         with transaction.atomic():
             source = to_subject_ref(asserted_by)
-            subject = apps.get_model("parties", "Party")._base_manager.using(using).get(pk=party.pk)
+            subject = apps.get_model("parties", "Party")._base_manager.get(pk=party.pk)
             refs = [EvidenceReference.of(row) for row in evidence]
             existing = (
                 subject.statements.current().filter(aspect="handle", handle=handle, asserted_by=str(source)).first()
@@ -955,18 +950,18 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             handle_model = apps.get_model("parties", "Handle")
             party_model = apps.get_model("parties", "Party")
             handles: dict[int, Any] = {}
-            for batch in by_key(handle_model.objects.using(self.db), sorted(set(handle_ids))):
+            for batch in by_key(handle_model.objects.all(), sorted(set(handle_ids))):
                 handles.update((row.pk, row) for row in batch.order_by("pk").lock_if_supported())
             ids = set(party_ids) | {row.party_id for row in handles.values() if row.party_id is not None}
-            statements = self.handle_statements().using(self.db)
-            for statement_handles in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
+            statements = self.handle_statements()
+            for statement_handles in by_key(handle_model._base_manager.all(), sorted(handles)):
                 ids.update(
                     statements.filter(handle_id__in=statement_handles.values("pk")).values_list("subject_id", flat=True)
                 )
             parties: dict[int, Any] = {}
-            for party_batch in by_key(party_model.objects.using(self.db), sorted(ids)):
+            for party_batch in by_key(party_model.objects.all(), sorted(ids)):
                 parties.update((row.pk, row) for row in party_batch.order_by("pk").lock_if_supported())
-            for statement_handles in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
+            for statement_handles in by_key(handle_model._base_manager.all(), sorted(handles)):
                 keys = list(
                     statements.filter(handle_id__in=statement_handles.values("pk")).values_list("pk", flat=True)
                 )
@@ -1550,7 +1545,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """
 
         person_model = apps.get_model("parties", "Person")
-        person, _created = person_model.objects.db_manager(self._db or user._state.db).get_or_create(
+        person, _created = person_model.objects.get_or_create(
             user=user,
             defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
         )

@@ -23,9 +23,6 @@ if TYPE_CHECKING:
 class XrefWidgetMixin:
     """Carry the resource ledger model bound by ``AngeeResource``."""
 
-    using: str | None = None
-    """Selected resource import database; None preserves native router behavior."""
-
     ledger_model: type[Resource] | None = None
     """Concrete resource ledger model used to resolve xrefs."""
 
@@ -47,7 +44,7 @@ class XrefWidgetMixin:
         unrelated type.
         """
 
-        return resolve_xref(ref, self.ledger_model, self.addon_aliases, model=self.model, using=self.using)
+        return resolve_xref(ref, self.ledger_model, self.addon_aliases, model=self.model)
 
 
 class RecordRefWidget(XrefWidgetMixin, widgets.Widget):
@@ -68,7 +65,7 @@ class RecordRefWidget(XrefWidgetMixin, widgets.Widget):
         del row, kwargs
         if value in (None, ""):
             return None
-        return generic_target(resolve_xref(value, self.ledger_model, self.addon_aliases, using=self.using))
+        return generic_target(resolve_xref(value, self.ledger_model, self.addon_aliases))
 
 
 class RecordRefField(fields.Field):
@@ -146,8 +143,6 @@ class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):
 
 
 class ContentTypeForeignKeyWidget(widgets.ForeignKeyWidget):
-    using: str | None = None
-
     """Resolve a foreign key to ``contenttypes.ContentType`` from a model label.
 
     Content types are never ledger rows, so a seed names the target model by
@@ -159,12 +154,10 @@ class ContentTypeForeignKeyWidget(widgets.ForeignKeyWidget):
         """Return the content type of the model ``value`` names."""
 
         del row, kwargs
-        return resolve_content_type(value, using=self.using)
+        return resolve_content_type(value)
 
 
 class ContentTypeManyToManyWidget(widgets.ManyToManyWidget):
-    using: str | None = None
-
     """Resolve scalar or list model labels for many-to-many fields to ``ContentType``."""
 
     def clean(
@@ -176,10 +169,10 @@ class ContentTypeManyToManyWidget(widgets.ManyToManyWidget):
         """Return the content type of every model label in ``value``."""
 
         del row, kwargs
-        return [resolve_content_type(label, using=self.using) for label in many_to_many_values(value)]
+        return [resolve_content_type(label) for label in many_to_many_values(value)]
 
 
-class _NativeJSONWidget(widgets.JSONWidget):
+class NativeJSONWidget(widgets.JSONWidget):
     """Accept native YAML/JSON values as already-clean JSON values."""
 
     def clean(
@@ -262,18 +255,14 @@ def resolve_xref(
 
 
 @overload
-def resolve_ledger_xref[TargetT: models.Model](
-    handle: str, *, model: type[TargetT], using: str | None = None,
-) -> TargetT | None: ...
+def resolve_ledger_xref[TargetT: models.Model](handle: str, *, model: type[TargetT]) -> TargetT | None: ...
 
 
 @overload
-def resolve_ledger_xref(handle: str, *, model: None = None, using: str | None = None) -> models.Model | None: ...
+def resolve_ledger_xref(handle: str, *, model: None = None) -> models.Model | None: ...
 
 
-def resolve_ledger_xref(
-    handle: str, *, model: type[models.Model] | None = None, using: str | None = None,
-) -> models.Model | None:
+def resolve_ledger_xref(handle: str, *, model: type[models.Model] | None = None) -> models.Model | None:
     """Resolve a ``<addon>.<xref>`` handle through the composed resource ledger.
 
     Delegates aliasing and resolution to ``Resource.objects.resolve``. Returns
@@ -285,7 +274,7 @@ def resolve_ledger_xref(
 
     ledger_model = apps.get_model("resources", "Resource")
     try:
-        return ledger_model.objects.db_manager(using).resolve(handle, model=model)
+        return ledger_model.objects.resolve(handle, model=model)
     except ValueError:
         return None
 
@@ -311,7 +300,7 @@ def split_xref(
     raise ValueError(f"unresolved xref {value!r}")
 
 
-def resolve_content_type(label: Any, *, using: str | None = None) -> ContentType:
+def resolve_content_type(label: Any) -> ContentType:
     """Return the content type of the model a Django model label names.
 
     ``ModelLabelField`` owns which labels name a configured model and raises
@@ -321,7 +310,7 @@ def resolve_content_type(label: Any, *, using: str | None = None) -> ContentType
 
     if not isinstance(label, str):
         raise ValueError("model labels must be strings")
-    return ContentType.objects.db_manager(using).get_for_model(ModelLabelField.get_model(label))
+    return ContentType.objects.get_for_model(ModelLabelField.get_model(label))
 
 
 def many_to_many_values(value: Any) -> list[str]:

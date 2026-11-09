@@ -10,7 +10,7 @@ from django.core.exceptions import ImproperlyConfigured
 from rebac import actor_context, system_context
 
 from angee.resources.testing.models import Resource
-from angee.resources.widgets import _NativeJSONWidget, resolve_ledger_xref, split_xref
+from angee.resources.widgets import NativeJSONWidget, resolve_ledger_xref, split_xref
 from tests.conftest import create_platform_admin
 
 
@@ -69,7 +69,7 @@ def test_split_xref_prefers_the_longest_installed_addon_alias() -> None:
 def test_native_json_widget_renders_semantic_values_canonically() -> None:
     """Import-export diffs ignore object key order without conflating falsey JSON."""
 
-    widget = _NativeJSONWidget()
+    widget = NativeJSONWidget()
 
     assert widget.render({"second": 2, "first": 1}) == '{"first":1,"second":2}'
     assert widget.render({}) == "{}"

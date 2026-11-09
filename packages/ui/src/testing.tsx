@@ -13,6 +13,7 @@ import {
 } from "@angee/metadata";
 
 import { InAppLinkProvider, type InAppNavigator } from "./lib/in-app-link";
+import { TooltipProvider } from "./ui/tooltip";
 
 import type {
   MutationDialogProps,
@@ -31,7 +32,12 @@ export interface UiTestProviderOptions<T extends RefineTestDataProvider = Refine
   refineResources?: RefineTestProviderOptions["resources"];
 }
 
-/** Add resource projection and metadata context to the native Refine test harness. */
+/**
+ * Add resource projection and metadata context to the native Refine test harness.
+ * Tooltips open as soon as the pointer enters their trigger, so a hover assertion
+ * never races Base UI's wall-clock open delay; a nested `TooltipProvider` keeps
+ * its own delay.
+ */
 export function createUiTestProviders<T extends RefineTestDataProvider = Pick<RefineTestDataProvider, never>>(
   defaults: UiTestProviderOptions<T> = {},
 ) {
@@ -63,7 +69,9 @@ export function createUiTestProviders<T extends RefineTestDataProvider = Pick<Re
       resources={refineResources ?? [...refineResourcesFromDataResources(resources ?? [])]}
       providerNames={providerNames ?? ["console", ...(resources ?? []).map((resource) => resource.schemaName)]}
     >
-      {navigate ? <InAppLinkProvider navigate={navigate}>{content}</InAppLinkProvider> : content}
+      <TooltipProvider delay={0}>
+        {navigate ? <InAppLinkProvider navigate={navigate}>{content}</InAppLinkProvider> : content}
+      </TooltipProvider>
     </refine.Provider>;
   }
 

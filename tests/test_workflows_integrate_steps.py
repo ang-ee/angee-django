@@ -414,6 +414,29 @@ def test_transport_failure_uses_native_retry_without_advancing_cursor(cycle, fai
     assert run.output["counts"]["cycle_items"] == 2
 
 
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        (
+            ConnectionError("Connection refused by the source."),
+            "Retryable: Stream transport failed.; caused by ConnectionError: Connection refused by the source.",
+        ),
+        (
+            AddressResolutionError(),
+            "Retryable: The bridge host could not be resolved.; "
+            "caused by AddressResolutionError: URL host could not be resolved.",
+        ),
+    ],
+)
+def test_transport_failure_attempt_names_its_cause(cycle, failure, error):
+    """The attempt's error keeps the transport exception behind the step's generic retry message."""
+    cycle.transport.pages = [failure]
+    run = cycle.start(StreamStage, {"key": "records", "page_bound": 1})
+    assert runner.execute(step_row(run).pk)
+    attempt = StepAttempt.system_queryset().get(step_run=step_row(run))
+    assert (attempt.result, attempt.error) == ("failed", error)
+
+
 def test_rescan_rotates_bounded_identity_reads_before_waiting(cycle):
     cycle.transport.partitions = ("east", "west")
     for partition in cycle.transport.partitions:

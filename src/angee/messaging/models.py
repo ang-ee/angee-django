@@ -92,6 +92,7 @@ from angee.integrate.live import (
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.messaging.backends import (
     ChannelBackend,
+    OutboundEmailChannelMissing,
     PairingActionError,
     ParsedHandle,
     ParsedMessage,
@@ -137,11 +138,8 @@ def _actor_user_id(instance: models.Model) -> Any | None:
     ``idempotency_actor`` explicitly. That override does not change attribution or access.
     """
 
-    actor_getter = getattr(instance, "actor", None)
-    actor = actor_getter() if callable(actor_getter) else None
-    if actor is None:
-        actor = current_actor()
-    return actor_user_id(actor)
+    actor = instance.actor() if isinstance(instance, RebacMixin) else None
+    return actor_user_id(actor if actor is not None else current_actor())
 
 
 def _user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
@@ -412,9 +410,8 @@ class ThreadedModelMixin(models.Model):
 
         if isinstance(self, RebacMixin) and not self.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {self._meta.label}")
-        alias = type(self)._base_manager.db_manager(hints={"instance": self}).db
         with system_context(reason="messaging.threaded_record.delete"):
-            return super().delete(using=alias, keep_parents=keep_parents)
+            return super().delete(using=using, keep_parents=keep_parents)
 
     def message_thread(self, *, create: bool = True) -> Thread | None:
         """Return this row's chatter thread, optionally creating it."""
@@ -752,7 +749,7 @@ class ThreadedModelMixin(models.Model):
         """Run the elevated system-post write; split out for readability only."""
 
         record = attachment.require_threaded_target()
-        return message_model.objects.db_manager(self._state.db).post_to_thread(
+        return message_model.objects.post_to_thread(
             attachment.thread,
             body=body,
             created_by_id=_actor_user_id(self),
@@ -785,7 +782,7 @@ class ThreadedModelMixin(models.Model):
         grants access before adding a new follower.
         """
 
-        return apps.get_model("messaging", "ThreadFollower").objects.db_manager(self._state.db).subscribe(
+        return apps.get_model("messaging", "ThreadFollower").objects.subscribe(
             self,
             party=party,
             user=user,
@@ -798,7 +795,7 @@ class ThreadedModelMixin(models.Model):
         """Remove a party's explicit follow without changing any shares."""
 
         return bool(
-            apps.get_model("messaging", "ThreadFollower").objects.db_manager(self._state.db).unsubscribe(
+            apps.get_model("messaging", "ThreadFollower").objects.unsubscribe(
                 self,
                 party=party,
                 user=user,
@@ -810,7 +807,7 @@ class ThreadedModelMixin(models.Model):
         """Return whether a party, or the acting user's person, follows this record."""
 
         return bool(
-            apps.get_model("messaging", "ThreadFollower").objects.db_manager(self._state.db).is_following(
+            apps.get_model("messaging", "ThreadFollower").objects.is_following(
                 self,
                 party=party,
                 user=user,
@@ -932,9 +929,9 @@ class ThreadedModelMixin(models.Model):
             # System bookkeeping on an already-authorized create; see the
             # autofollow elevation note in MessageManager.post_to_thread.
             with system_context(reason="messaging.autofollow"):
-                account = get_user_model()._base_manager.using(self._state.db).get(pk=created_by_id)
+                account = get_user_model()._base_manager.get(pk=created_by_id)
                 if account.kind != "person" or self.thread_reader_allowed(account):
-                    follower_model.objects.db_manager(self._state.db).subscribe(
+                    follower_model.objects.subscribe(
                         self,
                         user=account,
                         role=ThreadAttachment.AttachmentRole.CHATTER,
@@ -952,24 +949,19 @@ class ThreadedModelMixin(models.Model):
 
         if user is not None and getattr(user, "is_authenticated", True) is False:
             return False
-        has_access = getattr(self, "has_access", None)
-        return bool(has_access("write")) if callable(has_access) else True
+        return self.has_access("write") if isinstance(self, RebacMixin) else True
 
     def _message_post_allowed(self) -> bool:
         """Return whether the ambient actor can post to this row."""
 
-        has_access = getattr(self, "has_access", None)
-        if not callable(has_access):
+        if not isinstance(self, RebacMixin):
             return True
-        return self._message_read_allowed() and bool(has_access(self.thread_post_access))
+        return self._message_read_allowed() and self.has_access(self.thread_post_access)
 
     def _message_read_allowed(self) -> bool:
         """Return whether the ambient actor can read personal chatter state."""
 
-        has_access = getattr(self, "has_access", None)
-        if not callable(has_access):
-            return True
-        return bool(has_access(self.thread_read_access))
+        return self.has_access(self.thread_read_access) if isinstance(self, RebacMixin) else True
 
     def thread_reader_allowed(self, user: Any) -> bool:
         """Check one recipient through the same explicit-account audience gate."""
@@ -989,7 +981,7 @@ class ThreadedModelMixin(models.Model):
         account_subjects.pop(None, None)
         if not account_subjects:
             return set()
-        if not callable(getattr(self, "has_access", None)) or not model_resource_type(self):
+        if not isinstance(self, RebacMixin) or not model_resource_type(self):
             return set(account_subjects)
         resource = to_object_ref(self)
         results = backend().check_bulk_permissions(
@@ -1105,10 +1097,13 @@ class Channel(Bridge, inherits="integrate.Integration"):
         return self.get_backend_class_impl().delivery_visibility_delay
 
     def outbound_sender(self) -> tuple[str, str]:
-        """Return this connected channel's backend-owned default email sender."""
+        """Return this connected channel's backend-owned default email sender.
+
+        A channel that is not connected raises :class:`OutboundEmailChannelMissing`.
+        """
 
         if self.lifecycle != self.Lifecycle.CONNECTED:
-            raise ValidationError("Select a connected email channel.")
+            raise OutboundEmailChannelMissing
         return self.backend.outbound_sender()
 
     def validate_webform_answers(self, answers: dict[str, Any]) -> None:
@@ -1446,7 +1441,6 @@ class ChatterHistory(ModelHistory):
     def chatter_record(snapshot: Any) -> models.Model | None:
         """Return the stored record whose chatter this version belongs to, or ``None``."""
 
-        using = snapshot._state.db
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         chatter = attachment_model.AttachmentRole.CHATTER
         if isinstance(snapshot.instance, attachment_model):
@@ -1454,16 +1448,16 @@ class ChatterHistory(ModelHistory):
                 return None
             content_type_id, object_id = snapshot.content_type_id, snapshot.object_id
         else:
-            edge = attachment_model._base_manager.using(using).filter(
+            edge = attachment_model._base_manager.filter(
                 thread_id=snapshot.id, role=chatter,
             ).values_list("content_type_id", "object_id").first()
             if edge is None:
                 return None
             content_type_id, object_id = edge
-        model = ContentType.objects.db_manager(using).get_for_id(content_type_id).model_class()
+        model = ContentType.objects.get_for_id(content_type_id).model_class()
         if model is None:
             return None
-        return model._base_manager.using(using).filter(pk=object_id).first()
+        return model._base_manager.filter(pk=object_id).first()
 
 
 class Thread(
@@ -1505,7 +1499,7 @@ class Thread(
         """Physical chatter containers under the current, flattened survivor."""
 
         survivor = self.canonical()
-        return type(self)._base_manager.using(survivor._state.db).redirect_group(survivor)
+        return type(self)._base_manager.redirect_group(survivor)
 
     def chatter_record_ref(self) -> RecordRef | None:
         """The canonical chatter host, without loading messages or the document body."""
@@ -1708,7 +1702,7 @@ class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel,
     def teardown_for_target(cls, target: models.Model) -> None:
         """Run messaging's retained-state cleanup for a deleted attachment target."""
 
-        cls.objects.db_manager(hints={"instance": target}).teardown_for_target(target)
+        cls.objects.teardown_for_target(target)
 
     sqid_prefix = "tha_"
     thread = models.ForeignKey(
@@ -1765,7 +1759,7 @@ class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel,
         chatter = rows.filter(role=cls.AttachmentRole.CHATTER)
         if not chatter.exists():
             return NotImplemented
-        target = cls.objects.db_manager(rows.db).ensure_for_record(survivor, title=str(survivor))
+        target = cls.objects.ensure_for_record(survivor, title=str(survivor))
         for edge in chatter.select_related("thread").order_by("pk"):
             thread = edge.thread.canonical()
             if thread.pk != target.thread_id:
@@ -2375,9 +2369,8 @@ class Message(
     def trash(self, *, reason: str = "", recount: bool = True) -> None:
         """Trash and cancel unsent delivery; restoring never re-arms a send."""
 
-        manager = type(self).objects.db_manager(hints={"instance": self})
         with transaction.atomic():
-            manager.cancel_delivery(self)
+            type(self).objects.cancel_delivery(self)
             super().trash(reason=reason)
             if recount:
                 self._recount_thread()
@@ -2396,8 +2389,8 @@ class Message(
             return
         thread_model = type(self).thread.field.related_model
         with system_context(reason="messaging.message.recount_thread"):
-            thread = thread_model._base_manager.db_manager(hints={"instance": self}).get(pk=self.thread_id)
-            type(self).objects.db_manager(hints={"instance": self})._recount_thread(thread)
+            thread = thread_model._base_manager.get(pk=self.thread_id)
+            type(self).objects._recount_thread(thread)
 
     def can_change_comment(self, *, post_access: bool, moderate_access: bool, actor_id: Any) -> bool:
         """Combine record moderation with the author's continuing post access."""
@@ -2488,9 +2481,7 @@ class Message(
         reference = self.threaded_record_ref()
         if reference is None:
             return None
-        return apps.get_model(reference.model_label)._base_manager.using(self._state.db).filter(
-            pk=reference.object_id,
-        ).first()
+        return apps.get_model(reference.model_label)._base_manager.filter(pk=reference.object_id).first()
 
     def threaded_record_ref(self) -> RecordRef | None:
         """The chatter host's identity, without loading its document body."""

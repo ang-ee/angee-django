@@ -18,7 +18,7 @@ from angee.extraction.acquisition import (
     PartCarrier,
     PreparedDocument,
     RecognitionOutput,
-    _text_part,
+    text_part,
 )
 from angee.extraction.contracts import (
     ExtractionPartKind,
@@ -158,7 +158,7 @@ class RecognizePageStep(_IOStep, Step[RecognizePageInput, RecognitionOutput, Inf
             response = recognize_page(value.page, file, model, config=ctx.config.request)
         except TransientInferenceError as error:
             raise Retryable(str(error)) from None
-        part = _text_part(
+        part = text_part(
             value.page.source_position,
             value.page.page_position,
             response.text,

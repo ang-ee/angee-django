@@ -23,7 +23,7 @@ class _ExitDuringPairingSession(LiveSession):
             subscription_state={},
             sqid="fixture",
         )
-        super().__init__(bridge, reporter=SimpleNamespace(), stop_event=threading.Event())  # type: ignore[arg-type]
+        super().__init__(bridge, stop_event=threading.Event())
         self.requested_stop = requested_stop
         self.release_connection = threading.Event()
         self.vendor_thread: threading.Thread | None = None
@@ -107,7 +107,7 @@ def test_asyncio_vendor_failure_queues_error_after_pairing() -> None:
         subscription_state={},
         sqid="fixture",
     )
-    session = FailedSession(bridge, reporter=SimpleNamespace(), stop_event=threading.Event())  # type: ignore[arg-type]
+    session = FailedSession(bridge, stop_event=threading.Event())
     session._connect()
 
     assert session.outcome_error is None

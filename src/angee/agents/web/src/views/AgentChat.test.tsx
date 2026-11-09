@@ -28,7 +28,6 @@ function native() {
 const props = {
   agentId: "agt_1",
   sessionId: "ase_1",
-  runtimeClass: "EXTERNAL",
   view: { kind: "record", type: "notes/note", sqid: "nte_1" },
 } as const;
 
@@ -52,22 +51,14 @@ describe("agent chat composition", () => {
     render(<Provider><AppRuntimeProvider runtime={{}}><AgentChat {...props} protocolVersion={2} /></AppRuntimeProvider></Provider>);
     expect(await screen.findByText("This agent uses an unsupported chat protocol.")).toBeTruthy();
   });
-  test("uses the default ACP surface when no transport contribution exists", async () => {
+  test("the chooser in the bar switches the ACP chat to another agent", async () => {
     const Provider = native();
-    render(<Provider><AppRuntimeProvider runtime={{}}><AgentChat {...props} sessionId={undefined} /></AppRuntimeProvider></Provider>);
-    expect(await screen.findByRole("textbox")).toBeTruthy();
-    expect(screen.queryByText("Chat is unavailable for this agent.")).toBeNull();
-  });
-
-  test("every runtime chats over ACP, with the chooser in the bar", async () => {
-    const Provider = native();
-    const agents: AgentRosterItem[] = ["external", "opencode"].map((runtime) => ({
-      id: runtime, name: runtime, runtime_class: runtime as AgentRosterItem["runtime_class"],
-      runtime_status: "RUNNING" as const, is_template: false, updated_at: "2026-09-21", model: null,
+    const agents: AgentRosterItem[] = ["external", "opencode"].map((id) => ({
+      id, name: id, runtime_status: "RUNNING" as const, is_template: false, updated_at: "2026-09-21", model: null,
     }));
     function Switcher() {
       const [selected, select] = useState("external");
-      return <AgentChat {...props} sessionId={undefined} agentId={selected} runtimeClass={selected} agents={agents} onSelectAgent={select} />;
+      return <AgentChat {...props} sessionId={undefined} agentId={selected} agents={agents} onSelectAgent={select} />;
     }
     render(
       <Provider><AppRuntimeProvider runtime={{}}>
@@ -81,6 +72,5 @@ describe("agent chat composition", () => {
     fireEvent.click(option);
     expect((await screen.findByRole("combobox", { name: "Switch agent" })).textContent).toContain("opencode");
     expect(await screen.findByRole("textbox")).toBeTruthy();
-    expect(screen.queryByText("Chat is unavailable for this agent.")).toBeNull();
   });
 });

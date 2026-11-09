@@ -224,7 +224,7 @@ def prepare_pages(
                 parser = _Text()
                 parser.feed(text)
                 text = "\n".join(parser.chunks)
-            parts.append(_text_part(position, 0, text, "native_text"))
+            parts.append(text_part(position, 0, text, "native_text"))
             pages.append(PageCarrier(source_position=position, page_position=0))
         elif mime == "application/pdf":
             with pdfium.PdfDocument(content) as document:
@@ -235,7 +235,7 @@ def prepare_pages(
                     with closing(document[number]) as page, closing(page.get_textpage()) as textpage:
                         text = textpage.get_text_range().strip()
                         if text:
-                            parts.append(_text_part(position, number, text, "pdf_text"))
+                            parts.append(text_part(position, number, text, "pdf_text"))
                             pages.append(PageCarrier(source_position=position, page_position=number))
                         else:
                             dimensions = page.get_size()
@@ -284,11 +284,15 @@ def _raster(
     )
 
 
-def _text_part(
+def text_part(
     source: int, page: int, text: str, method: str, *,
     kind: ExtractionPartKind = cast(ExtractionPartKind, ExtractionPartKind.NATIVE_TEXT),
     **metadata: Any,
 ) -> DocumentPart:
+    """Return plain-text evidence for one source page, addressed by the text's SHA-256 digest.
+
+    ``method`` names the acquisition tier; ``metadata`` carries the remaining ``DocumentPart`` fields.
+    """
     return DocumentPart(
         source,
         page,

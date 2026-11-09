@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import connections, models, transaction
+from django.db import connection, models, transaction
 from django.utils import timezone
 from django_compose.models import Composable
 from rebac import PermissionDenied, system_context
@@ -46,6 +46,7 @@ from angee.messaging.managers import MessageQuerySet
 from angee.posts.backends import FeedBackend, ParsedPost
 from angee.posts.managers import (
     FeedFollowManager,
+    MessagePostsManager,
     PostMetricsManager,
     QuotaManager,
 )
@@ -355,9 +356,12 @@ class MessagePublic(Composable, extends="messaging.Message"):
 
     ``is_original_post`` marks the root post of a public thread (a post with no parent).
     It has no producer in base messaging, so posts owns it and the composer folds it
-    onto the single ``messaging.Message`` table.
+    onto the single ``messaging.Message`` table. ``Message.posts`` is the separately
+    named manager carrying public-post landing; ``Message.objects`` stays the
+    message's default manager.
     """
 
+    posts = MessagePostsManager()
 
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("is_original_post",)
 
@@ -439,8 +443,6 @@ class MessagePublic(Composable, extends="messaging.Message"):
         """
 
         message = cast("Message", self)
-        using = type(message)._base_manager.db_manager(hints={"instance": message}).db
-        connection = connections[using]
         table = connection.ops.quote_name(message._meta.db_table)
         body_sql, body_params = apps.get_model("messaging", "Part").objects.plain_body_sql(
             "c.id",

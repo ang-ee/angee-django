@@ -18,9 +18,11 @@ import { AppMenu } from "./AppMenu";
 import { MenuTree, type ChromeMenuItem } from "./menu-tree";
 import { ChromePlaceProvider } from "./refine-menu";
 import { InAppLinkProvider, routerNavigator } from "../lib/in-app-link";
+import { createUiTestProviders } from "../testing";
 
 const media = vi.hoisted(() => ({ large: false }));
-afterEach(() => { cleanup(); vi.restoreAllMocks(); window.sessionStorage.clear(); });
+const { Provider, clearClients } = createUiTestProviders();
+afterEach(() => { cleanup(); clearClients(); vi.restoreAllMocks(); window.sessionStorage.clear(); });
 
 vi.mock("../lib/use-media-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/use-media-query")>()),
@@ -569,7 +571,7 @@ function renderRail({ confined = false, preferences: initialPreferences = {}, me
   const router = createRouter({ routeTree: root.addChildren(["/projects", "/settings"].map((path) =>
     createRoute({ getParentRoute: () => root, path }))),
     history: createMemoryHistory({ initialEntries: ["/projects"] }) });
-  render(<RouterProvider router={router} />);
+  render(<Provider><RouterProvider router={router} /></Provider>);
   return { preferences: () => saved.current, router };
 }
 

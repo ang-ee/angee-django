@@ -378,7 +378,7 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=
                 ),
             )
             for target, health, body in targets:
-                if update_model._base_manager.using(placement._state.db).filter(
+                if update_model._base_manager.filter(
                     **generic_target(target).lookups(update_model, "target"),
                     body=body,
                 ).exists():
@@ -390,7 +390,7 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=
                     created_by_id=placement.created_by_id,
                     updated_by_id=placement.updated_by_id,
                 )
-                report.sudo(reason="portfolio.demo.report").save(using=placement._state.db)
+                report.sudo(reason="portfolio.demo.report").save()
 
 
 class UpdateQuerySet[UpdateT: Update](AngeeHistoryQuerySet[UpdateT]):

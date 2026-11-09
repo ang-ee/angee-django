@@ -32,9 +32,9 @@ export function SourcesPage(): React.ReactElement {
         <Column field="last_synced_at" />
       </List>
       <Form resource={MODEL}>
-        {/* repository + kind are fixed at create. `kind` is `createOnly` (not
-            `readOnly`) so the `createDefaults` "skill" seed is actually submitted —
-            `mutationData` drops readOnly fields — then locked read-only on edit. */}
+        {/* repository + kind are fixed at create: `createOnly` keeps them editable
+            on create, where `kind` shows its `createDefaults` "skill" seed, and
+            read-only on edit. */}
         <Field name="repository" createOnly />
         <Group label={t("sources.pointer")} columns={2}>
           <Field name="kind" createOnly />

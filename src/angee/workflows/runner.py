@@ -7,9 +7,10 @@ import time
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from datetime import timedelta
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
@@ -24,13 +25,14 @@ from angee.base.exceptions import exception_text
 from angee.base.signals import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset
-from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _sqlstate, isolate_failure
+from angee.workflows.context import StepContext
 from angee.workflows.states import (
     RecordOperation,
     RunStatus,
     StepRunStatus,
 )
 from angee.workflows.steps import AttemptRecord, Fail, Retryable, StepMode, Superseded
+from angee.workflows.transactions import RETRYABLE_SQLSTATES, database_timeout, isolate_failure, sqlstate
 
 logger = logging.getLogger(__name__)
 TICK_CANDIDATE_LIMIT = 1000
@@ -39,9 +41,6 @@ TICK_CANDIDATE_LIMIT = 1000
 One wide map of 1,000 waiting items fits in a sweep. A locked early candidate
 cannot hide later items within this bound; each is independently rechecked.
 """
-
-if TYPE_CHECKING:
-    from angee.workflows.context import StepContext
 
 
 class Runner:
@@ -76,20 +75,16 @@ class Runner:
             raise
         except Exception as failure:
             if isinstance(failure, OperationalError) and (
-                _sqlstate(failure) in RETRYABLE_SQLSTATES
+                sqlstate(failure) in RETRYABLE_SQLSTATES
                 or step_run is not None and step_run.step.mode == StepMode.IO
             ):
                 raise
             logger.exception("Workflow run %s failed during advancement.", run.pk)
-            run.fail_advance(step_run, settlement, AttemptRecord.failure(
-                exception_text(failure), diagnostic_error=exception_text(failure, diagnostic=True),
-                stacktrace=traceback.format_exc(), timed_out=isinstance(failure, SoftTimeLimitExceeded),
-            ))
+            # An advancement failure fails the run; it never schedules a step retry.
+            run.fail_advance(step_run, settlement, replace(self._failure(failure), retryable=False))
 
     def execute(self, step_run_id: int) -> bool:
         """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""
-        from angee.workflows.context import StepContext
-
         run_id = self.step_model.system_queryset().filter(
             pk=step_run_id, status=StepRunStatus.READY,
         ).values_list("run_id", flat=True).first()
@@ -116,7 +111,7 @@ class Runner:
                     ctx = StepContext(
                         run=run, step_run=step_run, step=step, attempt=attempt, actor=actor,
                         input=step.parse_input(step_run.input), config=step.parse_config(node.config),
-                        now=attempt.started_at,
+                        now=attempt.started_at, runner=self,
                     )
                     if step.mode == StepMode.DATABASE:
                         settlement = self._run_body(ctx)
@@ -147,11 +142,17 @@ class Runner:
 
     @staticmethod
     def _failure(failure: Exception) -> AttemptRecord:
+        """Classify a handled failure for its attempt.
+
+        The step keeps the resolved message; the attempt's diagnostic error names
+        each exception type along its cause chain, and its stacktrace keeps the trace.
+        """
         return AttemptRecord.failure(
-            exception_text(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
-            retryable=isinstance(failure, (Retryable,)) or (
+            exception_text(failure), diagnostic_error=exception_text(failure, diagnostic=True),
+            timed_out=isinstance(failure, SoftTimeLimitExceeded),
+            retryable=isinstance(failure, Retryable) or (
                 isinstance(failure, OperationalError)
-                and _sqlstate(failure) in RETRYABLE_SQLSTATES
+                and sqlstate(failure) in RETRYABLE_SQLSTATES
             ),
             stacktrace=traceback.format_exc(),
         )
@@ -161,7 +162,7 @@ class Runner:
         database = ctx.step.mode == StepMode.DATABASE
         try:
             with (
-                _database_timeout(ctx.step.timeout) if database else nullcontext()
+                database_timeout(ctx.step.timeout) if database else nullcontext()
             ), (transaction.atomic() if database else nullcontext()), actor_context(ctx.actor), changeset(
                 fresh=True, activity="run", origin=ctx.run,
             ) as failed:
@@ -205,7 +206,7 @@ class Runner:
             raise Superseded
         with self.run_model.objects.hold(step_run.run_id, timeout=remaining) as run:
             with system_context(reason="workflows.attempt"), (
-                _database_timeout(step_run.deadline_at - timezone.now())
+                database_timeout(step_run.deadline_at - timezone.now())
             ), transaction.atomic():
                 current = self.step_model.objects.fenced(step_run).lock_if_supported(no_key=True).first()
                 if run is None or current is None:

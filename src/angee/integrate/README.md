@@ -16,8 +16,10 @@ domain adapters own protocol parsing and ingest policy.
 
 Manual requests and scheduled polls share `Bridge.mark_sync_queued` admission.
 A live sync lock or retained workflow run keeps its progress and declines a new
-task. A stale syncing marker without either owner remains recoverable. Callers
-use `Bridge.request_sync`'s result to report whether they queued work.
+task; a declined scheduled poll still claims its interval
+(`Bridge.admit_due_sync`). A stale syncing marker without either owner remains
+recoverable. Callers use `Bridge.request_sync`'s result to report whether they
+queued work.
 `Integration.request_sync` requests every bridge capability of one integration
 and counts the syncs it queued.
 

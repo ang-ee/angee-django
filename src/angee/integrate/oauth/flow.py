@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from authlib.oauth2.rfc7636 import create_s256_code_challenge
 from django.apps import apps
@@ -22,6 +22,9 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
+
+if TYPE_CHECKING:
+    from angee.integrate.models import OAuthClient
 
 _SESSION_OAUTH_CLIENT_PREFIX = "angee.integrate.oauth.flow:"
 
@@ -44,7 +47,7 @@ def _oauth_client_model() -> Any:
 
 def issue_flow(
     request: HttpRequest,
-    oauth_client: Any,
+    oauth_client: OAuthClient,
     redirect_uri: str,
     *,
     user_id: str | None = None,
@@ -77,14 +80,14 @@ def issue_flow(
 
 def start(
     request: HttpRequest,
-    oauth_client: Any,
+    oauth_client: OAuthClient,
     redirect_uri: str,
     *,
     user_id: str | None = None,
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
     integration_id: str = "",
-    authorize_url_builder: Callable[[Any, str, state.StateRecord, str], str] | None = None,
+    authorize_url_builder: Callable[[OAuthClient, str, state.StateRecord, str], str] | None = None,
 ) -> OAuthStart:
     """Issue state and return the browser redirect facts for one OAuth/OIDC flow."""
 
@@ -106,7 +109,7 @@ def start(
     )
 
 
-def remembered_oauth_client(request: HttpRequest, state_token: str) -> Any:
+def remembered_oauth_client(request: HttpRequest, state_token: str) -> OAuthClient:
     """Return the enabled, session-bound OAuth client for one pending state token."""
 
     session = cast(Any, request).session
@@ -119,7 +122,7 @@ def remembered_oauth_client(request: HttpRequest, state_token: str) -> Any:
 
 
 def consume_validated_state(
-    oauth_client: Any,
+    oauth_client: OAuthClient,
     state_token: str,
     redirect_uri: str,
     *,
@@ -128,13 +131,16 @@ def consume_validated_state(
     """Consume one state record and fail closed when it does not match this flow."""
 
     record = state.consume(state_token)
-    oauth_client_id = str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", "")))
-    if record.flow != expected_flow or record.oauth_client_id != oauth_client_id or record.redirect_uri != redirect_uri:
+    if (
+        record.flow != expected_flow
+        or record.oauth_client_id != str(oauth_client.sqid)
+        or record.redirect_uri != redirect_uri
+    ):
         raise OAuthFlowError(INVALID_STATE, 400)
     return record
 
 
-def enabled_oauth_client(oauth_client_sqid: str) -> Any:
+def enabled_oauth_client(oauth_client_sqid: str) -> OAuthClient:
     """Return one enabled OAuth client addressed by sqid, or raise."""
 
     model = _oauth_client_model()
@@ -168,7 +174,7 @@ def pkce_challenge(code_verifier: str | None) -> str | None:
 
 
 def _default_authorize_url(
-    oauth_client: Any,
+    oauth_client: OAuthClient,
     state_token: str,
     record: state.StateRecord,
     redirect_uri: str,

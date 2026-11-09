@@ -107,7 +107,6 @@ export const ResolveSessionForView = graphql(`
       agent_name
       status
       model_handle
-      runtime_class
       session_id
     }
   }
@@ -130,7 +129,6 @@ export const AgentRoster = graphql(`
       id
       name
       runtime_status
-      runtime_class
       is_template
       updated_at
       model {

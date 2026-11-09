@@ -11,6 +11,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.core.cache import DEFAULT_CACHE_ALIAS, cache, caches
@@ -19,6 +20,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
+
+if TYPE_CHECKING:
+    from angee.integrate.models import OAuthClient
 
 _DEFAULT_STATE_TTL_SECONDS = 600
 _CACHE_PREFIX = "angee.integrate.oauth.state:"
@@ -53,7 +57,7 @@ class StateRecord:
 
 
 def issue(
-    oauth_client: object,
+    oauth_client: OAuthClient,
     redirect_uri: str,
     *,
     user_id: str | None = None,
@@ -66,11 +70,11 @@ def issue(
     _check_state_cache()
     state_token = secrets.token_urlsafe(32)
     record = StateRecord(
-        oauth_client_id=str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", ""))),
+        oauth_client_id=str(oauth_client.sqid),
         redirect_uri=redirect_uri,
         user_id=user_id,
         nonce=secrets.token_urlsafe(32),
-        code_verifier=secrets.token_urlsafe(64) if getattr(oauth_client, "supports_pkce", False) else None,
+        code_verifier=secrets.token_urlsafe(64) if oauth_client.supports_pkce else None,
         created_at=timezone.now(),
         next_path=next_path,
         flow=flow,

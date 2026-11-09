@@ -36,7 +36,6 @@ from angee.integrate.testing.integration import Integration
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Handle, Message, MessageEdge, Reaction, Thread
 from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
-from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
 from angee.provenance.statements import (
     SourceKind,
@@ -437,13 +436,13 @@ def test_feed_sync_overlays_post_metrics_and_public_payload(posts_tables: None) 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None) -> None:
+def test_posts_land_is_the_shared_public_overlay_owner(posts_tables: None) -> None:
     """Archive clients can land the same public shape without a Feed backend."""
 
     del posts_tables
     feed = _feed("archive-post-owner")
     with system_context(reason="test direct posts owner"):
-        landed = land_posts(
+        landed = Message.posts.land(
             feed,
             [_post("archive-p1", subject_url="https://example.test/archive-p1")],
             owner_id=feed.owner_id,
@@ -465,7 +464,7 @@ def test_reply_counts_report_measured_posts_of_one_channel_and_omit_unmeasured_o
     feed = _feed("reply-counts")
     other = _feed("reply-counts-other")
     with system_context(reason="test reply counts"):
-        land_posts(
+        Message.posts.land(
             feed,
             [
                 _post("measured", metrics=ParsedMetrics(reply_count=3)),
@@ -474,7 +473,7 @@ def test_reply_counts_report_measured_posts_of_one_channel_and_omit_unmeasured_o
             ],
             owner_id=feed.owner_id,
         )
-        land_posts(other, [_post("elsewhere", metrics=ParsedMetrics(reply_count=9))], owner_id=other.owner_id)
+        Message.posts.land(other, [_post("elsewhere", metrics=ParsedMetrics(reply_count=9))], owner_id=other.owner_id)
         counts = PostMetrics.objects.reply_counts(
             channel=feed,
             platform="youtube",
@@ -490,7 +489,7 @@ def test_provider_visibility_restores_only_provider_stamped_trash(posts_tables: 
     del posts_tables
     feed = _feed("provider-moderation")
     with system_context(reason="test provider moderation"):
-        land_posts(feed, [replace(_post("moderated"), hidden=True)], owner_id=feed.owner_id)
+        Message.posts.land(feed, [replace(_post("moderated"), hidden=True)], owner_id=feed.owner_id)
         message = Message._base_manager.get(external_id="moderated")
         assert message.is_trashed and message.provider_hidden
         assert message.trash_reason == Message.PROVIDER_TRASH_REASON

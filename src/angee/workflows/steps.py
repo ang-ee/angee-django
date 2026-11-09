@@ -59,14 +59,18 @@ class RetryPolicy:
         return self.backoff * 2 ** max(0, retries - 1)
 
 
-class _Settlement:
-    """Shared in-process protocol for public and planner-owned settlements."""
+class Settlement:
+    """What a step returns: the attempt's completion or continuation, applied by its transition.
 
-    def check(self, step: type[Step], *, config: Any = None) -> _Settlement:
+    Step bodies return ``Done``, ``Wait``, ``NextPage``, ``Fail`` or ``Ask``; the
+    map and await planners own their private subclasses.
+    """
+
+    def check(self, step: type[Step], *, config: Any = None) -> Settlement:
         """Validate the body's values before any row transition."""
         return self
 
-    def admit(self, ctx: Any) -> _Settlement:
+    def admit(self, ctx: Any) -> Settlement:
         """Prepare checked settlement resources inside the body's transaction."""
         return self
 
@@ -80,7 +84,7 @@ class _Settlement:
 
 
 @dataclass(frozen=True)
-class Done(_Settlement):
+class Done(Settlement):
     """A completed step carrying its raw output and named success outcome."""
 
     output: Any = field(default_factory=dict)
@@ -106,7 +110,7 @@ class Done(_Settlement):
 
 
 @dataclass(frozen=True)
-class Wait(_Settlement):
+class Wait(Settlement):
     """A record or time wait preserving the checkpoint and retry count."""
 
     until: datetime | None = None
@@ -140,7 +144,7 @@ class Wait(_Settlement):
 
 
 @dataclass(frozen=True)
-class NextPage(_Settlement):
+class NextPage(Settlement):
     """A completed page whose checkpoint continues in a new attempt."""
 
     state: Any = field(default_factory=dict)
@@ -153,7 +157,7 @@ class NextPage(_Settlement):
 
 
 @dataclass(frozen=True)
-class Fail(_Settlement):
+class Fail(Settlement):
     """An unsuccessful attempt whose body writes must roll back."""
 
     error: str = ""
@@ -166,7 +170,7 @@ class Fail(_Settlement):
 
 
 @dataclass(frozen=True)
-class Ask(_Settlement):
+class Ask(Settlement):
     """One question admitted with the step's continuation state."""
 
     request: DecisionRequest
@@ -198,14 +202,12 @@ class Ask(_Settlement):
         return rows.to_waiting(kind=WaitingKind.DECISION, state=self.state, decision_id=self.decision_id)
 
 
-type Settlement = Done | Wait | NextPage | Fail | Ask
-
 
 @dataclass(frozen=True)
 class AttemptRecord:
     """The runner's classified outcome and diagnostics for one claimed attempt."""
 
-    settlement: _Settlement
+    settlement: Settlement
     result: AttemptResult = cast(AttemptResult, AttemptResult.SUCCEEDED)
     error: str = ""
     diagnostic_error: str | None = None
@@ -214,7 +216,7 @@ class AttemptRecord:
     timed_out: bool = False
 
     @classmethod
-    def from_settlement(cls, settlement: _Settlement) -> AttemptRecord:
+    def from_settlement(cls, settlement: Settlement) -> AttemptRecord:
         """Record a body's settlement; a ``Fail`` records a failed attempt with its error."""
         if isinstance(settlement, Fail):
             return cls(settlement, result=cast(AttemptResult, AttemptResult.FAILED), error=settlement.error)
@@ -355,7 +357,7 @@ class Step[I, O, C](ImplBase):
         return strip_null_bytes(get_type_adapter(Any).dump_python({} if state is None else state, mode="json"))
 
     @classmethod
-    def check(cls, settlement: _Settlement, *, config: Any = None) -> _Settlement:
+    def check(cls, settlement: Settlement, *, config: Any = None) -> Settlement:
         """Validate and serialize a body's settlement once, at the body boundary.
 
         Helpers construct plain values. The runner calls this inside the body's
@@ -364,11 +366,11 @@ class Step[I, O, C](ImplBase):
         Pydantic receives the original values exactly once,
         preserving its validation aliases, validators and serialization behavior.
         """
-        if not isinstance(settlement, _Settlement):
+        if not isinstance(settlement, Settlement):
             raise ValidationError("A step must return a settlement.")
         return settlement.check(cls, config=config)
 
-    def run(self, ctx: Any) -> _Settlement:
+    def run(self, ctx: Any) -> Settlement:
         """Execute under the context actor with the class's declared transaction boundary."""
         raise NotImplementedError
 
