@@ -202,6 +202,37 @@ def test_authorization_flow_needs_pkce_or_a_client_secret() -> None:
     assert "code_challenge" not in OAuthClientProtocol(confidential).authorize_url(**flow)
 
 
+def test_authorize_url_reads_no_client_secret_and_omits_an_empty_scope() -> None:
+    """A PKCE flow builds its URL from public registration facts; provider extras never replace the grant's own."""
+
+    class ConfidentialClient:
+        client_id = "confidential-client"
+        authorize_endpoint = "https://provider.example/oauth/authorize"
+        supports_pkce = True
+        authorize_param_values = {"audience": "https://api.example", "client_id": "spoofed", "state": "spoofed"}
+
+        @property
+        def client_secret(self) -> str:
+            raise AssertionError("Building the authorize URL must not read the client secret.")
+
+    url = OAuthClientProtocol(ConfidentialClient()).authorize_url(
+        state="state-token",
+        redirect_uri="https://app.example/callback",
+        scopes=(),
+        code_challenge="challenge",
+    )
+
+    assert parse.parse_qsl(parse.urlsplit(url).query) == [
+        ("response_type", "code"),
+        ("client_id", "confidential-client"),
+        ("redirect_uri", "https://app.example/callback"),
+        ("state", "state-token"),
+        ("audience", "https://api.example"),
+        ("code_challenge", "challenge"),
+        ("code_challenge_method", "S256"),
+    ]
+
+
 def test_oauth_client_claim_accessors_support_dotted_paths() -> None:
     """Provider profile documents can expose identity claims below nested objects."""
 
