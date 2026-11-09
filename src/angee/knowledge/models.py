@@ -24,7 +24,7 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models.signals import post_save
 from django.utils import timezone
 from django_compose.models import Composable
@@ -580,10 +580,9 @@ class Page(
     def trash(self, *, reason: str = "") -> None:
         """Trash this page and, with the same stamp, every untrashed page below it."""
 
-        db = self._state.db
         with transaction.atomic():
             super().trash(reason=reason)
-            type(self).system_queryset().using(db).subtree_of(self).exclude(pk=self.pk).trash(
+            type(self).system_queryset().subtree_of(self).exclude(pk=self.pk).trash(
                 reason=self.trash_reason, at=self.trashed_at,
             )
 
@@ -594,9 +593,8 @@ class Page(
         page took a restored title meanwhile.
         """
 
-        db = self._state.db
         with transaction.atomic():
-            pages = type(self).system_queryset(lock=("self",)).using(db)
+            pages = type(self).system_queryset(lock=("self",))
             if self.parent_id is not None and pages.filter(pk=self.parent_id, is_trashed=True).exists():
                 raise ValidationError({"parent": "Restore the folder that contains this page first."})
             together = pages.subtree_of(self).exclude(pk=self.pk).filter(trashed_at=self.trashed_at).trashed()
@@ -659,14 +657,12 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
             raise ValidationError("Write a note before posting.")
         role = self.model.normalize_role(role)
         target = self.model.require_saved(target, "target")
-        using = self._db or router.db_for_write(self.model, instance=target)
-        bindings = self.db_manager(using, hints={"instance": target})
-        boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
+        boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with boundary, transaction.atomic():
             reference = generic_target(target)
             claim_values = [reference.content_type.pk, reference.object_id, vault.pk, role, body]
             if idempotency_key is not None:
-                binding = changeset_model().objects.db_manager(using).claim_created(
+                binding = changeset_model().objects.claim_created(
                     f"knowledge.record_note:{user_id}",
                     idempotency_key,
                     values=claim_values,
@@ -677,10 +673,8 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
                     return binding.with_actor(actor)
             page_model = self.model._meta.apps.get_model("knowledge", "Page")
             title = f"{body.splitlines()[0][:100]} · {timezone.now().isoformat()}"
-            page = page_model.objects.db_manager(using, hints={"instance": vault}).create_in(
-                vault, title=title, body=body,
-            )
-            binding = bindings.upsert(target=target, page=page, role=role)
+            page = page_model.objects.create_in(vault, title=title, body=body)
+            binding = self.upsert(target=target, page=page, role=role)
             if idempotency_key is not None:
                 require_changeset().record_created(binding)
             return binding
@@ -715,17 +709,13 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
         """
 
         target = self.model.require_saved(target, "target")
-        using = self._db or router.db_for_write(self.model, instance=target)
-        bindings = self.db_manager(using, hints={"instance": target})
         with transaction.atomic():
             reference = generic_target(target)
             with system_context(reason="knowledge.record_binding.lock"):
                 canonical = reference.content_type.model_class()
                 if canonical is None:
                     raise ValueError("Knowledge binding target model is unavailable.")
-                canonical._base_manager.db_manager(using, hints={"instance": target}).select_for_update(
-                    of=row_lock_paths(canonical), no_key=True,
-                ).get(
+                canonical._base_manager.select_for_update(of=row_lock_paths(canonical), no_key=True).get(
                     pk=reference.object_id
                 )
             owner = page
@@ -734,14 +724,13 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
                 with system_context(reason="knowledge.record_binding.page_lock"):
                     owner = (
                         type(owner)
-                        ._base_manager.db_manager(using, hints={"instance": owner})
-                        .select_for_update(of=row_lock_paths(type(owner)), no_key=True)
+                        ._base_manager.select_for_update(of=row_lock_paths(type(owner)), no_key=True)
                         .get(pk=owner.pk)
                     )
                     assert isinstance(owner, TrashMixin)
                     if owner.is_trashed:
                         raise ValidationError("Cannot bind a page in the trash.")
-            binding, _created = bindings.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
+            binding, _created = self.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
             return binding
 
     def unbind(
@@ -939,7 +928,7 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
                         body_hash=source.body_hash,
                         word_count=source.word_count,
                     )
-                    body.save_base(raw=True, force_insert=True, using=self.db)
+                    body.save_base(raw=True, force_insert=True)
                     copies.append(body.with_actor(actor))
             apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
             send_created_batch(
@@ -964,7 +953,6 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
         actor = current_actor()
         rows = self.with_actor(actor) if actor is not None else self.all()
         locked = rows.select_for_update()
-        using = locked.db
         with transaction.atomic():
             markdown = locked.get(pk=page.pk)
             if expected_hash is not None and expected_hash != markdown.body_hash:
@@ -975,7 +963,7 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
                 markdown.title = title
                 markdown.full_clean()
                 fields.add("title")
-            markdown.save(using=using, update_fields=fields, expected_revision=expected_revision)
+            markdown.save(update_fields=fields, expected_revision=expected_revision)
             return markdown
 
     # -- structure-aware edits --------------------------------------------
@@ -1355,12 +1343,11 @@ class LinkManager[LinkT: Link](_LinkManagerBase[LinkT]):
             return
         page_model = apps.get_model("knowledge", "Page")
         vault_ids = {body.vault_id for body in batch}
-        using = self._db or router.db_for_write(self.model, instance=batch[0])
-        links = self.model._base_manager.db_manager(using)
+        links = self.model._base_manager
         with system_context(reason="knowledge.backlinks"), transaction.atomic():
             resolved = {
                 (vault_id, title): pk
-                for vault_id, title, pk in page_model._base_manager.using(using).filter(
+                for vault_id, title, pk in page_model._base_manager.filter(
                     vault_id__in=vault_ids, is_trashed=False,
                 )
                 .values_list("vault_id", "title", "pk")
@@ -1391,9 +1378,8 @@ class LinkManager[LinkT: Link](_LinkManagerBase[LinkT]):
         affected = models.Q(outgoing_links__target_page_id__in=[page.pk for page in batch])
         for page in batch:
             affected |= models.Q(vault_id=page.vault_id, outgoing_links__target_text=page.title)
-        using = self._db or router.db_for_write(self.model, instance=batch[0])
         with system_context(reason="knowledge.backlinks.targets"):
-            self.db_manager(using).rebuild_many(markdown._base_manager.using(using).filter(affected).distinct())
+            self.rebuild_many(markdown._base_manager.filter(affected).distinct())
 
 
 class Link(AngeeDataModel, concrete=True):
