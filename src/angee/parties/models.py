@@ -57,12 +57,14 @@ from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
+from angee.parties.connections import ConnectionHandle
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
     CircleManager,
     HandleManager,
     PartyManager,
     PartyStatementQuerySet,
+    RelationshipManager,
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
@@ -702,6 +704,18 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         """Return the handle value for Django displays."""
 
         return self.value
+
+    @classmethod
+    def identified_connection(cls, parsed: ConnectionHandle) -> bool:
+        """Whether a connection names its account by a real identifier, not by a display name only.
+
+        An email address, a phone number or a platform id identifies one account.
+        An adapter may override that inference with its typed confidence.
+        """
+
+        if parsed.confidence is not None:
+            return parsed.confidence >= 1.0
+        return bool(parsed.external_id) or parsed.platform in {cls.Platform.EMAIL, cls.Platform.PHONE}
 
     @classmethod
     def normalize_value(cls, platform: str, value: str) -> str:
@@ -1437,7 +1451,7 @@ class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, Angee
     ``ended_at``. ``title`` carries the vCard ``TITLE`` ("CTO", "Godmother of").
     """
 
-    objects = StatementSubjectManager()
+    objects = RelationshipManager()
     sqid_prefix = "rel_"
     statements = StatementRecords(
         link="integrate.RecordLink",
