@@ -943,6 +943,9 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         through the drive's grant. Raises :class:`exceptions.UploadTooLarge` or
         :class:`exceptions.UploadTypeRefused` before anything is stored, and
         :class:`exceptions.UploadTargetNotFound` while no image drive can exist.
+        An image-drive convenience, it returns the bare File rather than
+        :meth:`ingest_bytes`'s ``(file, created)``: a shared, ownerless image is
+        never its caller's to discard, so whether this call created it decides nothing.
         """
 
         mime = require_image(content)
