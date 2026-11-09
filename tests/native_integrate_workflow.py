@@ -150,7 +150,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
 
     def test_file_and_drive_resources_review_then_map(self):
         with actor_context(self.actor):
-            file = apps.get_model("storage.File").objects.ingest_bytes(
+            file, _created = apps.get_model("storage.File").objects.ingest_bytes(
                 b"fixture", filename="bundle.zip", drive_id=str(self.source.sqid),
             )
         for suffix, subject in (("file", file), ("drive", self.source)):
@@ -185,7 +185,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
 
     def test_unrecognized_source_finishes_without_review(self):
         with actor_context(self.actor):
-            file = apps.get_model("storage.File").objects.ingest_bytes(
+            file, _created = apps.get_model("storage.File").objects.ingest_bytes(
                 b"fixture", filename="unknown.zip", drive_id=str(self.source.sqid),
             )
         workflow = load_workflow(
@@ -200,7 +200,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
 
     def test_reviewer_can_skip_without_importing(self):
         with actor_context(self.actor):
-            file = apps.get_model("storage.File").objects.ingest_bytes(
+            file, _created = apps.get_model("storage.File").objects.ingest_bytes(
                 b"fixture", filename="bundle.zip", drive_id=str(self.source.sqid),
             )
         workflow = load_workflow(
@@ -221,7 +221,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
 
     def test_failed_map_item_preserves_successful_item(self):
         with actor_context(self.actor):
-            file = apps.get_model("storage.File").objects.ingest_bytes(
+            file, _created = apps.get_model("storage.File").objects.ingest_bytes(
                 b"fixture", filename="bundle.zip", drive_id=str(self.source.sqid),
             )
         with patch.dict(settings.ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES, {
@@ -248,7 +248,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
 
     def test_mixed_target_resources_route_without_a_decision(self):
         with actor_context(self.actor):
-            file = apps.get_model("storage.File").objects.ingest_bytes(
+            file, _created = apps.get_model("storage.File").objects.ingest_bytes(
                 b"fixture", filename="bundle.zip", drive_id=str(self.source.sqid),
             )
         with patch.dict(settings.ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES, {

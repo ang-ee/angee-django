@@ -1558,7 +1558,7 @@ def test_threaded_model_post_accepts_storage_attachments(composed_tables: None, 
     with system_context(reason="test threaded model attachment setup"):
         user = user_model.objects.create_user(username="attach-author", email="attach-author@example.com")
         _storage_drive(tmp_path, owner=user)
-        file = StorageFile.objects.ingest_bytes(b"Attachment body", filename="brief.txt", owner_id=user.pk)
+        file, _created = StorageFile.objects.ingest_bytes(b"Attachment body", filename="brief.txt", owner_id=user.pk)
         ticket = ThreadedTicket.objects.create(title="Attachment case")
 
     with actor_context(user):

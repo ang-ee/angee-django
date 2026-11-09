@@ -230,7 +230,7 @@ def test_part_database_load_eagerly_fetches_content_without_creating_a_cache(
     message, parts = part_tree
     with system_context(reason="messaging part file setup"), mute_changes():
         _storage_drive(tmp_path, owner=None)
-        file = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
+        file, _created = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
         Part.objects.filter(pk=parts["attachment"].pk).update(file_id=file.pk)
     with CaptureQueriesContext(connection) as queries:
         ordered = Part.objects.reading_order_for_message(message)
@@ -259,7 +259,7 @@ def test_prefetched_tree_reloads_incomplete_fields_and_content(
     message, parts = part_tree
     with system_context(reason="messaging cached content setup"), mute_changes():
         _storage_drive(tmp_path, owner=None)
-        file = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
+        file, _created = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
         Part.objects.filter(pk=parts["attachment"].pk).update(file_id=file.pk)
         queryset = Part._base_manager.select_related("fragment", "file", "file__mime_type")
         if cache_state == "deferred_parent":
@@ -289,7 +289,7 @@ def test_attach_file_appends_one_part_per_file_and_returns_it_again(
     message, parts = part_tree
     with system_context(reason="messaging attach file"), mute_changes():
         _storage_drive(tmp_path, owner=None)
-        file = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
+        file, _created = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
         attached = Part.objects.attach_file(message, file)
         again = Part.objects.attach_file(message, file, name="renamed.txt", position=9)
     assert again.pk == attached.pk

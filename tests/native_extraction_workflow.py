@@ -134,7 +134,7 @@ class ExtractionWorkflowTests(TransactionTestCase):
         else:
             content.write(b"\xef\xbb\xbf")  # An empty UTF-8 document with a recognizable encoding.
         with actor_context(self.actor):
-            source = apps.get_model("storage.File").objects.ingest_bytes(
+            source, _created = apps.get_model("storage.File").objects.ingest_bytes(
                 content.getvalue(),
                 filename="document.pdf" if pages else "empty.txt",
                 drive_id=str(self.drive.sqid),

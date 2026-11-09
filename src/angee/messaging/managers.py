@@ -4496,11 +4496,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if parsed.content is None:
             return None
         file_model = apps.get_model("storage", "File")
-        return file_model.objects.ingest_bytes(
+        file, _created = file_model.objects.ingest_bytes(
             parsed.content,
             filename=filename or fallback_attachment_name(parsed.type),
             owner_id=created_by_id,
         )
+        return file
 
     def _write_participants(
         self,
