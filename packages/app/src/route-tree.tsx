@@ -225,7 +225,7 @@ export function layoutAuthGuard(
 /** Read route identity through the shared cache and the route's session failure policy. */
 export async function loadRouteIdentity(authProvider: RefineAuthProvider, queryClient: QueryClient) {
   try {
-    return await queryClient.ensureQueryData(identityQueryOptions(authProvider));
+    return await queryClient.query({ ...identityQueryOptions(authProvider), staleTime: "static" });
   } catch (error) {
     if (!isUnauthorizedError(error)) throw new AuthIdentityCheckError();
     return null;

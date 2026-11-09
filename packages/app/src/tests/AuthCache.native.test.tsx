@@ -134,9 +134,9 @@ for (const action of ["login", "logout"] as const) {
       const client = f.state().client;
       const cached = f.options("cached");
       const pending = f.options("pending");
-      await client.fetchQuery(cached);
+      await client.query(cached);
       expect(client.getQueryData(cached.queryKey)).toEqual({ rows: [{ id: "previous-session:cached" }] });
-      const oldRequest = client.fetchQuery(pending).catch((error: unknown) => error);
+      const oldRequest = client.query(pending).catch((error: unknown) => error);
       await waitFor(() => expect(f.pendingStarted()).toBe(true));
       expect(client.getQueryCache().find({ queryKey: pending.queryKey })?.getObserversCount()).toBe(observePending ? 1 : 0);
 
@@ -149,7 +149,7 @@ for (const action of ["login", "logout"] as const) {
       // The same key can now belong to the new session while the old transport
       // is still outstanding. A late old response must not overwrite it.
       const next = { rows: [{ id: `${action === "login" ? "next-session" : "anonymous"}:pending` }] };
-      await expect(client.fetchQuery(f.options("pending"))).resolves.toEqual(next);
+      await expect(client.query(f.options("pending"))).resolves.toEqual(next);
       await act(async () => {
         f.finishOldRequest();
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -171,9 +171,9 @@ for (const action of ["login", "logout"] as const) {
       const client = f.state().client;
       const cached = f.options("cached");
       const pending = f.options("pending");
-      const rows = await client.fetchQuery(cached);
+      const rows = await client.query(cached);
       const cachedQuery = client.getQueryCache().find({ queryKey: cached.queryKey });
-      const oldRequest = client.fetchQuery(pending);
+      const oldRequest = client.query(pending);
       await waitFor(() => expect(f.pendingStarted()).toBe(true));
 
       await act(async () => { expect((await f.authenticate()).success).toBe(false); });

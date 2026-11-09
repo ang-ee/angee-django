@@ -70,7 +70,7 @@ async function recoverAroundReads() {
     .mockResolvedValue(undefined);
   const { connection, queryClient, onRestored, failRequest } = boundary(probe);
   const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-  const read = (key: string) => queryClient.fetchQuery({
+  const read = (key: string) => queryClient.query({
     queryKey: [key], retry: false, queryFn: () => Promise.reject(new Error("Request failed.")),
   }).catch(() => undefined);
   await read("before");

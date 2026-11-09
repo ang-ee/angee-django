@@ -27,14 +27,14 @@ test("pushes update only requested fields and preserve sections absent from a pa
 test("native HTTP completion and post-mutation refetch can supersede live cache writes", async () => {
   const client = new QueryClient();
   let complete!: (data: OperatorSnapshotQueryData) => void;
-  const request = client.fetchQuery({ queryKey: servicesKey, queryFn: () => new Promise<OperatorSnapshotQueryData>((resolve) => { complete = resolve; }) });
+  const request = client.query({ queryKey: servicesKey, queryFn: () => new Promise<OperatorSnapshotQueryData>((resolve) => { complete = resolve; }) });
   updateSnapshotQueries(client, { services: [] });
   expect(client.getQueryData(servicesKey)).toEqual({ services: [] });
   complete({ services: [service] });
   await request;
   expect(client.getQueryData(servicesKey)).toEqual({ services: [service] });
   updateSnapshotQueries(client, { services: [] });
-  await client.fetchQuery({ queryKey: servicesKey, staleTime: 0, queryFn: async () => ({ services: [service] }) });
+  await client.query({ queryKey: servicesKey, staleTime: 0, queryFn: async () => ({ services: [service] }) });
   expect(client.getQueryData(servicesKey)).toEqual({ services: [service] });
   client.clear();
 });
@@ -52,7 +52,7 @@ test("a provider-isolated query is not overwritten by daemon snapshots", () => {
 test("an unrelated partial push cannot mark a pending pane as loaded", async () => {
   const client = new QueryClient();
   let complete!: (data: OperatorSnapshotQueryData) => void;
-  const request = client.fetchQuery({ queryKey: sourcesKey, queryFn: () => new Promise<OperatorSnapshotQueryData>((resolve) => { complete = resolve; }) });
+  const request = client.query({ queryKey: sourcesKey, queryFn: () => new Promise<OperatorSnapshotQueryData>((resolve) => { complete = resolve; }) });
   updateSnapshotQueries(client, { services: [] });
   expect(client.getQueryData(sourcesKey)).toBeUndefined();
   complete({ sources: [] });
