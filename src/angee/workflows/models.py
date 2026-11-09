@@ -53,7 +53,6 @@ from angee.workflows.managers import (
     StepWatchManager,
     WorkflowManager,
     WorkflowRunManager,
-    isolate_failure,
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.signals import run_stopping
@@ -73,6 +72,7 @@ from angee.workflows.states import (
 )
 from angee.workflows.steps import AttemptRecord, Fail, Step
 from angee.workflows.subjects import RunSubject
+from angee.workflows.transactions import isolate_failure
 from angee.workflows.triggers import (
     TriggerEventManager,
     TriggerGrantTarget,
