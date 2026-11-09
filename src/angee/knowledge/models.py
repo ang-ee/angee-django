@@ -53,7 +53,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id, relation_read_queryset
+from angee.base.permissions import actor_user_id, scoped_relation_read
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit, RetrievalResult
@@ -399,8 +399,8 @@ class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], 
     def _related_pages(self, *, trashed: bool) -> Self:
         """Scoped pages in one trash state, read through the shared relation policy."""
 
-        pages = cast(Self, relation_read_queryset(self.model, self))
-        return (pages.trashed() if trashed else pages.untrashed()).scoped()
+        pages = cast(Self, scoped_relation_read(self.model, self))
+        return pages.trashed() if trashed else pages.untrashed()
 
 _PageManagerBase = AngeeHistoryManager.from_queryset(PageQuerySet)
 
