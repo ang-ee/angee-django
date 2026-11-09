@@ -111,7 +111,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         if not display_name:
             raise ValidationError({"name": "A mount name is required."})
         try:
-            mount_mode = MountMode(str(getattr(mode, "value", mode)).strip().lower())
+            mount_mode = MountMode(mode)
         except ValueError as error:
             raise ValidationError({"mode": f"Unsupported mount mode: {mode}"}) from error
 
