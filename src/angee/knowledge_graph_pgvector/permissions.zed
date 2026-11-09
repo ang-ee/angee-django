@@ -18,7 +18,7 @@ definition knowledge_graph_pgvector/passage_embedding {
 
     permission read = passage->read
     permission write = passage->write
-    permission delete = passage->write | model->delete
+    permission delete = passage->write + model->delete
 }
 
 definition knowledge_graph_pgvector/entity {
