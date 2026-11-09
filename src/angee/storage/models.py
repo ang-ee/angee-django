@@ -276,9 +276,11 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
 
         An ownerless volume on the default backend (:meth:`create_on_default_backend`),
         so images land wherever the deployment keeps its files, apart from any user
-        file. Its one grant, ``viewer`` to every signed-in user (``auth/user:*``),
-        is written when it is provisioned: whoever holds an image's id reads it,
-        while which image a record shows stays with that record's readers. A drive
+        file. It owns its items, so an image stays ownerless whoever ingests it: an
+        acting user never becomes its owner. Its one grant, ``viewer`` to every
+        signed-in user (``auth/user:*``), is written when it is provisioned: whoever
+        holds an image's id reads it, while which image a record shows stays with
+        that record's readers. A drive
         already holding the slug serves only while it keeps that shape, with no
         other grant and no file anyone owns: an operator's drive of the name is
         refused and logged, so images never deduplicate onto its files nor open it
@@ -292,18 +294,22 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
             drive = self.model.system_queryset().filter(slug=slug).first()
             if drive is None:
                 try:
-                    drive = self.create_on_default_backend(slug=slug, name="Images")
+                    drive = self.create_on_default_backend(slug=slug, name="Images", owns_items=True)
                 except ValidationError:
                     # A concurrent first use created it, or no default drive exists yet.
                     drive = self.model.system_queryset().filter(slug=slug).first()
             if drive is None:
                 return None
-            grants = set(drive.direct_record_access())
+            grants = set(drive.system_direct_record_access())
             if grants - {everyone} or drive.files.exclude(owner=None).exists():
                 logger.error("Drive %r holds grants or owned files, so it cannot serve as the image drive.", slug)
                 return None
             if not grants:
                 drive.system_grant_record_access(everyone.relation, everyone.subject)
+            if not drive.owns_items:
+                # A drive provisioned before it owned its items gains that at its next use.
+                drive.owns_items = True
+                drive.save(update_fields=["owns_items", "updated_at"])
             return drive
 
 
@@ -937,7 +943,10 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                 row.storage_path = saved_path
                 row.save(update_fields=["storage_path"])
             try:
-                result = row.finalize(expected_hash=digest, expected_size=expected_size)
+                # The ingest verb is elevated: the bytes in hand are the authority, not the caller's write.
+                result = row.sudo(reason="storage.ingest.finalize").finalize(
+                    expected_hash=digest, expected_size=expected_size,
+                )
             except exceptions.UploadConflict:
                 if row.upload_envelope.get("failure_reason") == "duplicate":
                     row.sudo(reason="storage.ingest.duplicate").purge()
