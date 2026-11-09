@@ -275,13 +275,12 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
         """
 
         inserting = self._state.adding
-        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         recording = inserting and current_changeset() is self
         with (
             transaction.atomic(using=alias),
             system_context(reason="changeset.record") if recording else nullcontext(),
         ):
-            kwargs["using"] = alias
             super().save(*args, **kwargs)
             if inserting:
                 write_relationships(
@@ -291,7 +290,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
                             relation=relation,
                             subject=subject,
                         )
-                        for relation, subjects in self.proposed_relationships(using=alias).items()
+                        for relation, subjects in self.proposed_relationships().items()
                         for subject in subjects
                     ]
                 )

@@ -17,7 +17,7 @@ from typing import Any, ClassVar, Self, cast
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.db.models.query import ModelIterable
 from django.utils import timezone
@@ -939,7 +939,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
         if actor is None or StatementSourceMixin.source_kind_for(actor) != SourceKind.PERSON:
             super().save(*args, **kwargs)
             return
-        using = kwargs.get("using") or type(self)._base_manager.db_manager(hints={"instance": self}).db
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         update_fields = kwargs.get("update_fields")
         saved_fields = (
             None
@@ -951,7 +951,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
             }
         )
         with actor_context(actor), transaction.atomic(using=using):
-            previous = type(self)._base_manager.using(using).filter(pk=self.pk).first() if self.pk else None
+            previous = type(self)._base_manager.filter(pk=self.pk).first() if self.pk else None
             super().save(*args, **kwargs)
             resolved_fields: set[str] = set()
             for manager in self.statement_managers():
@@ -978,7 +978,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                     manager.set(aspect=aspect, values=values, asserted_by=actor)
                     resolved_fields.update(fields if saved_fields is None else set(fields) & saved_fields)
             if resolved_fields:
-                self.refresh_from_db(using=using, fields=sorted(resolved_fields))
+                self.refresh_from_db(fields=sorted(resolved_fields))
 
     def require_statement_write(self, actor: SubjectRef | None) -> None:
         """Admit assertions through the subject's native REBAC write scope."""

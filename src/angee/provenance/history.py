@@ -102,7 +102,7 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
             raise ImproperlyConfigured(f"{self.model._meta.label}: no native history capture owner.")
         by_database: dict[str, list[models.Model]] = {}
         for obj in objects:
-            alias = obj._state.db or router.db_for_write(tracked, instance=obj)
+            alias = router.db_for_write(tracked, instance=obj)
             by_database.setdefault(alias, []).append(obj)
         captured = []
         for alias, sources in by_database.items():
@@ -354,7 +354,7 @@ class ModelHistory(HistoricalRecords):
                 group.seen.remove(key)
                 return
             current_changeset(required=True, record=True)
-            alias = using or instance._state.db or router.db_for_write(model, instance=instance)
+            alias = using or router.db_for_write(model, instance=instance)
             names = [field.attname for field in self.fields_included(model)]
             try:
                 snapshot = model._base_manager.using(alias).only(*names).get(pk=instance.pk)
