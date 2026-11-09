@@ -412,9 +412,8 @@ class ThreadedModelMixin(models.Model):
 
         if isinstance(self, RebacMixin) and not self.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {self._meta.label}")
-        alias = type(self)._base_manager.db_manager(hints={"instance": self}).db
         with system_context(reason="messaging.threaded_record.delete"):
-            return super().delete(using=alias, keep_parents=keep_parents)
+            return super().delete(using=using, keep_parents=keep_parents)
 
     def message_thread(self, *, create: bool = True) -> Thread | None:
         """Return this row's chatter thread, optionally creating it."""
