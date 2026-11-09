@@ -7,10 +7,9 @@ import time
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
 from datetime import timedelta
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
@@ -28,15 +27,13 @@ from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
 from angee.workflows.states import (
-    DONE_OUTCOME,
-    ERROR_OUTCOME,
     AttemptResult,
     RecordOperation,
     RunStatus,
     StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _Settlement
+from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _AttemptRecord
 
 logger = logging.getLogger(__name__)
 TICK_CANDIDATE_LIMIT = 1000
@@ -48,38 +45,6 @@ cannot hide later items within this bound; each is independently rechecked.
 
 if TYPE_CHECKING:
     from angee.workflows.context import StepContext
-
-
-@dataclass(frozen=True)
-class _AttemptRecord:
-    """Runner-owned outcome and diagnostics for one claimed attempt."""
-
-    settlement: _Settlement
-    result: AttemptResult = cast(AttemptResult, AttemptResult.SUCCEEDED)
-    error: str = ""
-    diagnostic_error: str | None = None
-    stacktrace: str = ""
-    retryable: bool = False
-    timed_out: bool = False
-
-    @classmethod
-    def from_settlement(cls, settlement: _Settlement) -> _AttemptRecord:
-        if isinstance(settlement, Fail):
-            return cls(settlement, result=cast(AttemptResult, AttemptResult.FAILED), error=settlement.error)
-        return cls(settlement)
-
-    @classmethod
-    def failure(
-        cls, error: str, *, diagnostic_error: str | None = None, stacktrace: str = "",
-        retryable: bool = False, timed_out: bool = False,
-    ) -> _AttemptRecord:
-        return cls(
-            Fail(error=error), result=cast(
-                AttemptResult, AttemptResult.TIMED_OUT if timed_out else AttemptResult.FAILED,
-            ),
-            error=error, diagnostic_error=diagnostic_error, stacktrace=stacktrace,
-            retryable=retryable, timed_out=timed_out,
-        )
 
 
 class Runner:
@@ -102,113 +67,27 @@ class Runner:
         records: list[Any] | None = None,
         notes: list[dict[str, str]] | None = None,
     ) -> None:
-        """Settle, plan and publish once, keeping successful body writes on data errors.
+        """Advance a held run, classifying a failure for the run to record durably.
 
-        The caller holds the run lock. A lost fence or transient database error
-        escapes to roll back the transaction. Planning has its own savepoint so
-        a bad plan cannot poison the transaction recording the durable failure.
+        The caller holds the run lock. A lost fence, a retryable database error, or
+        a database error settling an IO attempt escapes to roll back the caller's
+        transaction; every other failure becomes the run's, its body writes kept.
         """
-        # The caller's run may carry a requester's pin, which its related manager keeps
-        # inside system_context; settling and planning always act elevated.
-        step_runs = run.step_runs.system_context(reason="workflows.advance")
-        with system_context(reason="workflows.advance"):
-            terminal = run.is_terminal
-            if terminal and settlement is None:
-                return
-            output: Any
-            try:
-                if settlement is not None:
-                    with transaction.atomic():
-                        step_runs.settle(step_run, settlement)
-                        if not isinstance(settlement.settlement, Fail):
-                            if records:
-                                for record in records:
-                                    record_model = type(record)
-                                    record_model.objects.get_or_create(
-                                        run_id=record.run_id, step_run_id=record.step_run_id,
-                                        content_type_id=record.content_type_id, object_id=record.object_id,
-                                        operation=record.operation, defaults={"label": record.label},
-                                    )
-                            if notes:
-                                step_runs.filter(pk=step_run.pk).update(notes=[*step_run.notes, *notes])
-                # A preserved IO sibling may settle after failure. Its evidence
-                # changes, but the terminal run and graph plan stay untouched.
-                if not terminal:
-                    with transaction.atomic():
-                        # The reverse manager needs its connecting FK to populate
-                        # Django's known-related-object cache without one query per row.
-                        rows = list(step_runs.only(
-                            "run_id", "node_key", "map_index", "status", "outcome", "waiting_kind", "input",
-                        ))
-                        definition = run.version.definition
-                        if definition.unrouted_failure(rows):
-                            status, outcome, output = RunStatus.FAILED, ERROR_OUTCOME, {}
-                        else:
-                            planned = definition.ready_nodes(
-                                rows, map_concurrency=settings.ANGEE_WORKFLOW_MAP_CONCURRENCY,
-                            )
-                            wake = [node.node_key for node in planned if node.existing]
-                            if wake:
-                                step_runs.filter(node_key__in=wake).to_ready()
-                            new_steps = [
-                                step_runs.model(
-                                    run=run, node_key=node.node_key, map_index=node.map_index,
-                                    status=node.status, rank=node.rank,
-                                ) for node in planned if not node.existing
-                            ]
-                            if new_steps:
-                                step_runs.bulk_create(new_steps)
-                            statuses = set(step_runs.values_list("status", flat=True))
-                            if statuses & {StepRunStatus.READY, StepRunStatus.RUNNING}:
-                                status, outcome, output = RunStatus.RUNNING, "", {}
-                            elif StepRunStatus.WAITING in statuses:
-                                status, outcome, output = RunStatus.WAITING, "", {}
-                            else:
-                                status = RunStatus.SUCCEEDED
-                                outcome, output = definition.result_for(step_runs.all(), run.input) or (
-                                    DONE_OUTCOME, {},
-                                )
-                        run._write_state(status=status, outcome=outcome, output=output)
-            except Superseded:
+        try:
+            run.advance(step_run, settlement, records=records, notes=notes)
+        except Superseded:
+            raise
+        except Exception as failure:
+            if isinstance(failure, OperationalError) and (
+                _sqlstate(failure) in RETRYABLE_SQLSTATES
+                or step_run is not None and step_run.step.mode == StepMode.IO
+            ):
                 raise
-            except Exception as failure:
-                if isinstance(failure, OperationalError) and (
-                    _sqlstate(failure) in RETRYABLE_SQLSTATES
-                    or step_run is not None and step_run.step.mode == StepMode.IO
-                ):
-                    raise
-                logger.exception("Workflow run %s failed during advancement.", run.pk)
-                run_error = exception_text(failure)
-                attempt_error = exception_text(failure, diagnostic=True)
-                timed_out = isinstance(failure, SoftTimeLimitExceeded)
-                recorded_on_attempt = False
-                if step_run is not None:
-                    with _record_failure("settlement failure"):
-                        # A planning error follows a completed settlement and
-                        # cannot replace it. A failed settlement still owns its fence.
-                        if step_runs.filter(pk=step_run.pk, status=StepRunStatus.RUNNING).exists():
-                            step_runs.settle(step_run, _AttemptRecord.failure(
-                                run_error, diagnostic_error=attempt_error,
-                                stacktrace=traceback.format_exc(), timed_out=timed_out,
-                            ))
-                            recorded_on_attempt = True
-                with _record_failure("attempt close"):
-                    if step_run is not None:
-                        closed = step_run.attempts.close(
-                            AttemptResult.TIMED_OUT if timed_out else AttemptResult.FAILED,
-                            attempt_error if timed_out else settlement.error if settlement else "",
-                            traceback.format_exc() if timed_out else settlement.stacktrace if settlement else "",
-                        )
-                        if recorded_on_attempt or timed_out and closed:
-                            run_error = ""
-                if not terminal:
-                    with _record_failure("run state"):
-                        run._write_state(status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error)
-            if terminal:
-                # Preserved IO evidence changed without a run state transition.
-                with _record_failure("run change publication"):
-                    run.refresh_from_db()
-                    publish_change(run, action="update", update_fields=None)
+            logger.exception("Workflow run %s failed during advancement.", run.pk)
+            run.fail_advance(step_run, settlement, _AttemptRecord.failure(
+                exception_text(failure), diagnostic_error=exception_text(failure, diagnostic=True),
+                stacktrace=traceback.format_exc(), timed_out=isinstance(failure, SoftTimeLimitExceeded),
+            ))
 
     def execute(self, step_run_id: int) -> bool:
         """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""

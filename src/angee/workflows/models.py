@@ -57,6 +57,7 @@ from angee.workflows.managers import (
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
+    DONE_OUTCOME,
     ERROR_OUTCOME,
     NAME_MAX_LENGTH,
     AttemptResult,
@@ -67,7 +68,7 @@ from angee.workflows.states import (
     StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import Step
+from angee.workflows.steps import Fail, Step, _AttemptRecord
 from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import (
     TriggerEventManager,
@@ -471,6 +472,109 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         with _record_failure("run change publication"):
             self.refresh_from_db()
             publish_change(self, action="update", update_fields=None)
+
+    def advance(
+        self,
+        step_run: Any = None,
+        settlement: _AttemptRecord | None = None,
+        *,
+        records: list[Any] | None = None,
+        notes: list[dict[str, str]] | None = None,
+    ) -> None:
+        """Settle an attempt, plan the graph and write this held run's state.
+
+        Settlement and planning have their own savepoints, so a bad plan cannot
+        poison the transaction that records the failure. A terminal run only keeps
+        a preserved IO sibling's late settlement and republishes its evidence; its
+        plan and state stay untouched. Failures propagate to the runner, which
+        classifies them for :meth:`fail_advance`.
+        """
+        terminal = self.is_terminal
+        if terminal and settlement is None:
+            return
+        # This run may carry a requester's pin, which its related manager keeps
+        # inside system_context; settling and planning always act elevated.
+        step_runs = self.step_runs.system_context(reason="workflows.advance")
+        with system_context(reason="workflows.advance"):
+            if settlement is not None:
+                with transaction.atomic():
+                    step_runs.settle(step_run, settlement)
+                    if not isinstance(settlement.settlement, Fail):
+                        for record in records or ():
+                            type(record).objects.get_or_create(
+                                run_id=record.run_id, step_run_id=record.step_run_id,
+                                content_type_id=record.content_type_id, object_id=record.object_id,
+                                operation=record.operation, defaults={"label": record.label},
+                            )
+                        if notes:
+                            step_runs.filter(pk=step_run.pk).update(notes=[*step_run.notes, *notes])
+            if terminal:
+                self._publish_update()
+                return
+            output: Any
+            with transaction.atomic():
+                # The reverse manager needs its connecting FK to populate
+                # Django's known-related-object cache without one query per row.
+                rows = list(step_runs.only(
+                    "run_id", "node_key", "map_index", "status", "outcome", "waiting_kind", "input",
+                ))
+                definition = self.version.definition
+                if definition.unrouted_failure(rows):
+                    status, outcome, output = RunStatus.FAILED, ERROR_OUTCOME, {}
+                else:
+                    planned = definition.ready_nodes(rows, map_concurrency=settings.ANGEE_WORKFLOW_MAP_CONCURRENCY)
+                    wake = [node.node_key for node in planned if node.existing]
+                    if wake:
+                        step_runs.filter(node_key__in=wake).to_ready()
+                    new_steps = [
+                        step_runs.model(
+                            run=self, node_key=node.node_key, map_index=node.map_index,
+                            status=StepRunStatus(node.status), rank=node.rank,
+                        ) for node in planned if not node.existing
+                    ]
+                    if new_steps:
+                        step_runs.bulk_create(new_steps)
+                    statuses = set(step_runs.values_list("status", flat=True))
+                    if statuses & {StepRunStatus.READY, StepRunStatus.RUNNING}:
+                        status, outcome, output = RunStatus.RUNNING, "", {}
+                    elif StepRunStatus.WAITING in statuses:
+                        status, outcome, output = RunStatus.WAITING, "", {}
+                    else:
+                        status = RunStatus.SUCCEEDED
+                        outcome, output = definition.result_for(step_runs.all(), self.input) or (DONE_OUTCOME, {})
+                self._write_state(status=status, outcome=outcome, output=output)
+
+    def fail_advance(self, step_run: Any, settlement: _AttemptRecord | None, failure: _AttemptRecord) -> None:
+        """Record an advancement failure the runner classified, each write in its own savepoint.
+
+        A planning failure follows a completed settlement and cannot replace it; a
+        settlement that failed still owns its fence and records the failure on its
+        attempt. An open run fails with the error unless its attempt already holds it.
+        """
+        terminal = self.is_terminal
+        step_runs = self.step_runs.system_context(reason="workflows.advance")
+        run_error = failure.error
+        with system_context(reason="workflows.advance"):
+            if step_run is not None:
+                recorded_on_attempt = False
+                with _record_failure("settlement failure"):
+                    if step_runs.filter(pk=step_run.pk, status=StepRunStatus.RUNNING).exists():
+                        step_runs.settle(step_run, failure)
+                        recorded_on_attempt = True
+                with _record_failure("attempt close"):
+                    if failure.timed_out:
+                        error, stacktrace = failure.diagnostic_error or "", failure.stacktrace
+                    else:
+                        error, stacktrace = (settlement.error, settlement.stacktrace) if settlement else ("", "")
+                    closed = step_run.attempts.close(failure.result, error, stacktrace)
+                    if recorded_on_attempt or failure.timed_out and closed:
+                        run_error = ""
+            if terminal:
+                # A preserved IO sibling's evidence changed without a run state transition.
+                self._publish_update()
+            else:
+                with _record_failure("run state"):
+                    self._write_state(status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error)
 
     def graph(self, actor: Any) -> RunGraph | None:
         """Read this run's frozen topology; ``None`` once the reader can no longer read the run.

@@ -22,6 +22,7 @@ from angee.jobs.timeouts import TASK_SETTLEMENT_RESERVE_SECONDS, task_time_budge
 from angee.workflows.states import (
     DONE_OUTCOME,
     ERROR_OUTCOME,
+    AttemptResult,
     Outcome,
     WaitingKind,
 )
@@ -198,6 +199,38 @@ class Ask(_Settlement):
 
 
 type Settlement = Done | Wait | NextPage | Fail | Ask
+
+
+@dataclass(frozen=True)
+class _AttemptRecord:
+    """The runner's classified outcome and diagnostics for one claimed attempt."""
+
+    settlement: _Settlement
+    result: AttemptResult = cast(AttemptResult, AttemptResult.SUCCEEDED)
+    error: str = ""
+    diagnostic_error: str | None = None
+    stacktrace: str = ""
+    retryable: bool = False
+    timed_out: bool = False
+
+    @classmethod
+    def from_settlement(cls, settlement: _Settlement) -> _AttemptRecord:
+        if isinstance(settlement, Fail):
+            return cls(settlement, result=cast(AttemptResult, AttemptResult.FAILED), error=settlement.error)
+        return cls(settlement)
+
+    @classmethod
+    def failure(
+        cls, error: str, *, diagnostic_error: str | None = None, stacktrace: str = "",
+        retryable: bool = False, timed_out: bool = False,
+    ) -> _AttemptRecord:
+        return cls(
+            Fail(error=error), result=cast(
+                AttemptResult, AttemptResult.TIMED_OUT if timed_out else AttemptResult.FAILED,
+            ),
+            error=error, diagnostic_error=diagnostic_error, stacktrace=stacktrace,
+            retryable=retryable, timed_out=timed_out,
+        )
 
 
 class EmptyOutput(BaseModel):

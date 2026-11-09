@@ -23,7 +23,6 @@ from angee.base.models.locks import StaleRevisionError
 from angee.jobs.enqueue import celery_app
 from angee.workflows import managers as managers_module
 from angee.workflows import models as models_module
-from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid
 from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet
 from angee.workflows.runner import runner
@@ -1495,7 +1494,7 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
     workflow = load_workflow(document("entry"), key="expired_failure_recovery", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = StepRun.system_queryset().get(run=run)
-    original_settle, original_record_failure = StepRunQuerySet.settle, runner_module._record_failure
+    original_settle, original_record_failure = StepRunQuerySet.settle, models_module._record_failure
     settlements = []
 
     def reject_result(self, row, settlement):
@@ -1512,7 +1511,7 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
             yield
 
     monkeypatch.setattr(StepRunQuerySet, "settle", reject_result)
-    monkeypatch.setattr(runner_module, "_record_failure", expire_before_failure_recovery)
+    monkeypatch.setattr(models_module, "_record_failure", expire_before_failure_recovery)
 
     assert runner.execute(step_run.pk) is False
     assert settlements == ["done", "fail"]
