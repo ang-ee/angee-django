@@ -63,7 +63,7 @@ EXPECTED_VERBS = {
         "cancel cancel_abandoned prune reap_interrupted reprocess start"
     ),
     "workflows.WorkflowRun.queryset": "about blocking for_subject hold hold_owned retention_candidates working_on",
-    "decisions.Decision.manager": "ask decide withdraw",
+    "decisions.Decision.manager": "ask",
     "decisions.Decision.queryset": (
         "attention_expression for_records open open_expression open_for waiting_on"
     ),
@@ -72,8 +72,9 @@ EXPECTED_VERBS = {
 EXPECTED_ROW_VERBS = {
     "workflows.WorkflowRun": "advance cancel_on_commit fail_advance reopen",
     "workflows.StepRun": "reap redispatch wake",
+    "decisions.Decision": "decide withdraw",
 }
-"""Transitions the rows own; their managers no longer carry them."""
+"""Transitions each row owns, rather than its manager."""
 
 EXPECTED_TYPES = {
     "awaits": "AwaitRun AwaitRunConfig AwaitRunInput",

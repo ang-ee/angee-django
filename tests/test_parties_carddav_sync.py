@@ -1988,7 +1988,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         assert not connection.in_atomic_block
         assert content == PNG_BYTES
         phases.append("extract")
-        stored, _ = manager.get_or_create(
+        return manager.get_or_create(
             drive=drive,
             content_hash=hashlib.sha256(content).hexdigest(),
             defaults={
@@ -2000,7 +2000,6 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
                 "created_by_id": owner_id,
             },
         )
-        return stored
 
     def unexpected_open(*args: Any, **kwargs: Any) -> None:
         del args, kwargs

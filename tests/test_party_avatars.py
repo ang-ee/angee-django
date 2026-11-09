@@ -139,7 +139,7 @@ def test_a_party_shows_its_own_avatar_else_its_strongest_readable_handles() -> N
 def test_a_contact_photo_resolves_to_its_avatar_never_to_a_users_file_with_the_same_bytes() -> None:
     owner = _user("avatar-resolve-owner")
     with system_context(reason="test contact photo resolve"):
-        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=owner.pk)
+        private, _ = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=owner.pk)
         avatar = File.objects.ingest_image(PNG_BYTES)
         with transaction.atomic():
             resolved = Party.objects.resolve_contact_photo(
