@@ -17,6 +17,7 @@ from asgiref.sync import async_to_sync
 from django.utils.module_loading import import_string
 from httpx import NetworkError, Timeout, TimeoutException
 from pydantic_ai.direct import model_request
+from pydantic_ai.embeddings import EmbeddingModel
 from pydantic_ai.exceptions import (
     ModelAPIError,
     ModelConnectionError,
@@ -200,6 +201,20 @@ class InferenceBackend(ImplBase):
             raise ValueError(f"Unknown inference request settings: {', '.join(sorted(unknown))}.")
         self.validate_timeout(result.get("timeout"))
         return cast(ModelSettings, result)
+
+    def embedding_model(
+        self,
+        handle: str,
+        *,
+        credential: Any | None = None,
+    ) -> AbstractAsyncContextManager[EmbeddingModel]:
+        """Bind a native embedding adapter with the same credential lifetime as chat.
+
+        Backends without an embeddings API, including Anthropic, refuse before
+        resolving credentials or opening a client.
+        """
+
+        raise NotImplementedError(f"{self.label} does not support embedding inference.")
 
     @staticmethod
     def validate_timeout(timeout: Any) -> None:
