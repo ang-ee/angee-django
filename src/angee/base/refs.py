@@ -120,10 +120,7 @@ def generic_pointer_target(record: models.Model) -> tuple[ContentType, Any]:
     ungated one; see :func:`generic_pointer_model`.
     """
 
-    content_type = ContentType.objects.db_manager(record._state.db, hints={"instance": record}).get_for_model(
-        generic_pointer_model(type(record))
-    )
-    return content_type, record.pk
+    return ContentType.objects.get_for_model(generic_pointer_model(type(record))), record.pk
 
 
 def _pk_ancestor_chain(model: type[models.Model]) -> Iterator[type[models.Model]]:

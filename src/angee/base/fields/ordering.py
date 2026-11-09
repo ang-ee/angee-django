@@ -4,24 +4,15 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
 from typing import Any, cast
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
-from django.db.backends.base.base import BaseDatabaseWrapper
 from django.utils.hashable import make_hashable
 
 
 class FractionalRankExhausted(ValidationError, ValueError):
     """Raised when binary64 cannot represent another safe fractional rank."""
-
-
-@dataclass(frozen=True, slots=True)
-class _PendingAppendRank:
-    """Carry an omitted rank to the native connection-aware save hook."""
-
-    instance: models.Model
 
 
 class FractionalRankField(models.FloatField):
@@ -65,13 +56,13 @@ class FractionalRankField(models.FloatField):
         Hasura input generation uses Django's field-owned ``has_default`` fact
         to decide whether an insert column may be omitted.  A fractional rank
         has no context-free literal default; native save preparation supplies
-        its contextual append rank on the actual write database.
+        its contextual append rank.
         """
 
         return True
 
     def get_default(self) -> None:
-        """Leave omitted ranks for connection-aware allocation at save time."""
+        """Leave omitted ranks for contextual allocation at save time."""
 
         return None
 
@@ -82,29 +73,22 @@ class FractionalRankField(models.FloatField):
             return
         super().validate(value, model_instance)
 
-    def pre_save(self, model_instance: models.Model, add: bool) -> float | _PendingAppendRank:
-        """Honor explicit ranks; defer omitted allocation until the write DB is known."""
+    def pre_save(self, model_instance: models.Model, add: bool) -> float:
+        """Honor an explicit rank; allocate an omitted one after its context's last rank."""
 
         value = super().pre_save(model_instance, add)
-        return _PendingAppendRank(model_instance) if value is None else cast(float, value)
+        if value is None:
+            value = self._get_append_rank_for_instance(model_instance)
+            setattr(model_instance, self.attname, value)
+        return cast(float, value)
 
-    def get_db_prep_save(self, value: Any, connection: BaseDatabaseWrapper) -> Any:
-        """Allocate omitted ranks on the compiler's actual database connection."""
-
-        if isinstance(value, _PendingAppendRank):
-            instance = value.instance
-            value = self._get_append_rank_for_instance(instance, using=connection.alias)
-            setattr(instance, self.attname, value)
-        return super().get_db_prep_save(value, connection)
-
-    def _get_append_rank_for_instance(self, instance: models.Model, *, using: str) -> float:
-        """Read the next rank within the instance's context on its write database."""
+    def _get_append_rank_for_instance(self, instance: models.Model) -> float:
+        """Read the next rank within the instance's context."""
 
         model = type(instance)
         context = self._context_values(instance)
         previous = (
-            model._base_manager.all()
-            .using(using)
+            model._base_manager
             .filter(**context)
             .order_by(f"-{self.name}")
             .values_list(self.name, flat=True)
@@ -120,7 +104,7 @@ class FractionalRankField(models.FloatField):
             for field in self._unique_context_fields(self.model)
         }
 
-    def allocate_missing_ranks(self, instances: Sequence[models.Model], *, using: str) -> None:
+    def allocate_missing_ranks(self, instances: Sequence[models.Model], *, using: str | None = None) -> None:
         """Allocate omitted ranks before a native multirow INSERT under its owner's lock.
 
         One INSERT cannot see its own earlier rows during field preparation.

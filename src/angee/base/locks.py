@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db import DEFAULT_DB_ALIAS, connections
+from django.db import connection
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,6 @@ class LocalLockBackend:
 
 @dataclass
 class _PostgresAdvisoryLockHandle:
-    alias: str
     key: tuple[int, int]
     released: bool = False
 
@@ -138,12 +137,12 @@ class _PostgresAdvisoryLockHandle:
         if self.released:
             return
         self.released = True
-        with connections[self.alias].cursor() as cursor:
+        with connection.cursor() as cursor:
             cursor.execute("SELECT pg_advisory_unlock(%s, %s)", self.key)
 
 
 class PostgresAdvisoryLockBackend:
-    """Postgres session-level advisory lock backend.
+    """Postgres session-level advisory lock backend on the database connection.
 
     Session-level advisory locks are connection-scoped. Deployments using this
     backend must connect directly to Postgres or use session pooling; pgbouncer
@@ -153,15 +152,9 @@ class PostgresAdvisoryLockBackend:
 
     cross_process = True
 
-    def __init__(self, *, alias: str = DEFAULT_DB_ALIAS) -> None:
-        """Store the Django database alias used for advisory locks."""
-
-        self.alias = alias
-
     def try_acquire(self, key: LockKey) -> LockHandle | None:
         """Acquire ``key`` through ``pg_try_advisory_lock``."""
 
-        connection = connections[self.alias]
         if connection.vendor != "postgresql":
             raise ImproperlyConfigured("PostgresAdvisoryLockBackend requires a PostgreSQL database connection.")
         # PostgreSQL session locks are reentrant, while a task key excludes
@@ -177,7 +170,7 @@ class PostgresAdvisoryLockBackend:
             acquired = bool(cursor.fetchone()[0])
         if not acquired:
             return None
-        return _PostgresAdvisoryLockHandle(self.alias, advisory_key)
+        return _PostgresAdvisoryLockHandle(advisory_key)
 
     def acquire(self, key: LockKey) -> LockHandle:
         """Wait in ``pg_advisory_lock`` until another session releases ``key``.
@@ -190,9 +183,9 @@ class PostgresAdvisoryLockBackend:
         if self._probe(key, this_session=True):
             raise RuntimeError(f"{key.name} is already held by this session; advisory locks are not reentrant.")
         advisory_key = _advisory_pair(key.name)
-        with connections[self.alias].cursor() as cursor:
+        with connection.cursor() as cursor:
             cursor.execute("SELECT pg_advisory_lock(%s, %s)", advisory_key)
-        return _PostgresAdvisoryLockHandle(self.alias, advisory_key)
+        return _PostgresAdvisoryLockHandle(advisory_key)
 
     def is_held(self, key: LockKey) -> bool:
         """Return whether Postgres reports ``key`` as held."""
@@ -202,7 +195,6 @@ class PostgresAdvisoryLockBackend:
     def _probe(self, key: LockKey, *, this_session: bool = False) -> bool:
         """Return whether a session, or only this one, holds ``key`` in ``pg_locks``."""
 
-        connection = connections[self.alias]
         if connection.vendor != "postgresql":
             raise ImproperlyConfigured("PostgresAdvisoryLockBackend requires a PostgreSQL database connection.")
         with connection.cursor() as cursor:
@@ -273,9 +265,9 @@ def task_lock_is_held(key: LockKey) -> bool:
 
 
 def get_lock_backend() -> LockBackend:
-    """Select the native backend for the default database."""
+    """Select the native backend for the database."""
 
-    if connections[DEFAULT_DB_ALIAS].vendor == "postgresql":
+    if connection.vendor == "postgresql":
         return PostgresAdvisoryLockBackend()
     return _LOCAL_BACKEND
 

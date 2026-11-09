@@ -33,8 +33,10 @@ class InstancePrefetch:
     def reader(queryset: models.QuerySet[Any]) -> Any:
         """The reader the hint's queryset names (REBAC's ``relation_actor``).
 
-        ``None`` for an emptied hint (``require_rebac_queryset(..., actor=None)``),
-        which reads for no reader.
+        ``None`` for an emptied hint (``require_rebac_queryset(..., actor=None)``)
+        or when no actor resolves. An owner keys per-reader answers on it; an
+        owner that reads related rows composes ``relation_read_queryset`` instead,
+        so an actorless read takes REBAC's ambient scope.
         """
 
         return None if isinstance(queryset, EmptyQuerySet) else relation_actor(queryset)

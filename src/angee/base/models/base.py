@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
-from typing import Any, ClassVar, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar, cast
 
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -37,6 +37,11 @@ from angee.base.models.transitions import StateTransitionsMixin
 from angee.base.permissions import DirectRecordAccess, declared_grants, declared_rebac_definition, instance_actor
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import record_access_revoked
+
+if TYPE_CHECKING:
+    from rebac import ObjectRef
+
+    from angee.base.refs import RecordRef
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -214,7 +219,7 @@ class AngeeModel(
             if reference.blocks_target_delete(type(self))
         )
         if named_in_relationships(self) or any(
-            reference.rows(self).using(self._state.db).exists() for reference in live_references
+            reference.rows(self).exists() for reference in live_references
         ):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()
@@ -265,6 +270,35 @@ class AngeeModel(
         """Return the fields hidden when this instance was projected by REBAC."""
 
         return redacted_fields(self)
+
+    change_batch_targets: ClassVar[Callable[..., Iterable[models.Model]] | None] = None
+    """An optional ``(instances, *, update_fields)`` classmethod that coalesces a ``bulk_updated`` batch.
+
+    It returns the rows the batch's readers observe, which write observation
+    publishes as full updates. ``None`` publishes the batch rows themselves as
+    partial updates. Local observers that need the original batch receive it on
+    ``bulk_updated``.
+    """
+
+    def change_read_resource(self) -> ObjectRef | None:
+        """Return the object whose ``read`` governs this row's change events; ``None`` reads the row itself.
+
+        A child or polymorphic edge whose visibility derives from another row
+        names that row. It is captured while the row is live, so create, update
+        and delete events share one authorization boundary. Like every change
+        hook, it runs inside the writing transaction on each observed write.
+        """
+
+        return None
+
+    def change_related_records(self) -> tuple[RecordRef, ...]:
+        """Return the records whose authored reads this row's change invalidates; none by default.
+
+        Adapters project the references one-to-one. A hook that also invalidates
+        inherited views widens its references with ``record_view_refs``.
+        """
+
+        return ()
 
     @property
     def record_display_label(self) -> str:

@@ -76,7 +76,7 @@ def concrete_child[T: models.Model](
         if cached is not None and not isinstance(cached, child_model):
             raise TypeError("An MTI relation cache must contain a row of its child model.")
         return cached
-    rows = queryset if queryset is not None else child_model._base_manager.db_manager(hints={"instance": parent}).all()
+    rows = queryset if queryset is not None else child_model._base_manager.all()
     return rows.filter(pk=parent.pk).first()
 
 
@@ -91,7 +91,7 @@ def most_derived_concrete[T: models.Model](row: T) -> T:
     for model in descendants:
         if isinstance(row, model):
             return row
-        found = model._base_manager.db_manager(hints={"instance": row}).filter(pk=row.pk).first()
+        found = model._base_manager.filter(pk=row.pk).first()
         if found is not None:
             assert isinstance(found, type(row))
             return found

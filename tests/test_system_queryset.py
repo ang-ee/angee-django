@@ -11,12 +11,12 @@ from django.db import connection, models, transaction
 from django.db.models import OuterRef
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import SubjectRef, system_context
+from rebac import MissingActorError, SubjectRef, system_context
 from rebac.managers import TrackedQuerySet
 
 from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.base import AngeeModel
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import relation_read_queryset, require_rebac_queryset
 from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
 from tests.conftest import Drive, File, Integration
 from tests.tables import model_tables
@@ -272,6 +272,23 @@ def test_an_explicit_none_reader_fails_closed_where_an_omitted_one_reads_ambient
     assert require_rebac_queryset(SystemQueryThing, actor=actor).actor() == actor
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+def test_a_relation_read_reads_as_its_source_reads() -> None:
+    """``relation_read_queryset``: the source's actor, else the ambient scope; an emptied source reads nothing."""
+
+    actor = SubjectRef.of("auth/user", "1")
+    SystemQueryThing.system_queryset().create(name="row")
+    source = SystemQueryThing.objects.all()
+
+    assert relation_read_queryset(SystemQueryThing, source.with_actor(actor)).actor() == actor
+    with system_context(reason="test.relation_read_queryset"):
+        assert relation_read_queryset(SystemQueryThing, source).count() == 1
+        assert relation_read_queryset(SystemQueryThing, source.none()).count() == 0
+    with pytest.raises(MissingActorError):
+        relation_read_queryset(SystemQueryThing, source).count()
+
+
 @pytest.mark.parametrize("reference", ["object", "id"])
 def test_lock_subject_preparation_keeps_foreign_key_values_and_caches_separate(reference):
     field = Integration._meta.get_field("vendor")
@@ -279,14 +296,12 @@ def test_lock_subject_preparation_keeps_foreign_key_values_and_caches_separate(r
     original = vendor_model(pk=1)
     proposed = vendor_model(pk=2)
     row = Integration(pk=3, vendor=original)
-    row._state.db = "default"
     row._state.adding = False
     values = {"vendor": proposed} if reference == "object" else {"vendor_id": proposed.pk}
 
     candidate = row.prepare_lock_subject(values)
 
     assert candidate.vendor_id == proposed.pk
-    assert candidate._state.db == row._state.db
     assert not candidate._state.adding
     assert field.is_cached(candidate) is (reference == "object")
     if reference == "object":
