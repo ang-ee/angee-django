@@ -12,7 +12,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
-from queue import Queue
 from time import monotonic, sleep
 from typing import Any
 
@@ -24,22 +23,27 @@ def submit[T](pool: ThreadPoolExecutor, call: Callable[[], T]) -> tuple[Future[T
 
     The worker runs in a copy of the caller's context, so the test's attribution
     boundary and actor reach its writes the way a framework thread pool carries
-    them, and it closes its connections when ``call`` returns.
+    them, and it closes its connections when ``call`` returns. A worker that fails
+    before reporting its backend raises that failure here.
     """
 
-    started: Queue[int] = Queue()
+    started: Future[int] = Future()
 
     def invoke() -> T:
-        close_old_connections()
         try:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT pg_backend_pid()")
-                started.put(cursor.fetchone()[0])
+            try:
+                close_old_connections()
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT pg_backend_pid()")
+                    started.set_result(cursor.fetchone()[0])
+            except BaseException as error:
+                started.set_exception(error)
+                raise
             return call()
         finally:
             connections.close_all()
 
-    return pool.submit(copy_context().run, invoke), started.get(timeout=10)
+    return pool.submit(copy_context().run, invoke), started.result(timeout=10)
 
 
 def wait_for_lock(pid: int, future: Future[Any]) -> None:
