@@ -676,7 +676,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         if self.requester_party_id is None:
             return None
         return (
-            apps.get_model("parties", "Person").system_queryset().using(self._state.db)
+            apps.get_model("parties", "Person").system_queryset()
             .filter(
                 pk=self.requester_party_id,
             )
@@ -687,25 +687,25 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def _build_collections(self) -> list[tuple[models.QuerySet[AngeeModel], bool]]:
         """Return the retained shell/answer and owned track content this round governs."""
 
-        tracks = apps.get_model("projects", "Project").system_queryset().using(self._state.db).filter(
+        tracks = apps.get_model("projects", "Project").system_queryset().filter(
             source_proposal__round_id=self.pk,
         )
-        drives = apps.get_model("storage", "Drive").system_queryset().using(self._state.db).filter(
+        drives = apps.get_model("storage", "Drive").system_queryset().filter(
             project_bindings__project_id__in=tracks.values("pk"),
         )
         return [
-            (apps.get_model("proposals", "Proposal").system_queryset().using(self._state.db).filter(
+            (apps.get_model("proposals", "Proposal").system_queryset().filter(
                 round_id=self.pk,
             ), False),
-            (apps.get_model("proposals", "Answer").system_queryset().using(self._state.db).filter(
+            (apps.get_model("proposals", "Answer").system_queryset().filter(
                 proposal__round_id=self.pk,
             ), False),
             (tracks, True),
-            (apps.get_model("projects", "Task").system_queryset().using(self._state.db).filter(
+            (apps.get_model("projects", "Task").system_queryset().filter(
                 project_id__in=tracks.values("pk"),
             ), True),
             (drives, True),
-            (apps.get_model("storage", "File").system_queryset().using(self._state.db).filter(
+            (apps.get_model("storage", "File").system_queryset().filter(
                 drive_id__in=drives.values("pk"),
             ), True),
         ]
@@ -716,9 +716,9 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         requester = self.requester_user_id()
         if requester is None:
             return
-        if self.current_responders().using(self._state.db).filter(pk=requester).exists():
+        if self.current_responders().filter(pk=requester).exists():
             raise RecordAccessSubjectRefused()
-        relationships = active_relationship_model().objects.using(self._state.db)
+        relationships = active_relationship_model().objects.all()
         for rows, owned in self._build_collections():
             if owned:
                 assert isinstance(rows, OwnerQuerySet)
@@ -1099,7 +1099,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             return NotImplemented
         for round in rows.order_by("pk").lock_if_supported():
             round.requester_party = survivor
-            round.save(using=rows.db, update_fields=("requester_party", "updated_at"))
+            round.save(update_fields=("requester_party", "updated_at"))
         return None
 
     def clean(self) -> None:
@@ -1118,7 +1118,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             fields = kwargs.get("update_fields")
             requester_write = fields is None or bool({"requester_party", "requester_party_id"}.intersection(fields))
             if not self._state.adding and requester_write and "requester_party_id" in self.__dict__:
-                locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
+                locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
                 if locked.requester_party_id != self.requester_party_id:
                     locked.requester_party_id = self.requester_party_id
                     locked._validate_requester_exclusion()
