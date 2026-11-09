@@ -14,10 +14,6 @@ import { isPresent, sessionPermitted, useAppRuntime } from "./runtime";
  * by the name after `#` in its address.
  */
 export interface ContainerKinds {
-  /** Connection recovery illustration (`connection.lost#artwork`). */
-  artwork: ReactNode;
-  /** Connection recovery guidance (`connection.lost#help`). */
-  help: ReactNode;
   /** A record form's Group, Action and Tab declarations. */
   sections: ReactNode;
   /** RecordRailGroup declarations beside a saved record's tabs. */

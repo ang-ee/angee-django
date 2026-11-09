@@ -386,6 +386,8 @@ export const enUiMessages: Record<string, string> = {
   "connection.description": "We’ve lost our connection to the server. We’re checking in gently and will reconnect as soon as it’s ready.",
   "connection.retrying": "Reconnecting automatically",
   "connection.resume": "Keep this tab open. We’ll bring you back to where you left off.",
+  "connection.interrupted": "A change was not saved",
+  "connection.interruptedDescription": "The connection dropped before the server received it. Check your work, then try again.",
   "app.startFailed": "Application could not start",
   "app.startFailedDescription": "Its configuration is invalid. The cause is below.",
   "app.reload": "Reload",

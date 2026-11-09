@@ -1,6 +1,8 @@
-import { AngeeLogo } from "@angee/logo-react";
+import { AngeeLogo, AngeeLogoCube, PRESETS } from "@angee/logo-react";
+import "@angee/logo-react/style.css";
 import type { ComponentProps, ReactElement } from "react";
 
+import { useMediaQuery } from "../lib/use-media-query";
 import { useOptionalAppearance } from "./appearance";
 import type { ThemeCustomizationLogo } from "./runtime.mjs";
 
@@ -51,6 +53,27 @@ export function ThemeLogo({ logo, themeGeometry, ...props }: ThemeLogoProps): Re
     bgColor={null}
     stroke="transparent"
   />;
+}
+
+export interface AnimatedThemeLogoProps {
+  /** Rendered edge length in pixels. */
+  size: number;
+  animation?: "rotate" | "rotate-slide";
+}
+
+/** The featured application mark: the animated Angee cube for the theme-default
+ * logo, otherwise the chosen {@link ThemeLogo} treatment. Reduced motion keeps the
+ * cube still.
+ * @kind fragment
+ */
+export function AnimatedThemeLogo({ size, animation = "rotate" }: AnimatedThemeLogoProps): ReactElement {
+  const logo = useThemeLogoChoice();
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  if (logo !== "theme") return <ThemeLogo logo={logo} size={size} width={size} height={size} />;
+  const { colors } = PRESETS.gold;
+  return <AngeeLogoCube size={size * 3 / 16} gap={size / 64}
+    leftColor={colors.left} rightColor={colors.right} baseDark={colors.top}
+    animationSpeed={18} animationType={reducedMotion ? "none" : animation} />;
 }
 
 /** Resolve the active bounded logo treatment for brand placements with custom layout.

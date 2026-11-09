@@ -10,7 +10,7 @@ import { AngeeLogoCube, PRESETS } from "@angee/logo-react";
 import "@angee/logo-react/style.css";
 import { useContainer, useRuntimeBrand, type CoreContainer } from "@angee/ui/runtime";
 import { Glyph } from "@angee/ui/chrome/Glyph";
-import { ThemeLogo, useThemeLogoChoice } from "@angee/ui/theme";
+import { AnimatedThemeLogo, ThemeLogo } from "@angee/ui/theme";
 
 import { useUiT } from "@angee/ui/i18n";
 import { cn } from "@angee/ui/lib/cn";
@@ -406,16 +406,11 @@ function LoginIdentity({
   children,
 }: { name: string; brand?: ReactNode; header?: boolean; children?: ReactNode }): ReactNode {
   const brand = useRuntimeBrand();
-  const logo = useThemeLogoChoice();
   if (header && override == null && brand === null) {
     return (
       <div className="mb-8 grid grid-cols-[4rem_minmax(0,1fr)] items-start gap-4 text-left">
         <div className="pointer-events-none grid size-16 p-2" aria-hidden="true">
-          {logo === "theme" ? (
-            <AngeeLogoCube size={9} gap={0.75}
-              leftColor={LOGIN_LOGO_PRESET.colors.left} rightColor={LOGIN_LOGO_PRESET.colors.right}
-              baseDark={LOGIN_LOGO_PRESET.colors.top} animationSpeed={18} animationType="rotate" />
-          ) : <ThemeLogo logo={logo} size={48} width={48} height={48} />}
+          <AnimatedThemeLogo size={48} />
         </div>
         <div className="min-w-0 pt-1">
           <p className="mb-2 text-base font-semibold leading-none text-fg">{name}</p>
