@@ -89,7 +89,8 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
 [comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
-knowledge, messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py)
+knowledge, [pgvector test-database readiness](../tests/test_postgresql_extensions.py),
+messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py)
 and [webform submission](../tests/test_messaging_webform_submission.py) races,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage, the system queryset, work and task ordering locks,
@@ -119,6 +120,33 @@ suite runs on SQLite with migrations enabled and `DATABASE_URL` unset; do not
 apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
 skip explicitly on SQLite. Report those skips separately from the PostgreSQL
 lane's executed coverage.
+
+### Local PostgreSQL Prerequisites
+
+PostgreSQL runs require the pgvector extension on the server. CI uses
+`pgvector/pgvector:pg17`, retaining PostgreSQL 17. For a local Homebrew server,
+install [pgvector](https://formulae.brew.sh/formula/pgvector), then connect to
+that server as a PostgreSQL **superuser** and enable it in `template1` before
+running tests:
+
+```sh
+brew install pgvector
+psql -h localhost -U postgres -d template1 -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+```
+
+Replace `postgres` with the local superuser role and use the host and port of
+the server selected by `DATABASE_URL`. The server's
+extension files must match its PostgreSQL major; installing the Python `pgvector`
+package alone does not install the server extension. Django and pytest-django
+create test databases from [PostgreSQL's default `template1`](https://www.postgresql.org/docs/17/manage-ag-templatedbs.html),
+including the composed host's secondary databases. They inherit `vector` even
+under `--nomigrations`, when `VectorExtension` migrations cannot run. A role
+with `CREATEDB` can then run the tests without superuser privileges.
+
+Existing databases do not inherit later changes to `template1`: recreate a
+reused test database with pytest's `--create-db`, or have a superuser enable
+`vector` in that database too. Enable it separately in an existing application
+database before provisioning the pgvector addon with a non-superuser role.
 
 Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
@@ -409,7 +437,9 @@ pushes to `main`. The current tiers are:
   keep that margin), the named PostgreSQL contract selection runs with
   `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each group writes JUnit output and checks that it did
-  not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
+  not skip tests. Its PostgreSQL 17 service includes pgvector and enables `vector`
+  in `template1` before any test database is created. Its server runs with
+  `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. The `uv` job passes only
   when Python quality, every SQLite shard and every PostgreSQL group pass, so
   callers keep one check name.
@@ -486,7 +516,9 @@ collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
 host through its authored `settings` module; pytest-django owns its separate test
-database. Pytest emits a thread dump after five minutes in one test protocol,
+database. The pgvector service enables `vector` in both the existing host database
+and `template1` before provisioning, so consumer test databases inherit it with
+`--nomigrations`. Pytest emits a thread dump after five minutes in one test protocol,
 including setup and teardown, without changing its outcome. Shared test plugins
 must defer model imports until Django's app registry is populated. Check tools
 come from the framework lockfile.
