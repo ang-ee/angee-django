@@ -213,7 +213,7 @@ class Party(
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
         """Lock identity Handles before the statement owner's core Party lock."""
 
-        owner = apps.get_model("parties", "Party").objects.db_manager(hints={"instance": self})
+        owner = apps.get_model("parties", "Party").objects
         members = members or {}
         handle = members.get("handle")
         handle_ids = (
@@ -227,7 +227,7 @@ class Party(
     def lock_for_merge(self) -> None:
         """Lock this party's Handles before the shared merge owner locks Parties."""
 
-        owner = apps.get_model("parties", "Party").objects.db_manager(hints={"instance": self})
+        owner = apps.get_model("parties", "Party").objects
         handle_ids = owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
         owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
 
@@ -783,7 +783,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         super().validate_merge(merged)
         if any(row.platform != self.platform for row in merged):
             raise ValidationError("Only handles on the same platform can be merged.")
-        apps.get_model("parties", "Party").objects.db_manager(self._state.db).lock_identity_rows(
+        apps.get_model("parties", "Party").objects.lock_identity_rows(
             party_ids=(), handle_ids=(self.pk, *(row.pk for row in merged)),
         )
 
@@ -806,7 +806,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         for name, value in values.items():
             setattr(self, name, value)
         if values:
-            self.save(using=self._state.db, update_fields=(*values, "updated_at"))
+            self.save(update_fields=(*values, "updated_at"))
         for row in merged:
             if self.avatar_id is None and row.avatar_id is not None:
                 self.set_avatar(row.avatar)

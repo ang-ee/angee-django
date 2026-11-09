@@ -265,7 +265,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
       refineLiveProvider?.setEnabled(false);
       resetSessionQueries(queryClient);
       if (userId === null && connection.getSnapshot() !== "unavailable") refineLiveProvider?.setEnabled(true);
-      const identity = await queryClient.fetchQuery(identityQueryOptions(refineAuthProvider));
+      const identity = await queryClient.query(identityQueryOptions(refineAuthProvider));
       if (userId !== null && (identity?.id !== userId || !identity.realUser)) {
         throw new Error("Preview identity was not returned.");
       }

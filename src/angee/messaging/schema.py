@@ -2257,11 +2257,10 @@ def _prime_record_messages(messages: list[Any]) -> None:
 
     if not messages:
         return
-    owner = Message.objects.db_manager(messages[0]._state.db)
     sender_names = dict(
-        owner.sudo(reason="messaging.record_thread.sender_labels")
+        Message.objects.sudo(reason="messaging.record_thread.sender_labels")
         .filter(pk__in=[message.pk for message in messages])
-        .annotate(_sender_name=owner.sender_name_expression())
+        .annotate(_sender_name=Message.objects.sender_name_expression())
         .values_list("pk", "_sender_name")
     )
     for message in messages:
@@ -2306,8 +2305,9 @@ def _record_thread_payload(
     _prime_follower_identities(followers, current_actor())
     attachment_count = (
         apps.get_model("messaging", "Part")
-        .objects.using(thread._state.db)
-        .filter(TrashQuerySet.untrashed_q("message__"), message__thread_id__in=thread.member_threads().values("pk"))
+        .objects.filter(
+            TrashQuerySet.untrashed_q("message__"), message__thread_id__in=thread.member_threads().values("pk"),
+        )
         .attachments()
         .count()
         if thread is not None

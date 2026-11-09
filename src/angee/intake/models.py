@@ -220,7 +220,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             # actor on the instance rather than wrapping the whole save in the
             # queryset insertion scope: that scope would also pin the nested write
             # and defeat the instance-local elevation.
-            need.with_actor(actor).save(force_insert=True, using=self.db)
+            need.with_actor(actor).save(force_insert=True)
             return need
 
     def capture_from_message(
@@ -945,7 +945,8 @@ def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expres
     """Whether the first Need's party is the viewer's person (MTI child), regardless of later Needs.
 
     It compares the actor with itself only, so it reveals nothing about anyone else's requests;
-    an actor without a user matches nothing. REBAC's broader requester relation
+    no viewer, including system context, or a viewer without a user matches nothing.
+    This is viewer-identity policy, not a relation read. REBAC's broader requester relation
     can include later approved requests; this filter only attributes the first.
     """
 

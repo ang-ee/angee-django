@@ -164,16 +164,19 @@ Use these owners instead of maintaining another contract in an addon:
   promote it to a model or manager method.
 - **Database routing:** Angee runs on one database, Django's `default`. It
   selects no database per operation, and the base system check `angee.E050`
-  refuses any `DATABASE_ROUTERS`. Owners open bare `transaction.atomic()` and
+  requires only the `default` alias in `DATABASES` and refuses any
+  `DATABASE_ROUTERS`. Owners open bare `transaction.atomic()` and
   register bare `transaction.on_commit()`. An alias Django or a library hands in (signal
   `using`, `Collector`, a hook's `using` argument, the `using` of an overridden
   `save()` or `save_base()`, the `db` of an overridden queryset `update()`,
   `delete()` or `bulk_create()`) passes through unchanged, to `super()` and to
   the transaction that override opens, as Django's own implementations do; do
-  not thread aliases through Angee helpers, managers, hooks or tasks. Use
+  not thread aliases through Angee helpers, managers, hooks or tasks.
+  `get_db_connection_name()` belongs only to import-export's own lifecycle;
+  Angee resource adapters do not call it to select a connection. Use
   native relation access, `refresh_from_db` when deferred or stale fields need
-  reloading, and preserve locks and batching. A declared read-only external
-  import source may select its database explicitly. REBAC-managed models and
+  reloading, and preserve locks and batching. External import sources use their
+  own client connections, not additional Django database aliases. REBAC-managed models and
   their relationship store share that one alias; the upstream
   `rebac.checks.check_policy_models` database check (run by `migrate` and
   `check --database default`) verifies the co-location. Permission reads never
@@ -224,6 +227,7 @@ Use these owners instead of maintaining another contract in an addon:
   the hint's attribute through `prefetched(row, to_attr, build)`, which builds the
   hint only for a row loaded another way, so it reads its own value through the
   same prefetch; each hint factory declares its `to_attr` once.
+- Actorless relation reads use [`relation_read_queryset`](../../src/angee/base/permissions.py): ambient system scope reads unscoped; no actor outside system scope fails closed; read-nothing exceptions require a documented policy.
 - Model-backed `hasura_model_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
   that Angee exposes but does not own, pass an explicit sqid public identity
@@ -1134,9 +1138,7 @@ tasks through [`angee.provenance.tasks.Task`](../../src/angee/provenance/tasks.p
 commands through `angee.server.management`'s `ANGEE_SERVER_COMMAND_CONTEXT` hooks, contributed by
 [`provenance`](../../src/angee/provenance/contrib/angee/context.py). The
 [server launcher](../composer.md#flow) supplies the winning command's parsed,
-read-only options at its `execute` boundary; a command's `--database` is a
-Django-supplied alias that a context passes through unchanged from those options,
-never parsed from argv. (`serve`, `runserver` and `test` are
+read-only options at its `execute` boundary. (`serve`, `runserver` and `test` are
 excluded because their requests, connections, tasks and tests own boundaries;
 interactive shells keep the command boundary); a bridge live-session run through
 [`run_bridge_session_job`](../../src/angee/integrate/session_runner.py). A

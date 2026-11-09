@@ -19,7 +19,6 @@ from rebac import system_context
 
 from angee.base.locks import task_lock_is_held
 from angee.integrate.live import PairingState
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
@@ -215,15 +214,12 @@ def _wait_until(predicate: Any, *, timeout: float = 1.0) -> None:
 def test_live_session_wake_honors_persisted_stop_desire(live_tables: Any) -> None:
     """The bounded wake reads the base-owned desire — a stop ends the session."""
 
-    from angee.integrate.sync import BridgeProgressReporter
-
     channel = _live_channel()
     session = FakeLiveSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
-    with system_context(reason="test live desire check"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live desire check"), channel.sync_lock() as acquired:
         assert acquired
         assert session._still_wanted() is True
         row = Channel._base_manager.get(pk=channel.pk)
@@ -237,18 +233,15 @@ def test_live_session_wake_honors_persisted_stop_desire(live_tables: Any) -> Non
 def test_live_session_wake_honors_paused_lifecycle(live_tables: Any) -> None:
     """A generic pause stops a live session without clearing its account identity."""
 
-    from angee.integrate.sync import BridgeProgressReporter
-
     channel = _live_channel()
     with system_context(reason="test live pause setup"):
         channel.merge_subscription_state(own_id="account-1")
         channel.pause()
     session = FakeLiveSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
-    with system_context(reason="test live pause check"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live pause check"), channel.sync_lock() as acquired:
         assert acquired
         assert session._still_wanted() is False
         assert session.pairing == PairingState.PAUSED
@@ -259,17 +252,15 @@ def test_live_session_lost_lock_exits_for_clean_restart(live_tables: Any, monkey
     """A dropped advisory lock ends the session instead of racing a duplicate."""
 
     from angee.integrate import session as session_module
-    from angee.integrate.sync import BridgeProgressReporter
 
     monkeypatch.setattr(session_module, "WAKE_SECONDS", 0.05)
-    monkeypatch.setattr(session_module, "bridge_is_locked", lambda _bridge: False)
     channel = _live_channel()
+    monkeypatch.setattr(type(channel), "sync_is_locked", lambda _bridge: False)
     session = FakeLiveSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
-    with system_context(reason="test live lost lock"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live lost lock"), channel.sync_lock() as acquired:
         assert acquired
         assert session.run() == PairingState.STARTING
 
@@ -279,7 +270,6 @@ def test_live_session_worker_shutdown_exits_within_one_wake(live_tables: Any, mo
     """A warm worker shutdown ends an idle live session without waiting on the socket."""
 
     from angee.integrate import session as session_module
-    from angee.integrate.sync import BridgeProgressReporter
 
     monkeypatch.setattr(session_module, "WAKE_SECONDS", 0.05)
     channel = _live_channel()
@@ -287,10 +277,9 @@ def test_live_session_worker_shutdown_exits_within_one_wake(live_tables: Any, mo
     stop_event.set()
     session = FakeLiveSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=stop_event,
     )
-    with system_context(reason="test live worker shutdown"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live worker shutdown"), channel.sync_lock() as acquired:
         assert acquired
         assert session.run() == PairingState.STOPPED
 
@@ -304,7 +293,6 @@ def test_live_session_drains_events_after_vendor_thread_exits(live_tables: Any, 
     """Thread completion preserves queued work and the vendor's terminal outcome."""
 
     from angee.integrate.live import SessionLoggedOut
-    from angee.integrate.sync import BridgeProgressReporter
 
     handled: list[int] = []
     vendor_error = ConnectionError("Vendor receive failed.")
@@ -336,8 +324,8 @@ def test_live_session_drains_events_after_vendor_thread_exits(live_tables: Any, 
             return self._still_wanted()
 
     channel = _live_channel()
-    session = FinishedSession(channel, reporter=BridgeProgressReporter(channel), stop_event=threading.Event())
-    with system_context(reason="test completed vendor drain"), bridge_advisory_lock(channel) as acquired:
+    session = FinishedSession(channel, stop_event=threading.Event())
+    with system_context(reason="test completed vendor drain"), channel.sync_lock() as acquired:
         assert acquired
         if terminal in {"logged_out", "error_before_logout"}:
             with pytest.raises(SessionLoggedOut):
@@ -364,13 +352,11 @@ def test_live_session_hands_off_submitted_password_and_consumes_it_once(
     """The task thread delivers encrypted material to the waiting vendor thread once."""
 
     from angee.integrate import session as session_module
-    from angee.integrate.sync import BridgeProgressReporter
 
     monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
     channel = _live_channel("fake-live-password")
     session = PasswordInputSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     password = "one-use-secret"
@@ -385,7 +371,7 @@ def test_live_session_hands_off_submitted_password_and_consumes_it_once(
 
     operator_thread = threading.Thread(target=submit_password, daemon=True)
 
-    with system_context(reason="test live password handoff"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live password handoff"), channel.sync_lock() as acquired:
         assert acquired
         session_credential = channel.credential
         assert "password" not in session_credential.reveal()
@@ -416,12 +402,9 @@ def test_live_session_hands_off_submitted_password_and_consumes_it_once(
 def test_live_session_reports_the_non_secret_password_prompt(live_tables: Any) -> None:
     """The awaiting report carries the vendor prompt but never a password value."""
 
-    from angee.integrate.sync import BridgeProgressReporter
-
     channel = _live_channel("fake-live-password-prompt")
     session = FakeLiveSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
 
@@ -443,14 +426,12 @@ def test_optional_material_round_skips_without_touching_durable_password(
     """A non-password round carries its key, projects skip, and returns the sentinel."""
 
     from angee.integrate import session as session_module
-    from angee.integrate.sync import BridgeProgressReporter
 
     monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
     channel = _live_channel("fake-live-recovery-skip")
     channel.credential.update_material(password="durable-login-password")
     session = OptionalPasswordInputSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     operator_failures: list[BaseException] = []
@@ -467,7 +448,7 @@ def test_optional_material_round_skips_without_touching_durable_password(
             operator_failures.append(error)
 
     operator_thread = threading.Thread(target=skip_round, daemon=True)
-    with system_context(reason="test optional material skip"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test optional material skip"), channel.sync_lock() as acquired:
         assert acquired
         operator_thread.start()
         outcome = session.run()
@@ -516,13 +497,10 @@ def test_credential_update_material_merges_stale_writers_and_deletes_none(live_t
 def test_password_rearm_scrubs_stale_material_and_queued_answers(live_tables: Any) -> None:
     """A new prompt round invalidates both persisted and in-memory old answers."""
 
-    from angee.integrate.sync import BridgeProgressReporter
-
     channel = _live_channel("fake-live-password-rearm")
     channel.credential.update_material(password="abandoned-secret")
     session = FakeLiveSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     session.inputs.put("late-answer")
@@ -545,20 +523,17 @@ def test_password_rearm_scrubs_stale_material_and_queued_answers(live_tables: An
 def test_live_session_end_discards_queued_password_answers(live_tables: Any) -> None:
     """A stopped session cannot leave an answer queued for a later session round."""
 
-    from angee.integrate.sync import BridgeProgressReporter
-
     channel = _live_channel("fake-live-password-end")
     stop_event = threading.Event()
     stop_event.set()
     session = FakeLiveSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=stop_event,
     )
     session.inputs.put("late-answer")
     session._password_delivered = True
 
-    with system_context(reason="test live password end"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live password end"), channel.sync_lock() as acquired:
         assert acquired
         assert session.run() is PairingState.STOPPED
 
@@ -575,7 +550,6 @@ def test_second_round_resubmit_delivers_the_new_password(
     """A rejected first password cannot satisfy the vendor's second prompt."""
 
     from angee.integrate import session as session_module
-    from angee.integrate.sync import BridgeProgressReporter
 
     monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
     channel = _live_channel("fake-live-password-round2")
@@ -583,7 +557,6 @@ def test_second_round_resubmit_delivers_the_new_password(
         channel = type(channel).objects.get(pk=channel.pk)
     session = RePromptingPasswordInputSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     operator_failures: list[BaseException] = []
@@ -616,7 +589,7 @@ def test_second_round_resubmit_delivers_the_new_password(
 
     operator_thread = threading.Thread(target=submit_both_rounds, daemon=True)
 
-    with system_context(reason="test second password round"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test second password round"), channel.sync_lock() as acquired:
         assert acquired
         operator_thread.start()
         outcome = session.run()
@@ -645,13 +618,11 @@ def test_missing_credential_at_password_delivery_is_a_latched_session_outcome(
 
     from angee.integrate import session as session_module
     from angee.integrate import tasks as tasks_module
-    from angee.integrate.sync import BridgeProgressReporter
 
     monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
     channel = _live_channel("fake-live-password-missing-credential")
     session = PasswordInputSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     operator_failures: list[BaseException] = []
@@ -668,7 +639,7 @@ def test_missing_credential_at_password_delivery_is_a_latched_session_outcome(
             operator_failures.append(error)
 
     operator_thread = threading.Thread(target=remove_credential_and_signal_ready, daemon=True)
-    with system_context(reason="test missing password credential"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test missing password credential"), channel.sync_lock() as acquired:
         assert acquired
         operator_thread.start()
         outcome = session.run()
@@ -697,14 +668,12 @@ def test_missing_password_at_consume_time_reports_and_rearms(
 
     from angee.integrate import session as session_module
     from angee.integrate import tasks as tasks_module
-    from angee.integrate.sync import BridgeProgressReporter
 
     monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
     channel = _live_channel("fake-live-password-missing-material")
     stop_event = threading.Event()
     session = PasswordInputSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=stop_event,
     )
     operator_failures: list[BaseException] = []
@@ -722,7 +691,7 @@ def test_missing_password_at_consume_time_reports_and_rearms(
             stop_event.set()
 
     operator_thread = threading.Thread(target=signal_ready_without_material, daemon=True)
-    with system_context(reason="test missing password material"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test missing password material"), channel.sync_lock() as acquired:
         assert acquired
         operator_thread.start()
         outcome = session.run()
@@ -753,18 +722,16 @@ def test_live_session_stop_while_awaiting_password_exits_without_input(
     """A persisted stop request unwinds a vendor thread blocked on password input."""
 
     from angee.integrate import session as session_module
-    from angee.integrate.sync import BridgeProgressReporter
 
     monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
     channel = _live_channel("fake-live-password-stop")
     session = PasswordInputSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     connection_thread = threading.Thread(target=session._connect, daemon=True)
 
-    with system_context(reason="test live password stop"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live password stop"), channel.sync_lock() as acquired:
         assert acquired
         connection_thread.start()
         assert session._drain_once() is True
@@ -786,7 +753,6 @@ def test_live_session_store_wipe_requires_released_connection(live_tables: Any) 
     """A void store is wiped only after the vendor connection released it."""
 
     from angee.integrate.live import reset_session_store, session_store_path
-    from angee.integrate.sync import BridgeProgressReporter
 
     channel = _live_channel()
     store = session_store_path(channel)
@@ -794,7 +760,6 @@ def test_live_session_store_wipe_requires_released_connection(live_tables: Any) 
     (store / "session.db").write_bytes(b"still-open")
     session = FakeLiveSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
 
@@ -999,8 +964,6 @@ def test_live_backend_projects_neutral_pairing_fields(live_tables: Any) -> None:
 def test_live_session_routes_message_events_through_the_declared_handle_hook(live_tables: Any) -> None:
     """Integrate treats messaging event names as opaque worker-session input."""
 
-    from angee.integrate.sync import BridgeProgressReporter
-
     handled: list[tuple[str, Any]] = []
 
     class RoutedSession(FakeLiveSession):
@@ -1012,7 +975,6 @@ def test_live_session_routes_message_events_through_the_declared_handle_hook(liv
     channel = _live_channel()
     session = RoutedSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     session.events.put(("messages", payload))
@@ -1025,13 +987,11 @@ def test_live_session_routes_message_events_through_the_declared_handle_hook(liv
 def test_live_channel_session_owns_message_ingest(live_tables: Any) -> None:
     """The messaging worker session lands queued messages through its public impl hooks."""
 
-    from angee.integrate.sync import BridgeProgressReporter
     from angee.messaging.session import LiveChannelSession
 
     channel = _live_channel()
     session = LiveChannelSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     message = ParsedMessage(
@@ -1041,7 +1001,7 @@ def test_live_channel_session_owns_message_ingest(live_tables: Any) -> None:
         body=ParsedPart(type="text/plain", role="body", text="hello"),
     )
 
-    with system_context(reason="test live channel ingest"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test live channel ingest"), channel.sync_lock() as acquired:
         assert acquired
         assert session._handle("messages", [(message, None)]) is True
 
@@ -1056,7 +1016,6 @@ def test_live_channel_media_resolution_downloads_once_per_fact(
 ) -> None:
     """The base passes each media fact without mutating a frozen DTO's metadata."""
 
-    from angee.integrate.sync import BridgeProgressReporter
     from angee.messaging import backends as messaging_backends
     from angee.messaging.session import LiveChannelSession
 
@@ -1065,7 +1024,6 @@ def test_live_channel_media_resolution_downloads_once_per_fact(
     channel = _live_channel("fake-live-media-owner")
     session = LiveChannelSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     first = media_item_class(mime="image/jpeg", name="photo.jpg")
@@ -1113,12 +1071,9 @@ def test_vendor_manager_resolves_seeded_slug_with_load_guidance(live_tables: Any
 def test_live_report_preserves_caller_supplied_identity(live_tables: Any) -> None:
     """A caller's transient identity value wins over the durable fallback."""
 
-    from angee.integrate.sync import BridgeProgressReporter
-
     channel = _live_channel()
     session = FakeLiveSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
     session.own_id = "durable-account"
@@ -1320,8 +1275,6 @@ def test_queued_session_revalidates_terminal_health(live_tables: Any, monkeypatc
 def test_pairing_clears_a_previous_runs_sync_failure(live_tables: Any) -> None:
     """A live session that reaches PAIRED drops a stale poll failure but keeps pairing."""
 
-    from angee.integrate.sync import BridgeProgressReporter
-
     channel = _live_channel("fake-live-clears-failure")
     with system_context(reason="test seed prior sync failure"):
         channel.record_sync_error(
@@ -1347,10 +1300,9 @@ def test_pairing_clears_a_previous_runs_sync_failure(live_tables: Any) -> None:
 
     session = PairingSession(
         channel,
-        reporter=BridgeProgressReporter(channel),
         stop_event=threading.Event(),
     )
-    with system_context(reason="test pairing clears failure"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test pairing clears failure"), channel.sync_lock() as acquired:
         assert acquired
         outcome = session.run()
 
@@ -1428,7 +1380,7 @@ def test_native_crash_report_preserves_terminal_or_stopped_row(live_tables: Any,
             channel.record_sync_error(RuntimeError("terminal"), now=timezone.now())
     channel.refresh_from_db()
     previous = channel.sync_progress.copy()
-    with bridge_advisory_lock(channel) as acquired:
+    with channel.sync_lock() as acquired:
         assert acquired
         channel.record_live_session_failure(SessionProcessError(2), now=timezone.now())
     channel.refresh_from_db()
@@ -1456,17 +1408,17 @@ def test_reconciler_warns_about_crashed_startup(
     assert "active stage with no running session" in caplog.text
 
 
-def test_transport_only_live_session_accepts_report_only_reporter() -> None:
-    """Transport setup and reporting require no model state or reporter database API."""
+def test_transport_only_live_session_reports_through_its_bridge() -> None:
+    """Transport setup and reporting need only the bridge's progress verb, no model state."""
 
     reports: list[tuple[str, Any]] = []
     bridge = SimpleNamespace(
         live_impl=SimpleNamespace(state_identity_key="own_id"),
         subscription_state={},
         SyncStage=Bridge.SyncStage,
+        report_progress=lambda stage, *, details: reports.append((stage, details)),
     )
-    reporter = SimpleNamespace(report=lambda stage, *, details: reports.append((stage, details)))
-    session = LiveSession(bridge, reporter=reporter, stop_event=threading.Event())
+    session = LiveSession(bridge, stop_event=threading.Event())
     session._report(PairingState.STARTING)
     assert reports == [(Bridge.SyncStage.DISCOVERING, {"pairing": {"state": PairingState.STARTING}})]
 
@@ -1580,10 +1532,8 @@ def test_transient_exception_from_session_run_is_deferred(live_tables: Any, monk
 def test_pairing_ends_a_transient_failure_streak(live_tables: Any) -> None:
     """Reaching PAIRED proves the failure untrue: deferral and attempts reset."""
 
-    from angee.integrate.sync import BridgeProgressReporter
-
     channel = _live_channel("fake-live-streak-reset")
-    with system_context(reason="test seed transient failures"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test seed transient failures"), channel.sync_lock() as acquired:
         assert acquired
         channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
         channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
@@ -1600,8 +1550,8 @@ def test_pairing_ends_a_transient_failure_streak(live_tables: Any) -> None:
             connection.join(timeout=0.5)
             return not connection.is_alive()
 
-    session = PairingSession(channel, reporter=BridgeProgressReporter(channel), stop_event=threading.Event())
-    with system_context(reason="test pairing resets streak"), bridge_advisory_lock(channel) as acquired:
+    session = PairingSession(channel, stop_event=threading.Event())
+    with system_context(reason="test pairing resets streak"), channel.sync_lock() as acquired:
         assert acquired
         assert session.run() is PairingState.PAIRED
     with system_context(reason="test pairing resets streak verify"):
@@ -1647,7 +1597,7 @@ def test_a_transient_failure_drops_the_dead_sessions_pairing_report(live_tables:
         }
         channel.save(update_fields=["sync_progress", "updated_at"])
     assert channel.live_impl.pairing().state is PairingState.AWAITING_SCAN
-    with system_context(reason="test qr session fails"), bridge_advisory_lock(channel) as acquired:
+    with system_context(reason="test qr session fails"), channel.sync_lock() as acquired:
         assert acquired
         channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
     channel.refresh_from_db()
@@ -1665,7 +1615,7 @@ def test_operator_start_and_repair_end_a_retry_streak(live_tables: Any, monkeypa
     channel = _live_channel("fake-live-operator-start")
 
     def fail_twice() -> None:
-        with system_context(reason="test transient streak"), bridge_advisory_lock(channel) as acquired:
+        with system_context(reason="test transient streak"), channel.sync_lock() as acquired:
             assert acquired
             channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())
             channel.record_live_session_failure(ConnectionError("dropped"), now=timezone.now())

@@ -55,7 +55,7 @@
     "@tanstack/react-router": "^1",
     "react": "^19.0.0",
     "vitest": "^4.1.9",
-    "@tanstack/react-query": "^5.101.1"
+    "@tanstack/react-query": "^5.102.0"
   },
   "peerDependenciesMeta": {
     "vitest": {
@@ -63,7 +63,7 @@
     }
   },
   "devDependencies": {
-    "@tanstack/react-query": "^5.101.1",
+    "@tanstack/react-query": "^5.102.0",
     "@tanstack/react-router": "^1.170.41",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.17",

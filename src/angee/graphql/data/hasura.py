@@ -64,7 +64,7 @@ from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.pagination import MAX_PAGE_SIZE, valid_page_size
-from angee.base.permissions import declared_rebac_definition
+from angee.base.permissions import declared_rebac_definition, relation_read_queryset
 from angee.base.querysets import AngeeQuerySet, row_lock_paths
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -107,7 +107,6 @@ from angee.graphql.introspection import (
 from angee.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_relation_expression,
-    relation_read_queryset,
     with_record_reference_access,
 )
 from angee.graphql.writes import write_queryset
@@ -2160,7 +2159,7 @@ def attach_hasura_resource_metadata(
     return resource
 
 
-def _line_metadata(
+def line_metadata(
     lines: HasuraLines,
     resource: HasuraResource,
     schema: Any,

@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "angee.workflows_extraction",
     "angee.workflows_integrate",
     "angee.knowledge",
+    "angee.knowledge_graph_pgvector",
     "angee.knowledge_integrate_notion",
     "angee.mcp",
     "angee.storage",

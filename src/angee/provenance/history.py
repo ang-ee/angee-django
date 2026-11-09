@@ -22,7 +22,8 @@ from simple_history.utils import get_change_reason_from_object, get_history_mana
 from angee.provenance.context import changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
 
-_UNLOADED = object()
+UNLOADED = object()
+"""Default for a history argument the caller has not loaded; the history owner reads it itself."""
 
 
 def _copy_history_metadata(source: models.Model, target: models.Model) -> None:
@@ -33,8 +34,8 @@ def _copy_history_metadata(source: models.Model, target: models.Model) -> None:
             setattr(target, name, getattr(source, name))
 
 
-class _ChangesetHistory(models.Model):
-    """Historical attribution shared by every native generated history model."""
+class ChangesetHistory(models.Model):
+    """The writing changeset's foreign key, shared by generated history models and retained statements."""
 
     changeset = models.ForeignKey(
         changeset_model_label(),
@@ -100,28 +101,17 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
         history = model_history(tracked)
         if history is None:
             raise ImproperlyConfigured(f"{self.model._meta.label}: no native history capture owner.")
-        by_database: dict[str, list[models.Model]] = {}
-        for obj in objects:
-            alias = obj._state.db or router.db_for_write(tracked, instance=obj)
-            by_database.setdefault(alias, []).append(obj)
-        captured = []
-        for alias, sources in by_database.items():
-            captured.extend(
-                history.bulk_history_create(
-                    tracked,
-                    [obj.pk for obj in sources],
-                    history_type or ("~" if update else "+"),
-                    using=alias,
-                    history_using=self._db,
-                    instances={obj.pk: obj for obj in sources},
-                    batch_size=batch_size,
-                    default_user=default_user,
-                    default_change_reason=default_change_reason,
-                    default_date=default_date,
-                    custom_historical_attrs=custom_historical_attrs,
-                )
-            )
-        return captured
+        return history.bulk_history_create(
+            tracked,
+            [obj.pk for obj in objects],
+            history_type or ("~" if update else "+"),
+            instances={obj.pk: obj for obj in objects},
+            batch_size=batch_size,
+            default_user=default_user,
+            default_change_reason=default_change_reason,
+            default_date=default_date,
+            custom_historical_attrs=custom_historical_attrs,
+        )
 
     def _construct_history(
         self,
@@ -171,7 +161,7 @@ class ModelHistory(HistoricalRecords):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("history_manager", ModelHistoryManager)
         kwargs.setdefault("historical_queryset", ModelHistoricalQuerySet)
-        kwargs.setdefault("bases", (_ChangesetHistory,))
+        kwargs.setdefault("bases", (ChangesetHistory,))
         super().__init__(*args, **kwargs)
 
     def contribute_to_class(self, cls: Any, name: str) -> None:
@@ -209,7 +199,7 @@ class ModelHistory(HistoricalRecords):
             weak=False,
         )
 
-    def set_changeset(self, instance: models.Model, history_instance: _ChangesetHistory, **kwargs: Any) -> None:
+    def set_changeset(self, instance: models.Model, history_instance: ChangesetHistory, **kwargs: Any) -> None:
         """Set nullable attribution according to the storage owner's context policy."""
 
         context = current_changeset(required=True, record=True)
@@ -235,7 +225,7 @@ class ModelHistory(HistoricalRecords):
 
         transaction.on_commit(committed)
 
-    def diff(self, first: Any, last: Any, *, previous: Any = _UNLOADED) -> Any:
+    def diff(self, first: Any, last: Any, *, previous: Any = UNLOADED) -> Any:
         """Return the native field delta across one changeset boundary.
 
         Page assemblers pass their already loaded predecessor. Standalone callers
@@ -245,11 +235,10 @@ class ModelHistory(HistoricalRecords):
         target = last.history_object
         model = type(target)
         key = model._meta.pk.attname
-        if previous is _UNLOADED:
+        if previous is UNLOADED:
             previous = (
                 type(last)
-                .objects.using(last._state.db)
-                .filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
+                .objects.filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
                 .order_by("-history_id")
                 .first()
             )
@@ -279,8 +268,6 @@ class ModelHistory(HistoricalRecords):
         keys: Iterable[Any],
         history_type: str,
         *,
-        using: str,
-        history_using: str | None = None,
         instances: Mapping[Any, models.Model] | None = None,
         batch_size: int | None = None,
         default_user: models.Model | None = None,
@@ -290,9 +277,7 @@ class ModelHistory(HistoricalRecords):
     ) -> list[models.Model]:
         """Batch stored snapshots of this model and its tracked MTI descendants.
 
-        ``using`` selects the stored source rows. An explicit ``history_using``
-        binds the historical destination; otherwise its native routing policy
-        applies. ``instances`` supplies only native history metadata overrides.
+        ``instances`` supplies only native history metadata overrides.
         Each batch records pending receiver keys, consumed by native receivers.
         """
 
@@ -303,8 +288,7 @@ class ModelHistory(HistoricalRecords):
         with write_group() as group:
             keys = list(dict.fromkeys(keys))
             names = [field.attname for field in self.fields_included(model)]
-            destination = history_using or (using if self.use_base_model_db else router.db_for_write(manager.model))
-            for rows in cast(HistoryQuerySet, model._base_manager.using(using)).capture_batches(keys):
+            for rows in cast(HistoryQuerySet, model._base_manager.all()).capture_batches(keys):
                 snapshots = list(rows.only(*names).order_by())
                 if not snapshots:
                     continue
@@ -312,7 +296,7 @@ class ModelHistory(HistoricalRecords):
                     if instances is not None and snapshot.pk in instances:
                         _copy_history_metadata(instances[snapshot.pk], snapshot)
                 context = current_changeset(required=True, record=True)
-                records = manager.db_manager(destination)._construct_history(
+                records = manager._construct_history(
                     snapshots,
                     batch_size=batch_size,
                     history_type=history_type,
@@ -334,8 +318,6 @@ class ModelHistory(HistoricalRecords):
                         child,
                         keys,
                         history_type,
-                        using=using,
-                        history_using=history_using,
                         instances=instances,
                         batch_size=batch_size,
                         default_user=default_user,
@@ -355,7 +337,7 @@ class ModelHistory(HistoricalRecords):
                 group.seen.remove(key)
                 return
             current_changeset(required=True, record=True)
-            alias = using or instance._state.db or router.db_for_write(model, instance=instance)
+            alias = using or router.db_for_write(model, instance=instance)
             names = [field.attname for field in self.fields_included(model)]
             try:
                 snapshot = model._base_manager.using(alias).only(*names).get(pk=instance.pk)
@@ -449,7 +431,7 @@ class ModelHistory(HistoricalRecords):
                 user = get_user_model()
                 extra["history_user"].remote_field.model = user
                 extra["history_user"].remote_field.field_name = user._meta.pk.name
-            field = _ChangesetHistory._meta.get_field("changeset").clone()
+            field = ChangesetHistory._meta.get_field("changeset").clone()
             field.remote_field.model = apps.get_model(changeset_model_label())
             field.remote_field.field_name = field.remote_field.model._meta.pk.name
             extra["changeset"] = field

@@ -85,7 +85,8 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     # Django owns the INSERT chunk size; the native write gate adds one revision
     # read. The remaining overhead is four row reads and BEGIN/COMMIT.
     fields = [
-        field for field in ThreadNotification._meta.concrete_fields
+        field
+        for field in ThreadNotification._meta.concrete_fields
         if not field.generated and not isinstance(field, models.AutoField)
     ]
     insert_size = connection.ops.bulk_batch_size(fields, [None] * count)

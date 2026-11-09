@@ -13,10 +13,9 @@ import logging
 import re
 from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
-from itertools import islice
 from typing import Any, ClassVar, Self, cast
 from urllib.parse import quote, unquote
 
@@ -24,7 +23,7 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models.signals import post_save
 from django.utils import timezone
 from django_compose.models import Composable
@@ -40,9 +39,9 @@ from rebac import (
 )
 from rebac.errors import MissingActorError
 from rebac.mixins import RebacModelBase
-from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
+from angee.base.expressions import TextSHA256
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
@@ -54,10 +53,10 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, relation_read_queryset
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import send_created_batch
-from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend
+from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit, RetrievalResult
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.context import changeset, changeset_model, require_changeset, write_group
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -96,6 +95,17 @@ class OutlineEntry:
     line: int
 
 
+@dataclass(frozen=True)
+class MarkdownSection:
+    """One outline span in original characters, with its inclusive subtree lines."""
+
+    start: int
+    end: int
+    heading_path: tuple[str, ...]
+    line: int
+    end_line: int
+
+
 def parse_wikilinks(body: str) -> dict[str, str]:
     """Index native wikilinks and Markdown links to ``wikilink:encoded-title``.
 
@@ -129,6 +139,11 @@ class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeHistoryQuerySet[V
     """Actor-scoped vault reads and search helpers."""
 
     def search_pages(self, query: str, *, first: int = 20) -> list[Any]:
+        """Project ranked hits to the existing page-only search surface."""
+
+        return [hit.page for hit in self.search_passages(query, first=first).hits]
+
+    def search_passages(self, query: str, *, first: int = 20) -> RetrievalResult:
         """Search at most 100 readable vaults, once per selected backend class.
 
         Vault name/id order bounds the work set. Backend-key order is stable;
@@ -136,19 +151,22 @@ class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeHistoryQuerySet[V
         """
         limit = max(0, min(first, MAX_SEARCH_PAGE_SIZE))
         if not limit:
-            return []
+            return RetrievalResult()
         groups: dict[str, list[Any]] = {}
         for vault in self.untrashed().scoped().order_by("name", "sqid")[:MAX_SEARCH_VAULTS]:
             groups.setdefault(vault.retrieval_class, []).append(vault)
         field = self.model.retrieval_class.field
-        pages: list[Any] = []
+        hits: list[RetrievalHit] = []
+        failures = []
         for key, vaults in sorted(groups.items()):
-            remaining = limit - len(pages)
+            remaining = limit - len(hits)
             implementation = field.resolve_class(key)
-            pages.extend(islice(implementation.search_many(vaults, query, first=remaining), remaining))
-            if len(pages) == limit:
+            result = implementation.search_many(vaults, query, first=remaining)
+            hits.extend(result.hits[:remaining])
+            failures.extend(result.failures)
+            if len(hits) == limit:
                 break
-        return pages
+        return RetrievalResult(hits=[replace(hit, rank=rank) for rank, hit in enumerate(hits, 1)], failures=failures)
 
 
 _VaultManagerBase = AngeeHistoryManager.from_queryset(VaultQuerySet)
@@ -356,22 +374,11 @@ class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel, concrete=True)
         binds it, mirroring ``InferenceProvider.backend``.
         """
 
-        return self.retrieval_for(self.retrieval_class)
+        return type(self).retrieval_class.field.resolve_class(self.retrieval_class)(self)
 
-    def retrieval_for(self, key: str) -> RetrievalBackend:
-        """Return the registered retrieval backend for ``key``, bound to this vault.
-
-        The single public resolution seam over the vault-owned ``retrieval_class``
-        registry: callers (this model's ``retrieval`` property, a semantic plugin
-        forcing its own ``key``) ask the vault rather than re-deriving the field's
-        internals. The native declared field owns value normalization and the
-        trusted registry resolver owns class loading.
-        """
-
-        backend_class = cast(
-            ImplClassField[RetrievalBackend], type(self)._meta.get_field("retrieval_class"),
-        ).resolve_class(key)
-        return backend_class(self)
+    def clean(self) -> None:
+        super().clean()
+        self.retrieval.validate_selection(self)
 
 
 class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], AngeeHistoryQuerySet[PageT]):
@@ -380,18 +387,20 @@ class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], 
     def navigation_root_expression(self, *, removed: bool = False) -> models.Expression:
         """A visible tree root has no readable parent in the same trash state."""
 
-        actor = relation_actor(self)
-        # Scoping needs the reader; an expression inspected without one reads no parent.
-        parents = self.none() if actor is None else self.with_actor(actor).filter(is_trashed=removed).scoped()
+        parents = self._related_pages(trashed=removed)
         return ~models.Exists(parents.filter(pk=models.OuterRef("parent_id")))
 
     def has_children_expression(self) -> models.Exists:
         """Whether the actor can expand this page to an untrashed child."""
 
-        actor = relation_actor(self)
-        children = self.none() if actor is None else self.with_actor(actor).untrashed().scoped()
+        children = self._related_pages(trashed=False)
         return models.Exists(children.filter(parent_id=models.OuterRef("pk")))
 
+    def _related_pages(self, *, trashed: bool) -> Self:
+        """Scoped pages in one trash state, read through the shared relation policy."""
+
+        pages = cast(Self, relation_read_queryset(self.model, self))
+        return (pages.trashed() if trashed else pages.untrashed()).scoped()
 
 _PageManagerBase = AngeeHistoryManager.from_queryset(PageQuerySet)
 
@@ -580,10 +589,9 @@ class Page(
     def trash(self, *, reason: str = "") -> None:
         """Trash this page and, with the same stamp, every untrashed page below it."""
 
-        db = self._state.db
         with transaction.atomic():
             super().trash(reason=reason)
-            type(self).system_queryset().using(db).subtree_of(self).exclude(pk=self.pk).trash(
+            type(self).system_queryset().subtree_of(self).exclude(pk=self.pk).trash(
                 reason=self.trash_reason, at=self.trashed_at,
             )
 
@@ -594,9 +602,8 @@ class Page(
         page took a restored title meanwhile.
         """
 
-        db = self._state.db
         with transaction.atomic():
-            pages = type(self).system_queryset(lock=("self",)).using(db)
+            pages = type(self).system_queryset(lock=("self",))
             if self.parent_id is not None and pages.filter(pk=self.parent_id, is_trashed=True).exists():
                 raise ValidationError({"parent": "Restore the folder that contains this page first."})
             together = pages.subtree_of(self).exclude(pk=self.pk).filter(trashed_at=self.trashed_at).trashed()
@@ -659,14 +666,12 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
             raise ValidationError("Write a note before posting.")
         role = self.model.normalize_role(role)
         target = self.model.require_saved(target, "target")
-        using = self._db or router.db_for_write(self.model, instance=target)
-        bindings = self.db_manager(using, hints={"instance": target})
-        boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
+        boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with boundary, transaction.atomic():
             reference = generic_target(target)
             claim_values = [reference.content_type.pk, reference.object_id, vault.pk, role, body]
             if idempotency_key is not None:
-                binding = changeset_model().objects.db_manager(using).claim_created(
+                binding = changeset_model().objects.claim_created(
                     f"knowledge.record_note:{user_id}",
                     idempotency_key,
                     values=claim_values,
@@ -677,10 +682,8 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
                     return binding.with_actor(actor)
             page_model = self.model._meta.apps.get_model("knowledge", "Page")
             title = f"{body.splitlines()[0][:100]} · {timezone.now().isoformat()}"
-            page = page_model.objects.db_manager(using, hints={"instance": vault}).create_in(
-                vault, title=title, body=body,
-            )
-            binding = bindings.upsert(target=target, page=page, role=role)
+            page = page_model.objects.create_in(vault, title=title, body=body)
+            binding = self.upsert(target=target, page=page, role=role)
             if idempotency_key is not None:
                 require_changeset().record_created(binding)
             return binding
@@ -715,17 +718,13 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
         """
 
         target = self.model.require_saved(target, "target")
-        using = self._db or router.db_for_write(self.model, instance=target)
-        bindings = self.db_manager(using, hints={"instance": target})
         with transaction.atomic():
             reference = generic_target(target)
             with system_context(reason="knowledge.record_binding.lock"):
                 canonical = reference.content_type.model_class()
                 if canonical is None:
                     raise ValueError("Knowledge binding target model is unavailable.")
-                canonical._base_manager.db_manager(using, hints={"instance": target}).select_for_update(
-                    of=row_lock_paths(canonical), no_key=True,
-                ).get(
+                canonical._base_manager.select_for_update(of=row_lock_paths(canonical), no_key=True).get(
                     pk=reference.object_id
                 )
             owner = page
@@ -734,14 +733,13 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
                 with system_context(reason="knowledge.record_binding.page_lock"):
                     owner = (
                         type(owner)
-                        ._base_manager.db_manager(using, hints={"instance": owner})
-                        .select_for_update(of=row_lock_paths(type(owner)), no_key=True)
+                        ._base_manager.select_for_update(of=row_lock_paths(type(owner)), no_key=True)
                         .get(pk=owner.pk)
                     )
                     assert isinstance(owner, TrashMixin)
                     if owner.is_trashed:
                         raise ValidationError("Cannot bind a page in the trash.")
-            binding, _created = bindings.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
+            binding, _created = self.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
             return binding
 
     def unbind(
@@ -911,7 +909,27 @@ class AmbiguousMatchError(StructuredEditError):
     """Raised when a heading path (or replace target) matches more than once."""
 
 
-class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
+class MarkdownPageQuerySet(PageQuerySet):
+    """Keep the canonical body hash current even for native bulk writes."""
+
+    def update(self, **kwargs: Any) -> int:
+        if "body" in kwargs:
+            kwargs.setdefault("updated_at", timezone.now())
+            body = kwargs["body"]
+            if isinstance(body, str):
+                kwargs["body_hash"] = self.model.hash_body(body)
+                kwargs["word_count"] = len(body.split())
+            else:
+                # Expressions (including bulk_update's CASE) still derive the
+                # canonical hash in the same UPDATE as the body.
+                kwargs["body_hash"] = TextSHA256(body)
+        return super().update(**kwargs)
+
+
+_MarkdownPageManager = PageManager.from_queryset(MarkdownPageQuerySet)
+
+
+class MarkdownPageManager[MarkdownT: MarkdownPage](_MarkdownPageManager[MarkdownT]):
     """Factories for actor-scoped markdown body writes."""
 
     def _copy_bodies(
@@ -939,7 +957,7 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
                         body_hash=source.body_hash,
                         word_count=source.word_count,
                     )
-                    body.save_base(raw=True, force_insert=True, using=self.db)
+                    body.save_base(raw=True, force_insert=True)
                     copies.append(body.with_actor(actor))
             apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
             send_created_batch(
@@ -964,7 +982,6 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
         actor = current_actor()
         rows = self.with_actor(actor) if actor is not None else self.all()
         locked = rows.select_for_update()
-        using = locked.db
         with transaction.atomic():
             markdown = locked.get(pk=page.pk)
             if expected_hash is not None and expected_hash != markdown.body_hash:
@@ -975,7 +992,7 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
                 markdown.title = title
                 markdown.full_clean()
                 fields.add("title")
-            markdown.save(using=using, update_fields=fields, expected_revision=expected_revision)
+            markdown.save(update_fields=fields, expected_revision=expected_revision)
             return markdown
 
     # -- structure-aware edits --------------------------------------------
@@ -1141,6 +1158,31 @@ class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits=
         ]
 
     @staticmethod
+    def sections(body: str) -> list[MarkdownSection]:
+        """Partition the original body by outline headings, preserving CR/LF offsets.
+
+        Character spans stop at the next heading; line ranges include child
+        headings so section edits and passage indexing share one outline owner.
+        """
+
+        offsets = [0, *(match.end() for match in re.finditer(r"\r\n?|\n", body))]
+        entries = MarkdownPage.parse_outline(body)
+        sections = []
+        if not entries or entries[0].line:
+            sections.append(MarkdownSection(0, offsets[entries[0].line] if entries else len(body), (), 0, len(offsets)))
+        ancestry = []
+        for index, entry in enumerate(entries):
+            while ancestry and ancestry[-1].level >= entry.level:
+                ancestry.pop()
+            ancestry.append(entry)
+            end = offsets[entries[index + 1].line] if index + 1 < len(entries) else len(body)
+            end_line = next((later.line for later in entries[index + 1:] if later.level <= entry.level), len(offsets))
+            sections.append(MarkdownSection(
+                offsets[entry.line], end, tuple(ancestor.text for ancestor in ancestry), entry.line, end_line,
+            ))
+        return sections
+
+    @staticmethod
     def section_range(body: str, heading_path: str | list[str]) -> tuple[int, int]:
         """Resolve ``heading_path`` to its ``[start, end)`` line range in ``body``.
 
@@ -1153,24 +1195,12 @@ class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits=
         nothing matches, :class:`AmbiguousMatchError` when more than one does.
         """
 
-        normalized = MarkdownPage._normalize_newlines(body)
-        entries = MarkdownPage.parse_outline(normalized)
-        line_count = len(normalized.split("\n"))
         want = [text.strip().lower() for text in ([heading_path] if isinstance(heading_path, str) else heading_path)]
-        matches: list[tuple[int, int]] = []
-        ancestry: list[OutlineEntry] = []
-        for index, entry in enumerate(entries):
-            while ancestry and ancestry[-1].level >= entry.level:
-                ancestry.pop()
-            ancestry.append(entry)
-            tail = [ancestor.text.strip().lower() for ancestor in ancestry][-len(want) :]
-            if tail != want:
-                continue
-            end = next(
-                (later.line for later in entries[index + 1 :] if later.level <= entry.level),
-                line_count,
-            )
-            matches.append((entry.line, end))
+        matches = [
+            (section.line, section.end_line)
+            for section in MarkdownPage.sections(body)
+            if section.heading_path and [text.strip().lower() for text in section.heading_path][-len(want):] == want
+        ]
         if not matches:
             raise SectionNotFoundError(f"No section matches heading path {heading_path!r}.")
         if len(matches) > 1:
@@ -1355,12 +1385,11 @@ class LinkManager[LinkT: Link](_LinkManagerBase[LinkT]):
             return
         page_model = apps.get_model("knowledge", "Page")
         vault_ids = {body.vault_id for body in batch}
-        using = self._db or router.db_for_write(self.model, instance=batch[0])
-        links = self.model._base_manager.db_manager(using)
+        links = self.model._base_manager
         with system_context(reason="knowledge.backlinks"), transaction.atomic():
             resolved = {
                 (vault_id, title): pk
-                for vault_id, title, pk in page_model._base_manager.using(using).filter(
+                for vault_id, title, pk in page_model._base_manager.filter(
                     vault_id__in=vault_ids, is_trashed=False,
                 )
                 .values_list("vault_id", "title", "pk")
@@ -1391,9 +1420,8 @@ class LinkManager[LinkT: Link](_LinkManagerBase[LinkT]):
         affected = models.Q(outgoing_links__target_page_id__in=[page.pk for page in batch])
         for page in batch:
             affected |= models.Q(vault_id=page.vault_id, outgoing_links__target_text=page.title)
-        using = self._db or router.db_for_write(self.model, instance=batch[0])
         with system_context(reason="knowledge.backlinks.targets"):
-            self.db_manager(using).rebuild_many(markdown._base_manager.using(using).filter(affected).distinct())
+            self.rebuild_many(markdown._base_manager.filter(affected).distinct())
 
 
 class Link(AngeeDataModel, concrete=True):

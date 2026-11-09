@@ -193,7 +193,7 @@ test.each([true, false])("empty %s-disabled/inactive initial requests cancel wit
   };
   const observer = disabled ? new QueryObserver(cache, { ...options, enabled: false }) : undefined;
   const unsubscribe = observer?.subscribe(() => undefined);
-  const request = cache.fetchQuery(options).catch((error: unknown) => error);
+  const request = cache.query(options).catch((error: unknown) => error);
   try {
     await invalidateAuthoredQueries(cache, ["notes.Note"]);
     expect(signal.aborted).toBe(true);
@@ -222,10 +222,10 @@ test("populated disabled/inactive queries retain data and unrelated initial quer
     queryFn: async () => { requests++; return ["current"]; },
   };
   const inactive = { ...options, queryKey: ["notes", "inactive"] };
-  await cache.fetchQuery(options); await cache.fetchQuery(inactive);
+  await cache.query(options); await cache.query(inactive);
   const observer = new QueryObserver(cache, { ...options, enabled: false });
   const unsubscribe = observer.subscribe(() => undefined);
-  const other = cache.fetchQuery({
+  const other = cache.query({
     queryKey: ["tags"], meta: { angeeModels: ["notes.Tag"] },
     queryFn: (context) => { signal = context.signal; return unrelated.promise; },
   });

@@ -8,6 +8,181 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — shared addon contracts, native embeddings and graph retrieval
+
+- Base: `AngeeModel` declares `change_read_resource`, `change_related_records`
+  and `change_batch_targets`; adapters dispatch through these contracts.
+  `AngeeQuerySetMixin` and `SCHEMA_BINDING` replace their underscored names.
+  `relation_read_queryset` now lives only in `base.permissions`; ordinary
+  relation reads use a pinned actor or REBAC's ambient scope. Knowledge page-tree
+  expressions compose that owner and use fresh related selections, independent
+  of the outer page filter. Actorless runtime reads fail closed; explicit system
+  reads are unscoped. `prefetched_objects` reads Django's materialized ordinary
+  relation cache without evaluation (`None` is a miss, `[]` an empty hit).
+- Base writes: immutable changed values retain their identity; mutable values
+  are copied before observers run. `bulk_updated` carries only `instances` and
+  `update_fields`, without `using`. The public `send_bulk_update` delivers that
+  batch robustly and logs every failed receiver; trash, provenance and workflows
+  share it. `PostgresAdvisoryLockBackend` and its handles no longer carry an
+  `alias`; they use Django's default connection.
+- One database: owner-initiated database selection has been removed across base,
+  provenance, timeline, messaging, posts, parties, projects, work, knowledge,
+  proposals, resources, IAM, storage, sequence, decisions and workflow verbs.
+  `using` is removed from `initialize_rows`, `canonical_ids`, `record_view_refs`,
+  `FractionalRankField.allocate_missing_ranks`, `Task.ordering_write`,
+  `changeset`, `_ChangesetBoundary`, `ChangesetContext`, `Aspect.coerce_members`,
+  `history_related_scopes`, `ModelHistory.changeset_states`, `build_resource`,
+  `resolve_xref`, `resolve_ledger_xref`, `resolve_content_type` and
+  `materialize_grant_groups`. Resource widgets no longer carry a `using`
+  attribute, resource construction no longer sets `using_db`, and `pre_load`
+  sends no alias. Native Django/history hooks retain their handed aliases;
+  import-export's own lifecycle retains `get_db_connection_name`, with no
+  Angee-initiated calls. `angee.E050` requires exactly `DATABASES['default']`
+  and empty `DATABASE_ROUTERS`.
+- Provenance: `_ChangesetScope` / `ChangesetScope` becomes `ChangesetContext`,
+  distinct from the existing `Changeset.scope` and `ChangesetScopeMiddleware`.
+  `_ChangesetHistory` and `_UNLOADED` become public `ChangesetHistory` and
+  `UNLOADED`. Command and resource-load attribution no longer select a database;
+  bulk history capture no longer partitions rows by database. Member timeline
+  reads have statement and SQL-size budgets.
+- Saved rows: `base.validators.SavedRow` is the shared Pydantic annotation used
+  by `DecisionRequest.records`; `is_saved_row` exposes the same predicate to
+  other callers. A row requires a primary key and `_state.adding == False`.
+  Constructing `Model(pk=...)` does not make it saved; validation names the
+  containing field and preserves nested error locations.
+- State and hierarchy: `StateTransitions` accepts abstract donor declarations
+  against abstract source fields and binds once to the composed host, refusing
+  collisions. `TaskWork` uses that guard and explicit `save(admitted_stage=...)`
+  for owner-authorized stage entry; its private status flags and `__setattr__`
+  workaround are removed. Projects-only hosts remain unguarded by work, and
+  work hosts still reject constructor-authored status. Public
+  `validate_hierarchy_parent` and transactional `validate_hierarchy_move`
+  replace private ancestry access; refused moves restore the in-memory path.
+- Messaging and posts: `angee.posts.ingest` is removed; use `Message.posts.land`
+  and `land_relations`. Parsed envelope hashing lives on `ParsedMessage.sync_hash`
+  and `ParsedPart.sync_digest`, replacing the manager's private hash helpers.
+  `ChannelQuerySet.outbound_email(backend_class=...)` is a lazy, chainable
+  predicate. `require_outbound_email` on that queryset and its manager raises
+  `OUTBOUND_EMAIL_NOT_CONFIGURED` or `OUTBOUND_EMAIL_CHANNEL_MISSING`; callers
+  needing an admission refusal must use the verb. `Channel.outbound_sender`
+  retains those coded, channel-keyed refusals; invalid sender setup also names
+  the channel field.
+  Comment timeline reads gate the host's thread permission in SQL and return
+  no comments when a retired record redirects to unreadable chatter.
+  Threaded-record and audience contracts live in `messaging.mixins`; historical
+  public imports from `messaging.models` remain aliases to those same classes.
+  The moderation audit reason is `posts.message.moderation`.
+- Proposals: manager access composes the task owner's `read_granted` and
+  `share_granted` rules instead of overriding derived permissions. Managers
+  cannot read withheld task content or record-bound tasks they cannot otherwise
+  read. The proposals permission extension revision is 11; deploy with
+  `rebac sync`.
+- Resources, IAM and storage: `_NativeJSONWidget` becomes public
+  `NativeJSONWidget`. Post-load hooks dispatch through `ResourceLoadMixin`, which
+  hook authors must compose. `AngeeResource.adopt_persisted_instance` copies a
+  verb-persisted row, marks it saved and completes the import lifecycle for
+  chatter and workflow-definition adapters. Dashboard loads revalidate parents
+  in one read. Mount provisioning parses `MountMode` exactly: case variants and
+  surrounding whitespace now fail validation. `File.purge_if_unretained` treats
+  every reverse foreign key as retention regardless of `on_delete`, including
+  a committed `messaging.Part.file` with `SET_NULL`.
+- Workflows and extraction: `workflows.transactions` owns `RETRYABLE_SQLSTATES`,
+  `sqlstate`, `database_timeout` and `isolate_failure`; private manager copies
+  are removed. `StepContext` requires its `runner`. `Settlement` replaces the
+  result union and private base with an abstract class; extending it is
+  framework-internal, while addons return `Done`, `Wait`, `NextPage`, `Ask` or
+  `Fail`. Attempt errors retain exception types and causes and, like stacktraces,
+  require run-operator access. Run-level errors retain their writer gate.
+  Workflows schema revision 25 requires `rebac sync`. Extraction acquisition
+  exposes `text_part` instead of `_text_part`.
+- Integrate locks: `bridge_lock_key` and the module-level lock forwarders are
+  removed with `integrate/locks.py`. Use `Integration.sync_lock_key`,
+  `sync_lock`, `sync_is_locked`, `live_session_host_lock_key` and
+  `session_is_hosted`. `Bridge.admit_due_sync` decides from the scheduler's
+  already-locked row, with one row lock. A fresh or declined admission claims
+  the poll interval; stale queued recovery retains its claim. Declined manual
+  admission still writes nothing.
+- Integrate progress and OAuth: `BridgeProgressReporter`, `current_bridge_progress`
+  and `LiveSession(reporter=)` / `.reporter` are removed. Nested sync code uses
+  `current_progress_bridge().report_progress`; `bridge_progress_context` becomes
+  `progress_bridge_context`. `ExternalAccount.account_label` owns its display
+  fallback; `provider_*` properties now raise for a missing required OAuth client
+  instead of returning empty strings. The typed OAuth protocol calls
+  `OAuthClient.discover_endpoints` directly; the duplicate OIDC `ensure_endpoints`
+  override and parameter-coercion helpers are removed (the base protocol method
+  remains). `HTTP_TIMEOUT_SECONDS` is owned by `integrate.http`.
+  `HttpClient.get_json` owns JSON GET; OAuth's former public `get_json` becomes
+  private `_get_json`, translating shared HTTP/decoding failures to its coded
+  errors and requiring an object response.
+- GraphQL: `line_metadata` replaces `_line_metadata`; generic adapters call the
+  base model's change, deletion and redaction contracts. `AngeeManager.admit_view_as`
+  declares a refusing default; IAM's manager owns admission. Record-reference
+  filter targets come from `accepted_target_models` without a content-type
+  lookup during expression construction. Relation resolvers use base's ambient
+  read and ordinary-prefetch owners; actorless fallback does not reuse an
+  evaluated actor-bound cache.
+- Web: imperative TanStack reads use `query` / `infiniteQuery` (react-query
+  >= 5.102); `readSharedIdentity` owns the shared static identity read. ACP chat
+  removes runtime dispatch props/context and the retired `@angee/agents/chat`,
+  `AgentChatProvider` and `useAgentChatContext` exports. `AgentChatTarget.runtime_class`
+  is removed from GraphQL; the agent model's runtime implementation remains.
+  `AgentChat` incorporates its former `AcpAgentChat` wrapper and drops the
+  non-lazy boundary. The detail Chat tab distinguishes loading, errors and
+  unavailable chat; roster selection falls back when the picked agent stops.
+  Provisioning reads workspace status directly and uses `ErrorBanner`'s null
+  state. `ActionFormDialog` enforces required static/dynamic definition fields,
+  binds missing-field errors and disables incomplete submission by composing
+  `MutationDialog`'s `requiredDialogErrors`. The shared test harness supplies
+  zero tooltip delay; hover assertions are synchronous after `mouseEnter`.
+- Native embeddings: `InferenceModel.embed` requires an approved model for the
+  requested use,
+  composes native OpenAI/Ollama embedding bindings and validates batch shape and
+  consistent dimensions, recording the size through `embedding_dimensions`.
+  SDK client lifetime is shared with chat; discovery records embedding
+  capabilities. `knowledge_embedding` and `knowledge_graph_extraction` are
+  deployment approval roles for embedding and chat models, respectively.
+- Pgvector retrieval: `angee.knowledge_graph_pgvector` implements permission-scoped
+  PostgreSQL passage retrieval selected by `Vault.retrieval_class = "pgvector"`.
+  Vaults configure `embedding_model`, optional `extraction_model` and
+  `graph_entity_kinds`; composed host migrations add these fields and the
+  `Passage`, `PassageEmbedding`, `Entity`, `EntityMention` and `EntityEdge` models
+  with their constraints/indexes. Provisioning prepares `vector` and `pg_trgm`;
+  activating/searching the backend on SQLite is refused.
+- Retrieval indexing preserves unchanged passage identity, heading paths and
+  exclusive source offsets. Commit-triggered embedding jobs and bounded
+  reconcilers fence concurrent work, keep provider calls outside transactions
+  and recheck source/model fingerprints before persisting. Search combines
+  exact cosine similarity, PostgreSQL full-text ranking and one-hop page links
+  using reciprocal rank fusion. Every arm scopes readable live evidence before
+  ranking; vectors must be finite and nonzero, and model failures are explicit.
+  `search_pages` retains page results;
+  GraphQL/MCP `search_passages` adds passage evidence, and `related_pages` uses
+  page centroids and links without embedding a query.
+- Optional local graph RAG extracts typed entities and relationships from
+  passage evidence through the approved inference owner. Evidence and both
+  endpoints are permission-filtered before bounded traversal and personalized
+  PageRank; graph evidence contributes another fusion arm. Disabling extraction
+  immediately removes that arm; stale source/configuration evidence is excluded.
+  Global summaries and thematic graph search are outside this capability.
+- `knowledge_retrieval_eval` accepts YAML/JSON golden cases, an actor and vaults;
+  it reports recall@10 and MRR overall and by factoid/multi-hop category across
+  vector, lexical, hybrid, hybrid+G0 and hybrid+G1 rankings. It shares production
+  ranking, resolves titles under the actor and does not backfill or mutate the
+  index. The bundled synthetic corpus is a starter, not a measured quality claim.
+- Dependencies: base requires Pydantic >= 2.14 and imports its public `MISSING`;
+  agents requires pydantic-ai-slim >= 2.60 and the OpenAI addon >= 2.66 for native
+  compatible-provider embeddings. The optional pgvector addon adds agents, jobs
+  and MCP dependencies plus `pgvector>=0.5.1,<0.6`,
+  `semantic-text-splitter>=0.33,<0.34`, `networkx>=3.7,<4`, `scipy>=1.16,<2` and
+  `pyyaml>=6,<7`. Refresh project locks/environments and regenerate composed
+  schemas and clients when upgrading these contracts.
+- Tests and CI: installed-model registry restoration and its ordered monkeypatch
+  fixture live in `base.testing.fixtures`, shared by framework and resource tests.
+  Test module/timing names describe their subjects; obsolete timing entries are
+  removed. Both PostgreSQL services in `reusable-checks.yml` use
+  `pgvector/pgvector:pg17`, installing `vector` in host and template databases
+  before composition/tests. Readiness tests cover native and composed databases.
+
 ## Unreleased — domain and capability owners on their rows, managers and querysets
 
 - Storage: `FileManager.ingest_bytes`/`ingest_stream` (and `PartCarrier.retain`)
@@ -84,11 +259,9 @@ live in code docstrings.
 - One database is the contract. `transaction.atomic()` and `on_commit()` are
   bare in owner verbs; an alias that Django or a library passes into an
   override or hook (`save(using=)`, signal `using`) passes through unchanged.
-  System check `angee.E050` refuses a non-empty `DATABASE_ROUTERS`, and the
-  static placement test is retired. Recorded follow-up: the remaining placement
-  plumbing in `src` (140 `db_manager(`, 28 `router.db_for_*`, 194 `.using(`,
-  161 `using=`, 173 `_state.db`, 63 `hints=` lines) is swept under the same
-  rule in a later change.
+  System check `angee.E050` requires exactly the `default` database alias and
+  empty `DATABASE_ROUTERS`; the static placement test is retired. The owner and
+  helper sweeps are complete under the native-hook pass-through rule above.
 - Locks: `angee.jobs.locks` moves to `angee.base.locks` with unchanged names
   (`task_lock`, `LockKey`, `record_lock_key`, `task_lock_is_held`,
   `task_locks_are_cross_process`). `task_lock(key, blocking=True)` waits and

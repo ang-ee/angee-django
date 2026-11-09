@@ -53,7 +53,6 @@ from angee.workflows.managers import (
     StepWatchManager,
     WorkflowManager,
     WorkflowRunManager,
-    isolate_failure,
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.signals import run_stopping
@@ -73,6 +72,7 @@ from angee.workflows.states import (
 )
 from angee.workflows.steps import AttemptRecord, Fail, Step
 from angee.workflows.subjects import RunSubject
+from angee.workflows.transactions import isolate_failure
 from angee.workflows.triggers import (
     TriggerEventManager,
     TriggerGrantTarget,
@@ -616,7 +616,10 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                     if failure.timed_out:
                         error, stacktrace = failure.diagnostic_error or "", failure.stacktrace
                     else:
-                        error, stacktrace = (settlement.error, settlement.stacktrace) if settlement else ("", "")
+                        error, stacktrace = (
+                            (settlement.diagnostic_error or settlement.error, settlement.stacktrace)
+                            if settlement else ("", "")
+                        )
                     closed = step_run.attempts.close(failure.result, error, stacktrace)
                     if recorded_on_attempt or failure.timed_out and closed:
                         run_error = ""
@@ -930,8 +933,7 @@ class StepRun(AngeeDataModel, concrete=True):
         rows = tuple(instances)
         if not rows:
             return ()
-        using = rows[0]._state.db
-        decisions = apps.get_model("decisions", "Decision")._base_manager.using(using).filter(
+        decisions = apps.get_model("decisions", "Decision")._base_manager.filter(
             pk__in={row.decision_id for row in rows if row.decision_id},
         ).defer("proposal", "context", "verdict", "verdict_values") if "decision_id" in update_fields else ()
         return decisions

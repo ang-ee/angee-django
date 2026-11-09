@@ -12,7 +12,7 @@ from typing import Any
 
 from django.apps import AppConfig, apps
 from django.conf import settings
-from django.db import connections, router
+from django.db import connection
 from django.db.models import Field, Model
 from django_compose.components import installed_components
 from pydantic import BaseModel, PrivateAttr
@@ -294,10 +294,7 @@ def resource_counts() -> dict[str, int]:
         resource = apps.get_model("resources", "Resource")
     except LookupError:
         return {}
-    database = router.db_for_read(resource)
-    if not router.allow_migrate_model(database, resource):
-        return {}
-    if resource._meta.db_table not in connections[database].introspection.table_names():
+    if resource._meta.db_table not in connection.introspection.table_names():
         return {}
     return resource.objects.counts_by_addon()
 

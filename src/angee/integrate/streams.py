@@ -40,7 +40,7 @@ from angee.integrate.states import (
     StreamPhase,
     SyncFailureKind,
 )
-from angee.integrate.sync import bridge_progress_context, current_bridge_progress
+from angee.integrate.sync import current_progress_bridge, progress_bridge_context
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset, current_changeset
 
@@ -1035,9 +1035,9 @@ def open_stream(
 
 
 def _report(bridge: Any, message: str, **details: Any) -> None:
-    reporter = current_bridge_progress()
-    if reporter is not None:
-        reporter.report(str(bridge.SyncStage.SYNCING), message=message, details=details)
+    progress = current_progress_bridge()
+    if progress is not None:
+        progress.report_progress(str(bridge.SyncStage.SYNCING), message=message, details=details)
 
 
 def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadline: float) -> int:
@@ -1106,7 +1106,7 @@ def _drain_partition(bridge: Any, definition: StreamDefinition, deadline: float)
             row = type(bridge)._base_manager.get(pk=bridge.pk)
             adapter = row.capability_impl
             try:
-                with bridge_progress_context(row):
+                with progress_bridge_context(row):
                     return _drain(row, adapter, definition, deadline)
             finally:
                 adapter.close()

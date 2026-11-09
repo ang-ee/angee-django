@@ -2,7 +2,7 @@
 
 from django.apps import apps
 
-from angee.knowledge.retrieval import RetrievalBackend
+from angee.knowledge.retrieval import RetrievalBackend, RetrievalHit, RetrievalResult
 
 
 class ReverseRetrieval(RetrievalBackend):
@@ -10,6 +10,14 @@ class ReverseRetrieval(RetrievalBackend):
 
     @classmethod
     def search_many(cls, vaults, query, *, first=20):
-        return apps.get_model("knowledge", "Page").objects.filter(
-            vault__in=vaults, title__icontains=query,
-        ).untrashed().scoped().order_by("-title")[:first]
+        pages = (
+            apps.get_model("knowledge", "Page")
+            .objects.filter(
+                vault__in=vaults,
+                title__icontains=query,
+            )
+            .untrashed()
+            .scoped()
+            .order_by("-title")[:first]
+        )
+        return RetrievalResult(hits=[RetrievalHit(page=page, rank=rank) for rank, page in enumerate(pages, 1)])

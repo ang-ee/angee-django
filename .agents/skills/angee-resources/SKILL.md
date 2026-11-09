@@ -131,7 +131,6 @@ description: "Declares and loads an addon's master, install and demo data: pypro
            for field in instance._meta.concrete_fields:                        # saved fields -> row instance
                setattr(instance, field.attname, getattr(installed, field.attname))
            instance._state.adding = False                                      # saved state -> row instance
-           instance._state.db = installed._state.db
            self.after_save_instance(instance, row, **kwargs)
    ```
    For batch work, override `after_resource_load` and call `super()` once (`Dashboard.after_resource_load` in `src/angee/dashboards/models.py`).

@@ -78,12 +78,13 @@ def test_oidc_login_establishes_person_only_for_explicitly_verified_email(compos
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("factory", ["create_user", "create_superuser", "create_person_as_system"])
+@pytest.mark.parametrize("factory", ["create_user", "create_superuser"])
 def test_user_factory_preserves_explicit_manager_database(factory: str) -> None:
+    """Django's native factories save on the manager's database, as ``createsuperuser --database`` requires."""
+
     users = User.objects.db_manager("unconfigured-explicit-database")
-    options = {"reason": "test.iam.database"} if factory == "create_person_as_system" else {}
     with pytest.raises(ConnectionDoesNotExist):
-        getattr(users, factory)("explicit-database", "explicit-db@example.com", **options)
+        getattr(users, factory)("explicit-database", "explicit-db@example.com")
     assert not User.system_queryset().filter(username="explicit-database").exists()
 
 

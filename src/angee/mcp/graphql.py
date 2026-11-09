@@ -23,6 +23,7 @@ Boundary conventions (the agent surface differs from the GraphQL wire):
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -42,10 +43,13 @@ from graphql import (
     GraphQLList,
     GraphQLNonNull,
     GraphQLScalarType,
+    OperationType,
     Undefined,
     assert_input_object_type,
     ast_from_value,
     get_named_type,
+    get_operation_ast,
+    parse,
     print_ast,
 )
 from pydantic import BaseModel
@@ -123,7 +127,14 @@ def _execute_sync(built: Any, document: str, variables: dict[str, Any] | None) -
 
     close_old_connections()
     try:
-        with transaction.atomic():
+        operation = get_operation_ast(parse(document))
+        # Read operations may call approved providers. Mutation owners retain
+        # the existing atomic statement boundary and native write semantics.
+        boundary = (
+            transaction.atomic() if operation is not None and operation.operation == OperationType.MUTATION
+            else nullcontext()
+        )
+        with boundary:
             user = _actor_user()
             request = HttpRequest()
             request.user = (

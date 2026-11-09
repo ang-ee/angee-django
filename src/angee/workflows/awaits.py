@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from angee.workflows.schemas import union_schema
 from angee.workflows.states import Outcome, WaitingKind
-from angee.workflows.steps import Done, Step, _Settlement
+from angee.workflows.steps import Done, Settlement, Step
 
 
 class AwaitRunInput(BaseModel):
@@ -28,7 +28,7 @@ class AwaitRunConfig(BaseModel):
 
 
 @dataclass(frozen=True)
-class _AwaitedRun(_Settlement):
+class _AwaitedRun(Settlement):
     """Retain an observed child in either its waiting or terminal settlement."""
 
     run_id: int = 0
@@ -84,7 +84,7 @@ class AwaitRun(Step[AwaitRunInput, Any, AwaitRunConfig]):
         schemas = config.outcomes
         return union_schema(*(schema for outcome, schema in schemas.items() if outcomes is None or outcome in outcomes))
 
-    def run(self, ctx: Any) -> _Settlement:
+    def run(self, ctx: Any) -> Settlement:
         """Load through the actor's read rule; terminal rows require no child lock."""
         child = ctx.load(apps.get_model("workflows", "WorkflowRun"), ctx.input.run_id)
         child.check_await(ctx.run, expects=ctx.config.expects)

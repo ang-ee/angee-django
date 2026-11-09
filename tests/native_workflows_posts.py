@@ -45,7 +45,6 @@ from angee.base.testing.packages import write_addon_distribution
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.posts.backends import ParsedPost
-from angee.posts.ingest import land_posts
 from angee.provenance.context import changeset_model
 from angee.resources.entries import ResourceEntry
 from angee.resources.loader import build_resource
@@ -119,7 +118,7 @@ class CommentReplyTests(TransactionTestCase):
                 live_since=timezone.now() - timedelta(minutes=1),
             )
             self.channel = apps.get_model("messaging", "Channel").objects.get(pk=self.feed.pk)
-            self.post = land_posts(
+            self.post = Message.posts.land(
                 self.feed,
                 [
                     ParsedPost(
@@ -150,7 +149,7 @@ class CommentReplyTests(TransactionTestCase):
             )
             Trigger.objects.enable(trigger, actor=self.admin)
         with system_context(reason="public comment ingest"):
-            self.comment = land_posts(
+            self.comment = Message.posts.land(
                 self.feed,
                 [
                     ParsedPost(
@@ -460,7 +459,7 @@ class CommentReplyTests(TransactionTestCase):
 
     def native_answer(self):
         with system_context(reason="native channel answer"):
-            land_posts(
+            Message.posts.land(
                 self.feed,
                 [
                     ParsedPost(

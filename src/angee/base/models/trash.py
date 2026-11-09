@@ -22,7 +22,7 @@ from angee.base.models.timestamps import auto_now_stamps, update_fields_with_aut
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import CanonicalQuerySet, by_key
 from angee.base.serialization import strip_null_bytes
-from angee.base.signals import bulk_updated
+from angee.base.signals import bulk_updated, send_bulk_update
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
@@ -179,7 +179,6 @@ class TrashMixin(PersistenceMixin, models.Model):
         """Move this row to the trash, stamping the acting user, time and reason."""
 
         reason = clean_trash_reason(reason)
-        db = self._state.db
         with transaction.atomic():
             self._require_trash_state(trashed=False)
             self.validate_trash()
@@ -187,7 +186,7 @@ class TrashMixin(PersistenceMixin, models.Model):
             self.trashed_at = timezone.now()
             self.trashed_by_id = actor_user_id(instance_actor(self))
             self.trash_reason = reason
-            self.save(using=db, update_fields=update_fields_with_auto_now(self, self.TRASH_FIELDS))
+            self.save(update_fields=update_fields_with_auto_now(self, self.TRASH_FIELDS))
 
     def validate_trash(self) -> None:
         """Refuse domain-invalid removal while the shared trash owner holds its row lock."""
@@ -195,12 +194,11 @@ class TrashMixin(PersistenceMixin, models.Model):
     def restore(self) -> None:
         """Take this row out of the trash, clearing its trash stamps."""
 
-        db = self._state.db
         with transaction.atomic():
             self._require_trash_state(trashed=True)
             for name, value in self.UNTRASHED_VALUES.items():
                 setattr(self, name, value)
-            self.save(using=db, update_fields=update_fields_with_auto_now(self, self.TRASH_FIELDS))
+            self.save(update_fields=update_fields_with_auto_now(self, self.TRASH_FIELDS))
 
     def revert_removal(self, previous: Any = None, *, reason: str = "") -> None:
         """Replay removal through the trash owner shared by MTI descendants."""
@@ -208,7 +206,7 @@ class TrashMixin(PersistenceMixin, models.Model):
         owner = self._meta.get_field(TRASH_FLAG_FIELD).model
         if not issubclass(owner, TrashMixin):
             raise ImproperlyConfigured("The trash flag must be declared by TrashMixin.")
-        target = owner._base_manager.db_manager(hints={"instance": self}).get(pk=self.pk)
+        target = owner._base_manager.get(pk=self.pk)
         if (actor := instance_actor(self)) is not None:
             if not isinstance(target, RebacMixin):
                 raise ImproperlyConfigured("Actor-attributed trash replay requires RebacMixin.")
@@ -230,7 +228,6 @@ class TrashMixin(PersistenceMixin, models.Model):
             raise ImproperlyConfigured("The trash flag must be declared by TrashMixin.")
         stored = (
             owner.system_queryset(lock=("self",))
-            .using(owner._base_manager.db_manager(hints={"instance": self}).db)
             .filter(pk=self.pk)
             .values_list(TRASH_FLAG_FIELD, flat=True)
             .first()
@@ -324,8 +321,8 @@ class TrashQuerySet(CanonicalQuerySet[_TrashModelT]):
                 return 0
             changed = sum(batch.update(**values) for batch in by_key(self, keys))
             if bulk_updated.has_listeners(self.model):
-                for batch in by_key(self.model._base_manager.using(self.db), keys):
-                    bulk_updated.send_robust(
-                        sender=self.model, instances=tuple(batch), update_fields=frozenset(values), using=self.db,
+                for batch in by_key(self.model._base_manager.all(), keys):
+                    send_bulk_update(
+                        sender=self.model, instances=batch, update_fields=values,
                     )
             return changed

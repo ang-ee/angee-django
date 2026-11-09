@@ -279,6 +279,32 @@ describe("serializeActionArgValues", () => {
 });
 
 describe("ActionFormDialog", () => {
+  test.each([false, true])("enforces definition requirements with dynamic fields=%s", async (dynamic) => {
+    const submit = vi.fn().mockResolvedValue({ ok: true });
+    const resolver = vi.fn((values: Record<string, unknown>) => ({ values, errors: {} }));
+    const fields = [
+      { name: "name", label: "Name", widget: "text", required: true },
+      { name: "retained", label: "Retained", required: true, readOnly: true },
+      { name: "hidden", label: "Hidden", required: true, hidden: true },
+    ] as const;
+    renderDialog({ id: "collect", label: "Collect", submit, args: {
+      fields: dynamic ? () => fields : fields, fieldNames: ["name", "retained", "hidden"],
+      defaultValues: { name: "" }, resolver,
+    } });
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Collect" });
+    const input = screen.getByRole("textbox", { name: "Name" });
+    expect(button.disabled).toBe(true);
+    fireEvent.submit(button.closest("form")!);
+    await waitFor(() => expect(input.getAttribute("aria-invalid")).toBe("true"));
+    expect(submit).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "Ready" } });
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(resolver).toHaveBeenCalled();
+  });
+
   test("uses an authored dialog size for context forms", () => {
     renderDialog({ id: "review", label: "Review", args: {
       fields: [{ name: "note", label: "Note" }], size: "lg",

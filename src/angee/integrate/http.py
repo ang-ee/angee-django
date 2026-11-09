@@ -227,6 +227,19 @@ class HttpClient:
             "GET", url, headers=headers, allow_private=allow_private, follow_redirects=follow_redirects, timeout=timeout
         )
 
+    def get_json(
+        self, url: str, *, headers: dict[str, str] | None = None, allow_private: bool = False,
+        timeout: int = HTTP_TIMEOUT_SECONDS, transport: httpx2.BaseTransport | None = None,
+    ) -> Any:
+        """GET JSON through the shared request policy; preserve HTTP and decoding errors."""
+
+        response = self.request(
+            "GET", url, headers={"Accept": "application/json", **(headers or {})},
+            allow_private=allow_private, timeout=timeout, transport=transport,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def download_capped(
         self,
         url: str,
@@ -392,6 +405,7 @@ class HttpClient:
         same_origin_redirects: int = 0,
         max_bytes: int | None = None,
         timeout: int = HTTP_TIMEOUT_SECONDS,
+        transport: httpx2.BaseTransport | None = None,
     ) -> httpx2.Response:
         """Send one pinned request to ``url`` and return the response.
 
@@ -432,7 +446,7 @@ class HttpClient:
                 response._content = content
 
         with httpx2.Client(
-            transport=self.transport_factory(allow_private=allow_private),
+            transport=transport if transport is not None else self.transport_factory(allow_private=allow_private),
             timeout=timeout,
             event_hooks={"response": [read_response]},
         ) as client:

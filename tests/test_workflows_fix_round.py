@@ -123,8 +123,9 @@ def test_attempt_diagnostics_are_sanitized_to_their_declared_column_bounds(execu
     for name, bound in bounds.items():
         value = getattr(attempt, name)
         assert len(value) == bound and "\x00" not in value
-    assert attempt.error.startswith("beforeafter")
-    assert retained_step(run).output == {"error": attempt.error}
+    message = "beforeafter" + "x" * max(bounds.values())
+    assert attempt.error == f"ValueError: {message}"[:bounds["error"]]
+    assert retained_step(run).output == {"error": message[:bounds["error"]]}
 
 
 @pytest.mark.parametrize("sqlstate", ["57014", "40P01", "55P03"])

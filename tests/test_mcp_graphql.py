@@ -18,6 +18,7 @@ import strawberry_django
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured
+from django.db import connection
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from graphql import (
@@ -533,3 +534,19 @@ def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
         }
     finally:
         reset_backend()
+
+
+
+@pytest.mark.parametrize("mutation", [False, True])
+def test_mcp_only_mutations_hold_an_outer_transaction(composed_tables, monkeypatch, mutation):
+    seen = []
+
+    def execute(document, **kwargs):
+        seen.append(connection.in_atomic_block)
+        return SimpleNamespace(data={"operation": True}, errors=None)
+
+    monkeypatch.setattr(mcp_graphql, "_actor_user", lambda: None)
+    document = "mutation { operation }" if mutation else "query { operation }"
+    result = mcp_graphql._execute_sync(SimpleNamespace(execute_sync=execute), document, {})
+    assert result.data == {"operation": True}
+    assert seen == [mutation]

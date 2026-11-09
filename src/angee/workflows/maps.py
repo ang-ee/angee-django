@@ -3,11 +3,10 @@
 from dataclasses import dataclass
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from pydantic.experimental.missing_sentinel import MISSING
+from pydantic import MISSING, BaseModel, ConfigDict, Field, model_validator
 
 from angee.workflows.states import ERROR_OUTCOME, Outcome, WaitingKind
-from angee.workflows.steps import EmptyOutput, Step, _Settlement
+from angee.workflows.steps import EmptyOutput, Settlement, Step
 
 
 class MapInput(BaseModel):
@@ -42,7 +41,7 @@ class MapItem[O](BaseModel):
 
 
 @dataclass(frozen=True)
-class _MapWait(_Settlement):
+class _MapWait(Settlement):
     """Park the containing step while the graph planner admits its body rows."""
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
@@ -72,7 +71,7 @@ class Map(Step[MapInput, list[MapItem[Any]], None]):
             model = model | EmptyOutput
         return cls._schema(list[MapItem[model]], "serialization")  # type: ignore[valid-type]
 
-    def run(self, ctx: Any) -> _Settlement:
+    def run(self, ctx: Any) -> Settlement:
         """Wait for bodies or return ordered typed evidence."""
         items = ctx.step_run.map_rows().collect_map(len(ctx.input.items))
         return _MapWait() if items is None else self.done(

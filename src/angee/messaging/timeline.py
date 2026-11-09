@@ -8,7 +8,7 @@ from typing import Any
 
 from django.apps import apps
 from django.db import models
-from rebac import actor_context
+from rebac import PermissionDenied, actor_context
 
 from angee.messaging.models import ThreadedModelMixin
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind
@@ -31,14 +31,19 @@ class CommentKind(TimelineKind):
         return issubclass(model, ThreadedModelMixin)
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        messages = apps.get_model("messaging", "Message").objects
-        readers = type(record).objects.with_actor(actor).with_action(record.thread_read_access)
-        if not readers.filter(pk=record.pk).exists():
-            return messages.none().annotate(_order_at=messages.chronological_time())
+        """The record's chatter, gated in SQL on the viewer's thread read of the record."""
+
+        readers = type(record).objects.with_actor(actor).with_action(record.thread_read_access).filter(pk=record.pk)
         with actor_context(actor):
-            return messages.record_scope(record).scoped().prefetch_related(None).select_related(
-                "subtype", "sender", "created_by",
-            )
+            messages = apps.get_model("messaging", "Message").objects
+            try:
+                rows = messages.record_scope(record)
+            except PermissionDenied:
+                # Retired chatter redirects to its survivor, whose reader gate may refuse this viewer.
+                return messages.with_actor(actor).none()
+            return rows.scoped().prefetch_related(
+                None,
+            ).select_related("subtype", "sender", "created_by").filter(models.Exists(readers.scoped()))
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         if row._meta.label == "messaging.ThreadAttachment" and row.role != "chatter":

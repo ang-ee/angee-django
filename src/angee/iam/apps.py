@@ -23,8 +23,8 @@ class IAMConfig(AppConfig):
     def compose_provision(self, context: ProvisionContext) -> None:
         """Bootstrap only when deployment inputs explicitly request an initial admin.
 
-        The command writes through the default manager, so the database router
-        places the admin, as it places every provisioning write.
+        The command writes through the default manager on the one database, as
+        every provisioning write does.
         """
 
         if any(bootstrap_admin_settings().values()):

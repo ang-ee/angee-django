@@ -6,6 +6,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 
+from angee.base.exceptions import TransitionNotAllowed
 from tests.work_campaign import CreateTask, Stage, make_task, persisted_state
 from tests.work_campaign import productivity_create_case as productivity_create_case
 from tests.work_campaign import work_case as work_case
@@ -36,8 +37,7 @@ def test_stale_task_cannot_leave_a_stage_that_a_rule_entered(work_case):
         reserved = Stage.objects.create(queue=queue, name="Rule", category="completed", rule_owned=True)
         fresh = CreateTask._base_manager.get(pk=stale.pk)
         fresh.stage = reserved
-        with fresh._work_verb_write():
-            fresh.save(update_fields=["stage"])
+        fresh.save(update_fields=["stage"])
     before = persisted_state(stale)
     stale.stage = Stage._base_manager.get(queue=queue, category="started")
     with actor_context(actor), pytest.raises(ValidationError, match="out of a rule-owned stage"):
@@ -114,24 +114,23 @@ def test_internal_rule_write_enters_and_leaves_while_same_stage_save_is_allowed(
     with system_context(reason="test.work.rule_stage"):
         reserved = Stage.objects.create(queue=queue, name="Rule", category="completed", rule_owned=True)
     with actor_context(actor):
-        with task._work_verb_write():
+        with system_context(reason="tests.work.rule_transition"):
             task.stage = reserved
             task.save(update_fields=["stage"])
         task.title = "Rule stage title"
         task.save(update_fields=["title", "stage"])
         assert task.status == "done"
-        with task._work_verb_write():
+        with system_context(reason="tests.work.rule_transition"):
             task.stage = queue.default_stage
             task.save(update_fields=["stage"])
     task.refresh_from_db()
     assert (task.status, task.done_at) == ("open", None)
 
 
-def test_drop_cannot_hide_a_direct_status_assignment(work_case):
+def test_direct_status_assignment_uses_the_shared_transition_guard(work_case):
     actor, queue = work_case
     task = make_task(queue)
     before = persisted_state(task)
-    task.status = "dropped"
-    with actor_context(actor), pytest.raises(ValidationError, match="status"):
-        task.drop("obsolete")
+    with actor_context(actor), pytest.raises(TransitionNotAllowed, match="status"):
+        task.status = "dropped"
     assert persisted_state(task) == before

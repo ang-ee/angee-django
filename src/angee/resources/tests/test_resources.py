@@ -2061,7 +2061,7 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
 
     hooks = []
 
-    class GrantDependentRow(AngeeModel):
+    class GrantDependentRow(ResourceLoadMixin, AngeeModel):
         """A row whose domain validation requires a preceding membership grant."""
 
         title = models.CharField(max_length=80)
@@ -2307,8 +2307,8 @@ def test_mti_grants_follow_ancestor_relation_contract(
     # Xref resolution and real MTI identity enumeration are covered by the
     # integration test above; exercise distinct native relation contracts here.
     monkeypatch.setattr(grants, "backend", lambda: active)
-    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args, using: [child, parent])
-    monkeypatch.setattr(grants, "_resolve_subject", lambda *args, using: subject)
+    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args: [child, parent])
+    monkeypatch.setattr(grants, "_resolve_subject", lambda *args: subject)
     row = GrantRow(
         entry=entry(tmp_path, {"path": "grants/demo.yaml", "kind": "grants"}),
         resource="resource_addon.child", relation="reviewer", subject="iam.reader", index=1,
@@ -2339,8 +2339,8 @@ def test_invalid_explicit_mti_grant_still_fails_native_validation(
     """), backend=active)
     child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
     monkeypatch.setattr(grants, "backend", lambda: active)
-    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args, using: [child, parent])
-    monkeypatch.setattr(grants, "_resolve_subject", lambda *args, using: SubjectRef.of("auth/user", "2"))
+    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args: [child, parent])
+    monkeypatch.setattr(grants, "_resolve_subject", lambda *args: SubjectRef.of("auth/user", "2"))
     row = GrantRow(
         entry=entry(tmp_path, {"path": "grants/demo.yaml", "kind": "grants"}),
         resource="resource_addon.child", relation="unknown", subject="iam.reader", index=1,

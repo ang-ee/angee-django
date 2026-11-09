@@ -41,7 +41,7 @@ Addon = apps.get_model("platform", "Addon")
 
 # An installed bundle that is available (advertised via entry points) but not enabled
 # in the test ``INSTALLED_APPS`` — the marketplace "to install" case.
-_AVAILABLE_ADDON = "angee.knowledge_graph_pgvector"
+_AVAILABLE_ADDON = "angee.theme_midnight"
 
 _SETTINGS_YAML = """\
 # Project composition facts — operator comments must survive an install edit.

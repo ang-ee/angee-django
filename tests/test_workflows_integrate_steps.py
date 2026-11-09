@@ -19,7 +19,6 @@ from rebac.actors import to_subject_ref
 
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
-from angee.integrate.locks import bridge_is_locked
 from angee.integrate.net import AddressResolutionError
 from angee.integrate.states import (
     ConflictKeep,
@@ -211,7 +210,7 @@ def test_serialized_bridge_io_releases_its_lock_after_every_exit(cycle, monkeypa
     def operation():
         with steps.bridge_io(ctx, cycle.bridge) as adapter:
             assert isinstance(adapter, BridgeImpl)
-            assert bridge_is_locked(cycle.bridge)
+            assert cycle.bridge.sync_is_locked()
             if failure is not None:
                 raise failure()
 
@@ -220,7 +219,7 @@ def test_serialized_bridge_io_releases_its_lock_after_every_exit(cycle, monkeypa
     else:
         with pytest.raises(Retryable if failure is RuntimeError else failure):
             operation()
-    assert not bridge_is_locked(cycle.bridge)
+    assert not cycle.bridge.sync_is_locked()
     closed.assert_called_once()
     ctx.heartbeat.assert_called_once()
     ctx.begin_effect.assert_called_once()
@@ -235,7 +234,7 @@ def test_busy_bridge_wait_preserves_checkpoint_without_beginning_an_effect(cycle
     def occupied(_bridge):
         yield False
 
-    monkeypatch.setattr(steps, "bridge_advisory_lock", occupied)
+    monkeypatch.setattr(type(cycle.bridge), "sync_lock", occupied)
     checkpoint = {"cycle_items": 7, "progress": "retained"}
     ctx = SimpleNamespace(now=timezone.now(), state=checkpoint, heartbeat=Mock(), begin_effect=Mock(),
                           wait=lambda **values: Wait(**values))
@@ -295,7 +294,7 @@ def test_two_partition_runs_wait_without_retry_or_effect_while_bridge_io_is_owne
         finally:
             release.set()
         assert first.result(timeout=10)
-    assert not bridge_is_locked(bridge)
+    assert not bridge.sync_is_locked()
     wake(right)
     run_until(right)
     left.refresh_from_db()
@@ -412,6 +411,29 @@ def test_transport_failure_uses_native_retry_without_advancing_cursor(cycle, fai
 
     assert run.status == "succeeded"
     assert run.output["counts"]["cycle_items"] == 2
+
+
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        (
+            ConnectionError("Connection refused by the source."),
+            "Retryable: Stream transport failed.; caused by ConnectionError: Connection refused by the source.",
+        ),
+        (
+            AddressResolutionError(),
+            "Retryable: The bridge host could not be resolved.; "
+            "caused by AddressResolutionError: URL host could not be resolved.",
+        ),
+    ],
+)
+def test_transport_failure_attempt_names_its_cause(cycle, failure, error):
+    """The attempt's error keeps the transport exception behind the step's generic retry message."""
+    cycle.transport.pages = [failure]
+    run = cycle.start(StreamStage, {"key": "records", "page_bound": 1})
+    assert runner.execute(step_row(run).pk)
+    attempt = StepAttempt.system_queryset().get(step_run=step_row(run))
+    assert (attempt.result, attempt.error) == ("failed", error)
 
 
 def test_rescan_rotates_bounded_identity_reads_before_waiting(cycle):

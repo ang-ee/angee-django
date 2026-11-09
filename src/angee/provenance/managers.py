@@ -30,10 +30,8 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
     def touching(self, record: HistoryMixin) -> Self:
         """Return changesets belonging to ``record``'s declared history document."""
 
-        using = record._state.db
         rows = [
             get_history_manager_for_model(table)
-            .using(using)
             .filter(predicate, changeset_id__isnull=False)
             .order_by()
             .values_list("changeset_id", flat=True)
@@ -53,10 +51,7 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
 
     @staticmethod
     def _merge_touching(record: HistoryMixin) -> Q:
-        content_types = [
-            ContentType.objects.db_manager(hints={"instance": record}).get_for_model(table)
-            for table in record.history_tables()
-        ]
+        content_types = [ContentType.objects.get_for_model(table) for table in record.history_tables()]
         return Q(
             activity="merge",
             origin_content_type__in=content_types,
@@ -88,10 +83,7 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
             if key not in identities:
                 identities[key] = set(
                     get_history_manager_for_model(table)
-                    .using(self.db)
-                    .filter(
-                        changeset_id__in=boundaries,
-                    )
+                    .filter(changeset_id__in=boundaries)
                     .order_by()
                     .values_list(column, flat=True)
                 )
@@ -115,22 +107,16 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
                     elif subjects:
                         # Deleted/moved owned rows still identify every document
                         # their statements belong to through retained snapshots.
-                        history = (
-                            get_history_manager_for_model(table)
-                            .using(self.db)
-                            .filter(
-                                **{
-                                    f"{table._meta.pk.attname}__in": subjects,
-                                }
-                            )
+                        history = get_history_manager_for_model(table).filter(
+                            **{f"{table._meta.pk.attname}__in": subjects},
                         )
                         for column in columns:
                             ids.update(history.order_by().values_list(column, flat=True))
             if merges:
-                content_types = ContentType.objects.db_manager(self.db).get_for_models(*record.history_tables())
+                content_types = ContentType.objects.get_for_models(*record.history_tables())
                 for content_type in content_types.values():
                     ids.update(merges.get(content_type.pk, ()))
-            rows = model._base_manager.using(self.db).filter(pk__in=ids)
+            rows = model._base_manager.filter(pk__in=ids)
             yield from ((model, pk) for pk in rows.order_by("pk").values_list("pk", flat=True))
 
 
@@ -168,7 +154,7 @@ class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT])
                 current_changeset(required=True, record=True)
         except IntegrityError:
             discard_changeset_claim(claimed)
-            existing = self.model._base_manager.using(self.db).filter(scope=scope, key=key).first()
+            existing = self.model._base_manager.filter(scope=scope, key=key).first()
             if existing is None:
                 raise
             if existing.fingerprint != fingerprint:

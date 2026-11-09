@@ -184,7 +184,7 @@ class Reference:
     def rows(self, record: models.Model) -> models.QuerySet[Any]:
         """Return the rows pointing at ``record``, outside any actor scope."""
 
-        return self.model._base_manager.using(record._state.db).filter(**self.lookup(record))
+        return self.model._base_manager.filter(**self.lookup(record))
 
     def retains(self, record: models.Model) -> bool:
         """Include earlier pointer versions when deciding whether evidence survives."""
@@ -215,9 +215,8 @@ class Reference:
         if issubclass(self.model, MergeContractMixin) and self.model.merge_contract is not None:
             if self.model.merge_contract(self, rows, survivor=survivor) is not NotImplemented:
                 return
-        using = rows.db
         target = self.lookup(survivor)
-        held = self.model._base_manager.using(using).filter(**target)
+        held = self.model._base_manager.filter(**target)
         identity = _merge_identity(self.model)
         for fields, condition in unique_field_sets(self.model):
             if not set(self.columns) <= set(fields):
@@ -302,8 +301,7 @@ class ForeignKeyReference(Reference):
         """
 
         related = self.field.related_model
-        return (isinstance(survivor, related)
-                or related._base_manager.using(survivor._state.db).filter(pk=survivor.pk).exists())
+        return isinstance(survivor, related) or related._base_manager.filter(pk=survivor.pk).exists()
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,12 +418,12 @@ def named_in_relationships(record: models.Model) -> bool:
     """
 
     model = type(record)
-    rows = active_relationship_model().objects.db_manager(hints={"instance": record})
+    rows = active_relationship_model().objects
     identities = set()
     for owner in concrete_lineage(model):
         if not model_resource_type(owner) and not model_can_resolve_subject(owner):
             continue
-        row = owner._base_manager.db_manager(hints={"instance": record}).filter(pk=record.pk).first()
+        row = owner._base_manager.filter(pk=record.pk).first()
         if row is not None:
             identities.update(model_identities(owner, row))
     return rows.referencing(identities).exists()

@@ -22,7 +22,7 @@
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
     "@refinedev/core": "^5.0.12",
-    "@tanstack/react-query": "^5.101.2",
+    "@tanstack/react-query": "^5.102.0",
     "lucide-react": "^1.21.0"
   },
   "peerDependencies": {

@@ -96,7 +96,7 @@ def _enabled_oidc_oauth_client(oauth_client_sqid: str) -> Any:
         oauth_client = oauth_flow.enabled_oauth_client(oauth_client_sqid)
     except ValueError as error:
         raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client is not enabled for OIDC.") from error
-    if not bool(getattr(oauth_client, "login_enabled", False)):
+    if not oauth_client.login_enabled:
         raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client is not enabled for OIDC.")
     return oauth_client
 

@@ -18,12 +18,8 @@ from django.conf import settings
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError, PyJWTError
 
-from angee.integrate.http import HttpClient
-from angee.integrate.oauth.client import (
-    HTTP_TIMEOUT_SECONDS,
-    USER_AGENT,
-    OAuthClientProtocol,
-)
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
+from angee.integrate.oauth.client import USER_AGENT, OAuthClientProtocol
 from angee.integrate.oauth.errors import (
     INVALID_ID_TOKEN,
     MISSING_ENDPOINT,
@@ -99,15 +95,11 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
 
         if not id_token:
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
-        issuer = str(getattr(self.oauth_client, "issuer", "") or "")
-        jwks_uri = str(getattr(self.oauth_client, "jwks_uri", "") or "")
-        if not issuer or not jwks_uri:
+        if not self.oauth_client.issuer or not self.oauth_client.jwks_uri:
             self.ensure_endpoints()
-            issuer = str(getattr(self.oauth_client, "issuer", "") or "")
-            jwks_uri = str(getattr(self.oauth_client, "jwks_uri", "") or "")
+        issuer, jwks_uri = self.oauth_client.issuer, self.oauth_client.jwks_uri
         if not issuer or not jwks_uri:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
-        client_id = str(getattr(self.oauth_client, "client_id", ""))
         try:
             verifier = jwks_client or _jwks_client(jwks_uri)
             signing_key = verifier.get_signing_key_from_jwt(id_token)
@@ -115,7 +107,7 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
                 id_token,
                 signing_key.key,
                 algorithms=_ALLOWED_JWT_ALGORITHMS,
-                audience=client_id,
+                audience=self.oauth_client.client_id,
                 issuer=issuer,
                 options={"require": ["exp", "iat"], "verify_exp": True, "verify_iss": True, "verify_aud": True},
             )
@@ -126,18 +118,6 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
         if nonce is not None and claims.get("nonce") != nonce:
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
         return claims
-
-    def ensure_endpoints(self) -> dict[str, Any]:
-        """Fill blank endpoints on the OAuth client via discovery.
-
-        A no-op when the client carries no ``discovery_url`` (endpoints are then
-        configured explicitly). The discovery document is cached per URL, so an
-        explicitly-configured provider that also sets a discovery URL fetches at
-        most once. In-memory only: the fetched endpoints serve the current request;
-        the operator's discovery action persists them (``discover_endpoints(persist=True)``).
-        """
-
-        return dict(self.oauth_client.discover_endpoints())
 
 
 class _PinnedPyJWKClient(PyJWKClient):

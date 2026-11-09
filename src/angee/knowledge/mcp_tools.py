@@ -35,7 +35,9 @@ def register(server: FastMCP) -> None:
         server,
         [
             GraphQLTool(
-                operation="create_page", name="create_page", fields=("sqid", "title", "kind", _MARKDOWN),
+                operation="create_page",
+                name="create_page",
+                fields=("sqid", "title", "kind", _MARKDOWN),
                 args=("vault", "title"),
                 description="Create a page in a writable vault. Supply the vault public id and title.",
             ),
@@ -62,6 +64,20 @@ def register(server: FastMCP) -> None:
                 limit_arg="first",
                 description="Search readable pages. Supply a vault public id to restrict the search, "
                 "or omit vault to search up to 100 readable vaults by backend. first bounds the total result count.",
+            ),
+            GraphQLTool(
+                operation="search_passages",
+                name="search_passages",
+                fields=(
+                    ("hits", (
+                        ("page", ("sqid", "title", "kind")), "heading_path", "start", "end", "text", "rank", "score",
+                    )),
+                    ("failures", ("backend", "arm", "vaults", "message")),
+                ),
+                args=("vault", "query"),
+                limit_arg="first",
+                description="Search readable knowledge and return each page's best passage with source offsets. "
+                "Lexical vaults return page-only hits. Omit vault to search readable vaults by their chosen backend.",
             ),
             GraphQLTool(
                 operation="patch_page_section",

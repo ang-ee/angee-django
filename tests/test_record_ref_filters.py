@@ -17,7 +17,7 @@ from angee.graphql.relations import actor_scoped_relation_expression, with_recor
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge import schema as knowledge_schema
-from tests.conftest import Page, SchemaAddon, addon_schema, create_user, vault_for
+from tests.conftest import Page, SchemaAddon, Vault, addon_schema, create_user, vault_for
 from tests.tables import model_tables
 
 pytestmark = pytest.mark.django_db(transaction=True, reset_sequences=True)
@@ -180,6 +180,10 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
         object_id = models.CharField(max_length=63)
         target = GenericForeignKey()
 
+        @classmethod
+        def declared_target_models(cls, **kwargs):
+            return {Vault._meta.label_lower: Vault}
+
         class Meta:
             app_label = "auth"
 
@@ -191,7 +195,9 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
                 content_type=ContentType.objects.get_for_model(record), object_id=str(record.pk),
             )
         with actor_context(owner):
-            guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
+            with CaptureQueriesContext(connection) as queries:
+                guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
+            assert len(queries) == 0
             assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False]
             assert "CAST(" in str(guarded.query) and "varchar(63)" in str(guarded.query)
         with actor_context(other):

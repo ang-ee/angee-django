@@ -31,8 +31,7 @@ def _records(row: Any, *, update_fields: Iterable[str] | None = None) -> list[mo
     """
     if changes_muted():
         return []
-    using = row._state.db
-    records = []
+    records: list[models.Model] = []
     for kind in kinds_for(type(row)):
         if not kind.relevant(type(row), update_fields):
             continue
@@ -43,12 +42,8 @@ def _records(row: Any, *, update_fields: Iterable[str] | None = None) -> list[mo
                     for model, pk in kind.records(target):
                         grouped.setdefault(generic_pointer_model(model), set()).add(pk)
                 for model, ids in grouped.items():
-                    canonical = set(model.canonical_ids(ids, using=using).values()) \
-                        if issubclass(model, MergeableMixin) else ids
-                    for pk in canonical:
-                        record = model(pk=pk)
-                        record._state.db = using
-                        records.append(record)
+                    canonical = set(model.canonical_ids(ids).values()) if issubclass(model, MergeableMixin) else ids
+                    records.extend(model(pk=pk) for pk in canonical)
         except Exception:
             log.exception("Timeline invalidation failed: %s %s:%s", kind.id, row._meta.label, row.pk)
     return records

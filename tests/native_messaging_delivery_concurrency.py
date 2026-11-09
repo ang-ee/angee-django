@@ -9,7 +9,6 @@ from django.db import close_old_connections, connections, transaction
 from django.utils import timezone
 from rebac import actor_context, system_context
 
-from angee.integrate.locks import bridge_advisory_lock
 from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain
 from angee.messaging.managers import DeliveryReconciliationBusy
 from tests.native_messaging_delivery import DeliveryFixtures, Message
@@ -120,11 +119,11 @@ class DeliveryConcurrency(DeliveryFixtures):
 
     def test_feed_sync_advisory_lock_defers_delivery_without_a_provider_attempt(self):
         row = self.outbound()
-        self.backend.delivery_lock = lambda: bridge_advisory_lock(self.feed)
+        self.backend.delivery_lock = lambda: self.feed.sync_lock()
         with system_context(reason="delivery lock fixture"):
             row.deliver()
         with ThreadPoolExecutor(max_workers=1) as pool:
-            with bridge_advisory_lock(self.feed) as acquired:
+            with self.feed.sync_lock() as acquired:
                 self.assertTrue(acquired)
                 contender = pool.submit(copy_context().run, independent_connection, lambda: self.run_delivery(row))
                 self.assertEqual(contender.result(timeout=10)["status"], "retry")

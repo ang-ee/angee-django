@@ -227,7 +227,7 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
         connectionRef.current = connection;
         setClient(connection);
         if (!sessionIdRef.current && connection.canList && connection.canRestore) {
-          const listed = await queryClient.fetchInfiniteQuery({ ...listOptionsRef.current, staleTime: 0 });
+          const listed = await queryClient.infiniteQuery({ ...listOptionsRef.current, staleTime: 0 });
           if (!current()) return;
           const newest = listed.pages[0]?.sessions[0];
           if (newest) { sessionIdRef.current = newest.sessionId; sessionCwdRef.current = newest.cwd; }

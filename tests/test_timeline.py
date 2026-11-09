@@ -15,13 +15,13 @@ from rebac import actor_context
 from angee.base.models.identity import public_id_of
 from angee.base.pagination import KeysetOrder, keyset_signer
 from angee.base.signals import mute_changes
-from angee.graphql.testing.documents import execute_schema, result_data
+from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.messaging.timeline import CommentKind
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from angee.timeline.kinds import timeline_kinds
 from angee.timeline.reading import Timeline
-from tests.conftest import addon_schema, create_platform_admin, vault_for
+from tests.conftest import addon_schema, create_platform_admin, create_user, vault_for
 
 KINDS = [
     "angee.provenance.timeline.timeline_kinds",
@@ -139,6 +139,42 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     with CaptureQueriesContext(connection) as queries:
         assert Timeline(vault, owner).attention() == 1
     assert sum('"timeline_source"' in query["sql"] for query in queries) == 1
+
+
+# Reset sequences keep the bound identifiers, and so the SQL text, the same length in any run order.
+@pytest.mark.django_db(transaction=True, reset_sequences=True)
+@pytest.mark.usefixtures("activity_catalog")
+@override_settings(ANGEE_TIMELINE_KINDS=KINDS)
+def test_member_reading_by_grant_pays_a_fixed_rail_cost(composed_permissions: None) -> None:
+    """A member granted read on the record reads the rail at a fixed cost, however many lines it has."""
+    owner, member = create_user("timeline-grant-owner"), create_user("timeline-grant-member")
+    with open_changeset(fresh=True, change_reason="vault"):
+        vault = vault_for(owner)
+    with actor_context(owner):
+        vault.with_actor(owner).grant_record_access("viewer", member)
+        apps.get_model("projects", "Task").objects.schedule(vault.with_actor(owner), title="Follow up")
+    schema = addon_schema(timeline_schema.schemas, "console")
+    variables = {"model": vault._meta.label, "id": public_id_of(vault)}
+
+    def edit_then_read(edits: range) -> GraphQLDocumentRead:
+        for index in edits:
+            with actor_context(owner), open_changeset(fresh=True, change_reason=f"Edit {index}"):
+                vault.name = f"Edit {index}"
+                vault.save(update_fields=["name"])
+        # Measured after one warm read, like the console document ceilings, on SQLite.
+        measure_graphql_document(schema, QUERY, variables, actor=member)
+        return measure_graphql_document(schema, QUERY, variables, actor=member)
+
+    few = edit_then_read(range(2))
+    counts = {kind["id"]: kind["count"] for kind in few.data["timeline"]["kinds"]}
+    assert counts["provenance.change"] >= 3 and counts["projects.task"] == 1
+    assert few.data["timeline"]["entries"][0]["detail"] == "Edit 1"
+    assert few.data["timeline"]["needs_me"] == few.data["timeline_attention"] == 0
+    few.assert_ceiling(statements=19, sql_kb=783)
+    many = edit_then_read(range(2, 10))
+    assert len(many.data["timeline"]["entries"]) == len(few.data["timeline"]["entries"]) + 8
+    assert many.statements == few.statements
+    many.assert_ceiling(statements=19, sql_kb=783)
 
 
 def timeline_entries(record, actor=None, *, kind=None):

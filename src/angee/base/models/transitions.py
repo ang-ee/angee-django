@@ -70,9 +70,11 @@ from functools import wraps
 from typing import Any, NoReturn, cast
 
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models, transaction
 from django.db.models.fields.mixins import FieldCacheMixin
+from django.db.models.signals import class_prepared
+from django.dispatch import receiver
 
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField, enum_member_for
@@ -183,6 +185,9 @@ class StateTransitions:
     ``status_transitions = StateTransitions(status, {Status.DRAFT: [Status.READY]})``
 
     Then decorate the model's own methods with ``@transition(status, ...)``.
+    An abstract donor may reference another abstract source's field. Django's
+    ``class_prepared`` binds that guard only to concrete hosts composing the donor;
+    the source field and hosts without the donor remain unchanged.
     The field's native descriptor guards assignment; the declaration and
     ``StateTransitionsMixin`` validate decorated methods against the
     source-to-target graph during class construction. An optional ``policy_setting``
@@ -212,12 +217,17 @@ class StateTransitions:
         """Attach the declaration and validate the declaring class's methods."""
 
         self.name = name
+        self.owner = cls
         setattr(cls, name, self)
-        if getattr(self.field, "model", None) is not cls:
-            raise ImproperlyConfigured(f"{cls.__name__}.{name} must be declared after the StateField it guards.")
+        field_owner = getattr(self.field, "model", None)
+        if field_owner is None or field_owner is not cls and not (
+            cls._meta.abstract and field_owner._meta.abstract
+        ):
+            raise ImproperlyConfigured(f"{cls.__name__}.{name} must follow a local or abstract source StateField.")
 
         self._declared = self._normalize_graph()
-        self.field.transition_guard = self
+        if field_owner is cls:
+            self.field.transition_guard = self
         if not issubclass(cls, StateTransitionsMixin):
             raise ImproperlyConfigured(
                 f"{cls._meta.label} must inherit StateTransitionsMixin to host StateTransitions."
@@ -494,7 +504,7 @@ class StateTransitions:
     ) -> None:
         """Guard this declaration's model and its native descendants."""
 
-        if not isinstance(instance, self.field.model):
+        if not isinstance(instance, self.owner):
             # A scalar field copy does not opt its new model into domain policy.
             instance.__dict__[field.attname] = value
             return
@@ -580,6 +590,32 @@ class StateTransitions:
         raise TransitionNotAllowed(_message(self.field, source, target, reason))
 
 
+
+
+@receiver(class_prepared, dispatch_uid="angee.state_transitions.donors")
+def _bind_donor_state_guards(sender: type[models.Model], **kwargs: Any) -> None:
+    """Bind abstract donor declarations to the final host's own field copies."""
+
+    if not issubclass(sender, StateTransitionsMixin):
+        return
+    for declaration in StateTransitions._iter_declarations(sender):
+        if declaration.field.model is declaration.owner:
+            continue
+        try:
+            field = sender._meta.get_field(declaration.field.name)
+        except FieldDoesNotExist as error:
+            raise ImproperlyConfigured(
+                f"{sender._meta.label}.{declaration.name} requires StateField {declaration.field.name!r}."
+            ) from error
+        if isinstance(field, StateField) and field.transition_guard is declaration:
+            continue
+        if not isinstance(field, StateField) or field.model is not sender:
+            raise ImproperlyConfigured(
+                f"{sender._meta.label}.{declaration.name} requires a local StateField {declaration.field.name!r}."
+            )
+        if field.transition_guard is not None and field.transition_guard is not declaration:
+            raise ImproperlyConfigured(f"{sender._meta.label}.{field.name} has competing transition guards.")
+        field.transition_guard = declaration
 
 
 def _as_values(value: Any) -> tuple[Any, ...]:

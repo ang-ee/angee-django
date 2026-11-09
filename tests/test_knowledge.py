@@ -60,6 +60,36 @@ def test_factory_rows_stay_gated_after_creation(composed_tables: None) -> None:
         vault.as_user(bob).save(update_fields=("name",))
 
 
+
+def test_page_tree_expressions_read_through_the_reader_or_the_ambient_scope(composed_tables: None) -> None:
+    """Roots and expandability read the actor's pages; system context reads all; no actor fails closed."""
+
+    owner, outsider = create_user("tree-owner"), create_user("tree-outsider")
+    with actor_context(owner):
+        vault = vault_for(owner)
+        folder = Page.objects.create_in(vault, title="Folder", kind=Page.PageKind.FOLDER)
+        Page.objects.create_in(vault, title="Child", parent=folder)
+
+    def tree() -> list[tuple[str, bool, bool]]:
+        rows = Page._base_manager.filter(vault=vault).annotate(
+            root=Page.objects.navigation_root_expression(), expandable=Page.objects.has_children_expression(),
+        )
+        return list(rows.order_by("title").values_list("title", "root", "expandable"))
+
+    readable = [("Child", False, False), ("Folder", True, True)]
+    with system_context(reason="test.knowledge.page_tree"):
+        assert tree() == readable
+    with actor_context(owner):
+        assert tree() == readable
+    with actor_context(outsider):
+        assert tree() == [("Child", True, False), ("Folder", True, False)]
+    with pytest.raises(MissingActorError):
+        Page.objects.has_children_expression()
+    with pytest.raises(MissingActorError):
+        Page.objects.navigation_root_expression()
+    # Schema composition reads an expression's output field from emptied rows.
+    assert Page.objects.none().navigation_root_expression().output_field is not None
+
 def test_create_for_refuses_foreign_owner(composed_tables: None) -> None:
     """A vault may only be created for the acting user."""
 
@@ -520,11 +550,11 @@ def test_lexical_retrieval_matches_title_and_body_scoped_to_actor(composed_table
         MarkdownPage.objects.write_body(shopping, "milk eggs bread")
 
     with actor_context(alice):
-        assert [page.title for page in vault.retrieval.search("paprika")] == ["Recipes"]  # body match
-        assert [page.title for page in vault.retrieval.search("shopping")] == ["Shopping"]  # title match
+        assert [hit.page.title for hit in vault.retrieval.search("paprika").hits] == ["Recipes"]  # body match
+        assert [hit.page.title for hit in vault.retrieval.search("shopping").hits] == ["Shopping"]  # title match
 
     with actor_context(bob):
-        assert list(vault.retrieval.search("paprika")) == []  # bob reads nothing here
+        assert list(vault.retrieval.search("paprika").hits) == []  # bob reads nothing here
 
 
 def _grant(resource: Any, relation: str, user: Any) -> None:

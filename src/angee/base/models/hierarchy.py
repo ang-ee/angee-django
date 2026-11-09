@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar, cast
 
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import NotSupportedError, connections, models, router, transaction
+from django.db import NotSupportedError, connection, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Cast, Replace
 
@@ -17,7 +17,7 @@ from angee.base.fields.ordering import FractionalRankField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.prefetch import InstancePrefetch
-from angee.base.querysets import _AngeeQuerySetMixin, query_batch_size
+from angee.base.querysets import AngeeQuerySetMixin, query_batch_size
 
 if TYPE_CHECKING:
     from django.db.models.fetch_modes import FetchMode
@@ -123,13 +123,11 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
         """
 
         model = self.model
-        self._for_write = True
-        using = self.db
         field = model._hierarchy_parent_field()
         rows = list(rows)
         if any(row.pk is not None for row in rows):
             raise ValidationError("A forest insert takes unsaved rows.")
-        if not connections[using].features.can_return_rows_from_bulk_insert:
+        if not connection.features.can_return_rows_from_bulk_insert:
             raise NotSupportedError("A forest insert requires bulk-insert primary keys on this database.")
         members = {id(row) for row in rows}
         parents: dict[int, HierarchyMixin | None] = {}
@@ -159,7 +157,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
                 column for column in model._meta.concrete_fields if isinstance(column, FractionalRankField)
             )
             for column in rank_fields:
-                column.allocate_missing_ranks(rows, using=using)
+                column.allocate_missing_ranks(rows)
             final_ranks = {
                 column: tuple(getattr(row, column.attname) for row in rows)
                 for column in rank_fields if field in column._unique_context_fields(model)
@@ -172,10 +170,10 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
                 temporary = column.get_temporary_ranks(rows, values)
                 for row, rank in zip(rows, temporary, strict=True):
                     setattr(row, column.attname, rank)
-            with model.initialize_rows(rows, using=using):
+            with model.initialize_rows(rows):
                 # Below the hierarchy guard and deferred observers: the creation version
                 # below records each row with its parent and path.
-                super(_AngeeQuerySetMixin, cast(_AngeeQuerySetMixin, self)).bulk_create(rows)
+                super(AngeeQuerySetMixin, cast(AngeeQuerySetMixin, self)).bulk_create(rows)
                 for row in order:
                     parent = parents[id(row)]
                     row.parent = parent
@@ -187,8 +185,8 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
                 width = 5 + 2 * len(final_ranks)
                 for chunk in batched(rows, query_batch_size(self, width=width)):
                     # The caller's queryset carries its authority (a sudo) to this write.
-                    batch = cast(_AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk]))
-                    super(_AngeeQuerySetMixin, batch).update(
+                    batch = cast(AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk]))
+                    super(AngeeQuerySetMixin, batch).update(
                         parent_id=Cast(
                             models.Case(
                                 *(models.When(pk=row.pk, then=models.Value(row.parent_id)) for row in chunk),
@@ -429,6 +427,20 @@ class HierarchyMixin(PersistenceMixin):
 
         return bool(self.path and other.path and self.path.startswith(other.path))
 
+    def validate_hierarchy_parent(self) -> None:
+        """Validate this row's parent against its scope and cycle rules before a write."""
+
+        parent = self._hierarchy_parent()
+        self._reject_cross_scope_parent(parent)
+        self._reject_cycle(parent)
+
+    def validate_hierarchy_move(self) -> None:
+        """Validate the rewritten subtree inside the move's transaction.
+
+        Capabilities extend this hook for invariants that depend on final paths;
+        a refusal rolls back the whole move and restores this row's path.
+        """
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row, maintaining ``path`` on create and reparent."""
 
@@ -438,15 +450,21 @@ class HierarchyMixin(PersistenceMixin):
             if self._state.adding:
                 self._save_created(*args, **kwargs)
             else:
-                self._validate_hierarchy_scope(kwargs.get("update_fields"), using=using)
-                if self._hierarchy_needs_repath(using=using):
-                    self._save_reparented(*args, **kwargs)
+                self._validate_hierarchy_scope(kwargs.get("update_fields"))
+                if self._hierarchy_needs_repath():
+                    path = self.path
+                    try:
+                        self._save_reparented(*args, **kwargs)
+                        self.validate_hierarchy_move()
+                    except Exception:
+                        self.path = path
+                        raise
                 else:
                     super().save(*args, **kwargs)
         if "parent_id" in self.__dict__:
             self._hierarchy_saved_parent_id = self.parent_id
 
-    def _validate_hierarchy_scope(self, update_fields: Iterable[str] | None, *, using: str | None = None) -> None:
+    def _validate_hierarchy_scope(self, update_fields: Iterable[str] | None) -> None:
         """A scope edit must keep the parent and existing children in one scope.
 
         Moving an entire tree between owners requires its own admitted verb;
@@ -459,45 +477,44 @@ class HierarchyMixin(PersistenceMixin):
         )]
         if not touched:
             return
-        rows = type(self).system_queryset(lock=("self",)).using(using or self._state.db)
+        rows = type(self).system_queryset(lock=("self",))
         stored = rows.filter(pk=self.pk).values(*(field.attname for field in touched)).get()
         changed = {field.attname: getattr(self, field.attname) for field in touched
                    if stored[field.attname] != getattr(self, field.attname)}
         if not changed:
             return
-        self._reject_cross_scope_parent(self._hierarchy_parent(using=using), using=using)
+        self._reject_cross_scope_parent(self._hierarchy_parent())
         if rows.filter(parent_id=self.pk).exclude(**changed).exists():
             raise ValidationError("Move or detach this node's children before changing its scope.")
 
     def _save_created(self, *args: Any, **kwargs: Any) -> None:
-        """Insert the row, then derive its ``path`` from the parent's committed path."""
+        """Insert the row in :meth:`save`'s transaction, then derive its ``path`` from the parent's committed path."""
 
-        using = kwargs["using"]
-        with transaction.atomic(using=using), type(self).initialize_rows([self], using=using) as deferred:
+        with type(self).initialize_rows([self]) as deferred:
             super().save(*args, **kwargs)
-            parent = self._hierarchy_parent(using=using)
+            parent = self._hierarchy_parent()
             if parent is not None:
                 # Re-read the parent's committed path under lock before deriving the
                 # child prefix: a create racing a reparent of that parent would
                 # otherwise bake in a stale prefix that the reparent's cascade never
                 # reaches (the new row is not yet under the old prefix it rewrites).
-                fresh = self._locked_paths([parent.pk], using=using)
+                fresh = self._locked_paths([parent.pk])
                 if parent.pk in fresh:
                     parent.path = fresh[parent.pk]
-            self._reject_cross_scope_parent(parent, using=using)
+            self._reject_cross_scope_parent(parent)
             new_path = self._hierarchy_path(parent)
             if new_path != self.path:
-                rows = type(self).system_queryset().using(using).filter(pk=self.pk)
+                rows = type(self).system_queryset().filter(pk=self.pk)
                 if deferred:
                     # Below the hierarchy guard and deferred observers: the
                     # creation version records the path with the row.
-                    super(_AngeeQuerySetMixin, cast(_AngeeQuerySetMixin, rows)).update(path=new_path)
+                    super(AngeeQuerySetMixin, cast(AngeeQuerySetMixin, rows)).update(path=new_path)
                 else:
                     self._write_hierarchy_path(rows, new_path)
                 self.path = new_path
 
     def _save_reparented(self, *args: Any, **kwargs: Any) -> None:
-        """Validate the move under lock, then rewrite the subtree in one UPDATE."""
+        """Validate the move under lock in :meth:`save`'s transaction, then rewrite the subtree in one UPDATE."""
 
         # A reparent is defined by the moved ``parent``, so persist it (and the
         # derived ``path``) even under a partial ``update_fields`` that named
@@ -505,37 +522,35 @@ class HierarchyMixin(PersistenceMixin):
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             kwargs["update_fields"] = set(update_fields) | {"parent", "path"}
-        using = kwargs["using"]
-        with transaction.atomic(using=using):
-            old_path = self._lock_moved_paths(using=using)
-            subtree = type(self).system_queryset(lock=("self",)).using(using).filter(path__startswith=old_path)
-            descendant_paths = []
-            if old_path:
-                # Evaluate SELECT FOR UPDATE before moving any descendant's path.
-                descendant_paths = list(subtree.order_by("pk").values_list("path", flat=True))
-            parent = self._hierarchy_parent(using=using)
-            self._reject_cycle(parent)
-            self._reject_cross_scope_parent(parent, using=using)
-            new_path = self._hierarchy_path(parent)
-            if descendant_paths:
-                self._validate_hierarchy_path_length(
-                    len(new_path) + max(len(path) - len(old_path) for path in descendant_paths)
-                )
-            self.path = new_path
-            super().save(*args, **kwargs)
-            if old_path:
-                # One bulk UPDATE rewrites the old prefix on every row still
-                # under it (descendants only — the save above already repathed
-                # self) — never a per-row walk. The prefix is unique to this
-                # root-to-self chain, so a whole-string REPLACE only touches the
-                # head. An empty old path (an unmaterialized row) skips the
-                # cascade: it has nothing under it, and ``LIKE '%'`` would
-                # rewrite the whole table.
-                replacement = Replace(F("path"), Value(old_path), Value(new_path))
-                self._write_hierarchy_path(
-                    subtree,
-                    replacement,
-                )
+        old_path = self._lock_moved_paths()
+        subtree = type(self).system_queryset(lock=("self",)).filter(path__startswith=old_path)
+        descendant_paths = []
+        if old_path:
+            # Evaluate SELECT FOR UPDATE before moving any descendant's path.
+            descendant_paths = list(subtree.order_by("pk").values_list("path", flat=True))
+        parent = self._hierarchy_parent()
+        self._reject_cycle(parent)
+        self._reject_cross_scope_parent(parent)
+        new_path = self._hierarchy_path(parent)
+        if descendant_paths:
+            self._validate_hierarchy_path_length(
+                len(new_path) + max(len(path) - len(old_path) for path in descendant_paths)
+            )
+        self.path = new_path
+        super().save(*args, **kwargs)
+        if old_path:
+            # One bulk UPDATE rewrites the old prefix on every row still
+            # under it (descendants only — the save above already repathed
+            # self) — never a per-row walk. The prefix is unique to this
+            # root-to-self chain, so a whole-string REPLACE only touches the
+            # head. An empty old path (an unmaterialized row) skips the
+            # cascade: it has nothing under it, and ``LIKE '%'`` would
+            # rewrite the whole table.
+            replacement = Replace(F("path"), Value(old_path), Value(new_path))
+            self._write_hierarchy_path(
+                subtree,
+                replacement,
+            )
 
     def _write_hierarchy_path(
         self,
@@ -552,7 +567,7 @@ class HierarchyMixin(PersistenceMixin):
             return queryset.owner_update(path=path_value)
         return queryset.update(path=path_value)
 
-    def _lock_moved_paths(self, *, using: str | None = None) -> str:
+    def _lock_moved_paths(self) -> str:
         """Row-lock this node and its new parent, refreshing committed paths.
 
         Two overlapping reparents interleaving on stale in-memory paths is the
@@ -563,21 +578,21 @@ class HierarchyMixin(PersistenceMixin):
         """
 
         pks = [self.pk] if self.parent_id is None else [self.pk, self.parent_id]
-        fresh = self._locked_paths(pks, using=using)
+        fresh = self._locked_paths(pks)
         self.path = fresh.get(self.pk, self.path)
         if self.parent_id is not None and self.parent_id in fresh:
-            parent = self._hierarchy_parent(using=using)
+            parent = self._hierarchy_parent()
             if parent is not None:
                 parent.path = fresh[self.parent_id]
         return self.path
 
-    def _locked_paths(self, pks: list[Any], *, using: str | None = None) -> dict[Any, str]:
+    def _locked_paths(self, pks: list[Any]) -> dict[Any, str]:
         """Return committed paths, serializing overlapping moves when supported."""
 
-        reader = type(self).system_queryset(lock=("self",)).using(using or self._state.db)
+        reader = type(self).system_queryset(lock=("self",))
         return dict(reader.filter(pk__in=pks).values_list("pk", "path"))
 
-    def _hierarchy_needs_repath(self, *, using: str | None = None) -> bool:
+    def _hierarchy_needs_repath(self) -> bool:
         """Return whether an existing row's ``parent`` moved (or its path is unset)."""
 
         # An unrelated deferred save must not load tree columns into its UPDATE.
@@ -585,40 +600,38 @@ class HierarchyMixin(PersistenceMixin):
             return True
         if "parent_id" not in self.__dict__:
             return False
-        if hasattr(self, "_hierarchy_saved_parent_id") and (using is None or using == self._state.db):
+        if hasattr(self, "_hierarchy_saved_parent_id"):
             return self._hierarchy_saved_parent_id != self.parent_id
         # A deferred load (``.only(...)`` excluding ``parent``) carries no baseline,
         # so a reparent would be invisible if we compared ``parent_id`` to itself.
         # Fetch the committed ``parent_id`` from the row to compare against the
         # in-memory FK the caller may have moved.
-        return self._hierarchy_committed_parent_id(using=using) != self.parent_id
+        return self._hierarchy_committed_parent_id() != self.parent_id
 
-    def _hierarchy_committed_parent_id(self, *, using: str | None = None) -> Any:
+    def _hierarchy_committed_parent_id(self) -> Any:
         """Return this row's committed ``parent_id`` from the database."""
 
         return (
             type(self).system_queryset()
-            .using(using or self._state.db)
             .filter(pk=self.pk)
             .values_list("parent_id", flat=True)
             .first()
         )
 
-    def _hierarchy_parent(self, *, using: str | None = None) -> HierarchyMixin | None:
-        """Return the parent on this database, preserving Django's relation cache."""
+    def _hierarchy_parent(self) -> HierarchyMixin | None:
+        """Return the persisted parent, preserving Django's relation cache."""
 
         if self.parent_id is None:
             return None
         field = self._hierarchy_parent_field()
-        alias = using or self._state.db
         if field.is_cached(self):
             parent = field.get_cached_value(self)
-            if parent is not None and parent._state.db == alias:
+            if parent is not None and not parent._state.adding:
                 return cast("HierarchyMixin", parent)
         parent_model = field.related_model
         if parent_model is None or not issubclass(parent_model, HierarchyMixin):
             raise ImproperlyConfigured("Hierarchy parents must compose HierarchyMixin.")
-        parent = parent_model.system_queryset().using(alias).get(pk=self.parent_id)
+        parent = parent_model.system_queryset().get(pk=self.parent_id)
         field.set_cached_value(self, parent)
         return cast("HierarchyMixin", parent)
 
@@ -645,7 +658,7 @@ class HierarchyMixin(PersistenceMixin):
         if parent.path.startswith(self.path):
             raise ValidationError({"parent": "A node cannot be moved under itself or a descendant."})
 
-    def _reject_cross_scope_parent(self, parent: HierarchyMixin | None, *, using: str | None = None) -> None:
+    def _reject_cross_scope_parent(self, parent: HierarchyMixin | None) -> None:
         """Reject a parent that differs on any declared :attr:`hierarchy_scope_fields`."""
 
         if parent is None:
@@ -655,7 +668,7 @@ class HierarchyMixin(PersistenceMixin):
         fields = [self._hierarchy_column(name) for name in self.hierarchy_scope_fields]
         # The parent is a row of the hierarchy's own model; a multi-table child
         # of it may not have a row in this model's table.
-        committed = type(parent).system_queryset().using(using or self._state.db).filter(pk=parent.pk).values(
+        committed = type(parent).system_queryset().filter(pk=parent.pk).values(
             *(field.attname for field in fields),
         ).get()
         for field in fields:

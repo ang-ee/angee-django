@@ -408,9 +408,9 @@ describe("Angee Hasura provider defaults", () => {
       meta: { angeeModels: ["notes.Tag"] },
       staleTime: Infinity,
     };
-    await client.fetchQuery(noteQuery);
-    await client.fetchQuery(unrelated);
-    await client.fetchQuery({ ...noteQuery, queryKey: ["message-feed", "inactive"] });
+    await client.query(noteQuery);
+    await client.query(unrelated);
+    await client.query({ ...noteQuery, queryKey: ["message-feed", "inactive"] });
     const observer = new QueryObserver(client, noteQuery);
     const unsubscribeObserver = observer.subscribe(() => undefined);
     const socket = connectingClient();
@@ -648,7 +648,7 @@ describe("Angee Hasura provider defaults", () => {
       queryKey: ["notes", "enable"], queryFn, staleTime: Infinity,
       meta: { angeeModels: ["notes.Note"] },
     };
-    await client.fetchQuery(query);
+    await client.query(query);
     const observer = new QueryObserver(client, query);
     const stopObserver = observer.subscribe(() => undefined);
     const socket = connectingClient();

@@ -249,21 +249,17 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         if not keys:
             return {}
         linked = {link.external_key: link for link in links if link.external_key in keys}
-        parties = apps.get_model("parties", "Party").objects.db_manager(
-            stream._state.db, hints={"instance": stream},
-        )
+        parties = apps.get_model("parties", "Party").objects
         prefetch_related_objects(
             list(linked.values()),
             GenericPrefetch("target", [
-                parties.model._base_manager.db_manager(stream._state.db, hints={"instance": stream})
-                .select_related("person"),
+                parties.model._base_manager.select_related("person"),
             ]),
         )
         targets = {key: parties.contact_person(link) for key, link in linked.items()}
         people = tuple(
             apps.get_model("parties", "Person")
-            .objects.db_manager(stream._state.db, hints={"instance": stream})
-            .untrashed()
+            .objects.untrashed()
             .filter(pk__in=[person.pk for person in targets.values() if person is not None])
         )
         by_id = {str(person.pk): person for person in people}

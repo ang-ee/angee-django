@@ -154,7 +154,7 @@ one canonical `StepRecord` edge per source with no step; ordinary input fields d
 not create edges. Readers can inspect these references through the run resource,
 with identities and relation-marked input values redacted when their current
 record access is gone. Failed steps retain a reader-facing message in their
-output; attempt errors keep diagnostic detail behind writer access. Evidence
+output; attempt errors and stacktraces keep diagnostic detail behind run-operator access. Evidence
 edges are pruned with their run and do not protect source records from deletion.
 The trigger's `enable_preview` discloses the source grants and the people and
 groups with workflow monitoring access to an eligible enabler. Monitoring is the

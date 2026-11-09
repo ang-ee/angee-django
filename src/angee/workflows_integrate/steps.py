@@ -15,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.integrate.impl import AdapterContractError, BridgeImpl
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge
 from angee.integrate.net import AddressResolutionError
 from angee.integrate.states import StreamPhase, SyncFailureKind
@@ -264,7 +263,7 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
     """
     try:
         with closing(bridge.capability_impl) as adapter:
-            lock = bridge_advisory_lock(bridge) if adapter.sync_parallelism == 1 else nullcontext(True)
+            lock = bridge.sync_lock() if adapter.sync_parallelism == 1 else nullcontext(True)
             with lock as acquired:
                 if not acquired:
                     yield ctx.wait(until=ctx.now + timedelta(seconds=1), state=ctx.state)
