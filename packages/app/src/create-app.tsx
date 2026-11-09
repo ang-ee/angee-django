@@ -5,6 +5,7 @@ import {
   dataResourcesFromAngeeSchemaMetadata,
   defineAngeeSchemaMetadata,
   mergeModelLabelInventory,
+  refineResourceIdentifier,
   schemaFieldMetadataFromAngeeSchemaMetadata,
   type AngeeSchemaMetadata,
   type SchemaFieldMetadata,
@@ -818,7 +819,10 @@ function createLiveProviderForSchema(
   return createAngeeHasuraLiveProvider({
     ...liveOptions,
     queryClient,
-    resources: dataResourcesFromAngeeSchemaMetadata(schema.metadata),
+    resources: dataResourcesFromAngeeSchemaMetadata(schema.metadata).map((resource) => ({
+      ...resource,
+      identifier: refineResourceIdentifier(resource),
+    })),
   });
 }
 
