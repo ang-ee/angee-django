@@ -90,7 +90,14 @@ from angee.integrate.live import (
     skipped_password_marker,
 )
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationRuntimeStatus
-from angee.messaging.backends import ChannelBackend, PairingActionError
+from angee.messaging.backends import (
+    ChannelBackend,
+    PairingActionError,
+    ParsedHandle,
+    ParsedMessage,
+    ParsedPart,
+    ParsedThread,
+)
 from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
@@ -1365,13 +1372,6 @@ class ChannelWebform(Composable, extends="messaging.Channel"):
         answers: dict[str, Any],
     ) -> Any:
         """Map one validated answer envelope to messaging's neutral ingest DTO."""
-
-        from angee.messaging.backends import (
-            ParsedHandle,
-            ParsedMessage,
-            ParsedPart,
-            ParsedThread,
-        )
 
         spec = self.webform_spec()
         email_field = spec.email_field
