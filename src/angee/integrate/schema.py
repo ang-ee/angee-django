@@ -809,17 +809,15 @@ class ConnectionMutation:
             id,
             reason="integrate.graphql.discover_oauth_endpoints",
         ) as oauth_client:
-            if not str(getattr(oauth_client, "discovery_url", "") or ""):
-                return ActionResult(ok=False, message="Set an OIDC metadata discovery URL first.")
             try:
-                discovery = oauth_client.discover_endpoints()
+                discovery = oauth_client.discover_endpoints(persist=True)
+            except ValidationError as error:
+                return ActionResult(ok=False, message=exception_text(error))
             except OAuthFlowError as error:
                 return ActionResult(ok=False, message=error.public_message)
             except Exception:  # noqa: BLE001 — provider diagnostics stay outside the action payload.
                 return ActionResult(ok=False, message="OIDC metadata discovery failed.")
-            oauth_client.save()
-        issuer = discovery.get("issuer") if isinstance(discovery, dict) else None
-        return ActionResult(ok=True, message=f"Discovered endpoints for {issuer or 'provider'}.")
+        return ActionResult(ok=True, message=f"Discovered endpoints for {discovery.get('issuer') or 'provider'}.")
 
     @strawberry.mutation
     def connect_account_complete(

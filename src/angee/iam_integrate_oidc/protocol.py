@@ -133,8 +133,8 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
         A no-op when the client carries no ``discovery_url`` (endpoints are then
         configured explicitly). The discovery document is cached per URL, so an
         explicitly-configured provider that also sets a discovery URL fetches at
-        most once. In-memory only: the fetched endpoints serve the current request
-        and are not persisted unless the caller saves the client.
+        most once. In-memory only: the fetched endpoints serve the current request;
+        the operator's discovery action persists them (``discover_endpoints(persist=True)``).
         """
 
         return dict(self.oauth_client.discover_endpoints())

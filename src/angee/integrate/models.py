@@ -602,15 +602,24 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         del discovery
         return False
 
-    def discover_endpoints(self) -> Mapping[str, Any]:
-        """Fetch OIDC metadata and fill blank OAuth/extension endpoints on this row."""
+    def discover_endpoints(self, *, persist: bool = False) -> Mapping[str, Any]:
+        """Fetch OIDC metadata and fill blank OAuth/extension endpoints on this row.
 
-        discovery_url = str(getattr(self, "discovery_url", "") or "")
-        if not discovery_url:
+        A protocol fills the row in memory for its current request and treats a
+        row without a discovery URL as explicitly configured. ``persist`` is the
+        operator's discovery action: it refuses a row without a discovery URL with
+        ``ValidationError`` and saves the filled endpoints under the caller's authority.
+        """
+
+        if not self.discovery_url:
+            if persist:
+                raise ValidationError("Set an OIDC metadata discovery URL first.")
             return {}
-        discovery = oidc_metadata_document(discovery_url)
+        discovery = oidc_metadata_document(self.discovery_url)
         self.fill_endpoints_from_discovery(discovery)
         self.fill_extension_fields_from_discovery(discovery)
+        if persist:
+            self.save()
         return discovery
 
 

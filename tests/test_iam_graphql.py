@@ -51,6 +51,7 @@ from angee.graphql.testing.documents import result_data as _data
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.oauth import discovery as oauth_discovery
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
@@ -2047,6 +2048,42 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
     result = _data(_execute(console_schema, discover, {"id": oauth_client_id}, user=admin))["discover_oauth_endpoints"]
     assert result["ok"] is False
     assert "discovery url" in result["message"].lower()
+
+
+def test_discover_oauth_endpoints_persists_the_filled_endpoints(
+    iam_connection_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client row saves the endpoints discovery filled; the action only reports the issuer."""
+
+    admin = _platform_admin("discover-persist-admin")
+    client = _oauth_client(
+        "discover-persist",
+        is_oidc=False,
+        discovery_url="https://persisted.example/.well-known/openid-configuration",
+        authorize_endpoint="",
+        token_endpoint="",
+    )
+    document = {
+        "issuer": "https://persisted.example",
+        "authorization_endpoint": "https://persisted.example/authorize",
+        "token_endpoint": "https://persisted.example/token",
+    }
+    monkeypatch.setattr(oauth_discovery, "_get_json", lambda url, **kwargs: document)
+    discover = "mutation($id: ID!){ discover_oauth_endpoints(id: $id){ ok message } }"
+
+    result = _data(_execute(_schema("console"), discover, {"id": str(client.sqid)}, user=admin))
+
+    assert result["discover_oauth_endpoints"] == {
+        "ok": True,
+        "message": "Discovered endpoints for https://persisted.example.",
+    }
+    with system_context(reason="test.integrate.discovery.verify"):
+        client.refresh_from_db()
+    assert (client.authorize_endpoint, client.token_endpoint) == (
+        "https://persisted.example/authorize",
+        "https://persisted.example/token",
+    )
 
 
 def test_view_as_target_has_no_pinned_admitting_actor(
