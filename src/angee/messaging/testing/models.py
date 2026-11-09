@@ -163,6 +163,8 @@ class Message(MessagePublic, AbstractMessage):
     AbstractMessage)`` now that posts is a composed base addon.
     """
 
+    rebac_grantable = AbstractMessage.rebac_grantable
+
     class Meta(AbstractMessage.Meta):
         """Django model options for the canonical test message."""
 

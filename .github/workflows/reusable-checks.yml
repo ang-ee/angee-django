@@ -436,8 +436,10 @@ jobs:
         working-directory: stack
         env:
           CONSUMER_PATH: ${{ inputs.consumer-path }}
+          CONSUMER_SOURCES: ${{ inputs.consumer-sources }}
         run: |
           uv run --no-sync python - <<'PY'
+          import json
           import os
           import subprocess
           import sys
@@ -470,9 +472,13 @@ jobs:
           os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (
               str(typing_root), str(framework), os.environ.get("PYTHONPATH"),
           )))
-          os.environ["MYPYPATH"] = os.pathsep.join(filter(None, (
-              str(typing_root), str(slot / "src"), os.environ.get("MYPYPATH"),
-          )))
+          source_roots = sorted(
+              str(host / "workspaces/src" / source["path"] / "src")
+              for source in json.loads(os.environ["CONSUMER_SOURCES"])
+          )
+          os.environ["MYPYPATH"] = os.pathsep.join(dict.fromkeys(filter(None, (
+              str(typing_root), str(slot / "src"), *source_roots, os.environ.get("MYPYPATH"),
+          ))))
           subprocess.run([
               sys.executable, "-m", "mypy", "--config-file", str(config),
               str(slot / "src"),

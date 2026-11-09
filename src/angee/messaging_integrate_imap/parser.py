@@ -36,6 +36,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from email import message_from_bytes
 from email import policy as email_policy
+from email.errors import MessageError
 from email.header import decode_header, make_header
 from email.message import EmailMessage, MIMEPart
 from email.utils import getaddresses, parsedate_to_datetime
@@ -46,6 +47,14 @@ from mailparser_reply import EmailReplyParser
 
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
 from angee.parties.models import Handle
+
+MIME_ERRORS = (MessageError, ValueError, LookupError, TypeError, RecursionError)
+"""Malformed MIME, charset/content lookup and bounded-parser failures.
+
+Inner helpers degrade only the affected header or part for these data errors.
+Any other failure escapes ``parse_message``; the backend then lands the whole raw
+message through ``fallback_message``, and worker cancellation propagates.
+"""
 
 # The parties platform email handles live under (`Handle.Platform` owns the value).
 _EMAIL_PLATFORM = str(Handle.Platform.EMAIL)
@@ -173,7 +182,7 @@ def fallback_message(
         lenient = message_from_bytes(raw)  # compat32: never raises on header access
         subject = _decode_lenient_header(lenient.get("Subject"))
         external_id = _message_id(lenient.get("Message-ID"))
-    except Exception:  # noqa: BLE001 — the fallback must survive any input.
+    except MIME_ERRORS:
         pass
     return ParsedMessage(
         external_id=external_id or synthetic_external_id(raw),
@@ -259,7 +268,7 @@ def html_to_text(html: str) -> str:
     try:
         extractor.feed(html)
         extractor.close()
-    except Exception:  # noqa: BLE001 — pathological markup degrades to what was collected.
+    except (*MIME_ERRORS, AssertionError):
         pass
     text = "".join(extractor.chunks)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -412,7 +421,7 @@ def _retained_headers(message: EmailMessage) -> tuple[tuple[str, str], ...]:
         for value in message.get_all(name, ()):
             try:
                 text = str(value).strip()
-            except Exception:  # noqa: BLE001 — one undecodable header must not drop the message.
+            except MIME_ERRORS:
                 continue
             if text:
                 pairs.append((name, text))
@@ -436,7 +445,7 @@ def _metadata(
         for value in message.get_all(name, ()):
             try:
                 values.append(str(value))
-            except Exception:  # noqa: BLE001 — one undecodable header must not drop the envelope.
+            except MIME_ERRORS:
                 continue
         if values:
             headers[name] = values
@@ -464,7 +473,7 @@ def _decode_lenient_header(value: Any) -> str:
         return ""
     try:
         return str(make_header(decode_header(text)))
-    except Exception:  # noqa: BLE001 — keep the raw text when RFC 2047 decoding fails.
+    except MIME_ERRORS:
         return text
 
 
@@ -545,7 +554,7 @@ def _embedded_message_part(
         candidate = message.get_content()
         if isinstance(candidate, MIMEPart):
             embedded = candidate
-    except Exception:  # noqa: BLE001 — an undecodable embedded message still lands as bytes.
+    except MIME_ERRORS:
         pass
     if embedded is None:
         payload = message.get_payload()
@@ -554,7 +563,7 @@ def _embedded_message_part(
     if embedded is not None:
         try:
             raw = embedded.as_bytes(policy=email_policy.default)
-        except Exception:  # noqa: BLE001 — preserve the decoded payload fallback below.
+        except MIME_ERRORS:
             raw = b""
     if not raw:
         raw = _decoded_payload(message) or b""
@@ -562,7 +571,7 @@ def _embedded_message_part(
     if embedded is not None:
         try:
             subject = str(embedded.get("Subject", "") or "").strip()
-        except Exception:  # noqa: BLE001 — a bad optional header must not erase valid raw bytes.
+        except MIME_ERRORS:
             pass
     name = _safe_filename(f"{subject}.eml" if subject else "message.eml")
     child = _expand_embedded_message(embedded, raw=raw, depth=depth, budget=budget)
@@ -583,7 +592,7 @@ def _message_report_part(message: MIMEPart) -> ParsedPart:
 
     try:
         raw = message.as_bytes(policy=email_policy.default)
-    except Exception:  # noqa: BLE001 — the report subtype and empty evidence still land.
+    except MIME_ERRORS:
         raw = _decoded_payload(message) or b""
     children = []
     payload = message.get_payload()
@@ -605,7 +614,7 @@ def _unsupported_message_part(message: MIMEPart) -> ParsedPart:
 
     try:
         raw = message.as_bytes(policy=email_policy.default)
-    except Exception:  # noqa: BLE001 — the declared subtype still lands for review.
+    except MIME_ERRORS:
         raw = _decoded_payload(message) or b""
     return ParsedPart(
         type=message.get_content_type(), disposition="attachment", content=raw,
@@ -632,7 +641,7 @@ def _expand_embedded_message(
         return _ensure_plain_body(_parse_body(
             embedded, embedded_depth=depth + 1, embedded_budget=budget,
         ))
-    except Exception:  # noqa: BLE001 — the retained raw parent remains actionable.
+    except MIME_ERRORS:
         return None
 
 
@@ -641,7 +650,7 @@ def _text_content(message: MIMEPart) -> str:
 
     try:
         return str(message.get_content())
-    except Exception:  # noqa: BLE001 — unknown/lying charsets fall through to the manual chain.
+    except MIME_ERRORS:
         payload = _decoded_payload(message) or b""
         for charset in (message.get_content_charset() or "utf-8", "utf-8"):
             try:
@@ -673,7 +682,7 @@ def _decoded_payload(message: MIMEPart) -> bytes | None:
 
     try:
         payload = message.get_payload(decode=True)
-    except Exception:  # noqa: BLE001 — a broken transfer encoding is "no decodable bytes".
+    except MIME_ERRORS:
         return None
     return payload if isinstance(payload, bytes) else None
 

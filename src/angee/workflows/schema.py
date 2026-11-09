@@ -76,7 +76,8 @@ Decision = apps.get_model("decisions", "Decision")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 _RUN_POLICY_VERSION = WorkflowRun.policy_version_prefetch()
-_STEP_POLICY_VERSION = WorkflowRun.policy_version_prefetch("run__")
+# Load the explicit run queryset before its custom policy relation can load an implicit run.
+_STEP_POLICY_VERSION: list[str | Prefetch] = ["run", WorkflowRun.policy_version_prefetch("run__")]
 _RUN_LABEL = {"_workflow_name": F("version__workflow__name")}
 
 
@@ -250,14 +251,14 @@ class StepRunType(AngeeNode):
     records: list[StepRecordType] = actor_scoped_to_many("records")
     watches: list[StepWatchType] = actor_scoped_to_many("watches")
     node_key: auto
-    node_label: str = strawberry_django.field(only=["node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION])
+    node_label: str = strawberry_django.field(only=["node_key", "run_id"], prefetch_related=_STEP_POLICY_VERSION)
     rank: auto
     map_index: auto
     is_mapped: bool = strawberry_django.field(only=["node_key"])
-    is_map: bool = strawberry_django.field(only=["node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION])
+    is_map: bool = strawberry_django.field(only=["node_key", "run_id"], prefetch_related=_STEP_POLICY_VERSION)
     map_total: int = strawberry_django.field(
         only=["node_key", "run_id"], annotate={"_map_total": StepRun.map_total_expression()},
-        prefetch_related=[_STEP_POLICY_VERSION],
+        prefetch_related=_STEP_POLICY_VERSION,
     )
     map_settled: int = strawberry_django.field(annotate={"_map_settled": StepRun.map_settled_expression()})
     status: auto
@@ -277,7 +278,7 @@ class StepRunType(AngeeNode):
     )
     outcome: auto
     outcome_label: str = strawberry_django.field(
-        only=["node_key", "outcome", "run_id"], prefetch_related=[_STEP_POLICY_VERSION],
+        only=["node_key", "outcome", "run_id"], prefetch_related=_STEP_POLICY_VERSION,
     )
     state: JSON
     hold: str | None = strawberry_django.field(annotate={"_hold": StepRun.hold_expression()})
@@ -289,13 +290,13 @@ class StepRunType(AngeeNode):
         """Expose the note's small contract rather than untyped JSON."""
         return [StepNoteType(**note) for note in cast(Any, self).notes]
 
-    @strawberry_django.field(only=["node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION])
+    @strawberry_django.field(only=["node_key", "run_id"], prefetch_related=_STEP_POLICY_VERSION)
     def map_steps(self, info: strawberry.Info) -> list[StepRunType]:
         """Map item execution stays beneath its authored parent in the timeline."""
         return cast(Any, self).map_steps_for(get_current_user(info))
 
     @strawberry_django.field(
-        only=["status", "waiting_kind", "node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION],
+        only=["status", "waiting_kind", "node_key", "run_id"], prefetch_related=_STEP_POLICY_VERSION,
     )
     def can_retry(self, info: strawberry.Info) -> bool:
         """Project the same model rule checked by the retry action."""
@@ -304,7 +305,7 @@ class StepRunType(AngeeNode):
     @strawberry_django.field(
         only=["node_key", "page_index", "run_id"],
         annotate={"_effect_started": lambda info: StepRun.effect_started_expression()},
-        prefetch_related=[_STEP_POLICY_VERSION],
+        prefetch_related=_STEP_POLICY_VERSION,
     )
     def requires_duplicate_acknowledgement(self) -> bool:
         """Read the step owner's current-page effect marker predicate."""

@@ -817,10 +817,15 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
     ]
 
     sync_calls: list[tuple[Any, dict[str, Any]]] = []
+
+    def queue_sync(row, **kwargs):
+        sync_calls.append((row, kwargs))
+        return True
+
     monkeypatch.setattr(
         storage_integrate_schema,
         "queue_bridge_sync",
-        lambda row, **kwargs: sync_calls.append((row, kwargs)),
+        queue_sync,
     )
     synced = result_data(
         execute_schema(

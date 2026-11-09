@@ -29,7 +29,7 @@ from rebac import (
 )
 from strawberry import auto
 
-from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -1018,3 +1018,83 @@ def test_row_locked_lines_require_the_node_lock_projection():
                 "types": [PinnedDocumentType, UnlockedPinnedLineType, *resource.types],
             }})
         ]).build("public")
+
+
+@pytest.mark.parametrize("operation", ["update", "save"])
+def test_writes_delegate_prepared_values_and_reload_after_owner_lock(composed_tables, monkeypatch, operation):
+    """Owner locks see pending scope; unrelated data committed while waiting survives."""
+    owner = create_user("prepared-lock-owner")
+    with system_context(reason="seed prepared lock target"):
+        doc = Document.objects.create(title="Before", note="Before wait")
+    _grant_manager(doc, owner)
+    original = Document.lock_subject
+    observed = []
+
+    def lock(instance, members=None):
+        observed.append((instance.title, instance._state.db))
+        locked = original(instance, members)
+        with system_context(reason="simulate current data after owner wait"):
+            Document.objects.filter(pk=instance.pk).update(note="Current after wait")
+        return locked
+
+    monkeypatch.setattr(Document, "lock_subject", lock)
+    backend = AngeeHasuraWriteBackend(Document, lines=_LINES)
+    with actor_context(owner):
+        if operation == "update":
+            backend.update(None, doc.public_id, {"title": "After"})
+        else:
+            backend.save(None, doc.public_id, {"title": "After"}, None)
+    doc.refresh_from_db()
+    assert observed == [("After", doc._state.db)]
+    assert (doc.title, doc.note) == ("After", "Current after wait")
+
+
+def test_owner_lock_does_not_bypass_narrowed_write_surface(composed_tables, monkeypatch):
+    owner = create_user("scoped-lock-owner")
+    with system_context(reason="seed scoped lock target"):
+        doc = Document.objects.create(title="In scope")
+    _grant_manager(doc, owner)
+    original = Document.lock_subject
+
+    def lock(instance, members=None):
+        locked = original(instance, members)
+        with system_context(reason="simulate scope change while waiting"):
+            Document.objects.filter(pk=instance.pk).update(title="Outside scope")
+        return locked
+
+    class ScopedBackend(AngeeHasuraWriteBackend):
+        def write_target_queryset(self):
+            return super().write_target_queryset().filter(title="In scope")
+
+    monkeypatch.setattr(Document, "lock_subject", lock)
+    with actor_context(owner), pytest.raises(ValidationError):
+        ScopedBackend(Document).update(None, doc.public_id, {"note": "Must not write"})
+    doc.refresh_from_db()
+    assert doc.note == ""
+
+
+def test_owner_lock_rechecks_write_permission_for_lines_only_save(composed_tables, monkeypatch):
+    owner = create_user("revoked-lock-owner")
+    with system_context(reason="seed revoked lock target"):
+        doc = Document.objects.create(title="Document")
+    _grant_manager(doc, owner)
+    original_lock = Document.lock_subject
+    original_access = Document.has_access
+    waited = False
+
+    def lock(instance, members=None):
+        nonlocal waited
+        locked = original_lock(instance, members)
+        waited = True
+        return locked
+
+    def access(instance, action, *args, **kwargs):
+        return False if waited and action == "write" else original_access(instance, action, *args, **kwargs)
+
+    monkeypatch.setattr(Document, "lock_subject", lock)
+    monkeypatch.setattr(Document, "has_access", access)
+    result = execute_schema(_SCHEMA, _SAVE, {"pk": doc.public_id, "lines": [
+        {"label": "Must not create", "quantity": 1, "position": 0},
+    ]}, user=owner)
+    assert result.errors and waited
+    assert not DocumentLine.system_queryset().filter(document=doc).exists()

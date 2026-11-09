@@ -1,7 +1,11 @@
 """Identity and mapped same_as pair reviews using real domain and engine owners."""
 
+from types import SimpleNamespace
+
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import TransactionTestCase
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
@@ -16,6 +20,7 @@ from angee.workflows.testing.drivers import (
     run_until,
     start_run,
 )
+from angee.workflows_parties.steps import IdentityReview, IdentityReviewConfig
 
 Party = apps.get_model("parties", "Party")
 Address = apps.get_model("parties", "Address")
@@ -45,10 +50,10 @@ class PartyWorkflowTests(TransactionTestCase):
         with actor_context(owner or self.reviewer):
             return Party.objects.create(display_name=name)
 
-    def run_identity(self, party, *, proposed=None, actor=None, **values):
+    def run_identity(self, party, *, proposed=None, actor=None, workflow=None, **values):
         """Start the installed one-node review through its public input contract."""
         run = start_run(
-            self.identity,
+            workflow or self.identity,
             actor=actor or self.admin,
             input={
                 "party_id": public_id_of(party),
@@ -190,6 +195,110 @@ class PartyWorkflowTests(TransactionTestCase):
         run = self.run_identity(party)
         self.assertEqual(run.status, "failed")
         self.assertFalse(self.decisions(run))
+
+    def answerer_workflow(self, party):
+        """Opt into human application while the initiator retains only standing reads."""
+        workflow = load_workflow({
+            "nodes": {"identity": {"step": "parties_identity_review", "config": {"apply_as": "answerer"}}},
+            "results": [{"from": "identity", "when": ["applied", "unchanged", "rejected", "escalated"]}],
+        }, key="answerer_identity", actor=self.admin)
+        with actor_context(self.admin):
+            workflow.grant_record_access("starter", self.other)
+            party.grant_record_access("reader", self.other)
+            write_relationships([
+                RelationshipTuple(to_object_ref(self.reviewer), "directory_reader", to_subject_ref(self.other)),
+            ])
+        return workflow
+
+    def test_answerer_changes_use_human_authority_and_preserve_private_evidence(self):
+        party = self.party()
+        workflow = self.answerer_workflow(party)
+        with actor_context(self.reviewer):
+            handle = Handle.objects.create(platform="email", value="human-reviewed@example.test")
+            handle.grant_record_access("reader", self.other)
+            link = party.with_actor(self.reviewer).statements.set(
+                aspect="handle", handle=handle, values={}, confidence=0.4,
+            )
+        self.assertFalse(party.with_actor(self.other).has_access("write"))
+        self.assertFalse(handle.with_actor(self.other).has_access("write"))
+        run = self.run_identity(party, workflow=workflow, actor=self.other, proposed={
+            "name": "Human reviewed name",
+            "address": {"street": "31 Private Lane", "city": "Example"},
+            "handle": {"statement_id": public_id_of(link)},
+        })
+        self.answer(run, ["name", "address", "handle"])
+        self.assertEqual((run.status, run.outcome, run.run_as_id), ("succeeded", "applied", self.other.pk))
+        party = Party.system_queryset().get(pk=party.pk)
+        address = Address.system_queryset().get(party=party)
+        self.assertEqual((party.display_name, party.updated_by_id), ("Human reviewed name", self.reviewer.pk))
+        self.assertEqual(address.created_by_id, self.reviewer.pk)
+        with system_context(reason="test identity application attribution"):
+            version = party.history.select_related("changeset").order_by("history_id").last()
+            self.assertEqual(version.changeset.actor_ref, str(to_subject_ref(self.reviewer)))
+        self.assertTrue(Party.statements.with_actor(self.reviewer).filter(
+            subject=party, handle=handle, rank=Party.statements.model.StatementRank.PREFERRED,
+        ).exists())
+        self.assertFalse(party.with_actor(self.other).has_access("write"))
+        self.assertFalse(handle.with_actor(self.other).has_access("write"))
+        self.assertFalse(address.with_actor(self.other).has_access("read"))
+        self.assertFalse(apps.get_model("workflows", "StepRecord").system_queryset().filter(
+            run=run, content_type=ContentType.objects.get_for_model(Address), object_id=address.pk,
+        ).exists())
+
+    def test_answerer_permission_is_rechecked_after_answer_before_apply(self):
+        party = self.party()
+        workflow = self.answerer_workflow(party)
+        with actor_context(self.admin):
+            party.grant_record_access("reader", self.reviewer)
+        run = self.run_identity(party, workflow=workflow, proposed={
+            "name": "Revoked edit", "address": {"street": "Must not be created"},
+        })
+        decision = self.decisions(run)[0]
+        decide(decision, actor=self.reviewer, chosen=["name", "address"])
+        with actor_context(self.reviewer):
+            party = party.with_actor(self.reviewer)
+            party.owner = self.admin
+            party.save(update_fields=["owner"])
+        self.assertFalse(party.with_actor(self.reviewer).has_access("write"))
+        self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
+        run_until(run)
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(Party.system_queryset().get(pk=party.pk).display_name, "Original name")
+        self.assertFalse(Address.system_queryset().filter(party=party).exists())
+        self.assertIn("PermissionDenied", StepAttempt.system_queryset().filter(step_run__run=run).last().stacktrace)
+
+    def test_answerer_hash_detects_a_concurrent_private_identity_change(self):
+        party = self.party()
+        workflow = self.answerer_workflow(party)
+        run = self.run_identity(party, workflow=workflow, actor=self.other)
+        with actor_context(self.admin):
+            hidden = Address.objects.create(party=party, street="Private concurrent address")
+        self.assertFalse(hidden.with_actor(self.reviewer).has_access("read"))
+        self.answer(run)
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(Party.system_queryset().get(pk=party.pk).display_name, "Original name")
+        self.assertIn("identity changed", StepAttempt.system_queryset().filter(step_run__run=run).last().error)
+
+    def test_answerer_nonmutating_choices_need_no_party_write(self):
+        party = self.party(owner=self.admin)
+        workflow = self.answerer_workflow(party)
+        party.with_actor(self.admin).grant_record_access("reader", self.reviewer)
+        for choice, outcome in (("keep", "unchanged"), ("reject", "rejected"), ("escalate", "escalated")):
+            with self.subTest(choice=choice):
+                run = self.run_identity(party, workflow=workflow, actor=self.other)
+                self.answer(run, choice)
+                self.assertEqual((run.status, run.outcome), ("succeeded", outcome))
+        self.assertEqual(Party.system_queryset().get(pk=party.pk).display_name, "Original name")
+
+    def test_answerer_mode_refuses_a_missing_answerer_without_falling_back(self):
+        party = self.party()
+        ctx = SimpleNamespace(
+            actor=self.admin, config=IdentityReviewConfig(apply_as="answerer"),
+            input=SimpleNamespace(party_id=public_id_of(party)), load=lambda *_args: party,
+        )
+        with self.assertRaisesMessage(ValidationError, "configured applying actor"):
+            IdentityReview().apply(ctx, SimpleNamespace(verdict=["name"], answered_by=None))
+        self.assertEqual(Party.system_queryset().get(pk=party.pk).display_name, "Original name")
 
     def test_demo_resources_supply_browsable_identity_and_same_as_pairs(self):
         ledger = apps.get_model("resources", "Resource").objects

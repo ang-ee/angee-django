@@ -209,22 +209,26 @@ ROWS = {
 # composed host; a platform admin reads both actors' messages and projects.
 BUDGETS = {
     # REBAC 0.31 compiles one actor-independent statement per scope, where 0.30 decided each
-    # actor's constant facts first and pruned the policy. Since 0.31.4 a witness statement decides
-    # whether the actor holds a permission's constant arms (``admin->member``): an admin then reads
-    # a statement of those arms alone, decided again at each read because this host keeps no
-    # witness (the user type's field-backed ``person`` relation), and a member pays one witness per
-    # distinct arm per request beside the full policy.
-    ("admin", "inbox"): (18, 29, 104),  # 0.31: 15 -> 29 statements (18 witnesses), 36 -> 104 KB
-    ("admin", "transcript"): (3, 59, 200),  # 0.31: 35 -> 59 statements (30 witnesses), 85 -> 200 KB
-    ("admin", "person"): (2, 34, 86),  # 0.31: 29 -> 34 statements (16 witnesses), 50 -> 86 KB
-    ("admin", "projects"): (6, 13, 23),  # 0.31: 15 -> 13 statements (5 witnesses), 24 -> 23 KB
+    # actor's constant facts first and pruned the policy. A witness statement decides whether the
+    # actor holds a permission's constant arms (``admin->member``): an admin then reads a statement
+    # of those arms alone, and a member's statement leaves them out. Since 0.31.5 the request keeps
+    # that answer wherever the arms' types read no model column, as on every read here, so each
+    # actor pays one witness per distinct arm per request.
+    ("admin", "inbox"): (18, 14, 58),  # 0.31: 15 -> 14 statements (3 witnesses), 36 -> 58 KB
+    ("admin", "transcript"): (3, 32, 129),  # 0.31: 35 -> 32 statements (3 witnesses), 85 -> 129 KB
+    ("admin", "person"): (2, 20, 49),  # 0.31: 29 -> 20 statements (2 witnesses), 50 -> 49 KB
+    ("admin", "projects"): (6, 10, 17),  # 0.31: 15 -> 10 statements (2 witnesses), 24 -> 17 KB
     ("admin", "identity"): (1, 1, 2),
-    ("member", "inbox"): (9, 14, 803),  # 0.31: 123 -> 14 statements (3 witnesses), 898 -> 803 KB; id sets are CTEs
+    ("member", "inbox"): (9, 14, 785),  # 0.31: 123 -> 14 statements (3 witnesses), 898 -> 781 KB; id sets are CTEs;
+    # identity_reader on the canonical Party: 781 -> 785 KB
     # The feed reads its messages under ``read_inbox`` and the reply-parent fields read ``read``
     # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
-    ("member", "transcript"): (3, 32, 2648),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2648 KB
-    ("member", "person"): (2, 20, 813),  # 0.31: 174 -> 20 statements (2 witnesses), 1036 -> 813 KB
-    ("member", "projects"): (3, 10, 254),  # 0.31: 89 -> 10 statements (2 witnesses), 538 -> 254 KB
+    ("member", "transcript"): (3, 32, 2600),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2593 KB;
+    # identity_reader: 2593 -> 2600 KB
+    ("member", "person"): (2, 20, 805),  # 0.31: 174 -> 20 statements (2 witnesses), 1036 -> 791 KB;
+    # identity_reader: 791 -> 805 KB
+    ("member", "projects"): (3, 10, 251),  # 0.31: 89 -> 10 statements (2 witnesses), 538 -> 247 KB;
+    # identity_reader: 247 -> 251 KB
     ("member", "identity"): (1, 1, 2),
 }
 

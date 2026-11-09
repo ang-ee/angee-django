@@ -1039,7 +1039,7 @@ class Channel(Bridge, inherits="integrate.Integration"):
     own backend and overlay.
     """
 
-    rebac_grantable = {"reader": "write", "replier": "write"}
+    rebac_grantable = {"reader": "write", "replier": "write", "annotator": "write"}
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
     live_impl_field: ClassVar[str | None] = "backend_class"
 
@@ -2161,6 +2161,33 @@ class Message(
                 condition=~models.Q(external_id=""),
             ),
         )
+
+    def source_header_values(self, name: str, *, actor: Any = None) -> tuple[str, ...]:
+        """Read original envelope values, falling back to canonical header parts.
+
+        Transport adapters may retain the complete envelope in metadata while
+        projecting only selected headers into Parts. Read that original source
+        before a mutable Handle reference; neither source establishes authenticity.
+        Repeated headers remain repeated so callers can reject ambiguous addresses.
+        Malformed retained values yield no usable header, never a partial identity.
+        """
+        actor = self.require_access("read", actor=actor)
+        header = name.casefold()
+        headers = self.metadata.get("headers") if isinstance(self.metadata, dict) else None
+        if isinstance(headers, dict):
+            values = [value for key, value in headers.items() if str(key).casefold() == header]
+            if values:
+                retained: list[str] = []
+                for value in values:
+                    items = (value,) if isinstance(value, str) else value
+                    if not isinstance(items, list | tuple) or any(not isinstance(item, str) for item in items):
+                        return ()
+                    retained.extend(items)
+                return tuple(retained)
+        parts = self.parts.with_actor(actor) if actor is not None else self.parts.all()
+        return tuple(parts.filter(
+            parent__isnull=True, role="header", name__iexact=name, fragment__isnull=False,
+        ).order_by("position", "pk").values_list("fragment__text", flat=True))
 
     def webform_submission(self) -> WebformSubmission | None:
         """Read the public-form envelope without interpreting it in consumers."""

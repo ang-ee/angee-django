@@ -14,6 +14,7 @@ class AngeeManager[T: models.Model](_AngeeManagerBase[T]):
     """Manager backed by :class:`AngeeQuerySet`."""
 
     model: type[T]
+    _hints: dict[str, models.Model]
 
 
 _AngeeUnscopedManagerBase = models.Manager.from_queryset(AngeeUnscopedQuerySet)

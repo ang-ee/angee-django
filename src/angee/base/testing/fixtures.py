@@ -21,8 +21,9 @@ def django_db_setup(
     """Install the host's permission schema and restore it after transaction flushes.
 
     Native Django database setup owns table creation. A composed host gets the
-    same REBAC lifecycle as a provisioned application. Bare source-model tests
-    own their per-test schemas through ``composed_permissions`` instead.
+    current generated REBAC declarations, including on a reused test database.
+    Disposable test policy has no local overrides to preserve. Bare source-model
+    tests own their per-test schemas through ``composed_permissions`` instead.
     """
 
     if not getattr(settings, "COMPOSE_OUTPUT_DIR", None):
@@ -32,7 +33,7 @@ def django_db_setup(
     rebac_app = apps.get_app_config("rebac")
 
     def sync_rebac_schema(**kwargs: Any) -> None:
-        call_command("rebac", "sync", verbosity=0)
+        call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
 
     post_migrate.connect(sync_rebac_schema, sender=rebac_app, weak=False)
     try:

@@ -17,7 +17,7 @@ from tests.conftest import addon_schema, create_user, vault_for
 from tests.test_decisions_inbox import inbox as inbox
 
 FIELDS = """
-  id kind_label records { id record_model record_id }
+  id kind_label concerns_label records { id record_model record_id }
   requester { id display_name } verdict is_open permissions
 """
 LIST = """query Inbox($viewer: String!) {
@@ -88,6 +88,9 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
                 rows = result["decisions"]
                 assert len(rows) == size
                 assert all("act" in row["permissions"] and row["is_open"] for row in rows)
+                assert {row["concerns_label"] for row in rows} == {
+                    str(subject) for subject in subjects[: min(size, 3)]
+                }
                 assert all(row["requester"] is not None for row in rows)
                 assert {record["record_id"] for row in rows for record in row["records"]} == {
                     str(subject.sqid) for subject in subjects[: min(size, 3)]

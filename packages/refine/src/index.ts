@@ -1,4 +1,5 @@
 export { refineFieldsFromPaths } from "./selections";
+export { ServerConnection, ServerUnavailableError } from "./server-connection";
 export {
   groupRowsDocument,
   listQueryMeta,

@@ -95,7 +95,7 @@ class Party(
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    rebac_grantable = {"reader": "write"}
+    rebac_grantable = {"reader": "write", "identity_reader": "write"}
 
     sqid_prefix = "pty_"
     history = ModelHistory(inherit=True, excluded_fields=("handle_count",))

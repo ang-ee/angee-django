@@ -20,8 +20,6 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_ModelT]):
     """Django collector updates dispatched to the record's declared persistence owner."""
 
-    _hints: dict[str, models.Model]
-
     def update(self, **kwargs: Any) -> int:
         """Keep exact collector selection and alias while preserving native capture."""
 

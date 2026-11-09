@@ -14,7 +14,7 @@ from angee.workflows.definition import Definition
 from angee.workflows.runner import runner
 from angee.workflows.steps import Done, EmptyOutput, Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepAttempt, StepRun, Workflow
+from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_user
 
 
@@ -36,6 +36,9 @@ class EmptyStep(Step[EmptyOutput, EmptyOutput, None]):
     """Consume an empty built-in terminal outcome."""
 
     key = "await_empty"
+
+    def run(self, ctx):
+        return ctx.done(ctx.input)
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +67,7 @@ def parent_document(expects, outcomes=None):
     return {"nodes": {
         "awaited": {"step": AwaitRun.key, "config": config, "next": {
             "accepted": "value", "declined": "empty", "done": "empty", "error": "empty", "canceled": "empty",
+            "interrupted": "empty",
         }},
         "value": {"step": NumberStep.key},
         "empty": {"step": EmptyStep.key, "input": {"from": "input", "path": ["empty"]}},
@@ -74,11 +78,11 @@ def test_run_output_schemas_are_keyed_by_effective_result_outcome():
     """Projected aliases retain their actual schema, plus terminal empty defaults."""
     definition = Definition.model_validate(child_document())
     schemas = definition.output_schemas
-    assert set(schemas) == {"accepted", "declined", "done", "error", "canceled"}
+    assert set(schemas) == {"accepted", "declined", "done", "error", "canceled", "interrupted"}
     assert schemas_match(schemas["accepted"], NumberStep.output_schema())
     assert validator(schemas["declined"]).is_valid({"reason": "negative"})
     assert not validator(schemas["declined"]).is_valid({"value": 1})
-    for outcome in ("done", "error", "canceled"):
+    for outcome in ("done", "error", "canceled", "interrupted"):
         assert validator(schemas[outcome]).is_valid({})
         assert not validator(schemas[outcome]).is_valid({"value": 1})
 
@@ -101,13 +105,13 @@ def test_result_without_when_excludes_error_from_its_output_contract():
     document = child_document()
     document["results"] = [{"from": "value"}]
     schemas = Definition.model_validate(document).output_schemas
-    assert set(schemas) == {"positive", "negative", "done", "error", "canceled"}
+    assert set(schemas) == {"positive", "negative", "done", "error", "canceled", "interrupted"}
     assert not validator(schemas["error"]).is_valid({"value": 3})
 
 
-@pytest.mark.parametrize("outcome", ["done", "error", "canceled"])
+@pytest.mark.parametrize("outcome", ["done", "error", "canceled", "interrupted"])
 def test_declared_result_coexists_with_native_empty_outcome_schema(outcome):
-    """An authored projection cannot hide failure, cancellation or no-result output."""
+    """An authored projection cannot hide an empty native terminal settlement."""
     document = child_document()
     document["results"] = [{"from": "value", "when": ["positive"], "as": outcome}]
     schema = Definition.model_validate(document).output_schemas[outcome]
@@ -189,7 +193,8 @@ def test_await_requires_published_expected_workflow(execution):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_await_requires_every_outcome_route_and_checks_successor_by_outcome(execution):
+@pytest.mark.parametrize("terminal", ["canceled", "interrupted"])
+def test_await_requires_every_outcome_route_and_checks_successor_by_outcome(execution, terminal):
     """An accepted edge supplies Number while default failures remain empty."""
     actor, _ = execution
     workflow = load_workflow(child_document(), key="await_contract", actor=actor)
@@ -197,10 +202,10 @@ def test_await_requires_every_outcome_route_and_checks_successor_by_outcome(exec
     definition, issues = Definition.check(document)
     assert issues == []
     assert schemas_match(definition.output_schema("awaited", {"accepted"}), NumberStep.input_schema())
-    del document["nodes"]["awaited"]["next"]["canceled"]
+    del document["nodes"]["awaited"]["next"][terminal]
     _, issues = Definition.check(document)
-    assert any(issue.code == "required_outcome" and issue.path[-1] == "canceled" for issue in issues)
-    document["nodes"]["awaited"]["next"]["canceled"] = "value"
+    assert any(issue.code == "required_outcome" and issue.path[-1] == terminal for issue in issues)
+    document["nodes"]["awaited"]["next"][terminal] = "value"
     _, issues = Definition.check(document)
     assert any(issue.code == "input" and issue.node == "value" for issue in issues)
 
@@ -214,6 +219,7 @@ def test_await_checks_output_against_the_selected_child_outcome(execution):
     assert AwaitRun.check(Done(output={"value": 2}, outcome="accepted"), config=config).output == {"value": 2}
     assert AwaitRun.check(Done(output={}, outcome="error"), config=config).outcome == "error"
     assert AwaitRun.check(Done(output={}, outcome="canceled"), config=config).outcome == "canceled"
+    assert AwaitRun.check(Done(output={}, outcome="interrupted"), config=config).outcome == "interrupted"
     with pytest.raises(ValidationError):
         AwaitRun.check(Done(output={"value": 2}, outcome="declined"), config=config)
     with pytest.raises(ValidationError, match="does not offer"):
@@ -224,6 +230,47 @@ def test_await_checks_output_against_the_selected_child_outcome(execution):
     done = _AwaitedRun(run_id=123, completed=True, outcome="accepted", output={"value": 3})
     checked = AwaitRun.check(done, config=config)
     assert isinstance(checked, _AwaitedRun) and checked.run_id == 123 and checked.completed
+
+
+def test_historical_await_without_interrupted_keeps_its_frozen_contract():
+    """Loading an older parent never silently adds an unauthored terminal route."""
+    outcomes = dict(Definition.model_validate(child_document()).output_schemas)
+    del outcomes["interrupted"]
+    document = parent_document("historical_child", outcomes)
+    del document["nodes"]["awaited"]["next"]["interrupted"]
+    definition, issues = Definition.check(document)
+    assert issues == []
+    config = definition.node("awaited").parsed_config
+    assert "interrupted" not in config.outcomes
+    with pytest.raises(ValidationError, match="outside this published await contract"):
+        AwaitRun.check(_AwaitedRun(run_id=123, completed=True, outcome="interrupted", output={}), config=config)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_parent_routes_a_natively_interrupted_child_after_its_terminal_wake(execution):
+    """Restart recovery's empty interruption settles an already waiting observer."""
+    actor, _ = execution
+    workflow = load_workflow(child_document(), key="interrupted_child", actor=actor)
+    child = start_run(workflow, actor=actor, input={"value": 3})
+    parent_workflow = load_workflow({
+        "nodes": {
+            "awaited": {"step": AwaitRun.key, "config": {"expects": workflow.key},
+                        "next": {outcome: "empty" for outcome in workflow.published.definition.output_schemas}},
+            "empty": {"step": EmptyStep.key, "input": {"from": "input", "path": ["empty"]}},
+        },
+        "results": [{"from": "awaited", "when": list(workflow.published.definition.output_schemas)}],
+    }, key="interrupted_observer", actor=actor)
+    parent = start_run(parent_workflow, actor=actor, input={"run_id": public_id_of(child), "empty": {}})
+    run_until(parent)
+    assert parent.status == "waiting"
+    assert WorkflowRun.objects.reap_interrupted() == 1
+    child.refresh_from_db()
+    assert (child.status, child.outcome, child.output) == ("interrupted", "interrupted", {})
+    runner.wake_runs(child.pk)
+    run_until(parent)
+    assert (parent.status, parent.outcome, parent.output) == ("succeeded", "interrupted", {})
+    awaited = StepRun.system_queryset().get(run=parent, node_key="awaited")
+    assert awaited.status == "succeeded" and awaited.awaited_run_id == child.pk
 
 
 @pytest.mark.django_db(transaction=True)
@@ -339,7 +386,7 @@ def test_observing_already_failed_owned_child_preserves_its_open_rows(execution,
     parent_workflow = load_workflow({"nodes": {
         "start": {"step": StartOwned.key, "next": {"done": "await"}},
         "await": {"step": AwaitRun.key, "config": {"expects": child_workflow.key},
-                  "next": {outcome: "finish" for outcome in ("done", "error", "canceled")}},
+                  "next": {outcome: "finish" for outcome in ("done", "error", "canceled", "interrupted")}},
         "finish": {"step": Branch.key},
     }}, key="await_failed_parent", actor=actor)
     parent = start_run(parent_workflow, actor=actor)

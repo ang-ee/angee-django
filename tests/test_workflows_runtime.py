@@ -2,20 +2,25 @@
 
 from contextlib import contextmanager
 from datetime import timedelta
+from unittest.mock import patch
+from uuid import uuid4
 
 import psycopg.errors
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
+from celery.worker.request import Request
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.management import call_command
 from django.db import DataError, IntegrityError, OperationalError, transaction
 from django.db.models.functions import Now
+from kombu.message import Message
 from pydantic import BaseModel, Field, field_serializer, field_validator
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.roles import grant as grant_role
 
 from angee.base.models.locks import StaleRevisionError
+from angee.jobs.enqueue import celery_app
 from angee.workflows import managers as managers_module
 from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid
@@ -428,6 +433,100 @@ def test_unrouted_failure_preserves_pending_branches(execution):
     assert StepRun.system_queryset().get(run=run, node_key="other").status == StepRunStatus.READY
     assert WorkflowRun.system_queryset().get(pk=run.pk).error == ""
     assert StepAttempt.system_queryset().get(step_run__run=run, step_run__node_key="bad").error
+
+
+def _delivery(name, options, *, published_at=None):
+    """Rebuild the worker's view of one captured execution copy."""
+    envelope = celery_app.amqp.create_task_message(str(uuid4()), name, now=published_at, **options)
+    return Request(
+        Message(body=envelope.body, headers=envelope.headers, properties=envelope.properties),
+        app=celery_app, decoded=True,
+    )
+
+
+def _expired_at(request, worker_now):
+    """Ask Celery's own receipt check whether the copy expired on the worker clock."""
+    with patch("celery.worker.request.datetime") as clock:
+        clock.now.return_value = worker_now
+        return request.maybe_expire()
+
+
+def test_expired_delivery_retains_ready_step_for_native_recovery(execution, monkeypatch, settings):
+    """Deferred publication cannot renew expiry; the durable step still recovers once."""
+    actor, sent = execution
+    monkeypatch.setattr("celery.worker.request.revoked_tasks", set())
+    workflow = load_workflow(document("entry"), key="delivery_expiry", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    step_run = StepRun.system_queryset().get(run=run)
+    sent.clear()
+    recovery = timedelta(seconds=managers_module.DISPATCH_RECOVERY_SECONDS)
+    lifetime = recovery * (settings.ANGEE_WORKFLOW_MAX_DISPATCHES + 1)
+    with transaction.atomic(), system_context(reason="test.deferred_delivery"):
+        StepRun.objects.filter(pk=step_run.pk).dispatch()
+        dispatched_at = StepRun.objects.get(pk=step_run.pk).dispatched_at
+        assert sent == []
+    assert len(sent) == 1
+    # A slow outer commit publishes after the copy's whole database-clock lifetime.
+    published_at = dispatched_at + lifetime + timedelta(minutes=5)
+    request = _delivery(*sent[0], published_at=published_at)
+    assert request.expires == dispatched_at + lifetime
+    assert _expired_at(request, published_at) is True
+    assert StepRun.system_queryset().get(pk=step_run.pk).status == StepRunStatus.READY
+    assert not StepAttempt.system_queryset().filter(step_run=step_run).exists()
+    assert runner.redispatch() == 0
+
+    with system_context(reason="test.expired_transport_delivery"):
+        StepRun.objects.filter(pk=step_run.pk).update(dispatched_at=Now() - lifetime - timedelta(seconds=1))
+    assert runner.redispatch() == 1
+    assert len(sent) == 2
+    retained = StepRun.system_queryset().get(pk=step_run.pk)
+    assert sent[-1][1]["expires"] == retained.dispatched_at + lifetime
+    assert not _delivery(*sent[-1]).maybe_expire()
+    assert runner.redispatch() == 0
+    assert runner.execute(step_run.pk)
+    assert not runner.execute(step_run.pk)
+    assert StepAttempt.system_queryset().filter(step_run=step_run).count() == 1
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
+
+
+def test_saturated_queue_runs_the_step_from_its_oldest_copy(execution, monkeypatch, settings):
+    """Replacements join the queue tail without revoking the copy already waiting ahead."""
+    actor, sent = execution
+    settings.ANGEE_WORKFLOW_MAX_DISPATCHES = 4
+    monkeypatch.setattr("celery.worker.request.revoked_tasks", set())
+    recovery = timedelta(seconds=managers_module.DISPATCH_RECOVERY_SECONDS)
+    tick = timedelta(seconds=15)
+    workflow = load_workflow(document("entry"), key="saturated_delivery", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    step_run = StepRun.system_queryset().get(run=run)
+    sent.clear()
+    with system_context(reason="test.saturated_delivery"):
+        StepRun.objects.filter(pk=step_run.pk).dispatch()
+        first_dispatched_at = StepRun.objects.get(pk=step_run.pk).dispatched_at
+    copies = [_delivery(*sent[0])]
+    # No worker slot frees up: each tick that finds the newest copy older than the
+    # recovery interval appends a replacement and spends one allowance.
+    for cycle in range(1, settings.ANGEE_WORKFLOW_MAX_DISPATCHES):
+        assert runner.redispatch() == 0
+        with system_context(reason="test.saturated_delivery"):
+            StepRun.objects.filter(pk=step_run.pk).update(dispatched_at=Now() - recovery - timedelta(seconds=1))
+        assert runner.redispatch() == 1
+        assert StepRun.system_queryset().get(pk=step_run.pk).dispatches == cycle
+        copies.append(_delivery(*sent[-1]))
+        # The earliest real instant this cycle can happen; it also models a worker
+        # clock running a full recovery interval ahead of the database.
+        worker_now = first_dispatched_at + cycle * (recovery + tick)
+        assert not any(_expired_at(copy, worker_now) for copy in copies)
+    assert len(copies) == settings.ANGEE_WORKFLOW_MAX_DISPATCHES
+    assert StepRun.system_queryset().get(pk=step_run.pk).status == StepRunStatus.READY
+    # The oldest copy reaches the head and runs the step once; the claim fences the rest.
+    assert runner.execute(step_run.pk)
+    assert not any(runner.execute(step_run.pk) for _copy in copies[1:])
+    assert StepAttempt.system_queryset().filter(step_run=step_run).count() == 1
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
+    # Expiry only sweeps a copy after the whole allowance and one more interval.
+    swept = first_dispatched_at + recovery * (settings.ANGEE_WORKFLOW_MAX_DISPATCHES + 1) + timedelta(seconds=1)
+    assert _expired_at(_delivery(*sent[0]), swept) is True
 
 
 def test_dispatch_counter_and_exhaustion(execution, settings):

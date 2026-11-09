@@ -669,8 +669,10 @@ data through REBAC, never a queryset bypass.
   field in its web fragment. The native prefetch hint batches every row's
   readable edges and tags once per page under the actor's scope. Adding or
   removing a tag, through the record's save or the `tag`/`untag` verbs, needs
-  write on the record; tag administrators curate only the vocabulary. An edge is
-  read by whoever reads both the tag and the record. `TagAssignment.check`
+  the record owner's declared tag authority, usually `write`; messaging uses
+  `annotate` to permit tags without content edits. Tag administrators curate
+  only the vocabulary. An edge is read by whoever reads both the tag and the
+  record. `TagAssignment.check`
   fails startup when the taggable models and the declared relations differ. The
   tags addon names no other addon's model.
 - **Raise through the model's access owner.** `require_access(permission, actor=None)`
@@ -829,7 +831,11 @@ data through REBAC, never a queryset bypass.
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
-  callers continue under the original actor, never the elevated one.
+  callers continue under the original actor, never the elevated one. A read
+  through a model's unscoped `_base_manager` (its `Meta.base_manager_name`, the
+  manager Django's relation descriptors use) is an owner-level bypass: owner
+  code takes it for structural work it owns, such as locks, existence checks and
+  counters, with no audit row, and never returns its rows as an actor's read.
 - **System work reads an actor-bound row's relations through
   `<related>.system_context(reason=...)`.** Since REBAC 0.31 a related manager
   keeps its source instance's actor even inside `system_context`. That actor comes
@@ -1698,6 +1704,19 @@ open fresh evaluator scopes for authorization and change-feed reads.
   contributed field; [`AngeeSchema`](../../src/angee/graphql/schema.py) exposes
   the composed definition to optimizer consumers without mutating shared addon
   declarations, so a narrow list selection costs the same at any row count.
+
+### Record write locking
+
+Generic proposal and Hasura writes delegate to
+[`PersistenceMixin.lock_subject`](../../src/angee/base/models/persistence.py)
+before acquiring subject rows. Domain overrides acquire prerequisite rows in
+stable order and return the persisted subject. `prepare_lock_subject` hydrates
+only decoded concrete values through native Django construction, so owners can
+lock both current and proposed scopes without invoking guarded transitions.
+This candidate is only for lock selection; it never becomes the write target.
+Callers reload through their original actor and surface scope and recheck write
+permission after waiting. Statement-member identity remains the hook's optional
+`members` argument. Plain Django models retain native row locking.
 
 ### Direct record access
 

@@ -1,18 +1,66 @@
 """Canonical concern links resolve through their own readable resource."""
 
+from types import SimpleNamespace
+
 import pytest
 import strawberry_django
 from pydantic import ValidationError
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac.relationships import delete_relationships
+from rebac.types import RelationshipFilter
 
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.testing.drivers import seed_decision
+from angee.decisions.testing.models import Decision
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
-from angee.graphql.testing.documents import execute_schema, result_data
-from tests.conftest import addon_schema, create_user
+from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
+from tests.conftest import addon_schema, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
+
+
+@pytest.mark.parametrize("fields", [
+    "concerns_label records { record_model record_id }",
+    "records { record_model record_id } concerns_label",
+])
+def test_concern_labels_batch_mixed_targets_without_exposing_revoked_records(composed_tables, fields):
+    issuer = create_user("concern-label-issuer")
+    reviewer = create_user("concern-label-reviewer")
+    outsider = create_user("concern-label-outsider")
+    vault = vault_for(issuer, name="Readable concern")
+    with system_context(reason="test.concern_labels"):
+        other = MtiParent.objects.create(title="Second type")
+    write_relationships([
+        RelationshipTuple(to_object_ref(vault), "viewer", to_subject_ref(reviewer)),
+        *(RelationshipTuple(to_object_ref(other), "reader", to_subject_ref(person)) for person in (issuer, reviewer)),
+    ])
+    decision = Decision.objects.ask(DecisionRequest(
+        kind="review_concerns", records=(vault, other), assignees=(reviewer,),
+        proposal={"alternatives": [{"key": "keep", "label": "Keep", "outcome": "done"}]},
+    ), actor=issuer)
+    schema = addon_schema(decision_schema.schemas, "console")
+    document = "query { decisions { " + fields + " } }"
+    row = result_data(execute_schema(schema, document, user=reviewer))["decisions"][0]
+    assert set(row["concerns_label"].split("; ")) == {str(vault), str(other)}
+    assert {link["record_id"] for link in row["records"]} == {vault.sqid, other.sqid}
+
+    subject = to_subject_ref(reviewer)
+    reference = to_object_ref(other)
+    delete_relationships(RelationshipFilter(
+        resource_type=reference.resource_type, resource_id=reference.resource_id, relation="reader",
+        subject_type=subject.object.resource_type, subject_id=subject.object.resource_id,
+    ))
+    row = result_data(execute_schema(schema, document, user=reviewer))["decisions"][0]
+    assert row["concerns_label"] == str(vault)
+    assert {link["record_id"] for link in row["records"]} == {vault.sqid, None}
+    assert result_data(execute_schema(schema, document, user=outsider)) == {"decisions": []}
+
+    # Mutation/owner-loaded rows miss the list cache but use the same readable-target prefetch.
+    with actor_context(reviewer):
+        fresh = Decision.objects.get(pk=decision.pk)
+        info = SimpleNamespace(context=SimpleNamespace(request=graphql_request(reviewer)))
+        assert decision_schema.DecisionType.concerns_label.base_resolver.wrapped_func(fresh, info) == str(vault)
 
 
 @pytest.mark.parametrize(

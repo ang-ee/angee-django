@@ -10,6 +10,8 @@ from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 from rebac.resources import model_resource_type
 
+from angee.base.models.identity import public_id_of
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import (
     Channel,
     Handle,
@@ -25,7 +27,9 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
-from tests.conftest import Vendor
+from angee.provenance import schema as provenance_schema
+from angee.tags.testing.models import Tag, TagAssignment
+from tests.conftest import Vendor, addon_schema
 from tests.messaging_campaign import grant, make_user
 from tests.test_messaging_access import messaging_access_schema as messaging_access_schema
 from tests.test_spaces import spaces_tables as spaces_tables
@@ -37,6 +41,60 @@ def assert_access(row, actor, action, allowed):
     """Object checks and SQL scopes must agree on the same row."""
     assert row.with_actor(actor).has_access(action) is allowed, (row._meta.label, actor.username, action)
     assert type(row).objects.with_actor(actor).with_action(action).scoped().filter(pk=row.pk).exists() is allowed
+
+
+SENDER_HISTORY = "query SenderHistory($model: String!, $id: ID!) { history(model: $model, id: $id) { total } }"
+
+
+def _handle_history(actor, handle):
+    """Read the Handle's changesets through the provenance owner's record gate."""
+    result = execute_schema(
+        addon_schema(provenance_schema.schemas, "console"), SENDER_HISTORY,
+        {"model": "parties.Handle", "id": public_id_of(handle)}, user=actor,
+    )
+    return result_data(result)["history"]
+
+
+def test_message_reader_sees_the_sender_envelope_never_the_directory_handle(messaging_access_schema):
+    owner, reader = (make_user(name) for name in ("sender-source-owner", "sender-source-reader"))
+    with system_context(reason="source sender read fixtures"):
+        party = Party.objects.create(display_name="Private sender Party", notes="Private", created_by=owner)
+        sender = Handle.objects.create(
+            platform="email", value="sender@example.test", label="Accounts desk", is_verified=True,
+            party=party, party_link_confirmed=True, controller=owner, metadata={"crm": "private"},
+            created_by=owner,
+        )
+        vendor = Vendor.objects.create(slug="sender-source", display_name="Sender source")
+        channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
+        message = Message.objects.create(
+            channel=channel, sender=sender, platform="email",
+            metadata={"headers": {"From": ["Sender <sender@example.test>"]}},
+        )
+        tag = Tag.objects.create(name="Operator note")
+        (edge,) = TagAssignment.objects.attach("parties/handle", sender.sqid, [tag.sqid])
+    channel.with_actor(owner).grant_record_access("reader", reader)
+    assert_access(message, reader, "read", True)
+    assert message.source_header_values("from", actor=reader) == ("Sender <sender@example.test>",)
+    # The envelope belongs to the message; the Handle row and everything gated by
+    # its read (curated fields, operator tags, change history) stay directory data.
+    assert_access(sender, reader, "read", False)
+    assert not Handle.objects.with_actor(reader).filter(pk=sender.pk).values("label", "controller").exists()
+    assert not TagAssignment.objects.with_actor(reader).filter(pk=edge.pk).exists()
+    assert _handle_history(reader, sender) is None
+    assert_access(party, reader, "read", False)
+
+    channel.with_actor(owner).revoke_record_access("reader", reader)
+    with pytest.raises(PermissionDenied):
+        message.source_header_values("from", actor=reader)
+
+    # Directory access is its own explicit grant on the Handle, never the message's.
+    sender.with_actor(owner).grant_record_access("reader", reader)
+    assert_access(sender, reader, "read", True)
+    assert_access(sender, reader, "write", False)
+    assert TagAssignment.objects.with_actor(reader).filter(pk=edge.pk).exists()
+    assert _handle_history(reader, sender) is not None
+    assert_access(party, reader, "read", False)
+    assert_access(message, reader, "read", False)
 
 
 def test_thread_transfer_requires_owner_and_clear_preserves_attribution(composed_tables, messaging_access_schema):

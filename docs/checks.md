@@ -168,7 +168,7 @@ host under pytest and the composed console schema under Django's test runner:
 ```python
 read = measure_graphql_document(schema, document, variables, actor=member)
 assert read.data["projects_aggregate"]["aggregate"]["count"] == 3
-read.assert_ceiling(statements=10, sql_kb=254)
+read.assert_ceiling(statements=10, sql_kb=247)
 ```
 
 A ceiling is the measured cost: statements exact, SQL text rounded up to the next KB
@@ -486,8 +486,10 @@ must defer model imports until Django's app registry is populated. Check tools
 come from the framework lockfile.
 
 Group 1 runs consumer Ruff/mypy and, after host SDL/codegen, the consumer's web
-fragment typechecks and tests. Optional full-profile bridge tests also run only
-in group 1. Calls without a consumer use one execution job. The `stack` aggregate
+fragment typechecks and tests. Mypy resolves composition targets through the
+native source roots of all declared `consumer-sources`, including sibling
+dependencies. Optional full-profile bridge tests also run only in group 1.
+Calls without a consumer use one execution job. The `stack` aggregate
 passes only when every execution job succeeds, preserving one check name for
 callers. The framework and other consumers retain their own caller lanes.
 

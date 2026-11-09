@@ -109,6 +109,31 @@ def test_step_decision_filter_uses_public_identity(schema, linked_decision):
     }
 
 
+@pytest.mark.parametrize("run_first", [False, True])
+def test_decision_waiting_runs_compose_node_labels_and_nested_run_selection(schema, linked_decision, run_first):
+    workflow, run, step, decision, owner, _, stranger, assignee = linked_decision
+    fields = [
+        "id node_label map_index is_mapped status",
+        "run { id display_name version { workflow { display_name } } }",
+    ]
+    if run_first:
+        fields.reverse()
+    query = """query DecisionSteps($decision: String!) {
+      steprun(where: {decision: {_eq: $decision}}, order_by: [{rank: asc}, {map_index: asc}]) {
+    """ + " ".join(fields) + "} }"
+    run.with_actor(owner).grant_record_access("reader", assignee)
+    for viewer in (owner, assignee):
+        data = result_data(execute_schema(schema, query, {"decision": decision.sqid}, user=viewer))
+        assert data["steprun"] == [{
+            "id": step.sqid, "node_label": step.node_label, "map_index": step.map_index,
+            "is_mapped": False, "status": "WAITING",
+            "run": {"id": run.sqid, "display_name": str(run), "version": (
+                {"workflow": {"display_name": workflow.name}} if viewer == owner else None
+            )},
+        }]
+    assert result_data(execute_schema(schema, query, {"decision": decision.sqid}, user=stranger)) == {"steprun": []}
+
+
 def test_decide_returns_the_answered_decision_for_exact_cache_adoption(schema, linked_decision):
     _, _, _, decision, _, _, _, assignee = linked_decision
     query = """mutation($id: ID!, $revision: Int!, $chosen: [String!]!) {

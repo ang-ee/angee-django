@@ -94,6 +94,41 @@ def _allowed(row: Any, actor: Any, action: str = "read") -> bool:
     )
 
 
+@pytest.mark.parametrize("model", (Party, Person, Organization))
+def test_selected_identity_grant_reaches_mti_without_private_or_subject_access(
+    follower_schema: None, model: type,
+) -> None:
+    users = get_user_model()
+    owner = users.objects.create_user(username="selected-identity-owner")
+    reader = users.objects.create_user(username="selected-identity-reader", kind="service")
+    outsider = users.objects.create_user(username="selected-identity-outsider")
+    with system_context(reason="selected identity grant fixtures"):
+        selected = model.objects.create(display_name="Selected identity", created_by=owner, **PARTY_PRIVATE)
+        other = Party.objects.create(display_name="Unselected identity", created_by=owner)
+        parent = Party.objects.get(pk=selected.pk)
+        handle = Handle.objects.create(platform="email", value="private@example.test", party=parent, created_by=owner)
+    if model is not Party:
+        # The canonical Party owns the one share surface; an MTI child declares none.
+        with pytest.raises(ValueError, match="identity_reader"):
+            selected.with_actor(owner).grant_record_access("identity_reader", reader)
+    parent.with_actor(owner).grant_record_access("identity_reader", reader)
+    parent.grant_record_access("identity_reader", reader)
+    assert len(parent.direct_record_access(("identity_reader",))) == 1
+    for row in (parent, selected):
+        assert _allowed(row, reader)
+        assert type(row).objects.with_actor(reader).filter(pk=row.pk).exists()
+        for action in ("read_private", "read__notes", "read__first_met_note", "read__handle_count", "write"):
+            assert not _allowed(row, reader, action)
+    assert not _allowed(parent, reader, "read_as_subject")
+    assert not _allowed(handle, reader)
+    assert not _allowed(other, reader)
+    with pytest.raises(PermissionDenied):
+        parent.with_actor(reader).grant_record_access("identity_reader", outsider)
+    parent.with_actor(owner).revoke_record_access("identity_reader", reader)
+    assert not _allowed(parent, reader)
+    assert not _allowed(selected, reader)
+
+
 @pytest.fixture
 def followers(follower_schema: None) -> SimpleNamespace:
     """Seed explicit followers, another thread and an unfollowed identity."""

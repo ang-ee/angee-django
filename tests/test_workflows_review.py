@@ -442,3 +442,29 @@ def test_action_model_must_share_the_concerned_identity(composed_tables, model):
                 "actions": {public_id_of(record): {"model": model, "fields": {"detail": {"set": "After"}}}},
             }]),
         )
+
+
+def test_proposal_uses_prepared_subject_lock_and_rechecks_permission(review, monkeypatch):
+    actor, people, _, question = review
+    _, step = start_review(review)
+    decision = answer(questions(step)[0], people[0])
+    model = type(question.review_subject)
+    original_lock = model.lock_subject
+    original_access = model.has_access
+    observed = []
+
+    def lock(instance, members=None):
+        observed.append((instance.name, instance._state.db))
+        return original_lock(instance, members)
+
+    def access(instance, action, **kwargs):
+        if action == "write":
+            assert observed, "Write access must be checked after waiting for the owner lock"
+        return original_access(instance, action, **kwargs)
+
+    monkeypatch.setattr(model, "lock_subject", lock)
+    monkeypatch.setattr(model, "has_access", access)
+    assert apply_proposals(decision, actor=actor) == "approved"
+    question.review_subject.refresh_from_db()
+    assert observed == [("Applied", question.review_subject._state.db)]
+    assert question.review_subject.name == "Applied"

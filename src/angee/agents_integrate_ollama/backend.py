@@ -7,12 +7,17 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlsplit
 
+import httpx2
 from pydantic_ai.settings import ModelSettings
+from typesafe_sdk import RetryPolicy, TypeSafeClient, TypeSafeError
+from typesafe_sdk.constants import DEFAULT_TIMEOUT
 
+from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 
 if TYPE_CHECKING:
     from pydantic_ai.models.openai import OpenAIChatModel
+    from typesafe_sdk import Content, Question, SystemOneResponse
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +29,9 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
     body. ``generation_limit`` supplies the OpenAI-compatible ``max_tokens``
     setting when a caller does not specify one. Context allocation is deliberately
     absent: configure ``num_ctx`` in the model's Ollama Modelfile so discovery and
-    every runtime agree on the deployed context window.
+    every runtime agree on the deployed context window. SDK retries are disabled:
+    callers own retries within their execution budget, rather than duplicating
+    queued work after a local inference timeout.
     """
 
     key = "ollama"
@@ -39,6 +46,11 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
     model_allow_prefixes: ClassVar[tuple[str, ...]] = ()
     model_deny_prefixes: ClassVar[tuple[str, ...]] = ()
     api_key_env: ClassVar[tuple[str, ...]] = ()
+    transient_error_paths = (
+        *OpenAIInferenceBackend.transient_error_paths,
+        "typesafe_sdk.TypeSafeAPIConnectionError", "typesafe_sdk.TypeSafeAPITimeoutError",
+        "typesafe_sdk.TypeSafeRateLimitError", "typesafe_sdk.TypeSafeInternalServerError",
+    )
 
     @property
     def requires_credential(self) -> bool:
@@ -70,6 +82,7 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
 
         client_class = DefaultAsyncHttpxClient if asynchronous else DefaultHttpxClient
         kwargs["http_client"] = client_class(trust_env=False, follow_redirects=False)
+        kwargs["max_retries"] = 0
         return kwargs
 
     @staticmethod
@@ -150,7 +163,9 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
         capabilities = shown.get("capabilities")
         model_use = ""
         if isinstance(capabilities, list) and all(isinstance(value, str) for value in capabilities):
-            if "embedding" in capabilities:
+            if "decision" in capabilities:
+                model_use = "decision"
+            elif "embedding" in capabilities:
                 model_use = "embedding"
             elif "completion" in capabilities:
                 model_use = "multimodal" if "vision" in capabilities else "chat"
@@ -196,6 +211,41 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
                 return 0
             return parsed if parsed > 0 else 0
         return 0
+
+    def request_error_types(self) -> tuple[type[BaseException], ...]:
+        """Include decision SDK validation and API failures without hiding them."""
+
+        return (*super().request_error_types(), TypeSafeError)
+
+    def decide(
+        self,
+        handle: str,
+        state: Content,
+        questions: Mapping[str, Question],
+        *,
+        timeout: float | None = None,
+        credential: Any | None = None,
+    ) -> SystemOneResponse:
+        """Call Ollama System One with native types, endpoint policy and client lifetime."""
+
+        self.validate_timeout(timeout)
+        kwargs = SDKInferenceBackend._client_kwargs(self, credential=credential)
+        self._validate_endpoint_url(str(kwargs["base_url"]))
+        # The native SDK appends /v1/systemone; the shared provider stores /v1.
+        kwargs["base_url"] = str(kwargs["base_url"]).removesuffix("/v1")
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        # Local Ollama accepts the native uncompressed protocol. Explicit auth,
+        # endpoint and transport prevent SDK environment defaults from rerouting it.
+        with TypeSafeClient(
+            **kwargs,
+            compression=False,
+            retry=RetryPolicy(max_retries=0),
+            http_client=httpx2.Client(
+                timeout=kwargs.get("timeout", DEFAULT_TIMEOUT), trust_env=False, follow_redirects=False,
+            ),
+        ) as client:
+            return client.system_one(state=state, questions=questions, model=self._provider_model(handle))
 
     def _build_model(self, handle: str, client: Any) -> OpenAIChatModel:
         """Declare Ollama's OpenAI-compatible native JSON-schema envelope."""

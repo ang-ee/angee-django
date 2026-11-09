@@ -72,6 +72,7 @@ rows:
               done: result
               error: result
               canceled: result
+              interrupted: result
           result:
             step: note_publication_result
         results:

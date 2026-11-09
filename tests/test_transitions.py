@@ -892,3 +892,20 @@ def test_transition_eligibility_uses_execution_guards_without_side_effects():
     task.ready = True
     done = TransitionTask(state=TransitionTask.State.DONE)
     assert not done.state_transitions.can_run(done, "mark_running")
+
+
+def test_lock_subject_preparation_hydrates_guarded_state_without_transition():
+    row = TransitionTask.from_db("routed", ["id", "state"], [123, TransitionTask.State.RUNNING])
+
+    candidate = row.prepare_lock_subject({"state": TransitionTask.State.PAUSED})
+
+    assert candidate.pk == row.pk
+    assert candidate._state.db == "routed"
+    assert not candidate._state.adding
+    assert candidate.get_deferred_fields() == row.get_deferred_fields()
+    assert candidate.state == TransitionTask.State.PAUSED
+    assert row.state == TransitionTask.State.RUNNING
+    assert "save_contexts" not in candidate.__dict__
+    assert "body_state" not in candidate.__dict__
+    with pytest.raises(TransitionNotAllowed):
+        candidate.state = TransitionTask.State.DONE

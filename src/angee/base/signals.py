@@ -26,7 +26,7 @@ the queryset already owns history and authorization for the write.
 """
 
 record_access_revoked = Signal()
-"""A direct record relation was revoked (instance, relation, subject, using).
+"""A direct record relation was revoked (instance, relation, subject).
 
 The subject is the normalized native SubjectRef. Receivers run synchronously
 inside the relationship write transaction, including for an absent tuple.

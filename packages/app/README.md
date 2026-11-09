@@ -161,6 +161,40 @@ native column visibility. A favorite without a preset leaves the selected preset
 
 ## Containers
 
+### Server connection recovery
+
+The app shares one server connection across its composed schema clients and
+session bootstrap. Network failures and gateway-unavailable responses open a
+connection dialog and stop subsequent requests before CSRF. One TanStack Query
+probe checks the public schema, with retry delays of 5, 10, 20, then
+30 seconds. Recovery refreshes reads and the current route without reloading the
+page. Failed mutations are never replayed; check the record before resubmitting
+an interrupted write. Business errors and individual HTTP 500 responses retain
+their ordinary error handling.
+
+The dialog uses the selected customer brand and theme. Without a customer mark,
+it shows the animated Angee cube, respecting reduced motion. Customize the
+`connection.*` messages through the host's existing `createApp.i18n` overrides.
+Addons can replace the artwork or add guidance through the usual containers:
+
+```tsx
+containers: {
+  "connection.lost#artwork": {
+    "desk.reconnecting": { content: <CustomerReconnectArtwork /> },
+  },
+  "connection.lost#help": {
+    "desk.status": { content: <a href="https://status.example.com">Service status</a> },
+  },
+},
+```
+
+Keep these contributions self-contained: the server is unavailable when they
+render. The app retains the accessible modal, connection detection and recovery
+policy. [`ConnectionBoundary`](src/providers/connection.tsx) owns this composition;
+[`ServerConnection`](../refine/src/server-connection.ts) owns the transport gate.
+
+### Contributions
+
 Addons extend each other's pages through containers: named lists on a node,
 addressed `node#name` (`form#sections`, `projects.Task#actions`,
 `record#aside`, `shell#user-menu`), whose entries are children. The `containers`
