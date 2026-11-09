@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import pytest
 import tomlkit
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
 from django.db import models
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
@@ -108,6 +108,51 @@ def source_change_publishers() -> Iterator[None]:
     finally:
         for model in connected:
             disconnect_publishers(model)
+
+
+@contextmanager
+def installed_app_registry_restored() -> Iterator[None]:
+    """Return Django's installed app registry to its state before the block.
+
+    Django cannot unregister a model, so a model class a test creates on an installed
+    app label would stay in ``apps.all_models`` for every later test in the process,
+    where system checks, the deletion collector and resource-type lookups meet it in
+    file order. A model from a module already imported when the block began was
+    created by the block and is unregistered, with its auto-created through models; a
+    module first imported in the block keeps its models registered, as its import does.
+    Installed app configs the block adds, replaces or removes are put back.
+    """
+
+    registered = {label: dict(entries) for label, entries in apps.all_models.items()}
+    configs = dict(apps.app_configs)
+    imported = set(sys.modules)
+    try:
+        yield
+    finally:
+        restored = apps.app_configs != configs
+        if restored:
+            apps.app_configs.clear()
+            apps.app_configs.update(configs)
+        for label, entries in apps.all_models.items():
+            kept = registered.get(label, {}) | {
+                name: model
+                for name, model in entries.items()
+                if model.__module__ in sys.modules and model.__module__ not in imported
+            }
+            if entries != kept:
+                entries.clear()
+                entries.update(kept)
+                restored = True
+        if restored:
+            apps.clear_cache()
+
+
+@pytest.fixture(autouse=True)
+def installed_app_registry() -> Iterator[None]:
+    """Give every test the installed app registry it started with."""
+
+    with installed_app_registry_restored():
+        yield
 
 
 @pytest.fixture
@@ -878,6 +923,7 @@ def make_addon(
         monkeypatch.setitem(sys.modules, f"{name}.schema", schema_module)
         tool["graphql"] = {"schema": "schema.schemas"}
     if resources is not None:
+
         def authored_source(value: Any) -> Any:
             if isinstance(value, str):
                 addon, separator, source = value.partition(":")
@@ -888,15 +934,14 @@ def make_addon(
                 return value.removeprefix("resources/")
             if isinstance(value, dict):
                 return {
-                    key: authored_source(item) if key in {"path", "depends_on"} else item
-                    for key, item in value.items()
+                    key: authored_source(item) if key in {"path", "depends_on"} else item for key, item in value.items()
                 }
             if isinstance(value, tuple | list):
                 return [authored_source(item) for item in value]
             return value
+
         tool["resources"] = {
-            key: value if key == "retired_models" else authored_source(value)
-            for key, value in resources.items()
+            key: value if key == "retired_models" else authored_source(value) for key, value in resources.items()
         }
     write_addon_distribution(path, name, depends_on=depends_on, label=label, capabilities=tool, metadata_root=path)
     monkeypatch.syspath_prepend(str(path))
@@ -930,9 +975,13 @@ def catalogue_package(name: str, *, depends_on: tuple[str, ...] = (), descriptio
     """One already-projected catalogue value for isolated marketplace tests."""
 
     return {
-        "name": name, "namespace": name.split(".", 1)[0],
-        "distribution": name.replace(".", "-").replace("_", "-"), "description": description,
-        "keywords": (), "category": "", "depends_on": depends_on,
+        "name": name,
+        "namespace": name.split(".", 1)[0],
+        "distribution": name.replace(".", "-").replace("_", "-"),
+        "description": description,
+        "keywords": (),
+        "category": "",
+        "depends_on": depends_on,
         "requirements": tuple(dependency.replace(".", "-").replace("_", "-") for dependency in depends_on),
     }
 
