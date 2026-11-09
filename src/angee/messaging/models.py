@@ -951,24 +951,19 @@ class ThreadedModelMixin(models.Model):
 
         if user is not None and getattr(user, "is_authenticated", True) is False:
             return False
-        has_access = getattr(self, "has_access", None)
-        return bool(has_access("write")) if callable(has_access) else True
+        return self.has_access("write") if isinstance(self, RebacMixin) else True
 
     def _message_post_allowed(self) -> bool:
         """Return whether the ambient actor can post to this row."""
 
-        has_access = getattr(self, "has_access", None)
-        if not callable(has_access):
+        if not isinstance(self, RebacMixin):
             return True
-        return self._message_read_allowed() and bool(has_access(self.thread_post_access))
+        return self._message_read_allowed() and self.has_access(self.thread_post_access)
 
     def _message_read_allowed(self) -> bool:
         """Return whether the ambient actor can read personal chatter state."""
 
-        has_access = getattr(self, "has_access", None)
-        if not callable(has_access):
-            return True
-        return bool(has_access(self.thread_read_access))
+        return self.has_access(self.thread_read_access) if isinstance(self, RebacMixin) else True
 
     def thread_reader_allowed(self, user: Any) -> bool:
         """Check one recipient through the same explicit-account audience gate."""
@@ -988,7 +983,7 @@ class ThreadedModelMixin(models.Model):
         account_subjects.pop(None, None)
         if not account_subjects:
             return set()
-        if not callable(getattr(self, "has_access", None)) or not model_resource_type(self):
+        if not isinstance(self, RebacMixin) or not model_resource_type(self):
             return set(account_subjects)
         resource = to_object_ref(self)
         results = backend().check_bulk_permissions(

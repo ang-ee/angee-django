@@ -50,6 +50,7 @@ from django.utils import timezone
 from django.utils.html import strip_tags
 from rebac import (
     PermissionDenied,
+    RebacMixin,
     SubjectRef,
     actor_context,
     current_actor,
@@ -1672,7 +1673,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             model = types[content_type_id].model_class()
             if model is None or not issubclass(model, ThreadedModelMixin):
                 continue
-            if not callable(getattr(model, "has_access", None)) or not model_resource_type(model):
+            if not issubclass(model, RebacMixin) or not model_resource_type(model):
                 allowed[(content_type_id, follower_party_id)] = record_ids
                 continue
             subject = to_subject_ref(accounts[follower_party_id])
