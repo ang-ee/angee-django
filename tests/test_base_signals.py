@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 import pytest
 from django.db import models
+from django.utils import timezone
 
 from angee.base import signals
 from angee.base.models.base import AngeeModel
+from angee.workflows.testing.models import RunSubjectRecord
 from tests.core_persistence import OwnedRow, TrashRow
 
 
@@ -65,3 +67,26 @@ def test_bulk_publication_observes_the_batch_rows_unless_the_model_coalesces(
 
     assert calls == [((2, 3), ("title",))]
     assert observed == [("9", None)]
+
+
+def test_published_changes_copy_mutable_values_and_keep_immutable_ones() -> None:
+    """A captured value never follows the row: mutable values are copied, immutable ones are kept as they are."""
+
+    stamped = timezone.now()
+    row = RunSubjectRecord(pk=1, settlements=[{"status": "done"}], updated_at=stamped)
+    captured: list[Mapping[str, Any] | None] = []
+
+    def receiver(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
+        captured.append(payload.changed_values)
+
+    signals.change_published.connect(receiver, sender=RunSubjectRecord, dispatch_uid="tests.base_signals.values")
+    try:
+        signals.publish_change(row, action="update", update_fields=("settlements", "updated_at"))
+    finally:
+        signals.change_published.disconnect(sender=RunSubjectRecord, dispatch_uid="tests.base_signals.values")
+    row.settlements[0]["status"] = "reopened"
+
+    [values] = captured
+    assert values is not None
+    assert values["settlements"] == [{"status": "done"}]
+    assert values["updated_at"] is stamped

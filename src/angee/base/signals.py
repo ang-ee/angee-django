@@ -15,10 +15,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from functools import partial
 from types import MappingProxyType
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from django.apps import apps
 from django.db import connections, router
@@ -180,6 +182,9 @@ delivery with ``transaction.on_commit(..., robust=True)``.
 
 _mute_depth: ContextVar[int] = ContextVar("angee_change_mute_depth", default=0)
 
+_IMMUTABLE_VALUE_TYPES = frozenset({date, datetime, time, timedelta, Decimal, UUID})
+"""Immutable field value types a deep copy would rebuild; builtin scalars it already returns as they are."""
+
 
 def changes_muted() -> bool:
     """Whether the current owner suppresses local observation and transport."""
@@ -221,7 +226,7 @@ def publish_change(
     if fields is not None:
         columns = {name: field for field in instance._meta.concrete_fields for name in (field.name, field.attname)}
         values = MappingProxyType({
-            name: deepcopy(getattr(instance, columns[name].attname)) for name in fields if name in columns
+            name: _captured_value(getattr(instance, columns[name].attname)) for name in fields if name in columns
         })
     payload = ModelChange(
         model=instance._meta.label, id=public_id_of(instance), action=action, occurrence_id=uuid4().hex,
@@ -234,6 +239,12 @@ def publish_change(
                 exc_info=(type(response), response, response.__traceback__),
             )
     change_observed.send(sender=type(instance), payload=payload)
+
+
+def _captured_value(value: Any) -> Any:
+    """Return ``value`` as an observation captures it: a copy unless no receiver can mutate it."""
+
+    return value if type(value) in _IMMUTABLE_VALUE_TYPES else deepcopy(value)
 
 
 def publish_bulk_update(
