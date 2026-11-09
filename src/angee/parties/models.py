@@ -415,7 +415,6 @@ class Party(
 class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """A human party — carries name parts and an optional platform-user link."""
 
-    rebac_grantable = {"identity_reader": "write"}
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -465,7 +464,6 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
 class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """An organisation party — carries its legal name and primary domain."""
 
-    rebac_grantable = {"identity_reader": "write"}
 
     statements = StatementRecords(
         link="integrate.RecordLink",
