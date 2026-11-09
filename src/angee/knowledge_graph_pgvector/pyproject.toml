@@ -3,7 +3,7 @@ build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_ange
 [project]
 name = "angee-knowledge-graph-pgvector"
 version = "3.0.0"
-description = "Permission-scoped passage retrieval with pgvector, PostgreSQL full-text search and wikilink neighbours"
+description = "Permission-scoped passage retrieval with vectors, full-text search and evidence-anchored graph ranking"
 keywords = ["pgvector", "embeddings", "knowledge"]
 dependencies = [
     "angee-knowledge>=3,<4",
@@ -12,6 +12,9 @@ dependencies = [
     "angee-jobs>=3,<4",
     "pgvector>=0.5.1,<0.6",
     "semantic-text-splitter>=0.33,<0.34",
+    "networkx>=3.7,<4",
+    "scipy>=1.16,<2",
+    "pyyaml>=6,<7",
 ]
 dynamic = ["entry-points"]
 
