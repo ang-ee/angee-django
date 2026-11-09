@@ -1095,10 +1095,8 @@ class ServiceUserMixin(PublicIdentity, models.Model):
         if cls._meta.abstract:
             return errors
         field = next((field for field in cls._meta.get_fields() if field.name == "user"), None)
-        related = getattr(getattr(field, "related_model", None), "_meta", None)
-        if isinstance(field, models.OneToOneField) and related is not None:
-            if related.label_lower == settings.AUTH_USER_MODEL.lower():
-                return errors
+        if isinstance(field, models.OneToOneField) and field.related_model is get_user_model():
+            return errors
         errors.append(
             checks.Error(
                 f"{cls._meta.label} composes ServiceUserMixin without a user one-to-one to {settings.AUTH_USER_MODEL}.",
