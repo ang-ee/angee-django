@@ -33,7 +33,7 @@ class TaskKind(TimelineKind):
             "assignee",
         )
 
-    def waiting_on(self, actor: Any) -> models.QuerySet:
+    def waiting_on(self, record: Any, actor: Any) -> models.QuerySet:
         task = apps.get_model("projects", "Task")
         return task._base_manager.filter(task.objects.waiting_on_filter(actor))
 

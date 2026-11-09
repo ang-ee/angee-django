@@ -12,6 +12,7 @@ from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.projects.testing.models import Task
 from angee.tags.testing.models import Tag
+from angee.timeline.reading import Timeline
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.test_timeline import read_timeline, timeline_entries
 
@@ -82,6 +83,26 @@ def test_record_reader_without_decision_read_sees_no_line_identity_or_count(peop
     assert data["timeline"]["entries"] == []
     assert data["timeline"]["kinds"][0]["count"] == 0
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 0
+
+
+@pytest.mark.parametrize("viewer", ["requester", "reviewer"])
+def test_decision_attention_requires_act_on_readable_questions(people, viewer) -> None:
+    requester, reviewer, _, subject = people
+    question = Decision.objects.ask(DecisionRequest(
+        kind="review", records=(subject,), assignees=(requester, reviewer), requester=requester,
+        proposal=DecisionProposal(alternatives=[{"key": "done", "label": "Done", "outcome": "done"}]),
+    ), actor=requester)
+    actor = reviewer if viewer == "reviewer" else requester
+    assert question.with_actor(actor).has_access("read")
+    assert question.with_actor(actor).has_access("act") is (viewer == "reviewer")
+    with actor_context(reviewer):
+        timeline = Timeline(subject, actor)
+        page = timeline.page()
+    entry, = page.entries
+    assert entry.target_id == public_id_of(question)
+    assert entry.needs_me is (viewer == "reviewer")
+    assert timeline.counts == {"decisions.decision": (1, int(viewer == "reviewer"))}
+    assert page.needs_me == timeline.attention() == int(viewer == "reviewer")
 
 
 def test_unassigned_attention_uses_answer_permission_without_claiming_others_assignments(people) -> None:

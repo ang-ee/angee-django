@@ -9,17 +9,23 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.models import PermissionAuditEvent
 
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.decisions.testing.models import Decision
 from angee.decisions.timeline import DecisionKind
 from angee.nexus.timeline import CorrespondenceKind
 from angee.projects.timeline import TaskKind
 from angee.provenance.context import changeset
 from angee.provenance.timeline import ChangeKind
 from angee.timeline.reading import Timeline
+from angee.workflows.states import RunStatus
+from angee.workflows.testing.drivers import load_workflow, run_until
+from angee.workflows.testing.models import WorkflowRun
 from angee.workflows.timeline import RunKind
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.test_timeline_nexus import correspondence as correspondence  # noqa: F401 -- shared corpus
 from tests.test_workflows_review import review as review  # noqa: F401 -- real decision/run fixture
 from tests.test_workflows_review import start_review
+from tests.workflow_steps import document
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -88,6 +94,67 @@ def test_structural_occurrences_do_not_admit_unreadable_rows(review, kind, setti
         assert page.entries == [] and page.needs_me == 0
         assert all(summary.count == 0 for summary in page.kinds)
         assert timeline.counts == {} and timeline.attention() == 0
+
+
+def assert_attention_omitted(kind, record, actor, monkeypatch):
+    """A present branch with no candidates never builds decision act authorization."""
+    assert kind.occurs(record)  # Warm native content-type identities.
+
+    def forbidden(*args, **kwargs):
+        pytest.fail(f"{kind.id} built decision attention without a candidate on this record")
+
+    monkeypatch.setattr(type(Decision.objects), "waiting_on", forbidden)
+    before = PermissionAuditEvent.objects.count()
+    with actor_context(AnonymousUser()), CaptureQueriesContext(connection) as queries:
+        assert kind.waiting_on(record, actor) is None
+    assert len(queries) == 1
+    sql = queries[0]["sql"]
+    assert sql.startswith("SELECT 1 ") and "LIMIT 1" in sql and "rebac_" not in sql.lower()
+    assert PermissionAuditEvent.objects.count() == before
+    with override_settings(ANGEE_TIMELINE_KINDS=[f"{type(kind).__module__}.timeline_kinds"]):
+        timeline = Timeline(record, actor)
+        page = timeline.page()
+        assert len(page.entries) == 1 and not page.entries[0].needs_me
+        assert timeline.counts == {kind.id: (1, 0)}
+        assert page.needs_me == timeline.attention() == Timeline(record, actor).attention() == 0
+        assert timeline.page(needs_me=True).entries == []
+
+
+@pytest.mark.usefixtures("workflow_step_classes")
+@pytest.mark.parametrize("status", [RunStatus.RUNNING, RunStatus.SUCCEEDED, RunStatus.WAITING])
+def test_runs_without_decision_waits_on_this_record_skip_act_scope(review, status, monkeypatch):
+    owner, _, _, _ = review
+    start_review(review)  # A decision wait elsewhere must not admit this record's attention arm.
+    record = vault_for(owner, name="No decision waits")
+    workflow = load_workflow(
+        document("entry", step="pause" if status == RunStatus.WAITING else "echo"),
+        key="timeline-no-decision-waits", actor=owner,
+    )
+    run = WorkflowRun.objects.start(workflow, actor=owner, subject=record)
+    if status != RunStatus.RUNNING:
+        run_until(run)
+    assert run.status == status
+    assert_attention_omitted(RunKind(), record, owner, monkeypatch)
+
+
+@pytest.mark.usefixtures("workflow_step_classes")
+@pytest.mark.parametrize("closed", ["answered", "withdrawn"])
+@pytest.mark.parametrize("membership", ["concern", "requester"])
+def test_closed_decisions_on_this_record_skip_act_scope(review, closed, membership, monkeypatch):
+    owner, reviewers, _, question = review
+    run, step = start_review(review)
+    if closed == "answered":
+        step.decision.decide(actor=reviewers[0], chosen=["reject"])
+    else:
+        with system_context(reason="test.timeline.closed_decision"):
+            step.decision.withdraw(actor=owner)
+    # An open question elsewhere must not admit this record's attention arm.
+    Decision.objects.ask(DecisionRequest(
+        kind="unrelated", records=(vault_for(owner, name="Other questions"),), assignees=(owner,),
+        proposal=DecisionProposal(alternatives=[{"key": "done", "label": "Done", "outcome": "done"}]),
+    ), actor=owner)
+    record = question.review_subject if membership == "concern" else run
+    assert_attention_omitted(DecisionKind(), record, owner, monkeypatch)
 
 
 @pytest.mark.usefixtures("workflow_step_classes", "activity_catalog", "composed_permissions")

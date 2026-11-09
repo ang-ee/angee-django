@@ -84,9 +84,14 @@ class TimelineKind(ABC):
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         """Describe the selected source rows, batching any additional display dependencies."""
 
-    def waiting_on(self, actor: Any) -> models.QuerySet | None:
-        """Own the attention population, or return None when this kind has no attention.
+    def waiting_on(self, record: models.Model, actor: Any) -> models.QuerySet | None:
+        """Own attention, or return None when no attention is possible on this record.
 
+        Before building a distinct attention authorization scope, probe candidates
+        through the source's unscoped base manager using the same record predicate
+        as ``occurs`` and ``queryset``. Return only existence: no permission scope,
+        system context or audit row. A negative probe returns None; a positive
+        probe still requires the attention owner's unchanged authorization.
         The reader correlates only its existence to an already readable source row.
         Use structural base-manager rows without an audit bypass or repeated read
         scope; retain any distinct authorization the attention rule requires.

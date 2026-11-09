@@ -46,8 +46,11 @@ class DecisionKind(TimelineKind):
             models.Prefetch("assignees", queryset=get_user_model().system_queryset()),
         )
 
-    def waiting_on(self, actor: Any) -> models.QuerySet:
-        return apps.get_model("decisions", "Decision").objects.waiting_on(actor)
+    def waiting_on(self, record: Any, actor: Any) -> models.QuerySet | None:
+        decision = apps.get_model("decisions", "Decision")
+        if not decision._base_manager.filter(self._record_filter(record), decision.objects.open_expression()).exists():
+            return None
+        return decision.objects.waiting_on(actor)
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         types, ids = [], []

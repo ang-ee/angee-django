@@ -134,7 +134,7 @@ class Timeline:
             fold_type, fold_pk = kind.fold(record) or (models.Value(None), models.Value(None))
             # The outer branch already authorizes this row. Only its attention
             # boolean crosses this boundary; do not repeat the read scope inside it.
-            waiting = kind.waiting_on(actor)
+            waiting = kind.waiting_on(record, actor)
             branches.append(rows.annotate(
                 _timeline_kind=models.Value(kind.id, output_field=models.CharField()),
                 _timeline_type=models.Value(

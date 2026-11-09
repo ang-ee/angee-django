@@ -1610,9 +1610,14 @@ open fresh evaluator scopes for authorization and change-feed reads.
   existence query, no REBAC scope or
   system-context audit row. Rows elsewhere in the source table do not admit a
   branch. A positive probe still requires the kind's normal read authorization.
-  The kind owns its attention population on structural rows without an audit
-  bypass or repeated read scope; only the boolean crosses to the already-readable
-  branch. Decision attention uses the decision owner's `waiting_on` act scope.
+  The kind's `waiting_on(record, actor)` probes structural attention candidates
+  on this record before building a distinct authorization scope, reusing the same
+  record predicate through `_base_manager` without REBAC, system context or an
+  audit row. No candidate means `None`, so the reader emits `Value(False)` and
+  compiles no attention scope. A positive probe retains the attention owner's
+  authorization unchanged. Only the boolean crosses to the already-readable
+  branch, without repeating its read scope. Decision attention uses the decision
+  owner's `waiting_on` act scope.
   Display payloads are hydrated only for selected rows, through the kind's own
   queryset. There is no event projection table or backfill requirement. Folding
   hides a child only when a readable parent target occurs on the same record;
