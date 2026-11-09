@@ -164,18 +164,21 @@ native column visibility. A favorite without a preset leaves the selected preset
 ### Server connection recovery
 
 The app shares one server connection across its composed schema clients and
-session bootstrap. Network failures and gateway-unavailable responses open a
-connection dialog and stop subsequent requests before CSRF. One TanStack Query
-probe checks the public schema, with retry delays of 5, 10, 20, then
-30 seconds. Recovery refreshes reads and the current route without reloading the
-page. Failed mutations are never replayed; check the record before resubmitting
-an interrupted write. Business errors and individual HTTP 500 responses retain
-their ordinary error handling.
+session bootstrap. A network failure or a 502, 503 or 504 response keeps that
+request's ordinary error and starts one TanStack Query probe of the public
+schema. Only a failed probe opens the connection dialog and stops further
+requests before CSRF; after a healthy probe the failure stays an ordinary error.
+The probe retries after 5, 10, 20, then 30 seconds. Recovery refreshes the reads
+the outage refused and the current route without reloading the page. Failed
+mutations are never replayed: a write refused during the outage is reported once
+the server is back, so check the record before resubmitting it. Business errors
+and HTTP 500 responses retain their ordinary error handling.
 
-The dialog uses the selected customer brand and theme. Without a customer mark,
-it shows the animated Angee cube, respecting reduced motion. Customize the
-`connection.*` messages through the host's existing `createApp.i18n` overrides.
-Addons can replace the artwork or add guidance through the usual containers:
+The dialog uses the selected customer brand mark, else ui's animated
+`AnimatedThemeLogo`, which respects reduced motion. Its `connection.*` copy
+belongs to `@angee/ui`'s reserved `ui` namespace, which neither addon bundles nor
+scoped vocabulary override. Addons replace the artwork or add guidance, with
+their own copy, through the usual containers:
 
 ```tsx
 containers: {
@@ -189,8 +192,10 @@ containers: {
 ```
 
 Keep these contributions self-contained: the server is unavailable when they
-render. The app retains the accessible modal, connection detection and recovery
-policy. [`ConnectionBoundary`](src/providers/connection.tsx) owns this composition;
+render, above the app's providers and error boundaries. A contribution that
+suspends or throws falls back to the default artwork, or to no guidance. The app
+retains the accessible modal, connection detection and recovery policy.
+[`ConnectionBoundary`](src/providers/connection.tsx) owns this composition;
 [`ServerConnection`](../refine/src/server-connection.ts) owns the transport gate.
 
 ### Contributions

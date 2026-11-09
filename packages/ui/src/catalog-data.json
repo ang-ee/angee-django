@@ -639,6 +639,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "AnimatedThemeLogo",
+    "source": "packages/ui/src/theme/logo.tsx",
+    "kind": "fragment",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "AppBootSkeleton",
     "source": "packages/ui/src/layouts/AppBootSkeleton.tsx",
     "kind": "fragment",
