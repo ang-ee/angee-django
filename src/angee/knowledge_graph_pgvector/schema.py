@@ -5,6 +5,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from strawberry import auto
 
 from angee.graphql.ids import PublicID, public_id_field, require_instance_for_id
 from angee.knowledge.schema import PageType
@@ -17,6 +18,12 @@ Vault = apps.get_model("knowledge", "Vault")
 @strawberry_django.type(Vault, name="VaultType", extend=True)
 class VaultEmbeddingExtension:
     embedding_model = public_id_field("embedding_model", nullable=True)
+
+
+@strawberry_django.type(Vault, name="VaultType", extend=True)
+class VaultGraphExtractionExtension:
+    extraction_model = public_id_field("extraction_model", nullable=True)
+    graph_entity_kinds: auto
 
 
 @strawberry_django.type(Page, name="PageType", extend=True)
@@ -38,6 +45,6 @@ class GraphPgvectorQuery:
 
 _PGVECTOR_BUCKET = {
     "query": [GraphPgvectorQuery],
-    "type_extensions": [VaultEmbeddingExtension, PageGraphPgvectorExtension],
+    "type_extensions": [VaultEmbeddingExtension, VaultGraphExtractionExtension, PageGraphPgvectorExtension],
 }
 schemas = {"public": {**_PGVECTOR_BUCKET}, "console": {**_PGVECTOR_BUCKET}}

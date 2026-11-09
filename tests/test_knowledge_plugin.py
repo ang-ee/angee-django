@@ -76,6 +76,9 @@ def test_related_pages_and_vault_model_extend_the_knowledge_schema():
     schema = _merged_schemas().graphql_schema("public")
     assert "related_pages" in cast(GraphQLObjectType, schema.type_map["PageType"]).fields
     assert "embedding_model" in cast(GraphQLObjectType, schema.type_map["VaultType"]).fields
+    assert {"extraction_model", "graph_entity_kinds"} <= cast(
+        GraphQLObjectType, schema.type_map["VaultType"]
+    ).fields.keys()
     assert {"search_pages", "search_passages", "related_pages"} <= schema.query_type.fields.keys()
     assert "semantic_search" not in schema.query_type.fields
 
