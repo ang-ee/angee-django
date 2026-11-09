@@ -36,7 +36,7 @@ def test_concurrent_pairing_attempts_reuse_one_channel(channel_owner: Any) -> No
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic(), system_context(reason="test.messaging.pairing.race"):
-            get_user_model().system_queryset(lock=("self",)).get(pk=channel_owner.pk)
+            get_user_model().system_queryset().lock_if_supported(no_key=True).get(pk=channel_owner.pk)
             contender, pid = submit(
                 pool,
                 lambda: Channel.objects.resume_or_create_pairing(
@@ -64,7 +64,7 @@ def test_concurrent_named_imports_create_one_channel(channel_owner: Any) -> None
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic(), system_context(reason="test.messaging.named_import.race"):
-            get_user_model().system_queryset(lock=("self",)).get(pk=channel_owner.pk)
+            get_user_model().system_queryset().lock_if_supported(no_key=True).get(pk=channel_owner.pk)
             contender, pid = submit(
                 pool,
                 lambda: Channel.objects.named_import_channel(

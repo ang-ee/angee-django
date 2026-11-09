@@ -372,7 +372,7 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
             raise PairingActionError("This action requires a live channel.")
         actor = current_actor() or user
         with system_context(reason="messaging.resume_or_create_channel"), transaction.atomic():
-            get_user_model().system_queryset(lock=("self",)).get(pk=user.pk)
+            get_user_model().system_queryset().lock_if_supported(no_key=True).get(pk=user.pk)
             channel = self.unfinished_pairing(user, backend_class).first()
             if channel is not None and session_store_path(channel).exists() and not task_locks_are_cross_process():
                 channel = None
@@ -403,7 +403,7 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
 
         name = self.normalized_name(name)
         with system_context(reason="messaging.channel.named_import"), transaction.atomic():
-            get_user_model().system_queryset(lock=("self",)).get(pk=user.pk)
+            get_user_model().system_queryset().lock_if_supported(no_key=True).get(pk=user.pk)
             existing = (
                 self.model._base_manager.filter(owner_id=user.pk, backend_class=backend_class, display_name=name)
                 .order_by("pk")
