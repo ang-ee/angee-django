@@ -82,7 +82,14 @@ from angee.integrate.live import session_store_path
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
 from angee.integrate.net import AddressNotAllowedError
 from angee.jobs.timeouts import task_claim_lease
-from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, PairingActionError, ParsedPart
+from angee.messaging.backends import (
+    DeliveryOutcome,
+    DeliveryUncertain,
+    OutboundEmailChannelMissing,
+    OutboundEmailNotConfigured,
+    PairingActionError,
+    ParsedPart,
+)
 from angee.messaging.constants import (
     DELIVERY_TASK_EXPIRES,
     MAX_DELIVERY_ATTEMPTS,
@@ -255,12 +262,25 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
 
         return self.for_backend("webform").filter(slug=slug, is_published=True)
 
-    def outbound_email(self) -> Self:
-        """Connected channels whose declared backend currently offers configured outbound email."""
+    def outbound_email(self, *, backend_class: str | None = None) -> Self:
+        """Connected channels whose declared backend currently offers configured outbound email.
+
+        ``backend_class`` narrows the selection to one declared backend. An empty
+        selection is refused with its reason: :class:`OutboundEmailNotConfigured`
+        when no backend (or not the named one) offers configured outbound email, else
+        :class:`OutboundEmailChannelMissing` when none of these channels is connected
+        on one. Narrow the queryset first to ask about an explicit channel.
+        """
 
         field = self.model.backend_class.field
-        keys = [key for key in field.registered_keys() if field.resolve_class(key).outbound_email_configured()]
-        return self.filter(backend_class__in=keys, lifecycle=IntegrationLifecycle.CONNECTED)
+        candidates = field.registered_keys() if backend_class is None else (backend_class,)
+        keys = [key for key in candidates if field.resolve_class(key).outbound_email_configured()]
+        if not keys:
+            raise OutboundEmailNotConfigured
+        channels = self.filter(backend_class__in=keys, lifecycle=IntegrationLifecycle.CONNECTED)
+        if not channels.exists():
+            raise OutboundEmailChannelMissing
+        return channels
 
     def require_backend_target(self, public_id: str, *, backend_class: str) -> ChannelT:
         """Resolve an explicit import target, refusing a missing or other-backend channel uniformly.

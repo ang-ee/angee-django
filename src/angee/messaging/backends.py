@@ -26,6 +26,7 @@ from typing import Any, ClassVar
 from django.apps import apps
 from django.core.exceptions import ValidationError
 
+from angee.base.exceptions import DomainError
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
@@ -42,6 +43,34 @@ logger = logging.getLogger(__name__)
 
 class PairingActionError(ValueError):
     """A safe, actionable live-channel pairing precondition failure."""
+
+
+class OutboundEmailNotConfigured(DomainError, ValidationError):
+    """No channel backend, or not the requested one, offers configured outbound email delivery.
+
+    A validation refusal keyed to ``channel``, so a sending form shows it beside its
+    channel choice; the schema projects its code.
+    """
+
+    code = "OUTBOUND_EMAIL_NOT_CONFIGURED"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(
+            self,
+            {"channel": ValidationError("Outbound email delivery is not configured.", code=self.code)},
+        )
+
+
+class OutboundEmailChannelMissing(DomainError, ValidationError):
+    """Outbound email is configured, but no selected channel is connected on a backend offering it."""
+
+    code = "OUTBOUND_EMAIL_CHANNEL_MISSING"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(
+            self,
+            {"channel": ValidationError("Select a connected email channel.", code=self.code)},
+        )
 
 
 class DeliveryUncertain(IntegrationError):
@@ -256,9 +285,13 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         return False
 
     def outbound_sender(self) -> tuple[str, str]:
-        """Return this channel's validated default ``(name, address)`` email sender."""
+        """Return this channel's validated default ``(name, address)`` email sender.
 
-        raise ValidationError("Select a connected email channel.")
+        A backend that offers no outbound email refuses with
+        :class:`OutboundEmailChannelMissing`.
+        """
+
+        raise OutboundEmailChannelMissing
 
     @classmethod
     def reconciles_delivery(cls) -> bool:

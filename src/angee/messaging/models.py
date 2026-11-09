@@ -92,6 +92,7 @@ from angee.integrate.live import (
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.messaging.backends import (
     ChannelBackend,
+    OutboundEmailChannelMissing,
     PairingActionError,
     ParsedHandle,
     ParsedMessage,
@@ -1096,10 +1097,13 @@ class Channel(Bridge, inherits="integrate.Integration"):
         return self.get_backend_class_impl().delivery_visibility_delay
 
     def outbound_sender(self) -> tuple[str, str]:
-        """Return this connected channel's backend-owned default email sender."""
+        """Return this connected channel's backend-owned default email sender.
+
+        A channel that is not connected raises :class:`OutboundEmailChannelMissing`.
+        """
 
         if self.lifecycle != self.Lifecycle.CONNECTED:
-            raise ValidationError("Select a connected email channel.")
+            raise OutboundEmailChannelMissing
         return self.backend.outbound_sender()
 
     def validate_webform_answers(self, answers: dict[str, Any]) -> None:

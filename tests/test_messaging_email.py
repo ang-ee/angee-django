@@ -12,6 +12,7 @@ from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.integrate.errors import IntegrationError
+from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part
 from tests.conftest import Vendor, make_integration
@@ -168,8 +169,10 @@ def test_default_sender_refuses_an_invalid_configured_address() -> None:
 @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False)
 def test_default_sender_requires_a_configured_transport() -> None:
     backend = AnymailEmailChannelBackend(SimpleNamespace(config={"from_email": "sender@example.test"}))
-    with pytest.raises(ValidationError, match="not configured"):
+    with pytest.raises(OutboundEmailNotConfigured) as refused:
         backend.outbound_sender()
+    assert refused.value.code == "OUTBOUND_EMAIL_NOT_CONFIGURED"
+    assert refused.value.message_dict == {"channel": ["Outbound email delivery is not configured."]}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -191,7 +194,30 @@ def test_outbound_email_admits_every_connected_backend_declaring_configured_emai
         with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True):
             assert set(Channel.objects.outbound_email()) == {billing, mailbox}
             assert billing.outbound_sender() == ("Billing", "billing@example.test")
-            with pytest.raises(ValidationError, match="Select a connected email channel"):
+            with pytest.raises(OutboundEmailChannelMissing):
                 paused.outbound_sender()
-        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False):
-            assert not Channel.objects.outbound_email().exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_outbound_email_names_why_its_selection_is_empty(composed_tables: None) -> None:
+    """An empty selection is refused with a coded reason: no transport, or no connected channel."""
+
+    del composed_tables
+    billing = make_integration("billing", model=Channel, backend_class="email")
+    mailbox = make_integration("mailbox", model=Channel, backend_class="imap", config={"host": "192.0.2.10"})
+    paused = make_integration("paused-mail", model=Channel, backend_class="email")
+    with system_context(reason="test.messaging.outbound_email"):
+        paused.pause()
+        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True):
+            assert set(Channel.objects.outbound_email(backend_class="email")) == {billing}
+            with pytest.raises(OutboundEmailNotConfigured):
+                Channel.objects.outbound_email(backend_class="manual")
+            with pytest.raises(OutboundEmailChannelMissing) as missing:
+                Channel.objects.filter(pk=paused.pk).outbound_email(backend_class="email")
+            with pytest.raises(OutboundEmailChannelMissing):
+                Channel.objects.filter(pk=mailbox.pk).outbound_email(backend_class="email")
+        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False), pytest.raises(OutboundEmailNotConfigured) as off:
+            Channel.objects.outbound_email()
+    assert missing.value.code == "OUTBOUND_EMAIL_CHANNEL_MISSING"
+    assert missing.value.message_dict == {"channel": ["Select a connected email channel."]}
+    assert off.value.code == "OUTBOUND_EMAIL_NOT_CONFIGURED"
