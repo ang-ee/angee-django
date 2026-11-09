@@ -8,12 +8,12 @@ from typing import Any
 
 import networkx as nx
 from django.apps import apps
+from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.db.models import Case, Exists, F, OuterRef, Q, Value, When
-from django.db.models.functions import StrIndex
 
+from angee.base.search import SEARCH_CONFIG
 from angee.knowledge.retrieval import RetrievalHit
-from angee.knowledge_graph_pgvector.extraction import entity_key
-from angee.knowledge_graph_pgvector.graph_config import GraphOptions
+from angee.knowledge_graph_pgvector.options import GraphOptions
 
 
 def local_passages(
@@ -56,18 +56,20 @@ def local_passages(
         "passage__page_id",
     ):
         scores[entity_id] += contributions[page_id]
-    key = entity_key(query)
-    if key:
+    if query.strip():
+        # Phrase tsqueries enforce token boundaries in either direction. Surface
+        # names come only from this reader's current mentions, never Entity keys
+        # inherited from another passage's spelling during fuzzy resolution.
         names = (
-            entities.annotate(query_position=StrIndex(Value(key), F("key")))
-            .filter(
-                Q(key__icontains=key) | Q(query_position__gt=0),
-            )
-            .order_by("key", "kind", "pk")[: options.seed_limit]
+            mentions.annotate(query_search=SearchVector(Value(query), config=SEARCH_CONFIG),
+                              name_search=SearchVector("name", config=SEARCH_CONFIG))
+            .filter(Q(query_search=SearchQuery(F("name"), search_type="phrase", config=SEARCH_CONFIG))
+                    | Q(name_search=SearchQuery(query, search_type="phrase", config=SEARCH_CONFIG)))
+            .order_by("entity_id").values_list("entity_id", flat=True).distinct()[:options.seed_limit]
         )
-        for row in names:
-            scores[row.pk] += 1
-    identities = entities.filter(pk__in=scores).in_bulk()
+        for pk in names:
+            scores[pk] += 1
+    identities = entities.filter(pk__in=scores).only("pk", "key", "kind").in_bulk()
     selected = sorted(identities, key=lambda pk: (-scores[pk], identities[pk].key, identities[pk].kind, pk))[
         : options.seed_limit
     ]
@@ -94,6 +96,8 @@ def local_passages(
         # entity before materialization; the total node cap also bounds fan-out.
         candidates = (
             edges.filter(Q(subject_id__in=frontier) | Q(object_id__in=frontier))
+            .exclude(pk__in=evidence_edges)
+            .only("pk", "passage_id", "subject_id", "object_id", "weight")
             .annotate(
                 frontier_id=Case(When(subject_id__in=frontier, then=F("subject_id")), default=F("object_id")),
             )
@@ -127,16 +131,16 @@ def local_passages(
         mentions.filter(entity_id__in=graph)
         .first_per_group(
             "entity_id",
-            order_by=("passage__page__title", "passage__page__sqid", "passage__ordinal", "pk"),
+            order_by=("passage__page__title", "passage__page_id", "passage__ordinal", "pk"),
             limit=options.degree_cap,
         )
         .order_by("entity_id", "pk")
     )
-    for mention in evidence:
-        passage_scores[mention.passage_id] += ranks[mention.entity_id]
+    for passage_id, entity_id in evidence.values_list("passage_id", "entity_id"):
+        passage_scores[passage_id] += ranks[entity_id]
     for edge in evidence_edges.values():
         passage_scores[edge.passage_id] += edge.weight * (ranks[edge.subject_id] + ranks[edge.object_id]) / 2
-    rows = list(passages.filter(pk__in=passage_scores).order_by("page__title", "page__sqid", "ordinal", "pk"))
+    rows = list(passages.filter(pk__in=passage_scores).order_by("page__title", "page_id", "ordinal", "pk"))
     # Stable sort keeps the public page/ordinal order for equal PageRank scores.
     rows.sort(key=lambda row: -passage_scores[row.pk])
     seen = set()

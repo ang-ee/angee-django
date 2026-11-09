@@ -4,13 +4,16 @@ from unittest.mock import Mock
 
 import pytest
 from django.db import connection
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import actor_context, system_context
 
 from angee.agents.testing.models import InferenceModel
 from angee.knowledge_graph_pgvector.retrieval import PgvectorRetrievalBackend
 from angee.knowledge_graph_pgvector.testing.models import Passage, PassageEmbedding
+from angee.mcp.graphql import _execute_sync
 from tests.conftest import MarkdownPage, Page, Vault, create_user, vault_for
+from tests.pgvector_fixtures import NativeEmbeddingBackend
 from tests.pgvector_fixtures import passage_records as passage_records
+from tests.test_knowledge_plugin import _merged_schemas
 
 pytestmark = pytest.mark.skipif(
     connection.vendor != "postgresql", reason="Requires PostgreSQL pgvector and full-text search"
@@ -42,7 +45,7 @@ def test_exact_vector_rank_is_scoped_and_never_mixes_dimensions(passage_records)
     with actor_context(records.owner):
         records.vault.grant_record_access("viewer", reader)
     with actor_context(reader):
-        pages = PgvectorRetrievalBackend._pages((records.vault, private))
+        pages = PgvectorRetrievalBackend.pages((records.vault, private))
         hits = PgvectorRetrievalBackend.vector_arm(pages, records.model.pk, [1, 0], first=10)
         assert [hit.page.pk for hit in hits] == [near.pk, far.pk]
         assert all(hit.page.pk != hidden.pk for hit in hits)
@@ -55,7 +58,7 @@ def test_full_text_uses_simple_websearch_and_returns_best_passage(passage_record
         records, title="Instructions", body="# Other\nUnrelated\n# Motion\nRunning daily", vector=[1, 0]
     )
     with actor_context(records.owner):
-        pages = PgvectorRetrievalBackend._pages((records.vault,))
+        pages = PgvectorRetrievalBackend.pages((records.vault,))
         hits = PgvectorRetrievalBackend.lexical_arm(pages, '"running daily"', first=10)
         assert [hit.page.pk for hit in hits] == [page.pk]
         assert hits[0].heading_path == ("Motion",)
@@ -80,22 +83,27 @@ def test_query_embeds_once_per_model_for_reader_without_catalogue_grants(passage
     monkeypatch.setattr(InferenceModel, "embedding_dimensions", property(lambda self: 2))
     with actor_context(reader):
         assert not records.model.with_actor(reader).has_access("read")
-        assert len(Vault.objects.search_passages("query", first=10)) == 2
+        assert len(Vault.objects.search_passages("query", first=10).hits) == 2
     embed.assert_called_once_with(["query"], input_type="query", role="knowledge_embedding")
 
 
 def test_provider_failure_is_visible_even_when_full_text_matches(passage_records, monkeypatch):
     monkeypatch.setattr(InferenceModel, "embed", Mock(side_effect=RuntimeError("provider unavailable")))
-    with actor_context(passage_records.owner), pytest.raises(RuntimeError, match="provider unavailable"):
-        Vault.objects.search_passages("Alpha")
+    with actor_context(passage_records.owner):
+        result = Vault.objects.search_passages("Alpha")
+    assert result.hits and result.hits[0].page.pk == passage_records.page.pk
+    assert len(result.failures) == 1
+    assert result.failures[0].arm == "vector"
+    assert "provider unavailable" not in result.failures[0].message
 
 
 def test_query_rechecks_deployment_approval(passage_records, settings, monkeypatch):
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"knowledge_embedding": []}
     embed = Mock()
     monkeypatch.setattr(InferenceModel, "embed", embed)
-    with actor_context(passage_records.owner), pytest.raises(PermissionDenied, match="not approved"):
-        Vault.objects.search_passages("Alpha")
+    with actor_context(passage_records.owner):
+        result = Vault.objects.search_passages("Alpha")
+        assert result.failures and result.hits
     embed.assert_not_called()
 
 
@@ -115,3 +123,63 @@ def test_related_pages_fuses_centroid_and_links_without_provider_call(passage_re
         link.trash()
         assert [hit.page.pk for hit in PgvectorRetrievalBackend.related_to(records.page)] == [vector.pk]
     embed.assert_not_called()
+
+
+
+def test_native_embedding_backend_indexes_and_searches_without_embed_monkeypatch(passage_records, settings):
+    records = passage_records
+    settings.ANGEE_INFERENCE_BACKEND_CLASSES = {
+        **settings.ANGEE_INFERENCE_BACKEND_CLASSES,
+        NativeEmbeddingBackend.key: "tests.pgvector_fixtures.NativeEmbeddingBackend",
+    }
+    NativeEmbeddingBackend.calls.clear()
+    with system_context(reason="test.pgvector.native_backend"):
+        provider = records.model.provider
+        provider.backend_class = NativeEmbeddingBackend.key
+        provider.save(update_fields=["backend_class"])
+    assert PassageEmbedding.objects.embed_page(records.page.pk) == 2
+    with actor_context(records.owner):
+        first = _execute_sync(_merged_schemas().build("public"), """query {
+          search_passages(query: "Alpha") { hits { page { id title } } failures { message } }
+        }""", {})
+        second = Vault.objects.search_passages("Alpha")
+    assert not first.errors
+    assert first.data["search_passages"] == {
+        "hits": [{"page": {"id": str(records.page.sqid), "title": records.page.title}}], "failures": [],
+    }
+    assert not second.failures
+    assert [hit.page.pk for hit in second.hits] == [records.page.pk]
+    assert len(NativeEmbeddingBackend.calls) == 2  # Document batch, then one cached query.
+
+
+
+def test_one_failed_model_group_does_not_drop_other_vector_groups(passage_records, monkeypatch):
+    records = passage_records
+    other_vault = vault_for(records.owner, name="Healthy provider")
+    with system_context(reason="test.vector.healthy_group"):
+        other_model = InferenceModel.objects.create(
+            provider=records.model.provider, name="healthy", model_use="embedding",
+        )
+        Vault.objects.filter(pk=other_vault.pk).update(retrieval_class="pgvector", embedding_model=other_model)
+    other_vault.refresh_from_db()
+    healthy = _indexed_page(records, title="Healthy vector", body="Different evidence", vector=[1, 0],
+                            vault=other_vault, model=other_model)
+
+    def embed(self, texts, **kwargs):
+        if self.pk == records.model.pk:
+            raise RuntimeError("unavailable")
+        return [[1.0, 0.0]]
+
+    monkeypatch.setattr(InferenceModel, "embed", embed)
+    with actor_context(records.owner):
+        result = Vault.objects.search_passages("no lexical match")
+    assert [hit.page.pk for hit in result.hits] == [healthy.pk]
+    assert [failure.vaults for failure in result.failures] == [(str(records.vault.sqid),)]
+
+
+def test_query_failure_is_reported_even_without_hits(passage_records, monkeypatch):
+    monkeypatch.setattr(InferenceModel, "embed", Mock(side_effect=RuntimeError("unavailable")))
+    with actor_context(passage_records.owner):
+        result = Vault.objects.search_passages("absent term")
+    assert result.hits == []
+    assert len(result.failures) == 1

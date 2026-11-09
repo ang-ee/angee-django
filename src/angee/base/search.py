@@ -11,6 +11,13 @@ SEARCH_CONFIG = "simple"
 SEARCH_MAX_BYTES = 512 * 1024
 
 
+def search_vector(text: str) -> SearchVector:
+    """Build the bounded, simple-config expression for INSERT or UPDATE."""
+
+    bounded = strip_null_bytes(text).encode("utf-8")[:SEARCH_MAX_BYTES].decode("utf-8", errors="ignore")
+    return SearchVector(models.Value(bounded), config=SEARCH_CONFIG)
+
+
 def stamp_search_vector(rows: models.QuerySet[Any], text: str) -> None:
     """Set ``search`` on derived rows; leave it NULL on the SQLite test floor.
 
@@ -20,5 +27,4 @@ def stamp_search_vector(rows: models.QuerySet[Any], text: str) -> None:
     """
 
     if connections[rows.db].vendor == "postgresql":
-        bounded = strip_null_bytes(text).encode("utf-8")[:SEARCH_MAX_BYTES].decode("utf-8", errors="ignore")
-        rows.update(search=SearchVector(models.Value(bounded), config=SEARCH_CONFIG))
+        rows.update(search=search_vector(text))

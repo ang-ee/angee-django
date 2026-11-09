@@ -1,6 +1,6 @@
 // @rebac_package: knowledge_graph_pgvector
 // @rebac_package_version: 3.0.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 definition knowledge_graph_pgvector/passage {
     relation page: knowledge/page // rebac:field=page
@@ -13,11 +13,12 @@ definition knowledge_graph_pgvector/passage {
 }
 
 definition knowledge_graph_pgvector/passage_embedding {
+    relation model: agents/inference_model // rebac:field=model
     relation passage: knowledge_graph_pgvector/passage // rebac:field=passage
 
     permission read = passage->read
     permission write = passage->write
-    permission delete = passage->write
+    permission delete = passage->write | model->delete
 }
 
 definition knowledge_graph_pgvector/entity {

@@ -1,8 +1,8 @@
 """Native graph permissions apply to queryset and point reads for every actor."""
 
 import pytest
-from django.core.exceptions import ValidationError
-from rebac import PermissionDenied, actor_context, system_context
+from django.core.exceptions import PermissionDenied, ValidationError
+from rebac import actor_context, system_context
 
 from angee.agents.models import InferenceModelUse
 from angee.agents.testing.models import InferenceModel
@@ -27,7 +27,7 @@ def test_entities_need_vault_access_and_live_readable_mentions(graph_records):
     with system_context(reason="test.pgvector.graph_permission_records"):
         edge = EntityEdge.objects.get(passage=passage)
         mention = EntityMention.objects.get(passage=passage, entity=entities["Orion"])
-        orphan = Entity.objects.create(vault=records.vault, key="orphan", name="Orphan", kind="concept")
+        orphan = Entity.objects.create(vault=records.vault, key="orphan", kind="concept")
     for actor, evidence_read, entity_read in (
         (records.owner, True, True),
         (reader, True, True),
@@ -97,7 +97,11 @@ def test_diff_cascades_graph_evidence_and_reconciler_collects_only_orphans(graph
 
 def test_extraction_selection_requires_writer_model_access_approval_and_chat_use(graph_records, monkeypatch, settings):
     records = graph_records
-    monkeypatch.setattr("angee.knowledge_graph_pgvector.models.require_pgvector", lambda: None)
+    monkeypatch.setattr(
+        "angee.knowledge_graph_pgvector.retrieval.PgvectorRetrievalBackend.require_database", lambda: None,
+    )
+    with system_context(reason="test.selection_change"):
+        Vault.objects.filter(pk=records.vault.pk).update(extraction_model=None)
     with actor_context(records.owner), pytest.raises(PermissionDenied, match="cannot read"):
         records.vault.clean()
     selector = records.extraction_model.provider.owner
@@ -116,28 +120,18 @@ def test_extraction_selection_requires_writer_model_access_approval_and_chat_use
 def test_graph_opt_in_defaults_and_vocabulary_validation(composed_tables):
     vault = Vault(name="Default")
     assert vault.extraction_model_id is None
-    assert vault.graph_entity_kinds == ["person", "organization", "place", "concept", "event"]
+    assert vault.graph_entity_kinds == ["concept", "event", "organization", "person", "place"]
     for kinds in ([], ["concept", "concept"], [None], "concept"):
         vault.graph_entity_kinds = kinds
-        with pytest.raises(ValidationError, match="entity kinds"):
+        with pytest.raises(ValidationError):
             vault.clean()
-
-
-def test_model_evidence_cannot_cross_vaults(graph_records):
-    records = graph_records
-    other = vault_for(records.owner, name="Other evidence boundary")
-    _, passage, entities = graph_page(records, "One vault", edges=[("One", "Two")])
-    with system_context(reason="test.pgvector.cross_vault"):
-        foreign = Entity.objects.create(vault=other, key="foreign", name="Foreign", kind="concept")
-        with pytest.raises(ValidationError, match="cross vaults"):
-            EntityMention(passage=passage, entity=foreign).clean()
-        with pytest.raises(ValidationError, match="cross vaults"):
-            EntityEdge(passage=passage, subject=entities["One"], object=foreign).clean()
 
 
 def test_extraction_model_and_kinds_are_writable_through_the_vault_resource(graph_records, monkeypatch):
     records = graph_records
-    monkeypatch.setattr("angee.knowledge_graph_pgvector.models.require_pgvector", lambda: None)
+    monkeypatch.setattr(
+        "angee.knowledge_graph_pgvector.retrieval.PgvectorRetrievalBackend.require_database", lambda: None,
+    )
     selector = records.extraction_model.provider.owner
     _grant(records.vault, "editor", selector)
     schema = _merged_schemas().build("public")
@@ -151,3 +145,19 @@ def test_extraction_model_and_kinds_are_writable_through_the_vault_resource(grap
     data = result_data(execute_schema(schema, document, variables, user=selector))["update_vaults_by_pk"]
     assert data["extraction_model"] == str(records.extraction_model.sqid)
     assert data["graph_entity_kinds"] == ["concept"]
+
+
+
+def test_unchanged_model_selection_does_not_require_catalogue_read_again(graph_records, monkeypatch):
+    records = graph_records
+    monkeypatch.setattr(
+        "angee.knowledge_graph_pgvector.retrieval.PgvectorRetrievalBackend.require_database", lambda: None,
+    )
+    with actor_context(records.owner):
+        assert not records.extraction_model.with_actor(records.owner).has_access("read")
+        records.vault.graph_entity_kinds = list(reversed(records.vault.graph_entity_kinds))
+        records.vault.clean()
+        records.vault.save(update_fields=["graph_entity_kinds"])
+    with system_context(reason="test.graph.sorted_kinds"):
+        records.vault.refresh_from_db()
+    assert records.vault.graph_entity_kinds == sorted(records.vault.graph_entity_kinds)

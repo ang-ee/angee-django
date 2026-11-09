@@ -15,7 +15,7 @@ from rebac import actor_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
-from angee.knowledge.retrieval import RetrievalBackend, RetrievalHit
+from angee.knowledge.retrieval import RetrievalBackend, RetrievalHit, RetrievalResult
 from angee.knowledge_graph_pgvector.constants import RECONCILE_TASK
 from angee.knowledge_graph_pgvector.retrieval import PgvectorRetrievalBackend
 from angee.mcp.graphql import DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT
@@ -63,18 +63,18 @@ def test_grouped_and_bound_search_dispatch_to_hit_contract(composed_tables, sett
 
     def search_many(cls, vaults, query, *, first=20):
         calls.append(([vault.pk for vault in vaults], query, first))
-        return [hit]
+        return RetrievalResult(hits=[hit])
 
     monkeypatch.setattr(GroupedSearchPlugin, "search_many", classmethod(search_many))
     with actor_context(owner):
-        assert list(first.retrieval.search("query", first=3)) == [hit]
+        assert first.retrieval.search("query", first=3).hits == [hit]
         assert Vault.objects.search_pages("query", first=7) == [page]
     assert calls == [([first.pk], "query", 3), ([first.pk, second.pk], "query", 7)]
 
 
 def test_related_pages_and_vault_model_extend_the_knowledge_schema():
     schema = _merged_schemas().graphql_schema("public")
-    assert "related_pages" in cast(GraphQLObjectType, schema.type_map["PageType"]).fields
+    assert "related_pages" not in cast(GraphQLObjectType, schema.type_map["PageType"]).fields
     assert "embedding_model" in cast(GraphQLObjectType, schema.type_map["VaultType"]).fields
     assert {"extraction_model", "graph_entity_kinds"} <= cast(
         GraphQLObjectType, schema.type_map["VaultType"]

@@ -168,9 +168,9 @@ jobs:
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -tAc "SHOW max_locks_per_transaction"
       - name: Enable pgvector for test databases
-        # --nomigrations and composed hosts create tables without extension
-        # migrations; each native test database inherits template1.
-        run: docker exec ${{ job.services.postgres.id }} psql -U postgres -d template1 -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector"
+        # --nomigrations and composed hosts create tables without the pre_migrate
+        # extension receiver; each native test database inherits template1.
+        run: docker exec ${{ job.services.postgres.id }} psql -U postgres -d template1 -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm"
       - name: Verify PostgreSQL contracts execute without skips
         # Every PostgreSQL-only contract (row and advisory locks, MVCC reads,
         # two-writer campaigns, vendor branches by node id) with the workflow,
@@ -222,6 +222,10 @@ jobs:
             tests/test_integrate_streams.py \
             tests/test_knowledge_clone_concurrency_campaign.py tests/test_knowledge_search.py \
             tests/test_postgresql_extensions.py \
+            tests/test_knowledge_graph_pgvector_extraction.py tests/test_knowledge_graph_pgvector_local.py \
+            tests/test_knowledge_graph_pgvector_index.py tests/test_knowledge_graph_pgvector_jobs.py \
+            tests/test_knowledge_graph_pgvector_evaluation.py \
+            tests/test_knowledge_graph_pgvector_postgres.py tests/test_knowledge_graph_pgvector_resolution.py \
             tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_locks_replay_and_rollback \
             tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
             tests/test_messaging_channel_concurrency.py tests/test_messaging_webform_submission.py \
@@ -425,7 +429,7 @@ jobs:
         run: |
           # The host database already exists; worker databases inherit template1.
           for database in angee template1; do
-            docker exec ${{ job.services.postgres.id }} psql -U postgres -d "$database" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector"
+            docker exec ${{ job.services.postgres.id }} psql -U postgres -d "$database" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm"
           done
       - name: Compose the runtime and SDL (no database needed)
         working-directory: stack

@@ -13,6 +13,7 @@ from django.core.management.base import BaseCommand, CommandError, CommandParser
 from rebac import actor_context, system_context
 
 from angee.knowledge_graph_pgvector.evaluation import GoldenSet, evaluate
+from angee.knowledge_graph_pgvector.retrieval import PgvectorRetrievalBackend
 
 
 class Command(BaseCommand):
@@ -32,9 +33,13 @@ class Command(BaseCommand):
             golden = GoldenSet.read(options["golden_set"])
             user_model = get_user_model()
             with system_context(reason="knowledge_graph_pgvector.evaluation.actor"):
-                actor = user_model.objects.get(**{user_model.USERNAME_FIELD: options["actor"], "is_active": True})
+                actor = user_model.objects.get_by_natural_key(options["actor"])
+                if not actor.is_active:
+                    raise ValueError("The evaluation actor must be active.")
             with actor_context(actor):
-                rows = apps.get_model("knowledge", "Vault").objects.untrashed().filter(retrieval_class="pgvector")
+                rows = apps.get_model("knowledge", "Vault").objects.untrashed().filter(
+                    retrieval_class=PgvectorRetrievalBackend.key,
+                )
                 vaults = [rows.from_public_id(public_id) for public_id in dict.fromkeys(options["vault"])]
                 if any(vault is None for vault in vaults):
                     raise ValueError("Every selected vault must be readable, untrashed and use pgvector.")

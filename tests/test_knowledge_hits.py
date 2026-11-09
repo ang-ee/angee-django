@@ -5,7 +5,7 @@ import importlib
 from rebac import actor_context
 
 from angee.graphql.testing.documents import execute_schema, result_data
-from angee.knowledge.retrieval import LexicalRetrievalBackend, RetrievalHit
+from angee.knowledge.retrieval import LexicalRetrievalBackend, RetrievalHit, RetrievalResult
 from tests.conftest import Page, Vault, addon_schema, create_user, vault_for
 
 
@@ -14,12 +14,12 @@ def test_lexical_hits_keep_page_search_and_actor_scope(composed_tables):
     vault = vault_for(owner)
     with actor_context(owner):
         page = Page.objects.create_in(vault, title="Needle", body="A canonical body.")
-        hits = Vault.objects.search_passages("Needle")
+        hits = Vault.objects.search_passages("Needle").hits
         assert hits == [RetrievalHit(page=page, rank=1)]
         assert Vault.objects.search_pages("Needle") == [page]
-        assert list(vault.retrieval.search("Needle")) == hits
+        assert vault.retrieval.search("Needle").hits == hits
     with actor_context(outsider):
-        assert Vault.objects.search_passages("Needle") == []
+        assert Vault.objects.search_passages("Needle").hits == []
 
 
 def test_search_passages_projects_evidence_and_page_search_keeps_its_shape(composed_tables, monkeypatch):
@@ -28,19 +28,24 @@ def test_search_passages_projects_evidence_and_page_search_keeps_its_shape(compo
     with actor_context(owner):
         page = Page.objects.create_in(vault, title="Needle", body="# Section\nEvidence")
     hit = RetrievalHit(page=page, rank=1, heading_path=("Section",), start=10, end=18, text="Evidence", score=0.5)
-    monkeypatch.setattr(LexicalRetrievalBackend, "search_many", classmethod(lambda cls, *args, **kwargs: [hit]))
+    monkeypatch.setattr(
+        LexicalRetrievalBackend, "search_many", classmethod(lambda cls, *args, **kwargs: RetrievalResult(hits=[hit])),
+    )
     schema = addon_schema(importlib.import_module("angee.knowledge.schema").schemas, "public")
     data = result_data(
         execute_schema(
             schema,
             """query {
-      search_passages(query: "Needle") { page { id title } heading_path start end text rank score }
+      search_passages(query: "Needle") {
+        hits { page { id title } heading_path start end text rank score }
+        failures { message }
+      }
       search_pages(query: "Needle") { id title }
     }""",
             user=owner,
         )
     )
-    assert data["search_passages"] == [
+    assert data["search_passages"]["hits"] == [
         {
             "page": {"id": str(page.sqid), "title": "Needle"},
             "heading_path": ["Section"],

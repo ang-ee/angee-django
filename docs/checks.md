@@ -131,7 +131,7 @@ running tests:
 
 ```sh
 brew install pgvector
-psql -h localhost -U postgres -d template1 -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+psql -h localhost -U postgres -d template1 -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm;'
 ```
 
 Replace `postgres` with the local superuser role and use the host and port of
@@ -139,14 +139,16 @@ the server selected by `DATABASE_URL`. The server's
 extension files must match its PostgreSQL major; installing the Python `pgvector`
 package alone does not install the server extension. Django and pytest-django
 create test databases from [PostgreSQL's default `template1`](https://www.postgresql.org/docs/17/manage-ag-templatedbs.html),
-including the composed host's secondary databases. They inherit `vector` even
-under `--nomigrations`, when `VectorExtension` migrations cannot run. A role
+including the composed host's secondary databases. They inherit `vector` and `pg_trgm` even
+under `--nomigrations`, which bypasses the addon’s native `pre_migrate`
+extension receiver. That receiver is the single application extension owner;
+`makemigrations` does not generate extension creation operations. A role
 with `CREATEDB` can then run the tests without superuser privileges.
 
 Existing databases do not inherit later changes to `template1`: recreate a
 reused test database with pytest's `--create-db`, or have a superuser enable
 `vector` in that database too. Enable it separately in an existing application
-database before provisioning the pgvector addon with a non-superuser role.
+database before migrating the pgvector addon with a non-superuser role.
 
 Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables

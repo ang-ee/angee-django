@@ -5,20 +5,24 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from django.core.exceptions import PermissionDenied
 from django.db import connection
 from django.utils import timezone
 from pydantic import ValidationError
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import actor_context, system_context
 
+from angee.agents.backends import TransientInferenceError
 from angee.agents.testing.models import InferenceModel
 from angee.knowledge_graph_pgvector import tasks
 from angee.knowledge_graph_pgvector.constants import EXTRACT_PASSAGE_TASK, RECONCILE_BATCH
-from angee.knowledge_graph_pgvector.extraction import PassageGraph, TransientGraphError, entity_key
-from angee.knowledge_graph_pgvector.graph_config import GraphOptions
+from angee.knowledge_graph_pgvector.extraction import PassageGraph, entity_key
+from angee.knowledge_graph_pgvector.options import GraphOptions
 from angee.knowledge_graph_pgvector.testing.models import Entity, EntityEdge, EntityMention, Passage
-from tests.conftest import MarkdownPage, Page, Vault
+from tests.conftest import MarkdownPage, Page, Vault, vault_for
 from tests.pgvector_fixtures import passage_records as passage_records
 from tests.pgvector_graph_fixtures import graph_records as graph_records
+
+pytestmark = pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL index failure state")
 
 GRAPH = {
     "entities": [
@@ -33,7 +37,9 @@ GRAPH = {
 
 def provider(monkeypatch, *, output=GRAPH, during=None):
     calls = []
-    monkeypatch.setattr("angee.knowledge_graph_pgvector.managers.require_pgvector", lambda: None)
+    monkeypatch.setattr(
+        "angee.knowledge_graph_pgvector.retrieval.PgvectorRetrievalBackend.require_database", lambda: None,
+    )
 
     def infer(self, messages, *, output_schema):
         assert not connection.in_atomic_block
@@ -169,7 +175,8 @@ def test_invalid_structured_output_leaves_no_partial_evidence(graph_records, mon
         Passage.objects.extract_passage(graph_records.passages[0].pk)
     with system_context(reason="test.pgvector.invalid_graph"):
         assert not Entity.objects.exists()
-        assert Passage.objects.graph_stale().filter(pk=graph_records.passages[0].pk).exists()
+        assert not Passage.objects.graph_stale().filter(pk=graph_records.passages[0].pk).exists()
+        assert Passage.objects.get(pk=graph_records.passages[0].pk).index_error == "ValidationError"
 
 
 def test_extraction_requires_current_deployment_approval(graph_records, monkeypatch, settings):
@@ -182,11 +189,11 @@ def test_extraction_requires_current_deployment_approval(graph_records, monkeypa
 
 def test_only_provider_classified_transient_errors_get_task_retry(graph_records, monkeypatch):
     provider(monkeypatch)
-    monkeypatch.setattr(InferenceModel, "request_error_types", lambda self: (TimeoutError,))
-    monkeypatch.setattr(InferenceModel, "is_transient_error", lambda self, error: isinstance(error, TimeoutError))
-    monkeypatch.setattr(InferenceModel, "infer", Mock(side_effect=TimeoutError("temporary")))
-    with pytest.raises(TransientGraphError):
+    monkeypatch.setattr(InferenceModel, "infer", Mock(side_effect=TransientInferenceError("temporary")))
+    with pytest.raises(TransientInferenceError):
         Passage.objects.extract_passage(graph_records.passages[0].pk)
+    with system_context(reason="test.pgvector.retry_due"):
+        Passage.objects.filter(pk=graph_records.passages[0].pk).update(index_retry_at=timezone.now())
     monkeypatch.setattr(InferenceModel, "infer", Mock(side_effect=ValueError("invalid schema")))
     with pytest.raises(ValueError, match="invalid schema"):
         Passage.objects.extract_passage(graph_records.passages[0].pk)
@@ -203,12 +210,13 @@ def test_reconciler_bounds_graph_work_and_orphan_collection(graph_records, monke
                 start=0,
                 end=1,
                 text_hash=f"{index:064x}",
-                source_hash=records.passages[0].source_hash,
+                source_body_hash=records.markdown.body_hash, source_title=records.markdown.title,
+                source_vault_id=records.vault.pk,
             )
-            Entity.objects.create(vault=records.vault, name=f"Orphan {index}", key=f"orphan {index}", kind="concept")
+            Entity.objects.create(vault=records.vault, key=f"orphan {index}", kind="concept")
     send = Mock()
     monkeypatch.setattr("angee.knowledge_graph_pgvector.managers.enqueue_task", send)
-    assert tasks.reconcile_embeddings() == RECONCILE_BATCH
+    assert tasks.reconcile_index() == RECONCILE_BATCH
     assert send.call_count == RECONCILE_BATCH
     assert all(call.args == (EXTRACT_PASSAGE_TASK,) for call in send.call_args_list)
     with system_context(reason="test.pgvector.graph_gc_bound"):
@@ -221,3 +229,76 @@ def test_passage_graph_rejects_duplicate_entities_and_invalid_weights():
         PassageGraph.model_validate({"entities": [GRAPH["entities"][0]] * 2, "edges": []})
     with pytest.raises(ValidationError):
         PassageGraph.model_validate({**GRAPH, "edges": [{**GRAPH["edges"][0], "strength": float("nan")}]})
+
+
+
+def test_101_poison_passages_complete_with_error_and_do_not_starve_new_work(graph_records, monkeypatch):
+    records = graph_records
+    calls = provider(monkeypatch, output={"entities": [], "edges": GRAPH["edges"]})
+    with system_context(reason="test.graph.poison_batch"):
+        template = records.passages[0]
+        Passage.objects.bulk_create([
+            Passage(page=records.page, ordinal=index + 2, start=0, end=1,
+                    text_hash=f"{index + 100:064x}", source_body_hash=template.source_body_hash,
+                    source_title=template.source_title, source_vault_id=template.source_vault_id)
+            for index in range(99)
+        ])
+        ids = list(Passage.objects.graph_stale().values_list("pk", flat=True))
+    assert len(ids) == 101
+    for pk in ids:
+        with pytest.raises(ValidationError):
+            Passage.objects.extract_passage(pk)
+    assert len(calls) == 101
+    with system_context(reason="test.graph.poison_results"):
+        assert not Passage.objects.graph_stale().exists()
+        assert Passage.objects.filter(index_attempts=1, index_retry_at=None).count() == 101
+        fresh = Passage.objects.create(
+            page=records.page, ordinal=101, start=0, end=1, text_hash="f" * 64,
+            source_body_hash=template.source_body_hash, source_title=template.source_title,
+            source_vault_id=template.source_vault_id,
+        )
+    send = Mock()
+    monkeypatch.setattr("angee.knowledge_graph_pgvector.managers.enqueue_task", send)
+    assert Passage.objects.reconcile() == 1
+    assert send.call_args.kwargs["kwargs"] == {"pk": fresh.pk}
+
+
+def test_graph_transient_failure_waits_with_doubling_backoff(graph_records, monkeypatch):
+    records = graph_records
+    provider(monkeypatch)
+    infer = Mock(side_effect=TransientInferenceError("retry later"))
+    monkeypatch.setattr(InferenceModel, "infer", infer)
+    now = timezone.now()
+    monkeypatch.setattr("angee.knowledge_graph_pgvector.models.timezone.now", lambda: now)
+    pk = records.passages[0].pk
+    with pytest.raises(TransientInferenceError):
+        Passage.objects.extract_passage(pk)
+    assert Passage.objects.extract_passage(pk) == 0
+    with system_context(reason="test.graph.retry_clock"):
+        first = Passage.objects.get(pk=pk)
+        assert first.index_attempts == 1
+        assert first.index_retry_at == now + timedelta(minutes=1)
+        Passage.objects.filter(pk=pk).update(index_retry_at=now)
+    with pytest.raises(TransientInferenceError):
+        Passage.objects.extract_passage(pk)
+    with system_context(reason="test.graph.second_failure"):
+        second = Passage.objects.get(pk=pk)
+        assert second.index_attempts == 2
+        assert second.index_retry_at == now + timedelta(minutes=2)
+    assert infer.call_count == 2
+
+
+def test_vault_move_replaces_graph_evidence_even_when_text_is_unchanged(graph_records, monkeypatch):
+    records = graph_records
+    provider(monkeypatch)
+    assert Passage.objects.extract_passage(records.passages[0].pk) == 1
+    other = vault_for(records.owner, name="Moved graph")
+    with system_context(reason="test.graph.move"):
+        Vault.objects.filter(pk=other.pk).update(retrieval_class="pgvector", extraction_model=records.extraction_model)
+        Page.objects.filter(pk=records.page.pk).update(vault=other)
+        markdown = MarkdownPage.objects.get(pk=records.page.pk)
+    rows = Passage.objects.rebuild_for(markdown)
+    assert {row.pk for row in rows}.isdisjoint(row.pk for row in records.passages)
+    with system_context(reason="test.graph.move_cleanup"):
+        assert not EntityMention.objects.filter(passage__page=records.page).exists()
+        assert not EntityEdge.objects.filter(passage__page=records.page).exists()

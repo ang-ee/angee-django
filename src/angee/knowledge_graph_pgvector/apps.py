@@ -10,7 +10,9 @@ class KnowledgeGraphPgvectorConfig(AppConfig):
 
     def ready(self) -> None:
         super().ready()
-        from angee.knowledge_graph_pgvector import signals
+        from angee.knowledge_graph_pgvector import checks, signals
+
+        _ = checks  # Import registers native system checks during ready().
 
         signals.connect()
         pre_migrate.connect(

@@ -10,6 +10,7 @@ dependencies = [
     "angee-mcp>=3,<4",
     "angee-agents>=3,<4",
     "angee-jobs>=3,<4",
+    "angee-integrate>=3,<4",
     "pgvector>=0.5.1,<0.6",
     "semantic-text-splitter>=0.33,<0.34",
     "networkx>=3.7,<4",

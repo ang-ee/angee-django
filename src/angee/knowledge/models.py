@@ -16,7 +16,6 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
-from itertools import islice
 from typing import Any, ClassVar, Self, cast
 from urllib.parse import quote, unquote
 
@@ -42,6 +41,7 @@ from rebac.errors import MissingActorError
 from rebac.mixins import RebacModelBase
 from rebac.resources import model_resource_type
 
+from angee.base.expressions import TextSHA256
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
@@ -56,7 +56,7 @@ from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id, relation_read_queryset
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import send_created_batch
-from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit
+from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit, RetrievalResult
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.context import changeset, changeset_model, require_changeset, write_group
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -95,6 +95,17 @@ class OutlineEntry:
     line: int
 
 
+@dataclass(frozen=True)
+class MarkdownSection:
+    """One outline span in original characters, with its inclusive subtree lines."""
+
+    start: int
+    end: int
+    heading_path: tuple[str, ...]
+    line: int
+    end_line: int
+
+
 def parse_wikilinks(body: str) -> dict[str, str]:
     """Index native wikilinks and Markdown links to ``wikilink:encoded-title``.
 
@@ -130,9 +141,9 @@ class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeHistoryQuerySet[V
     def search_pages(self, query: str, *, first: int = 20) -> list[Any]:
         """Project ranked hits to the existing page-only search surface."""
 
-        return [hit.page for hit in self.search_passages(query, first=first)]
+        return [hit.page for hit in self.search_passages(query, first=first).hits]
 
-    def search_passages(self, query: str, *, first: int = 20) -> list[RetrievalHit]:
+    def search_passages(self, query: str, *, first: int = 20) -> RetrievalResult:
         """Search at most 100 readable vaults, once per selected backend class.
 
         Vault name/id order bounds the work set. Backend-key order is stable;
@@ -140,19 +151,22 @@ class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeHistoryQuerySet[V
         """
         limit = max(0, min(first, MAX_SEARCH_PAGE_SIZE))
         if not limit:
-            return []
+            return RetrievalResult()
         groups: dict[str, list[Any]] = {}
         for vault in self.untrashed().scoped().order_by("name", "sqid")[:MAX_SEARCH_VAULTS]:
             groups.setdefault(vault.retrieval_class, []).append(vault)
         field = self.model.retrieval_class.field
         hits: list[RetrievalHit] = []
+        failures = []
         for key, vaults in sorted(groups.items()):
             remaining = limit - len(hits)
             implementation = field.resolve_class(key)
-            hits.extend(islice(implementation.search_many(vaults, query, first=remaining), remaining))
+            result = implementation.search_many(vaults, query, first=remaining)
+            hits.extend(result.hits[:remaining])
+            failures.extend(result.failures)
             if len(hits) == limit:
                 break
-        return [replace(hit, rank=rank) for rank, hit in enumerate(hits, 1)]
+        return RetrievalResult(hits=[replace(hit, rank=rank) for rank, hit in enumerate(hits, 1)], failures=failures)
 
 
 _VaultManagerBase = AngeeHistoryManager.from_queryset(VaultQuerySet)
@@ -360,22 +374,11 @@ class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel, concrete=True)
         binds it, mirroring ``InferenceProvider.backend``.
         """
 
-        return self.retrieval_for(self.retrieval_class)
+        return type(self).retrieval_class.field.resolve_class(self.retrieval_class)(self)
 
-    def retrieval_for(self, key: str) -> RetrievalBackend:
-        """Return the registered retrieval backend for ``key``, bound to this vault.
-
-        The single public resolution seam over the vault-owned ``retrieval_class``
-        registry: callers (this model's ``retrieval`` property, a semantic plugin
-        forcing its own ``key``) ask the vault rather than re-deriving the field's
-        internals. The native declared field owns value normalization and the
-        trusted registry resolver owns class loading.
-        """
-
-        backend_class = cast(
-            ImplClassField[RetrievalBackend], type(self)._meta.get_field("retrieval_class"),
-        ).resolve_class(key)
-        return backend_class(self)
+    def clean(self) -> None:
+        super().clean()
+        self.retrieval.validate_selection(self)
 
 
 class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], AngeeHistoryQuerySet[PageT]):
@@ -906,7 +909,27 @@ class AmbiguousMatchError(StructuredEditError):
     """Raised when a heading path (or replace target) matches more than once."""
 
 
-class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
+class MarkdownPageQuerySet(PageQuerySet):
+    """Keep the canonical body hash current even for native bulk writes."""
+
+    def update(self, **kwargs: Any) -> int:
+        if "body" in kwargs:
+            kwargs.setdefault("updated_at", timezone.now())
+            body = kwargs["body"]
+            if isinstance(body, str):
+                kwargs["body_hash"] = self.model.hash_body(body)
+                kwargs["word_count"] = len(body.split())
+            else:
+                # Expressions (including bulk_update's CASE) still derive the
+                # canonical hash in the same UPDATE as the body.
+                kwargs["body_hash"] = TextSHA256(body)
+        return super().update(**kwargs)
+
+
+_MarkdownPageManager = PageManager.from_queryset(MarkdownPageQuerySet)
+
+
+class MarkdownPageManager[MarkdownT: MarkdownPage](_MarkdownPageManager[MarkdownT]):
     """Factories for actor-scoped markdown body writes."""
 
     def _copy_bodies(
@@ -1135,6 +1158,31 @@ class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits=
         ]
 
     @staticmethod
+    def sections(body: str) -> list[MarkdownSection]:
+        """Partition the original body by outline headings, preserving CR/LF offsets.
+
+        Character spans stop at the next heading; line ranges include child
+        headings so section edits and passage indexing share one outline owner.
+        """
+
+        offsets = [0, *(match.end() for match in re.finditer(r"\r\n?|\n", body))]
+        entries = MarkdownPage.parse_outline(body)
+        sections = []
+        if not entries or entries[0].line:
+            sections.append(MarkdownSection(0, offsets[entries[0].line] if entries else len(body), (), 0, len(offsets)))
+        ancestry = []
+        for index, entry in enumerate(entries):
+            while ancestry and ancestry[-1].level >= entry.level:
+                ancestry.pop()
+            ancestry.append(entry)
+            end = offsets[entries[index + 1].line] if index + 1 < len(entries) else len(body)
+            end_line = next((later.line for later in entries[index + 1:] if later.level <= entry.level), len(offsets))
+            sections.append(MarkdownSection(
+                offsets[entry.line], end, tuple(ancestor.text for ancestor in ancestry), entry.line, end_line,
+            ))
+        return sections
+
+    @staticmethod
     def section_range(body: str, heading_path: str | list[str]) -> tuple[int, int]:
         """Resolve ``heading_path`` to its ``[start, end)`` line range in ``body``.
 
@@ -1147,24 +1195,12 @@ class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits=
         nothing matches, :class:`AmbiguousMatchError` when more than one does.
         """
 
-        normalized = MarkdownPage._normalize_newlines(body)
-        entries = MarkdownPage.parse_outline(normalized)
-        line_count = len(normalized.split("\n"))
         want = [text.strip().lower() for text in ([heading_path] if isinstance(heading_path, str) else heading_path)]
-        matches: list[tuple[int, int]] = []
-        ancestry: list[OutlineEntry] = []
-        for index, entry in enumerate(entries):
-            while ancestry and ancestry[-1].level >= entry.level:
-                ancestry.pop()
-            ancestry.append(entry)
-            tail = [ancestor.text.strip().lower() for ancestor in ancestry][-len(want) :]
-            if tail != want:
-                continue
-            end = next(
-                (later.line for later in entries[index + 1 :] if later.level <= entry.level),
-                line_count,
-            )
-            matches.append((entry.line, end))
+        matches = [
+            (section.line, section.end_line)
+            for section in MarkdownPage.sections(body)
+            if section.heading_path and [text.strip().lower() for text in section.heading_path][-len(want):] == want
+        ]
         if not matches:
             raise SectionNotFoundError(f"No section matches heading path {heading_path!r}.")
         if len(matches) > 1:

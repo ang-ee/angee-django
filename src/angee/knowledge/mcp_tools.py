@@ -68,7 +68,12 @@ def register(server: FastMCP) -> None:
             GraphQLTool(
                 operation="search_passages",
                 name="search_passages",
-                fields=(("page", ("sqid", "title", "kind")), "heading_path", "start", "end", "text", "rank", "score"),
+                fields=(
+                    ("hits", (
+                        ("page", ("sqid", "title", "kind")), "heading_path", "start", "end", "text", "rank", "score",
+                    )),
+                    ("failures", ("backend", "arm", "vaults", "message")),
+                ),
                 args=("vault", "query"),
                 limit_arg="first",
                 description="Search readable knowledge and return each page's best passage with source offsets. "

@@ -49,10 +49,9 @@ def graph_page(records, title, *, body=None, names=(), edges=(), vault=None):
                 vault=vault,
                 key=entity_key(name),
                 kind="concept",
-                defaults={"name": name},
             )
             entities[name] = entity
-            EntityMention.objects.create(passage=passage, entity=entity, description=body)
+            EntityMention.objects.create(passage=passage, entity=entity, name=name, description=body)
         for left, right in edges:
             EntityEdge.objects.create(
                 passage=passage,

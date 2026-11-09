@@ -60,6 +60,7 @@ class EvaluationResult:
     queries: int
     overall: dict[str, RetrievalMetrics]
     by_category: dict[str, dict[str, RetrievalMetrics]]
+    failures: list[dict[str, Any]]
 
 
 def evaluate(golden: GoldenSet, vaults: Iterable[Any]) -> EvaluationResult:
@@ -67,7 +68,7 @@ def evaluate(golden: GoldenSet, vaults: Iterable[Any]) -> EvaluationResult:
 
     vaults = tuple(vaults)
     titles = {title for case in golden.cases for title in case.expected_pages}
-    pages = PgvectorRetrievalBackend._pages(vaults).filter(title__in=titles)
+    pages = PgvectorRetrievalBackend.pages(vaults).filter(title__in=titles)
     by_title: dict[str, int] = {}
     for page in pages:
         if page.title in by_title:
@@ -77,11 +78,16 @@ def evaluate(golden: GoldenSet, vaults: Iterable[Any]) -> EvaluationResult:
     if missing:
         raise ValueError(f"Golden pages must be readable and untrashed: {', '.join(missing)}")
     measured = []
+    failures = []
     for case in golden.cases:
         expected = {by_title[title] for title in case.expected_pages}
         rankings = PgvectorRetrievalBackend.rankings(vaults, case.query, first=MAX_SEARCH_PAGE_SIZE)
+        failures.extend(
+            {"query": case.query, "backend": failure.backend, "arm": failure.arm, "message": failure.message}
+            for failure in rankings["hybrid+G1"].failures
+        )
         measured.append(
-            (case.category, {arm: RetrievalMetrics.measure(rankings[arm], expected) for arm in RETRIEVAL_ARMS})
+            (case.category, {arm: RetrievalMetrics.measure(rankings[arm].hits, expected) for arm in RETRIEVAL_ARMS})
         )
 
     def aggregate(rows: list[dict[str, RetrievalMetrics]]) -> dict[str, RetrievalMetrics]:
@@ -92,6 +98,7 @@ def evaluate(golden: GoldenSet, vaults: Iterable[Any]) -> EvaluationResult:
 
     return EvaluationResult(
         queries=len(measured),
+        failures=failures,
         overall=aggregate([metrics for _, metrics in measured]),
         by_category={
             category: aggregate([metrics for label, metrics in measured if label == category])

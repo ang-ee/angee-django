@@ -2,7 +2,7 @@
 
 from django.apps import apps
 
-from angee.knowledge.retrieval import RetrievalBackend, RetrievalHit
+from angee.knowledge.retrieval import RetrievalBackend, RetrievalHit, RetrievalResult
 
 
 class ReverseRetrieval(RetrievalBackend):
@@ -20,4 +20,4 @@ class ReverseRetrieval(RetrievalBackend):
             .scoped()
             .order_by("-title")[:first]
         )
-        return [RetrievalHit(page=page, rank=rank) for rank, page in enumerate(pages, 1)]
+        return RetrievalResult(hits=[RetrievalHit(page=page, rank=rank) for rank, page in enumerate(pages, 1)])

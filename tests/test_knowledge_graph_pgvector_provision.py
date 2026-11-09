@@ -8,6 +8,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import DatabaseError, connection
 from django.db.models.signals import pre_migrate
 
+from angee.knowledge_graph_pgvector.checks import check_graph_options
 from angee.knowledge_graph_pgvector.signals import prepare_vector_extension
 
 
@@ -46,3 +47,11 @@ def test_pre_migrate_identifies_pg_trgm_failure_after_vector_succeeds(monkeypatc
     monkeypatch.setattr(connection, "cursor", lambda: cursor)
     with pytest.raises(ImproperlyConfigured, match="pg_trgm.*privileges"):
         prepare_vector_extension(None, using="default")
+
+
+
+def test_graph_options_are_checked_before_workers_start(settings):
+    settings.ANGEE_KNOWLEDGE_GRAPH = {"hops": 100}
+    assert [error.id for error in check_graph_options(None)] == ["knowledge_graph_pgvector.E001"]
+    settings.ANGEE_KNOWLEDGE_GRAPH = {"hops": 1}
+    assert check_graph_options(None) == []

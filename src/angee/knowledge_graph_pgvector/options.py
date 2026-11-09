@@ -14,7 +14,7 @@ class GraphOptions(BaseModel):
     idle_minutes: int = Field(default=5, ge=0, le=1440)
     gleaning_passes: int = Field(default=0, ge=0, le=1)
     llm_adjudication: bool = False
-    trigram_threshold: float = Field(default=0.85, gt=0, le=1)
+    trigram_threshold: float = Field(default=0.8, gt=0, le=1)
     hops: int = Field(default=2, ge=1, le=2)
     degree_cap: int = Field(default=20, ge=1, le=100)
     seed_limit: int = Field(default=20, ge=1, le=50)
@@ -28,4 +28,4 @@ class GraphOptions(BaseModel):
 def default_entity_kinds() -> list[str]:
     """A fresh default vocabulary for each vault's extraction schema."""
 
-    return ["person", "organization", "place", "concept", "event"]
+    return sorted(["person", "organization", "place", "concept", "event"])

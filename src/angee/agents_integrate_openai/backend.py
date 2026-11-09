@@ -7,6 +7,8 @@ from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlsplit
 
+from asgiref.sync import async_to_sync
+
 from angee.agents.backends import InferenceModelSpec
 from angee.agents.sdk_backends import SDKInferenceBackend
 
@@ -17,12 +19,6 @@ if TYPE_CHECKING:
 
 DEFAULT_BROKER_NAME = "openai"
 _MAX_TOKEN_FIELDS = frozenset({"max_tokens", "max_completion_tokens"})
-_EMBEDDING_DIMENSIONS = {
-    "text-embedding-ada-002": 1536,
-    "text-embedding-3-small": 1536,
-    "text-embedding-3-large": 3072,
-}
-"""Native sizes published in OpenAI's embedding model catalogue; unknown ids learn on use."""
 
 
 class OpenAIInferenceBackend(SDKInferenceBackend):
@@ -113,11 +109,15 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
 
         del client
         if model_id.startswith("text-embedding-"):
-            dimensions = _EMBEDDING_DIMENSIONS.get(model_id) if not self._is_compatible_endpoint else None
-            return {
-                "model_use": "embedding",
-                "capabilities": {"embedding_dimensions": dimensions} if dimensions else {},
-            }
+            if self._is_compatible_endpoint:
+                return {"model_use": "embedding", "context_window": 0}
+            # Discovery records native metadata once; embedding requests never
+            # open a second SDK binding just to ask for the input budget.
+            async def budget() -> int | None:
+                async with self.embedding_model(model_id) as model:
+                    return await model.max_input_tokens()
+
+            return {"model_use": "embedding", "context_window": async_to_sync(budget)() or 0}
         return {"model_use": "chat"}
 
     def embedding_model(

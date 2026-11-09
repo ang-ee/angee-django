@@ -51,7 +51,7 @@ from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
-from angee.knowledge_graph_pgvector.models import VaultEmbeddingModel, VaultGraphExtraction
+from angee.knowledge_graph_pgvector.models import PageIndexState, VaultEmbeddingModel, VaultGraphExtraction
 from angee.knowledge_graph_pgvector.testing import models as pgv_models  # noqa: F401 -- register passage test models
 from angee.knowledge_integrate_notion.models import NotionConnection as AbstractNotionConnection
 from angee.messaging.testing import models as messaging_models  # noqa: F401 -- register messaging test models
@@ -231,7 +231,7 @@ class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, VaultGraphExtraction,
         rebac_resource_type = "knowledge/vault"
 
 
-class Page(RecordChangedOptIn, AbstractPage):
+class Page(RecordChangedOptIn, PageIndexState, AbstractPage):
     """Concrete knowledge page used by source-addon tests."""
 
     @classmethod

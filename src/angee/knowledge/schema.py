@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
@@ -11,11 +12,12 @@ import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch
+from graphql import get_named_type
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry_django.auth.utils import get_current_user
-from strawberry_django.optimizer import optimize
+from strawberry_django.optimizer import _generate_selection_resolve_info, _get_selections, optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.fields.identity import SqidField
@@ -56,6 +58,7 @@ from angee.knowledge.models import (
     StructuredEditError,
     UnsupportedPageKindError,
 )
+from angee.knowledge.retrieval import RetrievalResult
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 if TYPE_CHECKING:
@@ -382,6 +385,41 @@ class RetrievalHitType:
     score: float | None
 
 
+@strawberry.type
+class RetrievalFailureType:
+    backend: str
+    arm: str
+    vaults: list[str]
+    message: str
+
+
+@strawberry.type
+class RetrievalResultType:
+    hits: list[RetrievalHitType]
+    failures: list[RetrievalFailureType]
+
+    @classmethod
+    def project(cls, result: RetrievalResult, info: strawberry.Info) -> "RetrievalResultType":
+        """Batch Page projections with native hints under the nested hit selection.
+
+        Use the optimizer's own fragment/directive-aware selection traversal so
+        aliases and page extensions get the same hints as a root Page list.
+        """
+
+        raw = info._raw_info
+        for field_name in ("hits", "page"):
+            parent = get_named_type(raw.return_type)
+            selections = _get_selections(raw, parent)
+            nodes = [node for group in selections.values() for node in group if node.name.value == field_name]
+            if not nodes:
+                return cast("RetrievalResultType", result)
+            raw = _generate_selection_resolve_info(raw, nodes, parent.fields[field_name].type, parent)
+        pages = {row.pk: row for row in optimize(Page.objects.filter(pk__in=[hit.page.pk for hit in result.hits]), raw)}
+        return cast("RetrievalResultType", replace(result, hits=[
+            replace(hit, page=pages[hit.page.pk]) for hit in result.hits if hit.page.pk in pages
+        ]))
+
+
 class VaultWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
@@ -517,17 +555,18 @@ class KnowledgeQuery:
     @strawberry.field
     def search_passages(
         self,
+        info: strawberry.Info,
         query: str,
         vault: PublicID | None = None,
         first: int = 20,
-    ) -> list[RetrievalHitType]:
+    ) -> RetrievalResultType:
         """Return each matching page's best passage, where its backend supplies one."""
 
         rows = Vault.objects.all()
         if vault is not None:
             target = require_instance_for_id(Vault, vault)
             rows = rows.filter(pk=target.pk)
-        return cast("list[RetrievalHitType]", rows.search_passages(query, first=first))
+        return RetrievalResultType.project(rows.search_passages(query, first=first), info)
 
     @strawberry.field
     def search_pages(

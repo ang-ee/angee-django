@@ -550,11 +550,11 @@ def test_lexical_retrieval_matches_title_and_body_scoped_to_actor(composed_table
         MarkdownPage.objects.write_body(shopping, "milk eggs bread")
 
     with actor_context(alice):
-        assert [hit.page.title for hit in vault.retrieval.search("paprika")] == ["Recipes"]  # body match
-        assert [hit.page.title for hit in vault.retrieval.search("shopping")] == ["Shopping"]  # title match
+        assert [hit.page.title for hit in vault.retrieval.search("paprika").hits] == ["Recipes"]  # body match
+        assert [hit.page.title for hit in vault.retrieval.search("shopping").hits] == ["Shopping"]  # title match
 
     with actor_context(bob):
-        assert list(vault.retrieval.search("paprika")) == []  # bob reads nothing here
+        assert list(vault.retrieval.search("paprika").hits) == []  # bob reads nothing here
 
 
 def _grant(resource: Any, relation: str, user: Any) -> None:

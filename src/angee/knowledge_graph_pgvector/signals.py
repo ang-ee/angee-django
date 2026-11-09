@@ -3,19 +3,22 @@
 from collections.abc import Iterable
 from typing import Any
 
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import DatabaseError, connections
 from django.db.models.signals import post_save
+from rebac import system_context
 
 from angee.base.signals import connect_for_models
 from angee.jobs.enqueue import enqueue_task
 from angee.knowledge_graph_pgvector.constants import EMBED_PAGE_TASK, RECONCILE_SECONDS, RECONCILE_TASK
+from angee.knowledge_graph_pgvector.retrieval import PgvectorRetrievalBackend
 
 
 def prepare_vector_extension(sender: Any, using: str, **kwargs: Any) -> None:
     """Prepare vector storage and trigram resolution before host migrations.
 
-    Host migrations may also carry ``VectorExtension`` and ``TrigramExtension``.
+    This native pre_migrate receiver is the single extension owner.
     A preinstalled extension needs no elevated role; a missing extension needs
     the server package and creation privileges. SQLite remains a no-op here.
     """
@@ -62,6 +65,13 @@ def enqueue_embedding(
     """Signals dispatch identifiers only; managers decide whether work is needed."""
 
     if raw:
+        return
+    vault_id = instance.pk if sender._meta.label_lower == "knowledge.vault" else instance.vault_id
+    with system_context(reason="knowledge_graph_pgvector.enqueue_selection"):
+        selected = apps.get_model("knowledge", "Vault").objects.filter(
+            pk=vault_id, retrieval_class=PgvectorRetrievalBackend.key,
+        ).exists()
+    if not selected:
         return
     if sender._meta.label_lower == "knowledge.vault":
         if update_fields is None or {

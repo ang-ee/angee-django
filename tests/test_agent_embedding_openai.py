@@ -1,7 +1,7 @@
 """OpenAI embedding catalogue and native protocol over an in-memory SDK transport."""
 
 import json
-from contextlib import nullcontext
+from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
 
 import httpx2
@@ -9,36 +9,45 @@ import pytest
 from asgiref.sync import async_to_sync
 from openai import AsyncOpenAI
 from pydantic_ai.embeddings.openai import OpenAIEmbeddingModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 from angee.integrate.credentials import CredentialKind
 
 
 @pytest.mark.parametrize(
-    "name,dimensions",
+    "name",
     [
-        ("text-embedding-ada-002", 1536),
-        ("text-embedding-3-small", 1536),
-        ("text-embedding-3-large", 3072),
-        ("text-embedding-future", None),
+        "text-embedding-ada-002",
+        "text-embedding-3-small",
+        "text-embedding-3-large",
+        "text-embedding-future",
     ],
 )
-def test_openai_discovers_embeddings_without_an_inference_probe(monkeypatch, name, dimensions):
+def test_openai_discovers_embeddings_without_an_inference_probe(monkeypatch, name):
     backend = OpenAIInferenceBackend(SimpleNamespace(base_url="", config={}))
     client = SimpleNamespace(models=SimpleNamespace(list=lambda: [SimpleNamespace(id=name)]))
     monkeypatch.setattr(backend, "client", lambda: nullcontext(client))
+    @asynccontextmanager
+    async def binding(handle):
+        # Native model metadata needs no request; no hand-maintained size table.
+        async with AsyncOpenAI(api_key="test") as sdk:
+            yield OpenAIEmbeddingModel(handle, provider=OpenAIProvider(openai_client=sdk))
+
+    monkeypatch.setattr(backend, "embedding_model", binding)
     specs = backend.list_models()
     assert [spec.handle for spec in specs] == [name, f"openai/{name}"]
     for spec in specs:
         assert spec.model_use == "embedding"
-        assert spec.capabilities.get("embedding_dimensions") == dimensions
+        assert spec.capabilities.get("embedding_dimensions") is None
+        assert spec.context_window == 8192
 
 
 def test_compatible_discovery_does_not_assume_hosted_dimensions():
     backend = OpenAIInferenceBackend(SimpleNamespace(base_url="https://gateway.example.test/v1", config={}))
     assert backend._model_discovery(None, "text-embedding-3-large") == {
         "model_use": "embedding",
-        "capabilities": {},
+        "context_window": 0,
     }
 
 

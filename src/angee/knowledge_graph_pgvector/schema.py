@@ -1,11 +1,12 @@
 """Vault model selection and related-page projections over scoped retrieval."""
 
-from typing import Any, cast
+from typing import cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
 from strawberry import auto
+from strawberry_django.optimizer import optimize
 
 from angee.graphql.ids import PublicID, public_id_field, require_instance_for_id
 from angee.knowledge.schema import PageType
@@ -26,25 +27,18 @@ class VaultGraphExtractionExtension:
     graph_entity_kinds: auto
 
 
-@strawberry_django.type(Page, name="PageType", extend=True)
-class PageGraphPgvectorExtension:
-    @strawberry_django.field(only=["id", "vault_id"])
-    def related_pages(self, first: int = 5) -> list[PageType]:
-        return cast(
-            "list[PageType]", [hit.page for hit in PgvectorRetrievalBackend.related_to(cast(Any, self), first=first)]
-        )
-
-
 @strawberry.type
 class GraphPgvectorQuery:
     @strawberry.field
-    def related_pages(self, page: PublicID, first: int = 5) -> list[PageType]:
+    def related_pages(self, info: strawberry.Info, page: PublicID, first: int = 5) -> list[PageType]:
         target = require_instance_for_id(Page, page)
-        return cast("list[PageType]", [hit.page for hit in PgvectorRetrievalBackend.related_to(target, first=first)])
+        hits = PgvectorRetrievalBackend.related_to(target, first=first)
+        pages = {row.pk: row for row in optimize(Page.objects.filter(pk__in=[hit.page.pk for hit in hits]), info)}
+        return cast("list[PageType]", [pages[hit.page.pk] for hit in hits if hit.page.pk in pages])
 
 
 _PGVECTOR_BUCKET = {
     "query": [GraphPgvectorQuery],
-    "type_extensions": [VaultEmbeddingExtension, VaultGraphExtractionExtension, PageGraphPgvectorExtension],
+    "type_extensions": [VaultEmbeddingExtension, VaultGraphExtractionExtension],
 }
 schemas = {"public": {**_PGVECTOR_BUCKET}, "console": {**_PGVECTOR_BUCKET}}

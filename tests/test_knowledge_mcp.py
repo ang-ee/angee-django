@@ -132,7 +132,7 @@ def test_search_passages_projects_ranked_evidence() -> None:
     assert tool.annotations.readOnlyHint is True
     assert tool.parameters["required"] == ["query"]
     assert set(tool.parameters["properties"]) == {"vault", "query", "first"}
-    fields = tool.output_schema["properties"]["result"]["items"]["properties"]
+    fields = tool.output_schema["properties"]["hits"]["items"]["properties"]
     assert set(fields) == {"page", "heading_path", "start", "end", "text", "rank", "score"}
     assert "page { id title kind }" in tool.document
 

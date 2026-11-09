@@ -11,10 +11,7 @@ SETTINGS = {
     # without editing the knowledge addon; a ``Vault`` selects it with
     # ``retrieval_class = "pgvector"``.
     "ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES.pgvector": ("angee.knowledge_graph_pgvector.retrieval.PgvectorRetrievalBackend"),
-    # GraphOptions owns validated defaults; no extraction runs without a vault model.
-    "ANGEE_KNOWLEDGE_GRAPH": {},
     "CELERY_BEAT_SCHEDULE:append": {
         RECONCILE_TASK: {"task": RECONCILE_TASK, "schedule": float(RECONCILE_SECONDS)},
     },
 }
-"""Django settings contributed when the knowledge pgvector plugin is installed."""

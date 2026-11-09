@@ -17,8 +17,7 @@ ORM filtering over the existing ``title``/``body`` columns, not parsing.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
-from itertools import islice
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from django.apps import apps
@@ -48,6 +47,24 @@ class RetrievalHit:
     score: float | None = None
 
 
+@dataclass(frozen=True, kw_only=True)
+class RetrievalFailure:
+    """A dropped arm, projected without provider diagnostics or catalogue secrets."""
+
+    backend: str
+    arm: str
+    vaults: tuple[str, ...]
+    message: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class RetrievalResult:
+    """Ranked evidence and visible degradation, including when no hits remain."""
+
+    hits: list[RetrievalHit] = field(default_factory=list)
+    failures: list[RetrievalFailure] = field(default_factory=list)
+
+
 class RetrievalBackend(ImplBase):
     """The search strategy one vault resolves to.
 
@@ -68,16 +85,21 @@ class RetrievalBackend(ImplBase):
 
         self.vault = vault
 
-    def search(self, query: str, *, first: int = 20) -> Iterable[RetrievalHit]:
+    @classmethod
+    def validate_selection(cls, vault: Any) -> None:
+        """Validate backend-specific prerequisites when a vault selects this strategy."""
+
+    def search(self, query: str, *, first: int = 20) -> RetrievalResult:
         """Search this vault within the shared page budget, even for plugin callers."""
 
         limit = max(0, min(first, MAX_SEARCH_PAGE_SIZE))
         if not limit:
-            return ()
-        return islice(type(self).search_many((self.vault,), query, first=limit), limit)
+            return RetrievalResult()
+        result = type(self).search_many((self.vault,), query, first=limit)
+        return replace(result, hits=result.hits[:limit])
 
     @classmethod
-    def search_many(cls, vaults: Iterable[Any], query: str, *, first: int = 20) -> Iterable[RetrievalHit]:
+    def search_many(cls, vaults: Iterable[Any], query: str, *, first: int = 20) -> RetrievalResult:
         """Search one same-strategy vault group with one actor-scoped operation."""
         raise NotImplementedError("Retrieval backends must implement search_many().")
 
@@ -94,7 +116,7 @@ class LexicalRetrievalBackend(RetrievalBackend):
     label = "Lexical"
 
     @classmethod
-    def search_many(cls, vaults: Iterable[Any], query: str, *, first: int = 20) -> Iterable[RetrievalHit]:
+    def search_many(cls, vaults: Iterable[Any], query: str, *, first: int = 20) -> RetrievalResult:
         """One lexical scan over a bounded group, retaining page and trash scopes."""
 
         page_model = apps.get_model("knowledge", "Page")
@@ -105,7 +127,7 @@ class LexicalRetrievalBackend(RetrievalBackend):
             .order_by("title", "sqid")
             .scoped()
         )
-        return [
+        return RetrievalResult(hits=[
             RetrievalHit(page=page, rank=rank)
             for rank, page in enumerate(rows[: max(0, min(first, MAX_SEARCH_PAGE_SIZE))], 1)
-        ]
+        ])

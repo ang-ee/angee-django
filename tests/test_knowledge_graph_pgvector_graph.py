@@ -16,7 +16,7 @@ def _hit(pk, title, *, text=None):
     return RetrievalHit(page=SimpleNamespace(pk=pk, title=title, sqid=f"page-{pk}"), rank=1, text=text)
 
 
-def test_rrf_uses_k60_and_stable_title_and_public_id_ties():
+def test_rrf_uses_k60_and_stable_title_and_page_id_ties():
     a, b, c = _hit(2, "Same"), _hit(1, "Same"), _hit(3, "C")
     hits = reciprocal_rank_fusion([a, b, c], [b, a], first=3)
     assert [hit.page.pk for hit in hits] == [1, 2, 3]
@@ -42,7 +42,7 @@ def test_link_arm_scopes_both_ends_and_stops_after_one_hop(passage_records):
     _grant(visible, "viewer", reader)
     _grant(second_hop, "viewer", reader)
     with actor_context(reader):
-        pages = PgvectorRetrievalBackend._pages((records.vault,))
+        pages = PgvectorRetrievalBackend.pages((records.vault,))
         hits = PgvectorRetrievalBackend.link_arm(pages, [RetrievalHit(page=records.page, rank=1)], first=10)
         assert [hit.page.pk for hit in hits] == [visible.pk]
         assert hidden.pk not in [hit.page.pk for hit in hits]

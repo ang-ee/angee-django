@@ -14,6 +14,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
+import math
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
@@ -28,7 +30,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import models, transaction
 from django_compose.models import Composable
-from pydantic_ai.embeddings import EmbeddingResult, EmbedInputType
+from pydantic_ai.embeddings import EmbedInputType
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import (
     BinaryContent,
@@ -46,7 +48,7 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import SubjectRef, actor_context, current_actor, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
-from angee.agents.backends import InferenceBackend
+from angee.agents.backends import InferenceBackend, TransientInferenceError
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.grants import sync_resource_reader_grants
 from angee.agents.reader_role import sync_resource_reader_role
@@ -527,23 +529,9 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
         return value if type(value) is int and value > 0 else None
 
     def max_input_tokens(self) -> int | None:
-        """Return the discovered input budget, or the native embedding adapter's budget.
+        """Return the discovery-owned budget without opening a provider binding."""
 
-        Unknown budgets remain ``None``; this never probes by embedding text.
-        """
-
-        if self.context_window:
-            return int(self.context_window)
-        if self.model_use != InferenceModelUse.EMBEDDING:
-            return None
-        provider: Any = self.provider
-        binding = provider.backend.embedding_model(self.provider_model_name)
-
-        async def budget() -> int | None:
-            async with binding as model:
-                return await model.max_input_tokens()
-
-        return async_to_sync(budget)()
+        return int(self.context_window) if self.context_window else None
 
     def embed(self, texts: Sequence[str], *, input_type: EmbedInputType, role: str) -> list[list[float]]:
         """Embed a batch after re-checking its use, lifecycle and exact deployment role.
@@ -563,38 +551,55 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
         if not texts:
             return []
         provider: Any = self.provider
-        binding = provider.backend.embedding_model(self.provider_model_name)
-
-        async def request() -> EmbeddingResult:
-            async with binding as model:
-                return await model.embed(texts, input_type=input_type)
-
-        result = async_to_sync(request)()
+        try:
+            result = provider.backend.embed(self.provider_model_name, texts, input_type=input_type)
+        except provider.backend.request_error_types() as error:
+            if provider.backend.is_transient_error(error):
+                raise TransientInferenceError("Embedding transport failed.") from error
+            raise
+        self.record_usage(result.usage, operation="embed", role=role)
         vectors = [list(vector) for vector in result.embeddings]
         if len(vectors) != len(texts):
             raise UnexpectedModelBehavior("Embedding response must contain one vector per input text.")
         dimensions = len(vectors[0])
-        if not dimensions or any(len(vector) != dimensions for vector in vectors):
-            raise UnexpectedModelBehavior("Embedding response must contain vectors of one positive dimension.")
-        if dimensions != self.embedding_dimensions:
+        if not dimensions or any(
+            len(vector) != dimensions or not all(math.isfinite(value) for value in vector) or not any(vector)
+            for vector in vectors
+        ):
+            raise UnexpectedModelBehavior(
+                "Embedding response must contain finite, nonzero vectors of one positive dimension."
+            )
+        if self.embedding_dimensions is not None and dimensions != self.embedding_dimensions:
+            raise UnexpectedModelBehavior("Embedding dimensions differ from the model's recorded capabilities.")
+        if self.embedding_dimensions is None:
             self._record_embedding_dimensions(dimensions)
         return vectors
 
     def _record_embedding_dimensions(self, dimensions: int) -> None:
         """Learn an unknown size under a row lock; refuse changes to an existing vector space."""
 
-        with (
-            system_context(reason="agents.inference_model.embedding_dimensions"),
-            transaction.atomic() if not self._state.adding else nullcontext(),
-        ):
-            model = self if self._state.adding else type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        with system_context(reason="agents.inference_model.embedding_dimensions"), transaction.atomic():
+            model = type(self).objects.filter(pk=self.pk).lock_if_supported(no_key=True).get()
             if model.embedding_dimensions is not None and model.embedding_dimensions != dimensions:
                 raise UnexpectedModelBehavior("Embedding dimensions differ from the model's recorded capabilities.")
             if model.embedding_dimensions is None:
                 model.capabilities = {**model.capabilities, "embedding_dimensions": dimensions}
-                if not model._state.adding:
-                    model.save(update_fields=["capabilities"])
+                model.save(update_fields=["capabilities"])
             self.capabilities = model.capabilities
+
+    def record_usage(self, usage: RequestUsage | RunUsage, *, operation: str, role: str = "") -> dict[str, int]:
+        """Record normalized provider accounting without changing inference return types.
+
+        Structured usage events contain deployment identity and counters, never
+        provider inputs or credentials. Session/turn owners still persist their
+        own usage totals from the same normalization contract.
+        """
+
+        normalized = normalize_inference_usage(usage)
+        logging.getLogger("angee.agents.usage").info(
+            "Inference usage", extra={"model_id": self.pk, "operation": operation, "role": role, "usage": normalized},
+        )
+        return normalized
 
     def is_transient_error(self, error: Exception) -> bool:
         """Classify a failure through this model's native provider backend."""
@@ -732,13 +737,18 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
             raise TypeError("Inference images must be native pydantic-ai BinaryContent values.")
         if image_parts:
             request_messages.append(ModelRequest(parts=[UserPromptPart(image_parts)]))
-        response = self.chat(
-            request_messages,
-            model_settings=settings,
-            model_request_parameters=inference_request_parameters(output_schema),
-            credential=credential,
-        )
-        usage = normalize_inference_usage(response.usage)
+        try:
+            response = self.chat(
+                request_messages,
+                model_settings=settings,
+                model_request_parameters=inference_request_parameters(output_schema),
+                credential=credential,
+            )
+        except self.request_error_types() as error:
+            if self.is_transient_error(error):
+                raise TransientInferenceError("Inference transport failed.") from error
+            raise
+        usage = self.record_usage(response.usage, operation="infer")
         try:
             output = decode_inference_output(response) if isinstance(output_schema, Mapping) else None
         except ValueError as error:

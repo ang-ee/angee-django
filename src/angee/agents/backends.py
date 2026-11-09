@@ -17,7 +17,7 @@ from asgiref.sync import async_to_sync
 from django.utils.module_loading import import_string
 from httpx import NetworkError, Timeout, TimeoutException
 from pydantic_ai.direct import model_request
-from pydantic_ai.embeddings import EmbeddingModel
+from pydantic_ai.embeddings import EmbeddingModel, EmbeddingResult, EmbedInputType
 from pydantic_ai.exceptions import (
     ModelAPIError,
     ModelConnectionError,
@@ -76,6 +76,10 @@ class InferenceModelSpec:
         if self.config:
             defaults["config"] = self.config
         return defaults
+
+
+class TransientInferenceError(Exception):
+    """A provider-classified inference failure that a bounded retry may outlive."""
 
 
 class InferenceBackend(ImplBase):
@@ -138,7 +142,7 @@ class InferenceBackend(ImplBase):
     def is_transient_error(self, error: Exception) -> bool:
         """Classify native provider failures; vendor adapters extend transport types."""
 
-        if isinstance(error, self.TRANSIENT_MODEL_ERRORS):
+        if isinstance(error, (TransientInferenceError, *self.TRANSIENT_MODEL_ERRORS)):
             return True
         if isinstance(error, ModelHTTPError):
             return error.status_code == 429 or 500 <= error.status_code < 600
@@ -150,7 +154,8 @@ class InferenceBackend(ImplBase):
     def request_error_types(self) -> tuple[type[BaseException], ...]:
         """Expose the typed API and transport failures callers may classify."""
         return (
-            ModelAPIError, UnexpectedModelBehavior, TimeoutError, ConnectionError, TimeoutException, NetworkError,
+            TransientInferenceError, ModelAPIError, UnexpectedModelBehavior, TimeoutError, ConnectionError,
+            TimeoutException, NetworkError,
             *self.transient_error_types(),
         )
 
@@ -226,6 +231,19 @@ class InferenceBackend(ImplBase):
             for value in values
         ):
             raise ValueError("Inference timeout must be positive and finite, or None.")
+
+    def embed(
+        self, handle: str, texts: Sequence[str], *, input_type: EmbedInputType, credential: Any | None = None,
+    ) -> EmbeddingResult:
+        """Make one native embedding request with the same client lifetime as chat."""
+
+        binding = self.embedding_model(handle, credential=credential)
+
+        async def request() -> EmbeddingResult:
+            async with binding as model:
+                return await model.embed(texts, input_type=input_type)
+
+        return async_to_sync(request)()
 
     def decide(
         self,

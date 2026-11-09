@@ -10,14 +10,14 @@ from pydantic_ai.embeddings import EmbeddingResult, TestEmbeddingModel
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from rebac import system_context
 
-from angee.agents.backends import ManualInferenceBackend
+from angee.agents.backends import ManualInferenceBackend, TransientInferenceError
 from angee.agents.models import InferenceModelStatus, InferenceModelUnavailable, InferenceModelUse
 from angee.agents.testing.models import InferenceModel, InferenceProvider
 from tests.conftest import make_integration
 
 
 @pytest.fixture
-def embedding(monkeypatch, settings):
+def embedding(monkeypatch, settings, composed_tables):
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
     monkeypatch.setattr("pydantic_ai.models.ALLOW_MODEL_REQUESTS", False)
     native = TestEmbeddingModel(dimensions=3, settings={})
@@ -38,7 +38,7 @@ def embedding(monkeypatch, settings):
         return binding()
 
     monkeypatch.setattr(ManualInferenceBackend, "embedding_model", bind)
-    provider = InferenceProvider(name="Embeddings", backend_class="manual", base_url="https://models.example.test/v1")
+    provider = make_integration("Embeddings", model=InferenceProvider, backend_class="manual", base_url="https://models.example.test/v1")
     model = InferenceModel(
         provider=provider,
         name="broker/catalogue-name",
@@ -46,6 +46,8 @@ def embedding(monkeypatch, settings):
         config={"provider_model": "native-embedding"},
         capabilities={"other": True},
     )
+    with system_context(reason="test.embedding.persist"):
+        model.save()
     return SimpleNamespace(model=model, native=native, request=request, events=events)
 
 
@@ -126,7 +128,10 @@ def test_embed_failure_closes_binding_without_recording_dimensions(embedding):
 
 
 @pytest.mark.parametrize(
-    "vectors,texts", [([], ["one"]), ([[1.0], [2.0]], ["one"]), ([[]], ["one"]), ([[1.0], [1.0, 2.0]], ["one", "two"])]
+    "vectors,texts", [
+        ([], ["one"]), ([[1.0], [2.0]], ["one"]), ([[]], ["one"]), ([[0.0, 0.0]], ["one"]),
+        ([[float("nan")]], ["one"]), ([[float("inf")]], ["one"]), ([[1.0], [1.0, 2.0]], ["one", "two"]),
+    ],
 )
 def test_embed_refuses_malformed_vector_batches(embedding, vectors, texts):
     embedding.request.return_value = EmbeddingResult(
@@ -154,14 +159,14 @@ def test_embedding_dimensions_exposes_only_positive_integers(embedding, value, e
     assert embedding.model.embedding_dimensions == expected
 
 
-def test_max_input_tokens_uses_discovery_before_native_metadata(embedding):
+def test_max_input_tokens_uses_only_discovered_metadata(embedding):
     embedding.model.context_window = 4096
     assert embedding.model.max_input_tokens() == 4096
     assert embedding.events == []
     embedding.model.context_window = 0
-    assert embedding.model.max_input_tokens() == 1024
+    assert embedding.model.max_input_tokens() is None
     embedding.request.assert_not_awaited()
-    assert embedding.events[-1] == "closed"
+    assert embedding.events == []
 
 
 def test_max_input_tokens_preserves_unknown_budget(embedding, monkeypatch):
@@ -169,7 +174,7 @@ def test_max_input_tokens_preserves_unknown_budget(embedding, monkeypatch):
     assert embedding.model.max_input_tokens() is None
     embedding.model.model_use = InferenceModelUse.CHAT
     assert embedding.model.max_input_tokens() is None
-    embedding.native.max_input_tokens.assert_awaited_once()
+    embedding.native.max_input_tokens.assert_not_awaited()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -197,3 +202,20 @@ def test_embed_stale_first_use_refuses_a_different_recorded_dimension(embedding,
     with system_context(reason="test.embedding.read"):
         model.refresh_from_db()
     assert model.embedding_dimensions == 2
+
+
+def test_embedding_usage_is_recorded_by_agents_without_changing_return_type(embedding, caplog):
+    with caplog.at_level("INFO", logger="angee.agents.usage"):
+        vectors = embedding.model.embed(["A passage"], input_type="document", role="retrieval")
+    assert vectors == [[1.0] * 3]
+    event = next(record for record in caplog.records if record.name == "angee.agents.usage")
+    assert event.model_id == embedding.model.pk
+    assert event.role == "retrieval"
+    assert event.usage["input_tokens"] > 0
+    assert event.usage["requests"] == 1
+
+
+def test_embed_classifies_transport_failures_at_the_agents_owner(embedding):
+    embedding.request.side_effect = TimeoutError("transport")
+    with pytest.raises(TransientInferenceError):
+        embedding.model.embed(["passage"], input_type="document", role="retrieval")

@@ -17,8 +17,11 @@ def test_outline_chunking_preserves_unicode_crlf_offsets_and_provider_budget():
     rows = Passage.objects.passages(markdown, max_input_tokens=160)
     assert len(rows) > 3
     assert {tuple(row.heading_path) for row in rows} == {(), ("First",), ("First", "Child")}
+    assert rows[0].text(markdown) == "Intro é🙂\u2028still prose"
+    assert rows[-1].text(markdown) == "## Child\r\nChild text."
+    assert rows[-1].start == body.index("## Child")
+    assert rows[-1].end == len(body)
     for row in rows:
-        assert row.text(markdown) == body[row.start : row.end]
         assert len(row.embedding_text(markdown).encode("utf-8")) <= 160
 
 
@@ -29,10 +32,14 @@ def test_empty_body_has_a_title_passage():
     assert (rows[0].start, rows[0].end, rows[0].text(markdown)) == (0, 0, "Empty guide")
 
 
-def test_source_fingerprint_distinguishes_title_and_body_boundaries():
-    first = MarkdownPage(title="Title\n", body="Body")
-    second = MarkdownPage(title="Title", body="\nBody")
-    assert Passage.objects.fingerprint(first) != Passage.objects.fingerprint(second)
+def test_passage_source_uses_knowledge_body_hash_and_title():
+    markdown = MarkdownPage(pk=17, title="Title", body="Body", vault_id=3)
+    markdown.refresh_body_metadata()
+    row = Passage.objects.passages(markdown)[0]
+    assert row.source_body_hash == markdown.body_hash
+    assert row.source_title == "Title"
+    markdown.title = "Changed"
+    assert not row.matches_source(markdown)
 
 
 def test_duplicate_heading_paths_do_not_make_indexing_ambiguous():
@@ -91,15 +98,19 @@ def test_missing_current_model_vectors_are_stale_without_rechunking(passage_reco
         assert not Passage.objects.stale_pages().filter(pk=records.page.pk).exists()
 
 
-def test_hash_rebuild_catches_bulk_body_writes_without_body_hash_updates(passage_records):
+def test_bulk_body_writes_maintain_the_knowledge_hash_and_invalidate_passages(passage_records):
     with system_context(reason="test.pgvector.bulk"):
         MarkdownPage.objects.filter(pk=passage_records.page.pk).update(body="Bulk replacement")
         assert Passage.objects.stale_pages().filter(pk=passage_records.page.pk).exists()
+        row = MarkdownPage.objects.get(pk=passage_records.page.pk)
+        assert row.body_hash == MarkdownPage.hash_body("Bulk replacement")
 
 
 def test_lexical_only_selection_indexes_without_an_embedding_model(passage_records, monkeypatch):
     records = passage_records
-    monkeypatch.setattr("angee.knowledge_graph_pgvector.managers.require_pgvector", lambda: None)
+    monkeypatch.setattr(
+        "angee.knowledge_graph_pgvector.retrieval.PgvectorRetrievalBackend.require_database", lambda: None,
+    )
     with system_context(reason="test.pgvector.lexical"):
         Vault.objects.filter(pk=records.vault.pk).update(embedding_model=None)
         Passage.objects.filter(page=records.page).delete()
