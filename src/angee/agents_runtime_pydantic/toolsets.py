@@ -38,7 +38,7 @@ from rebac.backends import backend
 from angee.agents.constants import BUILTIN_MCP_ANGEE
 from angee.agents.grants import TOOL_GRANT_RESOURCE_TYPE, tool_grant_ref
 from angee.base.serialization import canonical_json, json_safe
-from angee.mcp.graphql import actor_tool_read_only
+from angee.mcp.graphql import require_actor_tool
 from angee.mcp.server import mcp_server
 
 MAX_TOOL_RESULT_CHARS = 32_000
@@ -124,7 +124,7 @@ class AngeeToolset(AbstractToolset[Any]):
             grant_id = grant_ids.get(name)
             if grant_id not in granted:
                 continue
-            actor_tool_read_only(registered)
+            require_actor_tool(registered)
             annotations = registered.annotations
             assert annotations is not None
             tools[name] = _AngeeToolsetTool(

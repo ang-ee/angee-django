@@ -46,8 +46,8 @@ from angee.mcp.graphql import (
     DEFAULT_QUERY_LIMIT,
     MAX_QUERY_LIMIT,
     _CompiledTool,
-    actor_tool_read_only,
     register_graphql_tools,
+    require_actor_tool,
 )
 from angee.mcp.resource_tools import (
     _resource_projections,
@@ -268,7 +268,7 @@ def test_resource_registrar_adds_honest_catalogue_and_readers(monkeypatch: pytes
     tools = _tool_map(server)
     assert set(tools) == {"list_resources", "query_probes", "read_probes"}
     assert tools["list_resources"].annotations.readOnlyHint is True
-    assert all(tool.meta == ACTOR_EXECUTION_META and actor_tool_read_only(tool) for tool in tools.values())
+    assert all(tool.meta == ACTOR_EXECUTION_META and require_actor_tool(tool) for tool in tools.values())
     assert tools["list_resources"].tags == {RESOURCE_READER_TOOL_TAG}
     result = asyncio.run(tools["list_resources"].run({}))
     assert result.structured_content == {

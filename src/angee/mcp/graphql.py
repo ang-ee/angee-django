@@ -685,7 +685,7 @@ def _json_type(gql_type: Any) -> tuple[dict[str, Any], bool]:
     return {}, False
 
 
-def actor_tool_read_only(tool: Tool) -> bool:
+def require_actor_tool(tool: Tool) -> bool:
     """Validate a built-in tool's actor-only execution contract and return its read posture.
 
     The in-process runtime runs ``Tool.run`` outside any FastMCP request, where

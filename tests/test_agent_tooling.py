@@ -66,7 +66,7 @@ from angee.agents_runtime_pydantic.toolsets import (
     _accessible_tool_grant_ids,
 )
 from angee.base.models.audit import AuditMixin
-from angee.mcp.graphql import ACTOR_EXECUTION_META, _CompiledTool, actor_tool_read_only
+from angee.mcp.graphql import ACTOR_EXECUTION_META, _CompiledTool, require_actor_tool
 from angee.mcp.tool_tags import RESOURCE_READER_TOOL_TAG
 
 User = get_user_model()
@@ -650,17 +650,17 @@ def test_builtin_tools_declare_actor_execution_and_missing_meta_fails_closed() -
         Tool.from_function(plain_read, annotations=read_hint, meta={"angee": {"execution_context": "request"}}),
     ):
         with pytest.raises(ImproperlyConfigured, match="actor-only execution"):
-            actor_tool_read_only(undeclared)
+            require_actor_tool(undeclared)
 
-    assert actor_tool_read_only(Tool.from_function(plain_read, annotations=read_hint, meta=ACTOR_EXECUTION_META))
+    assert require_actor_tool(Tool.from_function(plain_read, annotations=read_hint, meta=ACTOR_EXECUTION_META))
     write = Tool.from_function(
         plain_read,
         annotations=ToolAnnotations(readOnlyHint=False),
         meta=ACTOR_EXECUTION_META,
     )
-    assert actor_tool_read_only(write) is False
+    assert require_actor_tool(write) is False
     with pytest.raises(ImproperlyConfigured, match="readOnlyHint"):
-        actor_tool_read_only(Tool.from_function(plain_read, meta=ACTOR_EXECUTION_META))
+        require_actor_tool(Tool.from_function(plain_read, meta=ACTOR_EXECUTION_META))
 
 
 @pytest.mark.django_db(transaction=True)

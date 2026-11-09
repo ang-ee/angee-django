@@ -45,7 +45,7 @@ Compiled GraphQL tools carry their root ``op_type`` as the structural actor-post
 fact (their annotation must agree). Builtins also run through the in-process
 pydantic runtime, outside FastMCP's request-scoped ``Context`` and
 ``get_access_token``: they declare ``meta=ACTOR_EXECUTION_META``, and the runtime
-admits a granted tool only through ``angee.mcp.graphql.actor_tool_read_only``.
+admits a granted tool only through ``angee.mcp.graphql.require_actor_tool``.
 Compiled GraphQL tools declare it by construction.
 """
 
