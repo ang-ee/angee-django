@@ -708,13 +708,50 @@ def test_active_sync_keeps_its_progress_when_another_sync_is_requested(
         bridge.refresh_from_db()
         assert bridge.sync_stage == Bridge.SyncStage.SYNCING
         assert bridge.sync_progress == progress
-        assert bridge.next_sync_at == now - timedelta(minutes=10)
+        assert bridge.next_sync_at == now + timedelta(seconds=bridge.poll_interval)
         assert sent == []
 
     # A dead worker's stale syncing marker does not strand the connection.
     assert bridge.request_sync(now=now) is True
     bridge.refresh_from_db()
     assert bridge.sync_stage == Bridge.SyncStage.QUEUED
+    assert len(sent) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_declined_scheduled_admission_waits_for_the_next_interval(
+    transactional_db: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poll declined by a live sync lock leaves the due set until its next interval."""
+
+    del transactional_db
+    now = timezone.now()
+    later = now + timedelta(seconds=120)
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr("angee.integrate.models.enqueue_task", lambda _name, **kwargs: sent.append(kwargs))
+    with system_context(reason="test declined admission setup"):
+        bridge = make_integration(
+            "declined-due",
+            model=SchedulerBridge,
+            poll_interval=120,
+            next_sync_at=now - timedelta(seconds=1),
+        )
+
+    with bridge_advisory_lock(bridge) as acquired:
+        assert acquired
+        assert enqueue_due_bridges(now=now) == {"enqueued": 0, "skipped": 1}
+        bridge.refresh_from_db()
+        assert bridge.next_sync_at == later
+        assert bridge.sync_stage == Bridge.SyncStage.IDLE
+        # The declined bridge is no longer selected, so its lock is not probed again.
+        assert enqueue_due_bridges(now=now + timedelta(seconds=60)) == {"enqueued": 0, "skipped": 0}
+
+    assert sent == []
+    assert enqueue_due_bridges(now=later) == {"enqueued": 1, "skipped": 0}
+    bridge.refresh_from_db()
+    assert bridge.sync_stage == Bridge.SyncStage.QUEUED
+    assert bridge.next_sync_at == later + timedelta(seconds=120)
     assert len(sent) == 1
 
 

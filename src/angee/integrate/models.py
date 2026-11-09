@@ -3550,7 +3550,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         """Send one admitted sync task; return false when an execution already owns this sync.
 
         ``persist=False`` sends the token a caller already admitted through
-        :meth:`mark_sync_queued` under its own row lock (the due scheduler).
+        :meth:`admit_due_sync` under its own row lock (the due scheduler).
         """
 
         if self.pk is None:
@@ -3587,6 +3587,23 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         self.sync_stage, self.sync_error, self.sync_progress = row.sync_stage, row.sync_error, row.sync_progress
         self.sync_run_id = row.sync_run_id
         return True
+
+    def admit_due_sync(self, *, now: datetime) -> bool:
+        """Admit a due scheduled sync and claim its next interval; return whether it queued.
+
+        The due scheduler's admission. A fresh admission claims the interval; a
+        recovered stale queue keeps the claim it was queued with. A declined
+        admission (a live worker or a retained run owns this sync) still claims
+        the interval, so the bridge leaves the due set until its next poll
+        instead of being re-selected and its sync lock re-probed on every pass.
+        """
+
+        with system_context(reason="integrate.bridge.admit_due"), transaction.atomic():
+            recovering = self.lock_capability().sync_stage == self.SyncStage.QUEUED
+            admitted = self.mark_sync_queued(now=now)
+            if not (admitted and recovering):
+                self.claim_sync(now=now)
+        return admitted
 
     def reset_sync_queue(self, *, now: datetime) -> None:
         """Make a failed queue dispatch due again for the next scheduler pass."""
