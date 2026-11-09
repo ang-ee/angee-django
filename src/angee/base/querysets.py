@@ -157,8 +157,13 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
         return self.order_by().values(survivor=self.survivor_id())
 
 
-class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
-    """Shared native lookup and locking, preserving each manager's policy."""
+class AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
+    """Shared native lookup and locking, preserving each manager's policy.
+
+    Every Angee queryset composes it. An owner that has already validated a
+    write reaches the persistence beneath its own guards through
+    ``super(AngeeQuerySetMixin, rows)``.
+    """
 
     model: type[_ModelT]
     _hints: dict[str, models.Model]
@@ -214,7 +219,7 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
 
 
 class AngeeQuerySet(
-    _AngeeQuerySetMixin[_ModelT],
+    AngeeQuerySetMixin[_ModelT],
     RebacQuerySet[_ModelT],
 ):
     """QuerySet API shared by Angee source and runtime models."""
@@ -357,7 +362,7 @@ class AngeeQuerySet(
 
 
 class AngeeUnscopedQuerySet(
-    _AngeeQuerySetMixin[_ModelT],
+    AngeeQuerySetMixin[_ModelT],
     TrackedQuerySet[_ModelT],
 ):
     """Angee queryset API for intentionally permission-naive managers.

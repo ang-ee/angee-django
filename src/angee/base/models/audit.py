@@ -12,12 +12,12 @@ from rebac.managers import TrackedQuerySet
 
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.permissions import actor_user_id, instance_actor
-from angee.base.querysets import ClosedUpdateQuerySet, _AngeeQuerySetMixin, by_key
+from angee.base.querysets import AngeeQuerySetMixin, ClosedUpdateQuerySet, by_key
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
-class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_ModelT]):
+class RetainedReferenceQuerySet(AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_ModelT]):
     """Django collector updates dispatched to the record's declared persistence owner."""
 
     def update(self, **kwargs: Any) -> int:

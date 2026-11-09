@@ -70,17 +70,18 @@ class _RebacSchemaBinding:
     schema: Schema | None = None
 
 
-_SCHEMA_BINDING = "_angee_rebac_schema_binding"
+SCHEMA_BINDING = "_angee_rebac_schema_binding"
+"""The ``AppConfig.__dict__`` key holding its schema binding; test fixtures restore it with ``rebac_schema``."""
 
 
 def declared_schema_path(app_config: AppConfig) -> Path | None:
     """Retain the native authored declaration before binding generated output."""
 
-    binding = app_config.__dict__.get(_SCHEMA_BINDING)
+    binding = app_config.__dict__.get(SCHEMA_BINDING)
     declaration = getattr(app_config, "rebac_schema", None)
     if not isinstance(binding, _RebacSchemaBinding) or declaration != binding.effective:
         binding = _RebacSchemaBinding(resolve_schema_path(app_config), declaration, declaration)
-        app_config.__dict__[_SCHEMA_BINDING] = binding
+        app_config.__dict__[SCHEMA_BINDING] = binding
     return binding.source
 
 
@@ -88,11 +89,11 @@ def bind_rebac_schema(app_config: AppConfig, path: Path | None) -> None:
     """Bind generated input; ``None`` restores the original native declaration."""
 
     source = declared_schema_path(app_config)
-    binding = app_config.__dict__[_SCHEMA_BINDING]
+    binding = app_config.__dict__[SCHEMA_BINDING]
     assert isinstance(binding, _RebacSchemaBinding)
     effective = path if path is not None else binding.declaration
     setattr(app_config, "rebac_schema", effective)
-    app_config.__dict__[_SCHEMA_BINDING] = _RebacSchemaBinding(source, binding.declaration, effective)
+    app_config.__dict__[SCHEMA_BINDING] = _RebacSchemaBinding(source, binding.declaration, effective)
 
 
 def merged_schema_relpath(package: str) -> Path:
@@ -120,12 +121,12 @@ def declared_rebac_schema(app_config: AppConfig) -> Schema | None:
     """
 
     declared_schema_path(app_config)
-    binding = app_config.__dict__[_SCHEMA_BINDING]
+    binding = app_config.__dict__[SCHEMA_BINDING]
     assert isinstance(binding, _RebacSchemaBinding)
     schema_path = resolve_schema_path(app_config)
     if schema_path is None:
         if binding.signature is not None:
-            app_config.__dict__[_SCHEMA_BINDING] = replace(binding, signature=None, schema=None)
+            app_config.__dict__[SCHEMA_BINDING] = replace(binding, signature=None, schema=None)
         return None
     status = schema_path.stat()
     signature = (
@@ -135,7 +136,7 @@ def declared_rebac_schema(app_config: AppConfig) -> Schema | None:
         binding = replace(
             binding, signature=signature, schema=parse_zed(schema_path.read_text(encoding="utf-8")),
         )
-        app_config.__dict__[_SCHEMA_BINDING] = binding
+        app_config.__dict__[SCHEMA_BINDING] = binding
     return binding.schema
 
 

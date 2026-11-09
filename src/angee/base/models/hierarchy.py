@@ -17,7 +17,7 @@ from angee.base.fields.ordering import FractionalRankField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.prefetch import InstancePrefetch
-from angee.base.querysets import _AngeeQuerySetMixin, query_batch_size
+from angee.base.querysets import AngeeQuerySetMixin, query_batch_size
 
 if TYPE_CHECKING:
     from django.db.models.fetch_modes import FetchMode
@@ -173,7 +173,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
             with model.initialize_rows(rows, using=self.db):
                 # Below the hierarchy guard and deferred observers: the creation version
                 # below records each row with its parent and path.
-                super(_AngeeQuerySetMixin, cast(_AngeeQuerySetMixin, self)).bulk_create(rows)
+                super(AngeeQuerySetMixin, cast(AngeeQuerySetMixin, self)).bulk_create(rows)
                 for row in order:
                     parent = parents[id(row)]
                     row.parent = parent
@@ -185,8 +185,8 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
                 width = 5 + 2 * len(final_ranks)
                 for chunk in batched(rows, query_batch_size(self, width=width)):
                     # The caller's queryset carries its authority (a sudo) to this write.
-                    batch = cast(_AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk]))
-                    super(_AngeeQuerySetMixin, batch).update(
+                    batch = cast(AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk]))
+                    super(AngeeQuerySetMixin, batch).update(
                         parent_id=Cast(
                             models.Case(
                                 *(models.When(pk=row.pk, then=models.Value(row.parent_id)) for row in chunk),
@@ -488,7 +488,7 @@ class HierarchyMixin(PersistenceMixin):
                 if deferred:
                     # Below the hierarchy guard and deferred observers: the
                     # creation version records the path with the row.
-                    super(_AngeeQuerySetMixin, cast(_AngeeQuerySetMixin, rows)).update(path=new_path)
+                    super(AngeeQuerySetMixin, cast(AngeeQuerySetMixin, rows)).update(path=new_path)
                 else:
                     self._write_hierarchy_path(rows, new_path)
                 self.path = new_path
