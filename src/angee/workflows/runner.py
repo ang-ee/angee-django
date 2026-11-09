@@ -168,7 +168,7 @@ class Runner:
                                 outcome, output = definition.result_for(step_runs.all(), run.input) or (
                                     DONE_OUTCOME, {},
                                 )
-                        self.run_model.objects._write_state(run, status=status, outcome=outcome, output=output)
+                        run._write_state(status=status, outcome=outcome, output=output)
             except Superseded:
                 raise
             except Exception as failure:
@@ -203,9 +203,7 @@ class Runner:
                             run_error = ""
                 if not terminal:
                     with _record_failure("run state"):
-                        self.run_model.objects._write_state(
-                            run, status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error,
-                        )
+                        run._write_state(status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error)
             if terminal:
                 # Preserved IO evidence changed without a run state transition.
                 with _record_failure("run change publication"):

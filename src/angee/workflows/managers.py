@@ -16,7 +16,7 @@ from uuid import uuid4
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import DatabaseError, IntegrityError, OperationalError, connection, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
@@ -33,8 +33,8 @@ from angee.base.models.locks import StaleRevisionError, require_revision
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
 from angee.base.refs import RecordRef, record_view_refs
-from angee.base.serialization import canonical_json_sha256, strip_null_bytes
-from angee.base.signals import bulk_updated, changes_muted, mute_changes, publish_change
+from angee.base.serialization import canonical_json_sha256
+from angee.base.signals import bulk_updated, changes_muted, mute_changes
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -47,7 +47,6 @@ from angee.workflows.definition import (
     Issue,
     SourcedWorkflowExtension,
 )
-from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
     CANCELED_OUTCOME,
     ERROR_OUTCOME,
@@ -61,7 +60,6 @@ from angee.workflows.states import (
     WaitingKind,
 )
 from angee.workflows.steps import StepMode, Superseded
-from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
 if TYPE_CHECKING:
@@ -705,55 +703,10 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             with self.hold(run.pk) as locked:
                 from angee.workflows.runner import runner
 
-                if (subject := self._lock_subject(locked)) is not None:
+                if (subject := locked._lock_run_subject()) is not None:
                     subject.admit_run(locked)
                 runner.advance(locked)
             return locked.with_actor(actor)
-
-    def _lock_subject(self, run: Any, *, required: bool = True) -> RunSubject | None:
-        """Lock an opted-in root subject after the caller has locked its run."""
-        if run.parent_step_id is not None:
-            return None
-        model = run.subject_model_class
-        if model is None or not issubclass(model, RunSubject):
-            return None
-        subject = model._default_manager.filter(pk=run.subject_object_id).select_for_update(
-            no_key=True, of=row_lock_paths(model),
-        ).first()
-        if subject is None and required:
-            raise ValidationError("The workflow run subject no longer exists.")
-        return cast(RunSubject | None, subject)
-
-    def _write_state(self, run: Any, *, status: str, outcome: str, output: Any, error: str = "",
-                     actor: Any = None) -> None:
-        self.filter(pk=run.pk).update(
-            status=status, outcome=outcome, output=strip_null_bytes(output),
-            error=error,
-            finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
-        )
-        if status in RunStatus.terminal_values() and not run.is_terminal:
-            # The sender owns this savepoint: a receiver that poisons the
-            # transaction rolls back its cleanup, never the terminal write.
-            try:
-                with transaction.atomic():
-                    run_stopping.send_robust(sender=self.model, run=run)
-            except DatabaseError:
-                logger.exception("Workflow run cleanup left the transaction unusable; its cleanup was rolled back.")
-            decisions = apps.get_model("decisions", "Decision").objects
-            with system_context(reason="workflows.terminal.withdraw"):
-                for decision in decisions.filter(requesting_steps__run=run).open().order_by("pk"):
-                    decision.withdraw(actor=actor or run.run_as)
-            if (subject := self._lock_subject(run, required=False)) is not None:
-                subject.settle_run(self.get(pk=run.pk), status)
-            if status != RunStatus.CANCELED:
-                def cancel_children() -> None:
-                    self.cancel_abandoned(run.pk)
-
-                transaction.on_commit(cancel_children, robust=True)
-            enqueue_task("workflows.wake_run", kwargs={"run_id": run.pk}, robust=True)
-        with _record_failure("run change publication"):
-            run.refresh_from_db()
-            publish_change(run, action="update", update_fields=None)
 
     def cancel_abandoned(self, run_id: int) -> None:
         """Close unawaited owned children after the parent's terminal write commits."""
@@ -777,8 +730,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 with self.hold(run_id, skip_locked=True) as run:
                     if run is None or run.status != RunStatus.RUNNING:
                         continue
-                    self._write_state(
-                        run,
+                    run._write_state(
                         status=str(RunStatus.INTERRUPTED),
                         outcome=INTERRUPTED_OUTCOME,
                         output={},
@@ -800,15 +752,12 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             transitioning = not run.is_terminal
             if transitioning:
                 children += bool(index)
-                self._write_state(run, status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME,
-                                  output={}, actor=actor)
+                run._write_state(status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME, output={}, actor=actor)
             # Cleanup locks sessions and turns before cancel_open deletes their watches.
             changed = run.step_runs.cancel_open()
             steps += changed
             if not transitioning and (changed or stopped):
-                with _record_failure("run change publication"):
-                    run.refresh_from_db()
-                    publish_change(run, action="update", update_fields=None)
+                run._publish_update()
         return Cancellation(canceled, steps, children)
 
     def cancel_on_commit(self, run: Any, actor: Any) -> None:
@@ -853,9 +802,9 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
 
     def reopen(self, run: Any) -> None:
         """Clear a locked run's terminal facts and replan retained step rows."""
-        if (subject := self._lock_subject(run)) is not None:
+        if (subject := run._lock_run_subject()) is not None:
             subject.admit_run(run)
-        self._write_state(run, status=str(RunStatus.RUNNING), outcome="", output={})
+        run._write_state(status=str(RunStatus.RUNNING), outcome="", output={})
         from angee.workflows.runner import runner
 
         runner.advance(run)

@@ -11,13 +11,11 @@ from django.db.models.functions import Now
 from rebac import system_context
 
 from angee.base.signals import change_published
-from angee.workflows import managers
-from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet, WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode, Superseded
-from angee.workflows.testing.drivers import load_workflow
+from angee.workflows.testing.drivers import load_workflow, observe
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
 from tests.workflow_steps import Echo, document
 
@@ -399,18 +397,10 @@ def test_cancel_abandoned_failed_run_closes_open_siblings_without_changing_termi
 
 
 @pytest.mark.parametrize("result", ["failed", "superseded", "succeeded"])
-def test_artifacts_commit_only_with_successful_attempt_evidence(execution, register_step, monkeypatch, result):
+def test_artifacts_commit_only_with_successful_attempt_evidence(execution, register_step, result):
     """IO-created evidence is staged until its own successful settlement commits."""
     actor, _ = execution
-    publications, after_cancel = [], []
-    original_publish = managers.publish_change
-
-    def publish(run, **kwargs):
-        publications.append(run.pk)
-        return original_publish(run, **kwargs)
-
-    monkeypatch.setattr(managers, "publish_change", publish)
-    monkeypatch.setattr(runner_module, "publish_change", publish)
+    after_cancel = []
 
     class Evidence(Echo):
         mode = StepMode.IO
@@ -426,14 +416,16 @@ def test_artifacts_commit_only_with_successful_attempt_evidence(execution, regis
                 after_cancel.append(len(publications))
             return ctx.done(ctx.input)
 
-    register_step(Evidence)
-    workflow = load_workflow(document("entry"), key="settled_artifacts", actor=actor)
-    run = WorkflowRun.objects.start(workflow, actor=actor)
-    step = retained_step(run)
-    assert runner.execute(step.pk) is (result != "superseded")
-    assert StepRecord.system_queryset().filter(step_run=step).count() == (1 if result == "succeeded" else 0)
-    if result == "superseded":
-        assert len(publications) == after_cancel[0]
+    with observe(WorkflowRun) as publications:
+        register_step(Evidence)
+        workflow = load_workflow(document("entry"), key="settled_artifacts", actor=actor)
+        run = WorkflowRun.objects.start(workflow, actor=actor)
+        step = retained_step(run)
+        assert runner.execute(step.pk) is (result != "superseded")
+        assert StepRecord.system_queryset().filter(step_run=step).count() == (1 if result == "succeeded" else 0)
+        assert publications and all(payload.id == run.sqid for payload in publications)
+        if result == "superseded":
+            assert len(publications) == after_cancel[0]
 
 
 def test_reprocess_origin_is_present_at_its_first_change_publication(execution):

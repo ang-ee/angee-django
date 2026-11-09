@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
@@ -11,7 +12,7 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import models, transaction
+from django.db import DatabaseError, models, transaction
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Coalesce, Concat, Length, Now, Substr
 from django.db.models.lookups import IsNull
@@ -31,10 +32,14 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.permissions import require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch, ReaderMemo
+from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef
+from angee.base.serialization import strip_null_bytes
+from angee.base.signals import publish_change
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.models import ServiceUserMixin
+from angee.jobs.enqueue import enqueue_task
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -47,8 +52,10 @@ from angee.workflows.managers import (
     StepWatchManager,
     WorkflowManager,
     WorkflowRunManager,
+    _record_failure,
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
+from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
     ERROR_OUTCOME,
     NAME_MAX_LENGTH,
@@ -61,6 +68,7 @@ from angee.workflows.states import (
     WaitingKind,
 )
 from angee.workflows.steps import Step
+from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import (
     TriggerEventManager,
     TriggerGrantTarget,
@@ -103,6 +111,7 @@ class RunGraph:
     edges: tuple[RunGraphEdge, ...]
 
 
+logger = logging.getLogger(__name__)
 _READER = ReaderMemo("_workflows_reader_answers")
 """A run row's answers from one reader's batch read (graph, write, open work)."""
 
@@ -411,6 +420,57 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
             status=StepRunStatus.FAILED,
         ).order_by("rank", "map_index", "pk").only("status", "output")
         return next((reason for row in rows if (reason := row.failure_reason)), None)
+
+    def _lock_run_subject(self, *, required: bool = True) -> RunSubject | None:
+        """Lock this root run's opted-in subject after the caller has locked the run."""
+        if self.parent_step_id is not None:
+            return None
+        model = self.subject_model_class
+        if model is None or not issubclass(model, RunSubject):
+            return None
+        subject = model._default_manager.filter(pk=self.subject_object_id).select_for_update(
+            no_key=True, of=row_lock_paths(model),
+        ).first()
+        if subject is None and required:
+            raise ValidationError("The workflow run subject no longer exists.")
+        return cast(RunSubject | None, subject)
+
+    def _write_state(self, *, status: str, outcome: str, output: Any, error: str = "", actor: Any = None) -> None:
+        """Write this locked run's state; its first terminal transition releases its owned work.
+
+        Cleanup receivers, open-decision withdrawal and the subject's settlement share the
+        terminal write's transaction. Unawaited owned children are canceled after it commits.
+        """
+        runs = type(self).objects
+        runs.filter(pk=self.pk).update(
+            status=status, outcome=outcome, output=strip_null_bytes(output),
+            error=error,
+            finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
+        )
+        if status in RunStatus.terminal_values() and not self.is_terminal:
+            # The sender owns this savepoint: a receiver that poisons the
+            # transaction rolls back its cleanup, never the terminal write.
+            try:
+                with transaction.atomic():
+                    run_stopping.send_robust(sender=type(self), run=self)
+            except DatabaseError:
+                logger.exception("Workflow run cleanup left the transaction unusable; its cleanup was rolled back.")
+            decisions = apps.get_model("decisions", "Decision").objects
+            with system_context(reason="workflows.terminal.withdraw"):
+                for decision in decisions.filter(requesting_steps__run=self).open().order_by("pk"):
+                    decision.withdraw(actor=actor or self.run_as)
+            if (subject := self._lock_run_subject(required=False)) is not None:
+                subject.settle_run(runs.get(pk=self.pk), status)
+            if status != RunStatus.CANCELED:
+                transaction.on_commit(lambda: runs.cancel_abandoned(self.pk), robust=True)
+            enqueue_task("workflows.wake_run", kwargs={"run_id": self.pk}, robust=True)
+        self._publish_update()
+
+    def _publish_update(self) -> None:
+        """Reload this run and publish its change, isolating a publication failure."""
+        with _record_failure("run change publication"):
+            self.refresh_from_db()
+            publish_change(self, action="update", update_fields=None)
 
     def graph(self, actor: Any) -> RunGraph | None:
         """Read this run's frozen topology; ``None`` once the reader can no longer read the run.

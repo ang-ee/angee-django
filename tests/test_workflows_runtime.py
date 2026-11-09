@@ -22,9 +22,10 @@ from rebac.roles import grant as grant_role
 from angee.base.models.locks import StaleRevisionError
 from angee.jobs.enqueue import celery_app
 from angee.workflows import managers as managers_module
+from angee.workflows import models as models_module
 from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid
-from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunManager
+from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Done, Fail, RetryPolicy, Step, StepMode, Superseded, Wait
@@ -1362,7 +1363,7 @@ def test_failure_recording_database_errors_preserve_successful_body(
     register_step(RetainedBody)
     monkeypatch.setattr(Definition, "result_for", result_error)
     if failure_write == "state":
-        monkeypatch.setattr(WorkflowRunManager, "_write_state", invalid_write)
+        monkeypatch.setattr(WorkflowRun, "_write_state", invalid_write)
     else:
         _fail_run_publication(monkeypatch, workflow)
     assert runner.execute(step_run.pk)
@@ -1423,14 +1424,14 @@ def test_soft_time_limit_during_settlement_belongs_to_open_attempt(execution, re
 
 def _fail_run_publication(monkeypatch, workflow):
     """Break the run owner's notification without breaking step settlement."""
-    original = managers_module.publish_change
+    original = models_module.publish_change
 
     def publish(instance, **kwargs):
         if isinstance(instance, WorkflowRun):
             Workflow.objects.filter(pk=workflow.pk).update(key=None)
         return original(instance, **kwargs)
 
-    monkeypatch.setattr(managers_module, "publish_change", publish)
+    monkeypatch.setattr(models_module, "publish_change", publish)
 
 
 def test_publication_database_error_keeps_successful_outcome(execution, register_step, monkeypatch, caplog):
