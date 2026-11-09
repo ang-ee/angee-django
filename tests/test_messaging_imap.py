@@ -1521,6 +1521,32 @@ def test_poison_message_lands_through_the_fallback_envelope(monkeypatch: pytest.
     assert messages[0].body.content.startswith(b"From:")
 
 
+@pytest.mark.parametrize("failure", [AttributeError("folded header"), AssertionError("parser invariant")])
+def test_unlisted_parser_failure_lands_the_fallback_and_keeps_the_page(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception,
+) -> None:
+    """An error outside MIME_ERRORS isolates one message instead of stalling the mailbox."""
+
+    account = FakeImapAccount({"INBOX": _folder(
+        _eml(message_id="<poison@x>", subject="Poison"), _eml(message_id="<next@x>", subject="Next"),
+    )})
+    backend = _backend(monkeypatch, account)
+    parse = imap_backend.parse_message
+
+    def explode_once(raw: bytes, **kwargs: Any) -> Any:
+        if b"<poison@x>" in raw:
+            raise failure
+        return parse(raw, **kwargs)
+
+    monkeypatch.setattr(imap_backend, "parse_message", explode_once)
+    messages = {message.external_id: message for message in _drain(backend)}
+
+    assert set(messages) == {"poison@x", "next@x"}
+    assert messages["poison@x"].metadata["parse_error"] == f"{type(failure).__name__}: {failure}"
+    assert messages["poison@x"].body.content.startswith(b"From:")
+    assert "parse_error" not in messages["next@x"].metadata
+
+
 def test_oauth_credential_refreshes_then_authenticates_xoauth2(monkeypatch: pytest.MonkeyPatch) -> None:
     """An OAuth channel freshens its token and logs in over XOAUTH2."""
 
