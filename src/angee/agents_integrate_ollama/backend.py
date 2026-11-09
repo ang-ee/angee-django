@@ -17,6 +17,7 @@ from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 
 if TYPE_CHECKING:
+    from pydantic_ai.embeddings.openai import OpenAIEmbeddingModel
     from pydantic_ai.models.openai import OpenAIChatModel
     from typesafe_sdk import Content, Question, SystemOneResponse
 
@@ -184,29 +185,35 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
                 model_use = "embedding"
             elif "completion" in capabilities:
                 model_use = "multimodal" if "vision" in capabilities else "chat"
-        context_window = self._architecture_context_window(shown)
+        context_window = self._architecture_value(shown, "context_length")
+        dimensions = self._architecture_value(shown, "embedding_length") if model_use == "embedding" else 0
         config: dict[str, Any] = {}
         num_ctx = self._configured_num_ctx(shown.get("parameters"))
         if num_ctx:
             config["ollama_num_ctx"] = num_ctx
-        return {"model_use": model_use, "context_window": context_window, "config": config}
+        return {
+            "model_use": model_use,
+            "context_window": context_window,
+            "capabilities": {"embedding_dimensions": dimensions} if dimensions else {},
+            "config": config,
+        }
 
     @staticmethod
-    def _architecture_context_window(shown: Mapping[str, Any]) -> int:
-        """Return Ollama's architecture context length when it is unambiguous."""
+    def _architecture_value(shown: Mapping[str, Any], name: str) -> int:
+        """Return a positive architecture fact when its family or sole value identifies it."""
 
         model_info = shown.get("model_info")
         if not isinstance(model_info, Mapping):
             return 0
         details = shown.get("details")
         family = str(details.get("family", "") or "").strip() if isinstance(details, Mapping) else ""
-        preferred = model_info.get(f"{family}.context_length") if family else None
+        preferred = model_info.get(f"{family}.{name}") if family else None
         if type(preferred) is int and preferred > 0:
             return preferred
         candidates = [
             value
             for key, value in model_info.items()
-            if str(key).endswith(".context_length") and type(value) is int and value > 0
+            if str(key).endswith(f".{name}") and type(value) is int and value > 0
         ]
         return candidates[0] if len(candidates) == 1 else 0
 
@@ -257,10 +264,20 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
             compression=False,
             retry=RetryPolicy(max_retries=0),
             http_client=httpx2.Client(
-                timeout=kwargs.get("timeout", DEFAULT_TIMEOUT), trust_env=False, follow_redirects=False,
+                timeout=kwargs.get("timeout", DEFAULT_TIMEOUT),
+                trust_env=False,
+                follow_redirects=False,
             ),
         ) as client:
             return client.system_one(state=state, questions=questions, model=self._provider_model(handle))
+
+    def _build_embedding_model(self, handle: str, client: Any) -> OpenAIEmbeddingModel:
+        """Use Ollama's native provider identity over its OpenAI-compatible embeddings API."""
+
+        from pydantic_ai.embeddings.openai import OpenAIEmbeddingModel
+        from pydantic_ai.providers.ollama import OllamaProvider
+
+        return OpenAIEmbeddingModel(handle, provider=OllamaProvider(openai_client=client))
 
     def _build_model(self, handle: str, client: Any) -> OpenAIChatModel:
         """Bind the native Ollama provider and extend its profile with the schema-in-instructions envelope."""
