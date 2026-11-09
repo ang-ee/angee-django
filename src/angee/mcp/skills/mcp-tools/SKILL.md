@@ -27,7 +27,7 @@ through the same ambient actor.
 | `angee.mcp.graphql` | `GraphQLTool` declaration, compiler, limits, actor-scoped execution | `GraphQLTool`, `register_graphql_tools`, `DEFAULT_QUERY_LIMIT`, `MAX_QUERY_LIMIT`, `execute_under_actor`, `_compile`, `_validate` in `src/angee/mcp/graphql.py` |
 | `angee.mcp.middleware`, `angee.mcp.verifier` | Actor bracketing per call; bearer→`SubjectRef` through `ANGEE_MCP_ACTOR_VERIFIER` | `ActorMiddleware` in `src/angee/mcp/middleware.py`, `MCPActorVerifier` and `RebacTokenVerifier` in `src/angee/mcp/verifier.py` |
 | `angee.mcp.asgi` | `http_mounts()` and fresh `lifespans()` factories read by `angee.server.asgi`, entered per serving process | `src/angee/mcp/asgi.py`, `angee.server.asgi` |
-| `angee.mcp.resource_tools`, `angee.mcp.apps` | Generated console readers, `RESOURCE_READER_TOOL_TAG`, check `angee.mcp.E001` | `register_resource_tools`, `check_resource_tool_specs` in `src/angee/mcp/resource_tools.py`, `MCPConfig` in `src/angee/mcp/apps.py` |
+| `angee.mcp.resource_tools`, `angee.mcp.tool_tags`, `angee.mcp.apps` | Generated console readers, `RESOURCE_READER_TOOL_TAG`, check `angee.mcp.E001` | `register_resource_tools`, `check_resource_tool_specs` in `src/angee/mcp/resource_tools.py`, `RESOURCE_READER_TOOL_TAG` in `src/angee/mcp/tool_tags.py`, `MCPConfig` in `src/angee/mcp/apps.py` |
 | `angee.base.addons` | Optional addon-module discovery; MCP owns registrar validation | [Base adapter](../../../base/addons.py), [MCP server](../../server.py) |
 | `tests/test_<addon>_mcp.py`, `<consumer>/tests/test_mcp.py` | Compile-and-register tests; StreamableHTTP round trip | `_registered_tools`, `test_appconfig_wires_the_registrar` in `tests/test_knowledge_mcp.py`; `MCPStreamableHTTPMixin`, `NotesMCPServerTests` in `examples/src/example/notes/tests/test_mcp.py` |
 
@@ -153,7 +153,7 @@ against console-schema drift (`check_resource_tool_specs` in `src/angee/mcp/reso
 - Agent bearers authenticate as the agent's service user, not its owner; owner-gated fields are null for them (`resolve_actor` in `src/angee/agents/mcp_verifier.py`).
 - The MCP path has no request lifecycle; `_execute_sync` recycles connections itself, so do not add signals or middleware for it (`src/angee/mcp/graphql.py`).
 - `readOnlyHint` is derived from the root `op_type`; a hand-written tool must declare it and `meta=ACTOR_EXECUTION_META`, or the pydantic runtime refuses to advertise it (`actor_tool_read_only` in `src/angee/mcp/graphql.py`).
-- Non-GraphQL tools register with `tags`; the resource-reader tag is reserved for generated readers and drives grant sync (`RESOURCE_READER_TOOL_TAG` in `src/angee/mcp/resource_tools.py`, `sync_resource_reader_grants` in `src/angee/agents/grants.py`).
+- Non-GraphQL tools register with `tags`; the resource-reader tag is reserved for generated readers and drives grant sync (`RESOURCE_READER_TOOL_TAG` in `src/angee/mcp/tool_tags.py`, `sync_resource_reader_grants` in `src/angee/agents/grants.py`).
 
 ## Read next
 

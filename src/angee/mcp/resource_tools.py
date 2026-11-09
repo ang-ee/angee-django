@@ -26,15 +26,13 @@ from angee.graphql.access import is_gated_read_axis
 from angee.graphql.data.contracts import DataResourceFieldMetadata, DataResourceMetadata
 from angee.graphql.schema import GraphQLSchemas
 from angee.mcp.graphql import ACTOR_EXECUTION_META, GraphQLTool, register_graphql_tools
+from angee.mcp.tool_tags import RESOURCE_READER_TOOL_TAG
 from mcp.types import ToolAnnotations
 
 RESOURCE_SCHEMA = "console"
 """Schema bucket used by the session UI for messaging, knowledge, and notes."""
 
 MAX_SUMMARY_FIELDS = 8
-
-RESOURCE_READER_TOOL_TAG = "angee:resource_reader"
-"""Registration marker consumed by the built-in grant-catalogue sync."""
 
 
 @dataclass(frozen=True, slots=True)

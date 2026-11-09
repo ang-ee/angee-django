@@ -50,12 +50,12 @@ from angee.mcp.graphql import (
     register_graphql_tools,
 )
 from angee.mcp.resource_tools import (
-    RESOURCE_READER_TOOL_TAG,
     _resource_projections,
     check_resource_tool_specs,
     register_resource_tools,
     resource_tool_specs,
 )
+from angee.mcp.tool_tags import RESOURCE_READER_TOOL_TAG
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 

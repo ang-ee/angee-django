@@ -67,7 +67,7 @@ from angee.agents_runtime_pydantic.toolsets import (
 )
 from angee.base.models.audit import AuditMixin
 from angee.mcp.graphql import ACTOR_EXECUTION_META, _CompiledTool, actor_tool_read_only
-from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
+from angee.mcp.tool_tags import RESOURCE_READER_TOOL_TAG
 
 User = get_user_model()
 

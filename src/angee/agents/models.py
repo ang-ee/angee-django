@@ -46,6 +46,7 @@ from rebac.mixins import RebacModelBase
 
 from angee.agents.backends import InferenceBackend
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
+from angee.agents.grants import sync_resource_reader_grants
 from angee.agents.reader_role import sync_resource_reader_role
 from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
@@ -964,10 +965,6 @@ class MCPToolManager[ToolT: MCPTool](AngeeHistoryManager[ToolT]):
         their resource identities, and replaces the ``resource_reader`` bundle's
         generated-reader grants. Agent writes own bundle membership.
         """
-
-        # Source models load during app population; the grant policy reaches the GraphQL
-        # schema and Django's auth backends, which import only once apps are ready.
-        from angee.agents.grants import sync_resource_reader_grants
 
         registered = sorted(async_to_sync(mcp_server().list_tools)(), key=lambda tool: tool.name)
         tools = self.model._base_manager

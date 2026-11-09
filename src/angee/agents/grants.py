@@ -17,7 +17,7 @@ from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
 
 from angee.agents.reader_role import RESOURCE_READER_ROLE
-from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
+from angee.mcp.tool_tags import RESOURCE_READER_TOOL_TAG
 
 TOOL_GRANT_RESOURCE_TYPE = "agents/tool_grant"
 """REBAC definition for primary-keyed MCPTool catalogue rows."""
