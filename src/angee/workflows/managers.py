@@ -47,6 +47,7 @@ from angee.workflows.definition import (
     Issue,
     SourcedWorkflowExtension,
 )
+from angee.workflows.runner import runner
 from angee.workflows.states import (
     ERROR_OUTCOME,
     AttemptResult,
@@ -683,9 +684,6 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 for source in sorted(targets, key=lambda item: (item.content_type.pk, item.object_id))
             )
             with self.hold(run.pk) as locked:
-                # Deferred: the runner imports this module's recovery primitives.
-                from angee.workflows.runner import runner
-
                 locked.admit_subject()
                 runner.advance(locked)
             return locked.with_actor(actor)
@@ -1213,9 +1211,6 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
                     acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,
                     reset_dispatches=True,
                 )
-                # Deferred: the runner imports this module's recovery primitives.
-                from angee.workflows.runner import runner
-
                 run.reopen()
                 runner.advance(run)
                 current.refresh_from_db()

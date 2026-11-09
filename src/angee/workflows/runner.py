@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
@@ -24,6 +24,7 @@ from angee.base.exceptions import exception_text
 from angee.base.signals import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset
+from angee.workflows.context import StepContext
 from angee.workflows.states import (
     RecordOperation,
     RunStatus,
@@ -39,9 +40,6 @@ TICK_CANDIDATE_LIMIT = 1000
 One wide map of 1,000 waiting items fits in a sweep. A locked early candidate
 cannot hide later items within this bound; each is independently rechecked.
 """
-
-if TYPE_CHECKING:
-    from angee.workflows.context import StepContext
 
 
 class Runner:
@@ -88,8 +86,6 @@ class Runner:
 
     def execute(self, step_run_id: int) -> bool:
         """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""
-        from angee.workflows.context import StepContext
-
         run_id = self.step_model.system_queryset().filter(
             pk=step_run_id, status=StepRunStatus.READY,
         ).values_list("run_id", flat=True).first()
@@ -116,7 +112,7 @@ class Runner:
                     ctx = StepContext(
                         run=run, step_run=step_run, step=step, attempt=attempt, actor=actor,
                         input=step.parse_input(step_run.input), config=step.parse_config(node.config),
-                        now=attempt.started_at,
+                        now=attempt.started_at, runner=self,
                     )
                     if step.mode == StepMode.DATABASE:
                         settlement = self._run_body(ctx)

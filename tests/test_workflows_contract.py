@@ -8,6 +8,7 @@ from django.utils import timezone
 from pydantic import BaseModel, field_serializer
 
 from angee.workflows.context import StepContext
+from angee.workflows.runner import runner
 from angee.workflows.steps import Fail, NextPage, RetryPolicy, Step, StepMode, resolve_step
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 
@@ -25,7 +26,7 @@ def context(step: type[Step]) -> StepContext:
 
     return StepContext(
         run=WorkflowRun(), step_run=StepRun(), step=step, attempt=StepAttempt(),
-        input={}, config=None, actor=None, now=timezone.now(),
+        input={}, config=None, actor=None, now=timezone.now(), runner=runner,
     )
 
 

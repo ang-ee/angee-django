@@ -347,7 +347,7 @@ def test_answered_question_can_be_replaced_without_losing_its_run_association(re
 
     def context(for_run, principal):
         return StepContext(run=for_run, step_run=step, step=Followup, attempt=None,
-                           input={}, config=None, actor=principal, now=first.answered_at)
+                           input={}, config=None, actor=principal, now=first.answered_at, runner=runner)
 
     assert context(run, actor).decision(public_id_of(first)).pk == first.pk
     other, other_step = start_review((actor, people, sent, Followup))
@@ -370,7 +370,7 @@ def test_open_question_cannot_be_replaced(review):
     run, step = start_review(review)
     current = questions(step)[0]
     ctx = StepContext(run=run, step_run=step, step=question, attempt=None,
-                      input={}, config=None, actor=actor, now=run.created_at)
+                      input={}, config=None, actor=actor, now=run.created_at, runner=runner)
     before = Decision.system_queryset().count()
     with pytest.raises(ValidationError, match="still has an open decision"):
         question().ask(ctx).admit(ctx)
