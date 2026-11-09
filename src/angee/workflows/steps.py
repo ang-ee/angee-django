@@ -202,7 +202,7 @@ type Settlement = Done | Wait | NextPage | Fail | Ask
 
 
 @dataclass(frozen=True)
-class _AttemptRecord:
+class AttemptRecord:
     """The runner's classified outcome and diagnostics for one claimed attempt."""
 
     settlement: _Settlement
@@ -214,7 +214,8 @@ class _AttemptRecord:
     timed_out: bool = False
 
     @classmethod
-    def from_settlement(cls, settlement: _Settlement) -> _AttemptRecord:
+    def from_settlement(cls, settlement: _Settlement) -> AttemptRecord:
+        """Record a body's settlement; a ``Fail`` records a failed attempt with its error."""
         if isinstance(settlement, Fail):
             return cls(settlement, result=cast(AttemptResult, AttemptResult.FAILED), error=settlement.error)
         return cls(settlement)
@@ -223,7 +224,8 @@ class _AttemptRecord:
     def failure(
         cls, error: str, *, diagnostic_error: str | None = None, stacktrace: str = "",
         retryable: bool = False, timed_out: bool = False,
-    ) -> _AttemptRecord:
+    ) -> AttemptRecord:
+        """Record a failure the runner classified, as a timeout when ``timed_out``."""
         return cls(
             Fail(error=error), result=cast(
                 AttemptResult, AttemptResult.TIMED_OUT if timed_out else AttemptResult.FAILED,

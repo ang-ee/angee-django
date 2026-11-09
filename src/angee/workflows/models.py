@@ -53,7 +53,7 @@ from angee.workflows.managers import (
     StepWatchManager,
     WorkflowManager,
     WorkflowRunManager,
-    _record_failure,
+    isolate_failure,
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.signals import run_stopping
@@ -71,7 +71,7 @@ from angee.workflows.states import (
     StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import Fail, Step, _AttemptRecord
+from angee.workflows.steps import AttemptRecord, Fail, Step
 from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import (
     TriggerEventManager,
@@ -472,14 +472,14 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
     def _publish_update(self) -> None:
         """Reload this run and publish its change, isolating a publication failure."""
-        with _record_failure("run change publication"):
+        with isolate_failure("run change publication"):
             self.refresh_from_db()
             publish_change(self, action="update", update_fields=None)
 
     def advance(
         self,
         step_run: Any = None,
-        settlement: _AttemptRecord | None = None,
+        settlement: AttemptRecord | None = None,
         *,
         records: list[Any] | None = None,
         notes: list[dict[str, str]] | None = None,
@@ -595,7 +595,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
             raise PermissionDenied("Deferred cancellation requires an actor.")
         enqueue_task("workflows.cancel", kwargs={"run_id": self.pk, "actor": str(to_subject_ref(actor))}, robust=True)
 
-    def fail_advance(self, step_run: Any, settlement: _AttemptRecord | None, failure: _AttemptRecord) -> None:
+    def fail_advance(self, step_run: Any, settlement: AttemptRecord | None, failure: AttemptRecord) -> None:
         """Record an advancement failure the runner classified, each write in its own savepoint.
 
         A planning failure follows a completed settlement and cannot replace it; a
@@ -608,11 +608,11 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         with system_context(reason="workflows.advance"):
             if step_run is not None:
                 recorded_on_attempt = False
-                with _record_failure("settlement failure"):
+                with isolate_failure("settlement failure"):
                     if step_runs.filter(pk=step_run.pk, status=StepRunStatus.RUNNING).exists():
                         step_runs.settle(step_run, failure)
                         recorded_on_attempt = True
-                with _record_failure("attempt close"):
+                with isolate_failure("attempt close"):
                     if failure.timed_out:
                         error, stacktrace = failure.diagnostic_error or "", failure.stacktrace
                     else:
@@ -624,7 +624,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                 # A preserved IO sibling's evidence changed without a run state transition.
                 self._publish_update()
             else:
-                with _record_failure("run state"):
+                with isolate_failure("run state"):
                     self._write_state(status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error)
 
     def graph(self, actor: Any) -> RunGraph | None:
@@ -976,7 +976,7 @@ class StepRun(AngeeDataModel, concrete=True):
         """
         try:
             with transaction.atomic():
-                self.run.step_runs.expire(self, _AttemptRecord.failure(
+                self.run.step_runs.expire(self, AttemptRecord.failure(
                     "The attempt deadline expired.", retryable=True, timed_out=True,
                 ))
         except ImproperlyConfigured as failure:

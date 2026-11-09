@@ -87,8 +87,11 @@ def _sqlstate(error: Exception) -> str | None:
 
 
 @contextmanager
-def _record_failure(operation: str) -> Iterator[None]:
-    """Isolate diagnostic writes; a lost claim still aborts its execution transaction."""
+def isolate_failure(operation: str) -> Iterator[None]:
+    """Run a diagnostic write in its own savepoint and log its failure as ``operation``.
+
+    A lost claim (``Superseded``) still propagates and aborts its execution transaction.
+    """
     try:
         with transaction.atomic():
             yield
@@ -775,7 +778,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             candidates = list(self.retention_candidates().order_by("finished_at", "pk")
                               .values_list("pk", flat=True)[:PRUNE_BATCH_LIMIT])
             for run_id in candidates:
-                with _record_failure(f"prune candidate {run_id}"), self.hold_owned(run_id, skip_locked=True) as runs:
+                with isolate_failure(f"prune candidate {run_id}"), self.hold_owned(run_id, skip_locked=True) as runs:
                     if not runs or not self.retention_candidates().filter(pk=run_id).exists():
                         continue
                     try:

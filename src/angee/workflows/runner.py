@@ -24,13 +24,13 @@ from angee.base.exceptions import exception_text
 from angee.base.signals import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset
-from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
+from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _sqlstate, isolate_failure
 from angee.workflows.states import (
     RecordOperation,
     RunStatus,
     StepRunStatus,
 )
-from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _AttemptRecord
+from angee.workflows.steps import AttemptRecord, Fail, Retryable, StepMode, Superseded
 
 logger = logging.getLogger(__name__)
 TICK_CANDIDATE_LIMIT = 1000
@@ -59,7 +59,7 @@ class Runner:
         self,
         run: Any,
         step_run: Any = None,
-        settlement: _AttemptRecord | None = None,
+        settlement: AttemptRecord | None = None,
         *,
         records: list[Any] | None = None,
         notes: list[dict[str, str]] | None = None,
@@ -81,7 +81,7 @@ class Runner:
             ):
                 raise
             logger.exception("Workflow run %s failed during advancement.", run.pk)
-            run.fail_advance(step_run, settlement, _AttemptRecord.failure(
+            run.fail_advance(step_run, settlement, AttemptRecord.failure(
                 exception_text(failure), diagnostic_error=exception_text(failure, diagnostic=True),
                 stacktrace=traceback.format_exc(), timed_out=isinstance(failure, SoftTimeLimitExceeded),
             ))
@@ -129,7 +129,7 @@ class Runner:
                 except Exception as failure:
                     settlement = self._failure(failure)
                 if settlement is None:
-                    with _record_failure("run change publication"):
+                    with isolate_failure("run change publication"):
                         publish_change(run, action="update", update_fields=None)
                 if settlement is not None:
                     self.advance(
@@ -146,8 +146,8 @@ class Runner:
             return False
 
     @staticmethod
-    def _failure(failure: Exception) -> _AttemptRecord:
-        return _AttemptRecord.failure(
+    def _failure(failure: Exception) -> AttemptRecord:
+        return AttemptRecord.failure(
             exception_text(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
             retryable=isinstance(failure, (Retryable,)) or (
                 isinstance(failure, OperationalError)
@@ -156,7 +156,7 @@ class Runner:
             stacktrace=traceback.format_exc(),
         )
 
-    def _run_body(self, ctx: StepContext) -> _AttemptRecord:
+    def _run_body(self, ctx: StepContext) -> AttemptRecord:
         """Validate once with the body, rolling back DATABASE writes on failure."""
         database = ctx.step.mode == StepMode.DATABASE
         try:
@@ -173,13 +173,13 @@ class Runner:
                     failed()
                     if database:
                         transaction.set_rollback(True)
-                return _AttemptRecord.from_settlement(settlement)
+                return AttemptRecord.from_settlement(settlement)
         except Superseded:
             raise
         except Exception as failure:
             return self._failure(failure)
 
-    def _settle_io(self, ctx: StepContext, settlement: _AttemptRecord) -> bool:
+    def _settle_io(self, ctx: StepContext, settlement: AttemptRecord) -> bool:
         """Retry a fenced result transaction until its claim's current deadline."""
         while timezone.now() < ctx.step_run.deadline_at:
             try:
@@ -285,7 +285,7 @@ class Runner:
             candidates = candidates.exclude(run__status__in=RunStatus.terminal_values())
             for pk, run_id in list(candidates.order_by("pk").values_list("pk", "run_id")[:TICK_CANDIDATE_LIMIT]):
                 try:
-                    with _record_failure(f"tick candidate {pk}"):
+                    with isolate_failure(f"tick candidate {pk}"):
                         with self.run_model.objects.hold(run_id, skip_locked=True) as run:
                             if run is None or run.is_terminal:
                                 continue

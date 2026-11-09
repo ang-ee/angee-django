@@ -1494,7 +1494,7 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
     workflow = load_workflow(document("entry"), key="expired_failure_recovery", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = StepRun.system_queryset().get(run=run)
-    original_settle, original_record_failure = StepRunQuerySet.settle, models_module._record_failure
+    original_settle, original_isolate_failure = StepRunQuerySet.settle, models_module.isolate_failure
     settlements = []
 
     def reject_result(self, row, settlement):
@@ -1507,11 +1507,11 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
     def expire_before_failure_recovery(operation):
         if operation == "settlement failure":
             StepRun.objects.filter(pk=step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
-        with original_record_failure(operation):
+        with original_isolate_failure(operation):
             yield
 
     monkeypatch.setattr(StepRunQuerySet, "settle", reject_result)
-    monkeypatch.setattr(models_module, "_record_failure", expire_before_failure_recovery)
+    monkeypatch.setattr(models_module, "isolate_failure", expire_before_failure_recovery)
 
     assert runner.execute(step_run.pk) is False
     assert settlements == ["done", "fail"]

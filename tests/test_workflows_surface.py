@@ -81,7 +81,7 @@ EXPECTED_TYPES = {
     "context": "StepContext",
     "maps": "Map MapInput MapItem",
     "decision_steps": "AskDecision DecisionConfig DecisionStep",
-    "steps": "Ask Done EmptyOutput Fail NextPage RetryPolicy Retryable Step StepMode Superseded Wait",
+    "steps": "Ask AttemptRecord Done EmptyOutput Fail NextPage RetryPolicy Retryable Step StepMode Superseded Wait",
 }
 
 EXPECTED_RUNNER = tuple(
