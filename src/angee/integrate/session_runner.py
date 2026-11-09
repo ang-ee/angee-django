@@ -106,10 +106,9 @@ def run_bridge_session_job(
                 # The implementation changed while the task acquired its lock.
                 # Let reconciliation route the next start through the host.
                 return {"ok": True, "skipped": True, "reason": "implementation-changed"}
-            with bridge_progress_context(bridge) as reporter:
+            with bridge_progress_context(bridge):
                 session = impl.session_class_resolved()(
                     bridge,
-                    reporter=reporter,
                     stop_event=stop_event,
                     on_shutdown=on_shutdown,
                     on_stalled_shutdown=on_stalled_shutdown,
@@ -129,7 +128,7 @@ def run_bridge_session_job(
                 if session.outcome_error is not None:
                     bridge.record_live_session_failure(session.outcome_error, now=timezone.now())
                     return {"ok": False, "session_error": True, "state": state}
-                reporter.report(bridge.SyncStage.IDLE, details={"pairing": {"state": state}})
+                bridge.report_progress(bridge.SyncStage.IDLE, details={"pairing": {"state": state}})
         return {"ok": True, "state": state, "items": session.landed}
 
 

@@ -1,12 +1,15 @@
-"""Bridge sync dispatch and progress helpers."""
+"""Bridge sync dispatch and the bridge that receives nested progress reports."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from angee.integrate.models import Bridge
 
 
 class SyncDispatch(StrEnum):
@@ -15,52 +18,28 @@ class SyncDispatch(StrEnum):
     DISPATCHED = "dispatched"
 
 
-_current_bridge_progress: ContextVar[BridgeProgressReporter | None] = ContextVar(
-    "angee_current_bridge_progress",
-    default=None,
-)
-
-
-class BridgeProgressReporter:
-    """Report progress for the bridge currently being synchronized."""
-
-    def __init__(self, bridge: Any) -> None:
-        self.bridge = bridge
-
-    def report(
-        self,
-        stage: str,
-        *,
-        message: str = "",
-        details: Mapping[str, Any] | None = None,
-        **extra: Any,
-    ) -> dict[str, Any]:
-        """Delegate to the bridge row owner (``Bridge.report_progress``)."""
-
-        return self.bridge.report_progress(stage, message=message, details=details, **extra)
+_progress_bridge: ContextVar[Bridge | None] = ContextVar("angee_progress_bridge", default=None)
 
 
 @contextmanager
-def bridge_progress_context(bridge: Any) -> Any:
-    """Make ``bridge`` progress reporting available to nested sync code."""
+def bridge_progress_context(bridge: Bridge) -> Iterator[Bridge]:
+    """Make ``bridge`` the receiver of progress reports from nested sync code."""
 
-    reporter = BridgeProgressReporter(bridge)
-    token = _current_bridge_progress.set(reporter)
+    token = _progress_bridge.set(bridge)
     try:
-        yield reporter
+        yield bridge
     finally:
-        _current_bridge_progress.reset(token)
+        _progress_bridge.reset(token)
 
 
-def current_bridge_progress() -> BridgeProgressReporter | None:
-    """Return the current bridge progress reporter, if a bridge sync is active."""
+def current_progress_bridge() -> Bridge | None:
+    """Return the bridge whose sync is running here; report through its ``report_progress``."""
 
-    return _current_bridge_progress.get()
+    return _progress_bridge.get()
 
 
 __all__ = [
-    "BridgeProgressReporter",
     "SyncDispatch",
     "bridge_progress_context",
-    "current_bridge_progress",
+    "current_progress_bridge",
 ]

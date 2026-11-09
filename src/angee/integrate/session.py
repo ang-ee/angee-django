@@ -33,7 +33,6 @@ from angee.integrate.live import (
 )
 from angee.integrate.locks import bridge_is_locked
 from angee.integrate.models import IntegrationRuntimeStatus
-from angee.integrate.sync import BridgeProgressReporter
 
 logger = logging.getLogger(__name__)
 
@@ -66,15 +65,13 @@ class LiveSession:
         self,
         bridge: Any,
         *,
-        reporter: BridgeProgressReporter,
         stop_event: threading.Event,
         on_shutdown: Callable[[], None] | None = None,
         on_stalled_shutdown: Callable[[], NoReturn] | None = None,
     ) -> None:
-        """Bind the session to one bridge row and its progress reporter."""
+        """Bind the session to one bridge row, which persists its progress reports."""
 
         self.bridge = bridge
-        self.reporter = reporter
         self.stop_event = stop_event
         self.on_shutdown = on_shutdown
         """Notify the host before entering potentially blocking vendor cleanup."""
@@ -447,7 +444,7 @@ class LiveSession:
                 details["pairing"].setdefault(key, value)
         if self.landed:
             details["items"] = self.landed
-        self.reporter.report(stage, details=details)
+        self.bridge.report_progress(stage, details=details)
 
     def _mark_paired(self, external_id: str) -> bool:
         """Record the linked account once, then let reconnects pass."""

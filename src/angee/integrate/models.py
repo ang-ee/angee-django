@@ -3777,7 +3777,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         session actually pairs.
 
         Re-reads under a row lock because the session's pairing report
-        (:class:`~angee.integrate.sync.BridgeProgressReporter`) is the concurrent
+        (:meth:`report_progress`) is the concurrent
         writer of the same ``sync_progress`` dict: the pairing ``details`` (the QR
         the operator is looking at) and the scheduler's ``stage``/``queued_at``
         markers must survive. Dropping the failure is exactly :meth:`_sync_marker`
