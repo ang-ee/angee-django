@@ -2140,7 +2140,9 @@ bridge advisory lock as polling and delivery settlement.
   every advancement, lets lost fences and transient database errors roll back,
   and hands any other failure to `WorkflowRun.fail_advance` to record. Each tick
   candidate's transition is a `StepRun` verb (`wake`, `redispatch`, `reap`) that
-  reports whether its run must replan; managers and querysets own row-set verbs.
+  reports whether its run must replan; managers and querysets own row-set verbs
+  and act on a held run only through its verbs (`admit_subject`, `reopen`,
+  `interrupt`, `cancel_owned_work`).
 - **Queryset verbs own transitions and companion fields.** `StepRunQuerySet`
   owns `claim`, `settle`, `to_succeeded`, `fail_attempt`, `to_waiting`,
   `to_ready`, `cancel_open`, `dispatch` and `count_redispatch`;

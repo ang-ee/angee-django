@@ -49,7 +49,6 @@ from angee.workflows.definition import (
 )
 from angee.workflows.states import (
     ERROR_OUTCOME,
-    INTERRUPTED_OUTCOME,
     AttemptResult,
     NodeKey,
     RunOrigin,
@@ -702,8 +701,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             with self.hold(run.pk) as locked:
                 from angee.workflows.runner import runner
 
-                if (subject := locked._lock_run_subject()) is not None:
-                    subject.admit_run(locked)
+                locked.admit_subject()
                 runner.advance(locked)
             return locked.with_actor(actor)
 
@@ -729,13 +727,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 with self.hold(run_id, skip_locked=True) as run:
                     if run is None or run.status != RunStatus.RUNNING:
                         continue
-                    run._write_state(
-                        status=str(RunStatus.INTERRUPTED),
-                        outcome=INTERRUPTED_OUTCOME,
-                        output={},
-                        actor=run.run_as,
-                    )
-                    run.step_runs.cancel_open()
+                    run.interrupt()
                     interrupted += 1
         return interrupted
 
@@ -744,7 +736,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
         steps = children = 0
         canceled = bool(runs and not runs[0].is_terminal)
         for index, run in enumerate(runs):
-            transitioning, changed = run._cancel_owned_work(actor=actor)
+            transitioning, changed = run.cancel_owned_work(actor=actor)
             children += bool(index and transitioning)
             steps += changed
         return Cancellation(canceled, steps, children)

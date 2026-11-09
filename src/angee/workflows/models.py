@@ -61,6 +61,7 @@ from angee.workflows.states import (
     CANCELED_OUTCOME,
     DONE_OUTCOME,
     ERROR_OUTCOME,
+    INTERRUPTED_OUTCOME,
     NAME_MAX_LENGTH,
     AttemptResult,
     RecordOperation,
@@ -546,13 +547,25 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                         outcome, output = definition.result_for(step_runs.all(), self.input) or (DONE_OUTCOME, {})
                 self._write_state(status=status, outcome=outcome, output=output)
 
-    def reopen(self) -> None:
-        """Clear this held run's terminal facts and readmit its subject; the runner replans it."""
+    def admit_subject(self) -> None:
+        """Lock this held root run's opted-in subject and let it admit the run.
+
+        The subject's refusal raises ``ValidationError`` and rolls the caller back.
+        """
         if (subject := self._lock_run_subject()) is not None:
             subject.admit_run(self)
+
+    def reopen(self) -> None:
+        """Clear this held run's terminal facts and readmit its subject; the runner replans it."""
+        self.admit_subject()
         self._write_state(status=str(RunStatus.RUNNING), outcome="", output={})
 
-    def _cancel_owned_work(self, *, actor: Any) -> tuple[bool, int]:
+    def interrupt(self) -> None:
+        """Settle this held run as interrupted by a process restart and close its open steps."""
+        self._write_state(status=str(RunStatus.INTERRUPTED), outcome=INTERRUPTED_OUTCOME, output={})
+        self.step_runs.cancel_open()
+
+    def cancel_owned_work(self, *, actor: Any) -> tuple[bool, int]:
         """Stop this held run's open work, keeping its terminal facts.
 
         Return whether the run transitioned to canceled and how many open steps closed.
