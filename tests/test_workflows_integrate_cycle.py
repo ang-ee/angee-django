@@ -224,7 +224,7 @@ def test_ui_cancel_settles_once_and_repeated_delivery_cannot_overwrite_it(cycle_
     _workflow, bridge = cycle_factory()
     run = dispatch(bridge)
     _admin, sent = execution
-    WorkflowRun.objects.cancel_on_commit(run, bridge.owner)
+    run.cancel_on_commit(bridge.owner)
     cancellations = [envelope["kwargs"] for name, envelope in sent if name == "workflows.cancel"]
     assert len(cancellations) == 1
     tasks.cancel(**cancellations[0])
@@ -237,7 +237,7 @@ def test_ui_cancel_settles_once_and_repeated_delivery_cannot_overwrite_it(cycle_
     assert bridge.last_error == bridge.sync_error
     settled = (bridge.last_sync_completed_at, bridge.next_sync_at, bridge.sync_progress, run.finished_at)
 
-    WorkflowRun.objects.cancel_on_commit(run, bridge.owner)
+    run.cancel_on_commit(bridge.owner)
     tasks.cancel(**cancellations[0])
     assert bridge.settle_dispatch(run.pk, result=900) is False
     run.refresh_from_db()

@@ -48,7 +48,6 @@ from angee.workflows.definition import (
     SourcedWorkflowExtension,
 )
 from angee.workflows.states import (
-    CANCELED_OUTCOME,
     ERROR_OUTCOME,
     INTERRUPTED_OUTCOME,
     AttemptResult,
@@ -745,33 +744,10 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
         steps = children = 0
         canceled = bool(runs and not runs[0].is_terminal)
         for index, run in enumerate(runs):
-            stopped = run.stopped_at is None and (not run.is_terminal or run.status == RunStatus.FAILED)
-            if stopped:
-                self.filter(pk=run.pk).update(stopped_at=Now(), updated_at=Now())
-                run.refresh_from_db(fields=["stopped_at"])
-            transitioning = not run.is_terminal
-            if transitioning:
-                children += bool(index)
-                run._write_state(status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME, output={}, actor=actor)
-            # Cleanup locks sessions and turns before cancel_open deletes their watches.
-            changed = run.step_runs.cancel_open()
+            transitioning, changed = run._cancel_owned_work(actor=actor)
+            children += bool(index and transitioning)
             steps += changed
-            if not transitioning and (changed or stopped):
-                run._publish_update()
         return Cancellation(canceled, steps, children)
-
-    def cancel_on_commit(self, run: Any, actor: Any) -> None:
-        """Deliver an authorized cancellation after this transaction releases its locks.
-
-        Rollback discards the request. The task calls ``cancel`` with the same
-        actor, rechecking access and terminal state under the existing owner.
-        Robust delivery failures are logged without interrupting other callbacks.
-        """
-        actor = run.require_access("write", actor)
-        if actor is None:
-            raise PermissionDenied("Deferred cancellation requires an actor.")
-        payload = {"run_id": run.pk, "actor": str(to_subject_ref(actor))}
-        enqueue_task("workflows.cancel", kwargs=payload, robust=True)
 
     def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta | None = timedelta(seconds=5)) -> Cancellation:
         """Cancel open rows after DATABASE work releases its lock, retaining terminal run facts."""
@@ -799,15 +775,6 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                 model = retained.subject_model_class
                 subject = model.system_queryset().get(pk=retained.subject_object_id) if model is not None else None
             return self.start(workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained)
-
-    def reopen(self, run: Any) -> None:
-        """Clear a locked run's terminal facts and replan retained step rows."""
-        if (subject := run._lock_run_subject()) is not None:
-            subject.admit_run(run)
-        run._write_state(status=str(RunStatus.RUNNING), outcome="", output={})
-        from angee.workflows.runner import runner
-
-        runner.advance(run)
 
     def prune(self) -> int:
         """Delete bounded old owned trees, marking protected roots for a later retry."""
@@ -1289,6 +1256,9 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
                     acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,
                     reset_dispatches=True,
                 )
-                self.run_model.objects.reopen(run)
+                from angee.workflows.runner import runner
+
+                run.reopen()
+                runner.advance(run)
                 current.refresh_from_db()
                 return current.with_actor(actor)

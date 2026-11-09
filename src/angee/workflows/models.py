@@ -57,6 +57,7 @@ from angee.workflows.managers import (
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
+    CANCELED_OUTCOME,
     DONE_OUTCOME,
     ERROR_OUTCOME,
     NAME_MAX_LENGTH,
@@ -543,6 +544,42 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                         status = RunStatus.SUCCEEDED
                         outcome, output = definition.result_for(step_runs.all(), self.input) or (DONE_OUTCOME, {})
                 self._write_state(status=status, outcome=outcome, output=output)
+
+    def reopen(self) -> None:
+        """Clear this held run's terminal facts and readmit its subject; the runner replans it."""
+        if (subject := self._lock_run_subject()) is not None:
+            subject.admit_run(self)
+        self._write_state(status=str(RunStatus.RUNNING), outcome="", output={})
+
+    def _cancel_owned_work(self, *, actor: Any) -> tuple[bool, int]:
+        """Stop this held run's open work, keeping its terminal facts.
+
+        Return whether the run transitioned to canceled and how many open steps closed.
+        """
+        stopped = self.stopped_at is None and (not self.is_terminal or self.status == RunStatus.FAILED)
+        if stopped:
+            type(self).objects.filter(pk=self.pk).update(stopped_at=Now(), updated_at=Now())
+            self.refresh_from_db(fields=["stopped_at"])
+        transitioning = not self.is_terminal
+        if transitioning:
+            self._write_state(status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME, output={}, actor=actor)
+        # Cleanup locks sessions and turns before cancel_open deletes their watches.
+        changed = self.step_runs.cancel_open()
+        if not transitioning and (changed or stopped):
+            self._publish_update()
+        return transitioning, changed
+
+    def cancel_on_commit(self, actor: Any) -> None:
+        """Deliver an authorized cancellation after this transaction releases its locks.
+
+        Rollback discards the request. The task cancels as the same actor,
+        rechecking access and terminal state under the run manager's cancel.
+        Robust delivery failures are logged without interrupting other callbacks.
+        """
+        actor = self.require_access("write", actor)
+        if actor is None:
+            raise PermissionDenied("Deferred cancellation requires an actor.")
+        enqueue_task("workflows.cancel", kwargs={"run_id": self.pk, "actor": str(to_subject_ref(actor))}, robust=True)
 
     def fail_advance(self, step_run: Any, settlement: _AttemptRecord | None, failure: _AttemptRecord) -> None:
         """Record an advancement failure the runner classified, each write in its own savepoint.

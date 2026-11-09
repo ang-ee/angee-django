@@ -60,7 +60,7 @@ EXPECTED_VERBS = {
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": (
-        "cancel cancel_abandoned cancel_on_commit prune reap_interrupted reopen reprocess start"
+        "cancel cancel_abandoned prune reap_interrupted reprocess start"
     ),
     "workflows.WorkflowRun.queryset": "about blocking for_subject hold hold_owned retention_candidates working_on",
     "decisions.Decision.manager": "ask decide withdraw",
@@ -68,6 +68,11 @@ EXPECTED_VERBS = {
         "attention_expression for_records open open_expression open_for waiting_on"
     ),
 }
+
+EXPECTED_ROW_VERBS = {
+    "workflows.WorkflowRun": "advance cancel_on_commit fail_advance reopen",
+}
+"""Transitions the rows own; their managers no longer carry them."""
 
 EXPECTED_TYPES = {
     "awaits": "AwaitRun AwaitRunConfig AwaitRunInput",
@@ -134,6 +139,9 @@ def test_workflows_public_surface() -> None:
                 if names := _public_verbs(cls, label, base):
                     verbs[f"{label}.{model.__name__}.{owner}"] = names
     assert verbs == {owner: tuple(names.split()) for owner, names in EXPECTED_VERBS.items()}
+    for label, names in EXPECTED_ROW_VERBS.items():
+        model = apps.get_model(label)
+        assert all(callable(getattr(model, name, None)) for name in names.split()), label
 
     types = {}
     runner = []
