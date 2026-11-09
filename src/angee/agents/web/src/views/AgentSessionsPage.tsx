@@ -165,19 +165,15 @@ export function AgentSessionsPage(): React.ReactElement {
         <KeptAliveAgents
           openedIds={openedIds}
           selectedId={activeId}
-          renderAgent={(id) => {
-            const runtimeClass = agents.find((agent) => agent.id === id)?.runtime_class;
-            return runtimeClass === undefined ? null : (
-              <AgentChat
-                agentId={id}
-                view={viewForAgent(id)}
-                runtimeClass={runtimeClass}
-                sessionId={id === activeId ? selectedSessionId : undefined}
-                onSessionChange={(sessionId) => { if (id === activeId) navigateSession(sessionId); }}
-                renderSessionNavigation={(sessions) => id === activeId ? <SessionNavigation rail={rail} sessions={sessions} selectedId={selectedSessionId} navigate={navigateSession} /> : null}
-              />
-            );
-          }}
+          renderAgent={(id) => agents.some((agent) => agent.id === id) ? (
+            <AgentChat
+              agentId={id}
+              view={viewForAgent(id)}
+              sessionId={id === activeId ? selectedSessionId : undefined}
+              onSessionChange={(sessionId) => { if (id === activeId) navigateSession(sessionId); }}
+              renderSessionNavigation={(sessions) => id === activeId ? <SessionNavigation rail={rail} sessions={sessions} selectedId={selectedSessionId} navigate={navigateSession} /> : null}
+            />
+          ) : null}
         />
       </div>
     </>

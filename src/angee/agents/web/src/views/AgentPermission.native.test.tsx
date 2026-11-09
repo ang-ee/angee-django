@@ -23,7 +23,7 @@ async function mount(version: 1 | 2, ask = true, providerOptions: AcpProviderOpt
   fixtures.push(() => agent.close(), providers.clearClients);
   transport.open.mockImplementation(agent.open);
   render(<providers.Provider><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-    <AgentChat agentId="agt-1" view={view} runtimeClass="OPENCODE" />
+    <AgentChat agentId="agt-1" view={view} />
   </AppRuntimeProvider></ToastProvider></providers.Provider>);
   const input = await screen.findByPlaceholderText("Message the agent…");
   fireEvent.change(input, { target: { value: "Use the tool" } });

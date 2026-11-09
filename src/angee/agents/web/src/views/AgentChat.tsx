@@ -41,9 +41,6 @@ import type { AgentChatView, McpServerConfig } from "../documents";
  * loads or for a default agent not yet in the list.
  */
 export function AgentChat(props: AgentChatProps): React.ReactElement {
-  if (props.runtimeClass === undefined) {
-    return <LoadingPanel />;
-  }
   return (
     <AgentChatProvider value={props}>
       <LazyBoundary pending={<LoadingPanel />}>

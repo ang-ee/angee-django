@@ -13,7 +13,6 @@ export interface AgentChatProps {
   selectedAgentId?: string;
   onSelectAgent?: (id: string) => void;
   fallbackName?: string;
-  runtimeClass?: string;
   sessionId?: string;
   protocolVersion?: 1 | 2;
   onSessionChange?: (id: string) => void;

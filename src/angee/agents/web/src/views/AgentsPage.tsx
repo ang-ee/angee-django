@@ -18,14 +18,14 @@ import { usePrincipalAccessRecordTab } from "@angee/iam";
 
 import { useAgentsT } from "../i18n";
 import { AGENT_LIFECYCLE_FIELDS, AGENT_MODEL as MODEL, useAgentLifecycleActions } from "./agent-actions";
-import { booleanField, stringField } from "./agent-record";
+import { booleanField } from "./agent-record";
 import { AgentChat } from "./AgentChat";
 import { AgentProvisioning } from "./AgentProvisioning";
 import { type AgentChatView } from "../documents";
 
 // (`sqid` is not a GraphQL field — the agent's public id is carried by `id` for
 // the view envelope; see below.)
-const CHAT_FIELDS = ["id", "can_chat", "runtime_class"] as const;
+const CHAT_FIELDS = ["id", "can_chat"] as const;
 
 function canDeleteAgent(record: Row): boolean {
   return booleanField(record, "can_delete");
@@ -52,12 +52,11 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
     },
   });
   const record = (run.result as Row | undefined) ?? null;
-  const runtimeClass = stringField(record, "runtime_class");
   if (!booleanField(record, "can_chat")) {
     return <InlineEmpty icon="agent" label={t("agent.chatUnavailable")} />;
   }
   const view: AgentChatView = { kind: "record", type: "agents/agent", sqid: agentId };
-  return <AgentChat agentId={agentId} view={view} runtimeClass={runtimeClass} />;
+  return <AgentChat agentId={agentId} view={view} />;
 }
 
 type RowRecord = BaseRecord & Row;

@@ -23,7 +23,7 @@ export function createAcpTestProviders(agent: FakeAcpAgent, protocolVersion: num
         }
         if (meta?.gqlMutation === RenderAgentPrompt) return { data: { render_agent_prompt: await options.renderPrompt?.() ?? "" } };
         if (meta?.gqlQuery === AgentRoster) return { data: { agents: [{
-          id: "agt-1", name: "Scout", runtime_class: "OPENCODE", runtime_status: "RUNNING",
+          id: "agt-1", name: "Scout", runtime_status: "RUNNING",
           is_template: false, updated_at: "2026-10-02", model: null,
         }] } };
         throw new Error("Unexpected authored test operation");
