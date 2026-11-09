@@ -22,6 +22,7 @@ import {
 } from "@refinedev/core";
 
 import {
+  ServerUnavailableError,
   createAngeeGraphQLClient,
   useAuthoredMutation,
   recordValue,
@@ -336,7 +337,10 @@ export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
   const identity = useGetIdentity<AuthIdentity | null>({
     queryOptions: IDENTITY_QUERY_SETTINGS,
   });
-  const auth = useMemo(() => identity.data === undefined && !isUnauthorizedError(identity.error)
+  // Still resolving while the first answer is pending or the server is unavailable;
+  // any other failure settles as signed out so appearance and chrome can proceed.
+  const auth = useMemo(() => identity.data === undefined
+    && (identity.error === null || identity.error instanceof ServerUnavailableError)
     ? { user: null, status: "resolving", hasRole: () => false } satisfies AuthState
     : authStateFromUser(identity.data ?? null), [identity.data, identity.error]);
   return {

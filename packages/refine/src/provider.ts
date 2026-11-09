@@ -106,8 +106,7 @@ export function createAngeeGraphQLClient(
     fetch: baseFetch,
   });
   const withAuth = auth(baseFetch);
-  // Check before CSRF too: a blocked call must not create a failed shared
-  // bootstrap that the independent recovery probe would then join.
+  // Gate before CSRF too: an unavailable server receives no session bootstrap.
   const authenticatedFetch = options.connection?.fetch(withAuth) ?? withAuth;
   const requestFetch: FetchFn = (input, init) =>
     authenticatedFetch(typeof options.url === "function" ? options.url() : input, init);

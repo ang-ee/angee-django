@@ -4,19 +4,33 @@ import { ServerConnection, ServerUnavailableError } from "./server-connection";
 import { sessionAuth } from "./transport-auth";
 
 describe("shared server connection", () => {
-  test.each([502, 503, 504])("blocks every schema after HTTP %s and sends no GraphQL after failed CSRF", async status => {
+  test.each([502, 503, 504])("HTTP %s asks for a check and stays that request's ordinary, retryable error", async status => {
     const connection = new ServerConnection();
     const network = vi.fn(async () => new Response("upstream detail", { status }));
+    const client = createAngeeGraphQLClient({ url: "/graphql/public/", fetch: network, connection });
+    const failure = await client.request("{ __typename }").catch(error => error);
+    expect(failure).not.toBeInstanceOf(ServerUnavailableError);
+    expect(retryableQueryError(failure)).toBe(true);
+    expect(connection.getSnapshot()).toBe("checking");
+    // The gateway answered the CSRF bootstrap too; the read still went out.
+    expect(network).toHaveBeenCalledTimes(2);
+  });
+
+  test("a failed check blocks every schema before CSRF until a check restores it", async () => {
+    const connection = new ServerConnection();
+    const network = vi.fn(async () => Response.json({ data: { __typename: "Query" } }));
     const publicClient = createAngeeGraphQLClient({ url: "/graphql/public/", fetch: network, connection });
     const consoleClient = createAngeeGraphQLClient({ url: "/graphql/console/", fetch: network, connection });
+    connection.disconnect();
     const failure = await publicClient.request("{ __typename }").catch(error => error);
     expect(failure).toBeInstanceOf(ServerUnavailableError);
     expect(retryableQueryError(failure)).toBe(false);
     for (let i = 0; i < 20; i++) {
       await expect(consoleClient.request("{ __typename }")).rejects.toBeInstanceOf(ServerUnavailableError);
     }
-    expect(network).toHaveBeenCalledTimes(1);
-    expect(network.mock.calls[0]).toEqual(["/auth/csrf/", { credentials: "include" }]);
+    expect(network).not.toHaveBeenCalled();
+    connection.restore();
+    await expect(consoleClient.request("{ __typename }")).resolves.toEqual({ __typename: "Query" });
   });
 
   test("reports concurrent failures once and never replays a mutation on recovery", async () => {
@@ -25,11 +39,18 @@ describe("shared server connection", () => {
     connection.subscribe(changed);
     const network = vi.fn(async (): Promise<Response> => { throw new TypeError("Failed to fetch"); });
     const fetch = connection.fetch(network);
-    await Promise.allSettled([fetch("/graphql/", { method: "POST", body: "mutation" }), fetch("/graphql/")]);
+    const results = await Promise.allSettled([fetch("/graphql/", { method: "POST", body: "mutation" }), fetch("/graphql/")]);
+    expect(results.map(result => result.status === "rejected" && result.reason)).toEqual([expect.any(TypeError), expect.any(TypeError)]);
     expect(changed).toHaveBeenCalledTimes(1);
-    expect(connection.getSnapshot()).toBe(true);
+    expect(connection.getSnapshot()).toBe("checking");
+    const armedAt = connection.armedAt;
+    expect(armedAt).toEqual(expect.any(Number));
+    connection.disconnect();
+    expect(connection.armedAt).toBe(armedAt);
+    await expect(fetch("/graphql/")).rejects.toBeInstanceOf(ServerUnavailableError);
     connection.restore();
-    expect(changed).toHaveBeenCalledTimes(2);
+    expect(connection.armedAt).toBeNull();
+    expect(changed).toHaveBeenCalledTimes(3);
     expect(network).toHaveBeenCalledTimes(2);
     network.mockImplementation(async () => new Response("OK"));
     expect((await fetch("/graphql/")).ok).toBe(true);
@@ -40,7 +61,8 @@ describe("shared server connection", () => {
     const connection = new ServerConnection();
     const response = await connection.fetch(async () => new Response(null, { status }))("/graphql/");
     expect(response.status).toBe(status);
-    expect(connection.getSnapshot()).toBe(false);
+    expect(connection.getSnapshot()).toBe("connected");
+    expect(connection.armedAt).toBeNull();
   });
 
   test("does not treat cancellation or application exceptions as downtime", async () => {
@@ -51,12 +73,15 @@ describe("shared server connection", () => {
     await expect(connection.fetch(network)("/graphql/", { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
     expect(network).not.toHaveBeenCalled();
     await expect(connection.fetch(async () => { throw new Error("application bug"); })("/graphql/")).rejects.toThrow("application bug");
-    expect(connection.getSnapshot()).toBe(false);
+    expect(connection.getSnapshot()).toBe("connected");
   });
 
-  test("even an unmonitored session transport stops after a non-OK CSRF bootstrap", async () => {
-    const network = vi.fn(async () => new Response(null, { status: 403 }));
-    await expect(sessionAuth()(network)("/graphql/public/")).rejects.toThrow("secure session");
-    expect(network).toHaveBeenCalledTimes(1);
+  test("a non-OK CSRF bootstrap sends the request without a token", async () => {
+    const network = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(null, { status: input === "/auth/csrf/" ? 403 : 200 }));
+    const response = await sessionAuth()(network)("/graphql/public/", { method: "POST" });
+    expect(response.ok).toBe(true);
+    expect(network).toHaveBeenCalledTimes(2);
+    expect(new Headers(network.mock.calls[1]?.[1]?.headers).has("x-csrftoken")).toBe(false);
   });
 });

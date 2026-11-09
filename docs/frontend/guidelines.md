@@ -57,8 +57,9 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
 - Server unavailability is shared transport state, not a page's error or auth
   decision. Compose the [app connection boundary](../../packages/app/src/providers/connection.tsx)
   and its native Query recovery; preserve mounted pages and never replay an
-  interrupted write. Customer artwork and guidance use its containers and
-  existing brand/i18n contracts ([customization](../../packages/app/README.md#server-connection-recovery)).
+  interrupted write. Customer artwork and guidance use its containers and the
+  runtime brand; its copy is the reserved `ui` namespace's
+  ([customization](../../packages/app/README.md#server-connection-recovery)).
 - Dialect data hooks live in `@angee/refine` as metadata-free hooks. Callers
   resolve `resourceOperationTarget` at the metadata edge and pass the root as
   `{ root }`.
@@ -72,8 +73,9 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   included app), optionally a route whose descendants inherit the override; a
   page composes every app on its trail, outermost first. The app validates existing
   message, model, field and menu keys; metadata projects presentation labels
-  without changing query or model identity. Use host `createApp.i18n` for global
-  copy, and scoped vocabulary for another addon's copy within an app. Native
+  without changing query or model identity. Addon i18n bundles own their own
+  namespaces; scoped vocabulary overrides another addon's copy within an app. The
+  `ui` namespace is `@angee/ui`'s, and neither overrides it. Native
   i18next scopes retain one locale across navigation. See the
   [manifest example](../../packages/app/README.md#app-vocabulary-and-shipped-views).
 - Record display representation is a backend-emitted metadata fact in the
