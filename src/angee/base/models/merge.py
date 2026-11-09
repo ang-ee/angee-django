@@ -186,7 +186,7 @@ class MergeableMixin(AngeeModel):
             raise ValidationError("Choose the records to merge into this one.")
         if len(records) > MERGE_LIMIT:
             raise ValidationError(f"Merge at most {MERGE_LIMIT} records at once.")
-        with transaction.atomic(using=using), actor_context(actor):
+        with transaction.atomic(), actor_context(actor):
             found = instances_from_public_ids(
                 model, records, queryset=model._default_manager.with_actor(actor).with_action("read").using(using),
             )
@@ -235,8 +235,7 @@ class MergeableMixin(AngeeModel):
         if self.pk in keys or self.pk is None or None in keys:
             raise ValidationError("A fold requires distinct saved records.")
         ids = sorted(keys)
-        using = self._state.db
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             model.lock_merge_records((self, *merged))
             rows = model._base_manager.db_manager(hints={"instance": self}).filter(
                 pk__in=[self.pk, *ids]

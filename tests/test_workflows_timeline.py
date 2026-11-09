@@ -299,16 +299,18 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     assert step["records"][0]["record_id"] == record.sqid
     assert step["decision"]["records"][0]["record_id"] == record.sqid
     assert data["decisions"] == [{"id": step["decision"]["id"]}]
-    from angee.graphql.events import ChangeRelatedRecord
+    concern = (record._meta.label, record.sqid)
 
-    concern = ChangeRelatedRecord(record._meta.label, record.sqid)
+    def concerns(row):
+        return {(ref.model_label, ref.public_id) for ref in row.change_related_records()}
+
     with system_context(reason="tests.timeline.change_concerns"):
         stored = WorkflowRun.objects.get(sqid=run.sqid)
-        assert concern in stored.change_related_records()
-        assert concern in stored.step_runs.get(node_key="entry").change_related_records()
-        assert concern in stored.step_runs.get(node_key="entry").decision.change_related_records()
+        assert concern in concerns(stored)
+        assert concern in concerns(stored.step_runs.get(node_key="entry"))
+        assert concern in concerns(stored.step_runs.get(node_key="entry").decision)
     outsider = create_user("timeline-concern-outsider")
-    assert concern in WorkflowRun.system_queryset().get(pk=run.pk).with_actor(outsider).change_related_records()
+    assert concern in concerns(WorkflowRun.system_queryset().get(pk=run.pk).with_actor(outsider))
 
 
 def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(review, register_step, schema):

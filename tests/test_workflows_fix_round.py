@@ -10,7 +10,7 @@ from django.db import DataError, OperationalError, connection
 from django.db.models.functions import Now
 from rebac import system_context
 
-from angee.graphql.publishing import change_published
+from angee.base.signals import change_published
 from angee.workflows import managers
 from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet, WorkflowRunQuerySet

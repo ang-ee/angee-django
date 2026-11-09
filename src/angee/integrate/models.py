@@ -57,6 +57,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.base.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
@@ -106,10 +107,9 @@ from angee.integrate.states import (
     SyncFailureStatus,
 )
 from angee.integrate.streams import sync_bridge
-from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
+from angee.integrate.sync import SyncDispatch, bridge_progress_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
 from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
@@ -875,7 +875,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
 
         candidates = self.select_related("oauth_client", "external_account").select_for_update(of=("self",))
         using = candidates.db
-        with system_context(reason="integrate.credential.disconnect"), transaction.atomic(using=using):
+        with system_context(reason="integrate.credential.disconnect"), transaction.atomic():
             credential = (
                 candidates
                 .filter(user=user, external_account__sqid=external_account_sqid)
@@ -908,7 +908,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             target = integration.concrete_capability()
             target.set_lifecycle(IntegrationLifecycle.DISCONNECTED)
             target.attach_credential(None)
-        transaction.on_commit(copy(credential).revoke_remote, using=credential._state.db, robust=True)
+        transaction.on_commit(copy(credential).revoke_remote, robust=True)
 
     def delete_unattached_derived(self, credential_pk: int | None) -> None:
         """Dispose of discovery-created material after its last attachment releases it."""
@@ -3514,7 +3514,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         if not self.mark_sync_started(now=now):
             raise IntegrationError("Connection discovery must finish before syncing.")
         try:
-            with bridge_sync_context(), bridge_progress_context(self):
+            with bridge_progress_context(self):
                 result = self.sync()
             if result is SyncDispatch.DISPATCHED:
                 return result

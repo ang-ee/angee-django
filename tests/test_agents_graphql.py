@@ -46,12 +46,12 @@ from angee.agents.testing.models import (
     Skill,
 )
 from angee.base.exceptions import TransitionNotAllowed
+from angee.base.locks import task_lock
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
 from angee.integrate.credentials import CredentialKind
-from angee.jobs.locks import task_lock
 from angee.operator.daemon import OperatorDaemonConflict, OperatorDaemonNotFound, OperatorInstanceKind, WorkspaceStatus
 from tests.conftest import Credential, ExternalAccount, Integration, OAuthClient, SchemaAddon, Vendor, make_integration
 from tests.conftest import create_platform_admin as _platform_admin

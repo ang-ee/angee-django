@@ -381,7 +381,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         manifests = {name: manifest for name, (manifest, _origin) in available.items()}
         counts = composed.resource_counts()
         rows = self.all()
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             package_identity_index((
                 *((row.distribution, row.name) for row in rows.select_for_update() if row.distribution),
                 *((package["distribution"], name) for name, package in manifests.items()),
@@ -444,7 +444,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         index = installed_components("angee.addons") if index is None else index
         closure = getattr(settings, "COMPOSE_CLOSURE", None)
         dependencies = {} if closure is None else closure.dependencies
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             rows = list(self.select_for_update().order_by("name"))
             identities = package_identity_index((
                 *((entry.dist.metadata["Name"], name) for name, entry in installed_entry_points(index=index).items()

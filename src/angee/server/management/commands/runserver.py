@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 from django.core.management.commands.runserver import Command as RunserverCommand
+from django.db import connections
 from django.utils import autoreload
 from django.utils.module_loading import import_string
 
@@ -50,17 +51,22 @@ class Command(RunserverCommand):
         ``raise_last_exception`` then system + migration checks — so a config error
         (e.g. an ``ImplClassField`` registry path or REBAC misconfig the guidelines
         validate via ``check``) surfaces at startup, not on the first request. The
-        base ``run()`` owns the reload decision, so ``args`` is unused.
+        checks' database connections are closed before serving: they belong to this
+        thread, not to the ASGI workers. The base ``run()`` owns the reload
+        decision, so ``args`` is unused.
         """
 
         import uvicorn
 
         del args
         autoreload.raise_last_exception()
-        if not options.get("skip_checks"):
-            self.stdout.write("Performing system checks...\n\n")
-            self.check(display_num_errors=True)
-        self.check_migrations()
+        try:
+            if not options.get("skip_checks"):
+                self.stdout.write("Performing system checks...\n\n")
+                self.check(display_num_errors=True)
+            self.check_migrations()
+        finally:
+            connections.close_all()
         application = import_string(settings.ASGI_APPLICATION)
         self._server = uvicorn.Server(
             uvicorn.Config(

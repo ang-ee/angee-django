@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import nullcontext
-from typing import Any, ClassVar, Self, TypeVar
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from copy import copy
+from typing import Any, ClassVar, Self, TypeVar, cast
 
 from django.core import checks
-from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.db import models, transaction
 from django_compose.models import Composable
 from rebac import (
     RebacMixin,
     RelationshipTuple,
     SubjectRef,
     delete_relationship,
+    system_context,
     to_object_ref,
     write_relationships,
 )
@@ -25,9 +26,11 @@ from rebac.managers import RebacManager
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
+from angee.base.fields.ordering import FractionalRankField
 from angee.base.managers import AngeeManager, AngeeUnscopedManager
-from angee.base.models.identity import PublicIdentity, SqidMixin
+from angee.base.models.identity import PublicIdentity, SqidMixin, public_id_of
 from angee.base.models.inputs import InputExtensionsMixin
+from angee.base.models.locks import RowLockMixin
 from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.transitions import StateTransitionsMixin
@@ -54,6 +57,140 @@ class AngeeModel(
 
     _angee_base: ClassVar[models.Manager[Self]] = AngeeUnscopedManager()
     """Unfiltered tracked writes for Django's relation and base-manager paths."""
+
+    def replace_lines(
+        self,
+        field: str,
+        rows: Iterable[tuple[str | None, Mapping[str, Any]]],
+        *,
+        position_field: str = "position",
+        replace: bool = True,
+        permission: str = "write",
+    ) -> None:
+        """Make this row's owned lines match ``rows``, writing them as the requesting user.
+
+        ``field`` names a reverse foreign key whose rows exist only as parts of
+        this row. Each entry is ``(public id, values)``: a public id addresses a
+        stored line to update, ``None`` creates one, and with ``replace`` every
+        stored line no entry keeps is deleted; ``replace=False`` only adds and
+        keeps the lines this row's own save provisioned. Values are native model
+        values: a foreign key by primary key under its ``attname``, a
+        many-to-many field as its complete related set, and a name no field owns
+        as an input-extension value for the line's :meth:`apply_input_extensions`;
+        :meth:`line_relation` refuses any other name before anything is written.
+
+        Either mode requires ``permission`` on this row from the requester:
+        ``write`` unless the caller names the admission that already covers the
+        lines (a creation that just admitted this row passes ``create``); no
+        mode implies it. The line writes then run elevated, authorized by
+        that check, yet each still meets the line's own guards: ``full_clean``,
+        its persisted :class:`RowLockMixin` lock (every removal is checked
+        before any write) and its manager's ``create``. This row's lock
+        serializes the desired set, and a :class:`FractionalRankField` position
+        is staged first so a reorder never collides with itself.
+        """
+
+        desired = [(public_id, dict(values)) for public_id, values in rows]
+        relation = type(self).line_relation(field, {name for _pid, values in desired for name in values})
+        line_model = relation.related_model
+        parent_link = relation.field
+        self.require_access(permission)
+        with transaction.atomic(), system_context(reason="base.replace_lines"):
+            self.lock_subject()  # The row's own lock order: overrides take their domain locks first.
+            lines = line_model._base_manager.filter(**{parent_link.name: self})
+            existing = lines.in_bulk()
+            by_public_id = {public_id_of(line): line for line in existing.values()}
+            unknown = sorted({pid for pid, _values in desired if pid is not None and pid not in by_public_id})
+            if unknown:
+                raise ValidationError(
+                    f"{line_model._meta.object_name} lines {unknown!r} are not part of "
+                    f"{self._meta.object_name} {public_id_of(self)!r}; reload and retry."
+                )
+            kept = {by_public_id[pid].pk for pid, _values in desired if pid is not None}
+            removed = sorted(set(existing) - kept) if replace else []
+            for pk in removed:
+                if isinstance(line := existing[pk], RowLockMixin):
+                    line.validate_row_delete()
+            if removed:
+                # Removals free their unique values (a name) for the lines that follow.
+                try:
+                    lines.filter(pk__in=removed).delete()
+                except (models.ProtectedError, models.RestrictedError) as error:
+                    raise ValidationError(_line_removal_refusal(line_model, error)) from error
+            try:
+                position = line_model._meta.get_field(position_field)
+            except FieldDoesNotExist:
+                position = None
+            if isinstance(position, FractionalRankField):
+                moving = [
+                    by_public_id[pid] for pid, values in desired
+                    if pid is not None and values.get(position.name) is not None
+                    and position.to_python(values[position.name]) != getattr(by_public_id[pid], position.attname)
+                ]
+                if moving:
+                    # Immediate uniqueness forbids cyclic swaps: stage the moving
+                    # lines on free ranks, then save their exact final values below.
+                    temporary = position.get_temporary_ranks(
+                        moving, (values.get(position.name) for _pid, values in desired),
+                    )
+                    staged = [copy(line) for line in moving]
+                    for line, rank in zip(staged, temporary, strict=True):
+                        setattr(line, position.attname, rank)
+                    lines.bulk_update(staged, [position.name])
+            for pid, values in desired:
+                extensions = (
+                    line_model.pop_input_extensions(values) if issubclass(line_model, InputExtensionsMixin) else {}
+                )
+                if pid is not None:
+                    line = by_public_id[pid]
+                    previous = line.row_lock() if isinstance(line, RowLockMixin) else None
+                    related = _assign_line_values(line, values)
+                    if isinstance(line, RowLockMixin):
+                        line.validate_row_lock(previous)
+                    line.full_clean()
+                    line.save()
+                else:
+                    values[parent_link.attname] = self.pk
+                    candidate = line_model()
+                    related = _assign_line_values(candidate, values)
+                    if isinstance(candidate, RowLockMixin):
+                        candidate.validate_row_lock(None)
+                    candidate.full_clean()
+                    # Created through the manager, so its factory invariants still apply.
+                    line = line_model._default_manager.create(
+                        **{name: value for name, value in values.items() if name not in dict(related)},
+                    )
+                for name, value in related:
+                    if value is not None:
+                        getattr(line, name).set(value)
+                if extensions:
+                    cast(InputExtensionsMixin, line).apply_input_extensions(**extensions)
+
+    @classmethod
+    def line_relation(cls, field: str, names: Iterable[str] = ()) -> models.ManyToOneRel:
+        """Return the line relation ``field`` names, refusing what :meth:`replace_lines` cannot write.
+
+        ``field`` must be a reverse foreign key. Each of ``names`` that names a
+        field of the line must be a concrete column (by name or ``attname``) or
+        a forward many-to-many; a reverse relation is refused, and a name no
+        field owns is an input extension. Resource builders pass their declared
+        line columns, so a bad declaration fails the build, not the first write.
+        """
+
+        relation = cls._meta.get_field(field)
+        if not isinstance(relation, models.ManyToOneRel) or relation.one_to_one:
+            raise ImproperlyConfigured(f"{cls._meta.label}.{field} is not a to-many line relation.")
+        line_model = relation.related_model
+        for name in names:
+            try:
+                column = line_model._meta.get_field(name)
+            except FieldDoesNotExist:
+                continue
+            if not isinstance(column, models.ManyToManyField) and not (
+                isinstance(column, models.Field) and column.concrete
+            ):
+                raise ImproperlyConfigured(f"{line_model._meta.label}.{name} is not a writable line column.")
+        return relation
 
     def retained(self) -> bool:
         """Whether a live or historical reference, or a stored grant, names this row.
@@ -199,11 +336,7 @@ class AngeeModel(
     def _write_declared_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
         """Keep fresh subject admission and the native relationship write under owner locks."""
 
-        using = router.db_for_write(type(self), instance=self)
-        relationships_using = router.db_for_write(active_relationship_model())
-        with transaction.atomic(using=using), (
-            transaction.atomic(using=relationships_using) if relationships_using != using else nullcontext()
-        ):
+        with transaction.atomic():
             actor, elevated = self.effective_actor()
             target = self.lock_for_record_access()
             if elevated:
@@ -254,8 +387,7 @@ class AngeeModel(
         """Delete the tuple and notify its lifecycle owners in the same transaction."""
 
         subject_ref = _relationship_subject(subject)
-        using = router.db_for_write(active_relationship_model())
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             delete_relationship(
                 RelationshipTuple(
                     resource=to_object_ref(self),
@@ -480,3 +612,36 @@ def _relationship_subject(value: Any) -> SubjectRef:
         pass
     ref = to_object_ref(value)
     return SubjectRef.of(ref.resource_type, ref.resource_id)
+
+
+def _assign_line_values(line: models.Model, values: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """Set a line's column values natively; return its many-to-many sets, applied after the save."""
+
+    related: list[tuple[str, Any]] = []
+    for name, value in values.items():
+        field = cast("models.Field[Any, Any]", line._meta.get_field(name))  # AngeeModel.line_relation admitted it.
+        if isinstance(field, models.ManyToManyField):
+            related.append((name, value))
+        elif name == field.attname != field.name:
+            setattr(line, name, value)
+        else:
+            field.save_form_data(line, value)
+    return related
+
+
+def _line_removal_refusal(
+    line_model: type[models.Model],
+    error: models.ProtectedError | models.RestrictedError,
+) -> str:
+    """Say which kinds of record still use removed lines, counted, never naming the rows."""
+
+    blockers = error.protected_objects if isinstance(error, models.ProtectedError) else error.restricted_objects
+    counts: dict[str, int] = {}
+    for row in blockers:
+        name = str(type(row)._meta.verbose_name_plural)
+        counts[name] = counts.get(name, 0) + 1
+    used_by = ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
+    return (
+        f"Some {line_model._meta.verbose_name_plural} cannot be removed: other records use them "
+        f"({used_by}). Keep them, or remove what uses them first."
+    )

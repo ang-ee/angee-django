@@ -117,6 +117,23 @@ def test_directory_reader_lists_the_active_human_directory(composed_tables: None
 
 
 @pytest.mark.django_db(transaction=True)
+def test_user_scopes_keep_the_selected_queryset(composed_tables: None) -> None:
+    """Directory, colleague and preview scopes chain onto a selected user queryset."""
+
+    del composed_tables
+    actor = User.objects.create_user(username="actor", email="actor@example.com")
+    peer = User.objects.create_user(username="peer", email="peer@example.com")
+    User.objects.create_user(username="other", email="other@example.com")
+    _grant_directory(actor)
+    selected = User.objects.filter(username__in=("actor", "peer"))
+
+    assert set(selected.colleagues(actor).values_list("pk", flat=True)) == {actor.pk, peer.pk}
+    assert set(selected.filter(pk=peer.pk).colleagues(actor).values_list("pk", flat=True)) == {peer.pk}
+    assert set(selected.exclude(pk=actor.pk).directory(actor).values_list("pk", flat=True)) <= {peer.pk}
+    assert actor.pk not in set(selected.view_as_queryset(actor).values_list("pk", flat=True))
+
+
+@pytest.mark.django_db(transaction=True)
 def test_account_directory_readers_are_offered_their_named_accounts(composed_tables: None) -> None:
     """Without the whole directory, a member is offered themselves and the accounts named to them."""
 

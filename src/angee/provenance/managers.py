@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connections, models, transaction
+from django.db import IntegrityError, connection, models, transaction
 from django.db.models import Q
 from simple_history.utils import get_history_manager_for_model
 
@@ -153,7 +153,7 @@ class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT])
                 raise ValidationError({error_name: error}) from error
             if not value.strip():
                 raise ValidationError({error_name: f"A changeset {name} must not be blank."})
-        if not connections[self.db].in_atomic_block:
+        if not connection.in_atomic_block:
             raise RuntimeError("Changeset claims require an outer transaction.atomic() boundary.")
         claimed = require_changeset()
         if not isinstance(claimed, self.model):
@@ -164,7 +164,7 @@ class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT])
         claimed.key = key
         claimed.fingerprint = fingerprint
         try:
-            with transaction.atomic(using=self.db):
+            with transaction.atomic():
                 current_changeset(required=True, record=True)
         except IntegrityError:
             discard_changeset_claim(claimed)

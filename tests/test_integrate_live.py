@@ -17,11 +17,11 @@ from django.core.management import call_command
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.locks import task_lock_is_held
 from angee.integrate.live import PairingState
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
-from angee.jobs.locks import task_lock_is_held
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
 from angee.messaging.testing.models import Message
 from tests.conftest import make_integration
@@ -1289,9 +1289,9 @@ def test_process_session_rejects_local_lock_backend(live_tables: Any, monkeypatc
 def test_session_host_deduplicates_startup(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A starting host prevents a second parent and extra reconciler dispatches."""
 
+    from angee.base.locks import task_lock
     from angee.integrate import session_runner
     from angee.integrate import tasks as tasks_module
-    from angee.jobs.locks import task_lock
 
     channel = _live_channel("fake-live-hosted")
     monkeypatch.setattr(FakeLiveChannelBackend, "session_isolation", "process")

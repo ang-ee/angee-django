@@ -154,7 +154,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
             parent = parents[id(row)]
             if parent is not None and any(getattr(row, name) != getattr(parent, name) for name in scope):
                 raise ValidationError({"parent": "Parent must belong to the same scope."})
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             rank_fields = tuple(
                 column for column in model._meta.concrete_fields if isinstance(column, FractionalRankField)
             )
@@ -169,7 +169,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
             for row in rows:
                 row.parent = None
             for column, values in final_ranks.items():
-                temporary = column.get_temporary_ranks(rows, values, using=using)
+                temporary = column.get_temporary_ranks(rows, values)
                 for row, rank in zip(rows, temporary, strict=True):
                     setattr(row, column.attname, rank)
             with model.initialize_rows(rows, using=using):

@@ -26,8 +26,11 @@ from rebac import actor_context, anonymous_actor
 from strawberry import auto
 from strawberry_django.fields.types import field_type_map
 
+from angee.base import signals
 from angee.base.models.audit import AuditMixin
+from angee.base.models.identity import public_id_for
 from angee.base.models.timestamps import TimestampMixin
+from angee.base.refs import RecordRef
 from angee.base.serialization import json_safe
 from angee.base.signals import send_created_batch
 from angee.base.testing.packages import write_addon_distribution
@@ -35,10 +38,9 @@ from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.metadata import readable_model_field_names
-from angee.graphql.events import ChangePayload
+from angee.graphql.events import ChangePayload, ChangeRelatedRecord
 from angee.graphql.field_types import register_field_type
 from angee.graphql.mixins import ChangeBroadcastMixin
-from angee.graphql.publishing import publication_ingestion_context
 from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from tests.conftest import SchemaAddon
@@ -155,9 +157,13 @@ def test_publisher_parent_views_are_explicit(
             fields=(SimpleNamespace(readable=True, model_field_name="name"),),
         )) == frozenset({"name"})
         sent = []
-        monkeypatch.setattr(publishing, "_send_change", lambda model, payload: sent.append((model, payload)))
+
+        def observe(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
+            sent.append((sender, payload))
+
         with model_tables((Parent, Child)):
             publishing.connect_publishers(Child, readable_fields=("name",), include_parents=include_parents)
+            signals.change_published.connect(observe, weak=False, dispatch_uid="tests.publisher_parent_views")
             try:
                 child = Child.objects.create(name="Before")
                 assert len(sent) == 1 and sent[0][0] is Child
@@ -195,13 +201,29 @@ def test_publisher_parent_views_are_explicit(
                     (Child, str(row.pk), "create") for row in children
                 ]
             finally:
+                signals.change_published.disconnect(dispatch_uid="tests.publisher_parent_views")
                 publishing.disconnect_publishers(Child)
 
 
+@pytest.fixture
+def group_feed() -> Any:
+    """Declare Django's auth group a transport feed for one test, with chosen readable fields."""
+
+    declared: list[type[models.Model]] = []
+
+    def declare(model: type[models.Model] = Group, readable_fields: Any = ()) -> None:
+        publishing.connect_publishers(model, readable_fields=readable_fields)
+        declared.append(model)
+
+    yield declare
+    for model in declared:
+        publishing.disconnect_publishers(model)
+
+
 def test_publish_uses_public_id_and_changed_values(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, group_feed: Any,
 ) -> None:
-    """Publishing builds JSON-safe payloads with stable public IDs."""
+    """A feed's transport builds JSON-safe payloads with stable public IDs."""
 
     sent: list[tuple[type[models.Model], dict[str, Any]]] = []
 
@@ -219,14 +241,10 @@ def test_publish_uses_public_id_and_changed_values(
         "on_commit",
         lambda callback, **kwargs: callback(),
     )
+    group_feed(readable_fields=("name",))
     group = Group(id=7, name="editors")
 
-    publishing.publish_change(
-        group,
-        action="update",
-        update_fields=("name",),
-        readable_fields=("name",),
-    )
+    signals.publish_change(group, action="update", update_fields=("name",))
 
     assert len(sent) == 1
     occurrence_id = sent[0][1].pop("occurrence_id")
@@ -245,8 +263,30 @@ def test_publish_uses_public_id_and_changed_values(
     ]
 
 
+def test_observation_without_a_feed_queues_no_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Local observers see every owner write; only a declared feed reaches the channel layer."""
+
+    payloads: list[signals.ModelChange] = []
+    callbacks: list[Any] = []
+
+    def receiver(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
+        payloads.append(payload)
+
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callbacks.append(callback))
+    signals.change_published.connect(receiver, sender=Group, dispatch_uid="tests.observation_without_a_feed")
+    try:
+        signals.publish_change(Group(id=7, name="local"), action="update", update_fields=("name",))
+    finally:
+        signals.change_published.disconnect(sender=Group, dispatch_uid="tests.observation_without_a_feed")
+
+    assert [(payload.model, payload.id, payload.changed_values) for payload in payloads] == [
+        ("auth.Group", "7", {"name": "local"}),
+    ]
+    assert callbacks == []
+
+
 def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, group_feed: Any,
 ) -> None:
     """Suppressed and value-free events do not force readable-field metadata."""
 
@@ -257,21 +297,6 @@ def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
         resolutions.append("resolved")
         return ("name",)
 
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callbacks.append(callback))
-    group = Group(id=7, name="editors")
-
-    publishing.publish_change(group, action="create", update_fields=None, readable_fields=readable_fields)
-    publishing.publish_change(group, action="update", update_fields=None, readable_fields=readable_fields)
-    publishing.publish_change(group, action="delete", update_fields=None, readable_fields=readable_fields)
-    publishing._on_save(Group, group, raw=True, update_fields=("name",), readable_fields=readable_fields)
-    with publishing.mute_changes():
-        publishing.publish_change(
-            group,
-            action="update",
-            update_fields=("name",),
-            readable_fields=readable_fields,
-        )
-
     class SilentGroup(ChangeBroadcastMixin, Group):
         class Meta:
             proxy = True
@@ -280,44 +305,41 @@ def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
         def broadcasts_changes(self) -> bool:
             return False
 
-    publishing.publish_change(
-        SilentGroup(id=8, name="hidden"),
-        action="update",
-        update_fields=("name",),
-        readable_fields=readable_fields,
-    )
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callbacks.append(callback))
+    group_feed(readable_fields=readable_fields)
+    group_feed(SilentGroup, readable_fields=readable_fields)
+    group = Group(id=7, name="editors")
+
+    signals.publish_change(group, action="create", update_fields=None)
+    signals.publish_change(group, action="update", update_fields=None)
+    signals.publish_change(group, action="delete", update_fields=None)
+    post_save.send(sender=Group, instance=group, raw=True, created=False, update_fields=("name",))
+    with signals.mute_changes():
+        signals.publish_change(group, action="update", update_fields=("name",))
+    signals.publish_change(SilentGroup(id=8, name="hidden"), action="update", update_fields=("name",))
 
     assert resolutions == []
     assert len(callbacks) == 3
 
-    publishing.publish_change(
-        group,
-        action="update",
-        update_fields=("name",),
-        readable_fields=readable_fields,
-    )
+    signals.publish_change(group, action="update", update_fields=("name",))
 
     assert resolutions == ["resolved"]
     assert len(callbacks) == 4
 
 
 def test_partial_update_payload_is_captured_before_commit(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, group_feed: Any,
 ) -> None:
-    """The commit callback retains values captured when the signal ran."""
+    """The commit callback retains values captured when the write was observed."""
 
     callbacks: list[Any] = []
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callbacks.append(callback))
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
+    group_feed(readable_fields=lambda: ("name",))
     group = Group(id=9, name="before")
 
-    publishing.publish_change(
-        group,
-        action="update",
-        update_fields=("name",),
-        readable_fields=lambda: ("name",),
-    )
+    signals.publish_change(group, action="update", update_fields=("name",))
     group.name = "after"
     assert sent == []
     callbacks[0]()
@@ -325,9 +347,31 @@ def test_partial_update_payload_is_captured_before_commit(
     assert sent[0]["changed_values"] == {"name": "before"}
 
 
+def test_local_observer_changes_do_not_leak_into_transport_values(
+    monkeypatch: pytest.MonkeyPatch, group_feed: Any,
+) -> None:
+    """Values are captured before local observers run, so their edits never reach the wire."""
+
+    sent: list[dict[str, Any]] = []
+
+    def rename(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
+        payload.instance.name = "renamed by an observer"
+
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
+    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
+    group_feed(readable_fields=("name",))
+    signals.change_published.connect(rename, sender=Group, dispatch_uid="tests.local_observer_rename")
+    try:
+        signals.publish_change(Group(id=9, name="written"), action="update", update_fields=("name",))
+    finally:
+        signals.change_published.disconnect(sender=Group, dispatch_uid="tests.local_observer_rename")
+
+    assert sent[0]["changed_values"] == {"name": "written"}
+
+
 @pytest.mark.django_db(transaction=True)
 def test_commit_broadcast_failure_is_logged_without_escaping(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, group_feed: Any,
 ) -> None:
     """Django's robust callback can name and log a failed transport after commit."""
 
@@ -335,48 +379,44 @@ def test_commit_broadcast_failure_is_logged_without_escaping(
         raise RuntimeError("Transport unavailable")
 
     monkeypatch.setattr(publishing, "_broadcast", fail)
+    group_feed()
     with transaction.atomic():
-        publishing.publish_change(Group(id=9, name="committed"), action="update", update_fields=None)
+        signals.publish_change(Group(id=9, name="committed"), action="update", update_fields=None)
     assert "Transport unavailable" in caplog.text
 
 
-def test_change_signal_receiver_sees_broadcast_payload(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.django_db(transaction=True)
+def test_local_commit_effects_precede_transport_for_one_occurrence(
+    monkeypatch: pytest.MonkeyPatch, group_feed: Any,
 ) -> None:
-    """A dispatch-uid receiver sees the same payload the GraphQL broadcast emits."""
+    """A local observer and the transport share one occurrence; local commit effects run first."""
 
-    payloads: list[ChangePayload] = []
-    broadcasts: list[tuple[type[models.Model], dict[str, Any]]] = []
+    order: list[tuple[str, str]] = []
 
-    def receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
-        del kwargs
+    def receiver(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
         assert sender is Group
-        payloads.append(payload)
+        transaction.on_commit(lambda: order.append(("local", payload.occurrence_id)))
 
-    monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append((model, event)))
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    publishing.change_published.connect(
-        receiver,
-        dispatch_uid="tests.change_signal_receiver_sees_broadcast_payload",
+    monkeypatch.setattr(
+        publishing, "_broadcast", lambda model, event: order.append(("transport", event["occurrence_id"])),
     )
+    group_feed(readable_fields=("name",))
+    signals.change_published.connect(receiver, dispatch_uid="tests.local_commit_effects_precede_transport")
     try:
-        publishing.publish_change(
-            Group(id=8, name="reviewers"),
-            action="update",
-            update_fields=("name",),
-            readable_fields=("name",),
-        )
+        with transaction.atomic():
+            signals.publish_change(Group(id=8, name="reviewers"), action="update", update_fields=("name",))
+            assert order == []
     finally:
-        publishing.change_published.disconnect(dispatch_uid="tests.change_signal_receiver_sees_broadcast_payload")
+        signals.change_published.disconnect(dispatch_uid="tests.local_commit_effects_precede_transport")
 
-    assert len(payloads) == 1
-    assert broadcasts == [(Group, payloads[0].as_message())]
+    assert [stage for stage, _ in order] == ["local", "transport"]
+    assert order[0][1] == order[1][1]
 
 
 def test_publish_change_keeps_silent_rows_local(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Local projections see silent rows; the broadcast policy still gates transport."""
+    """Local observers see silent rows; the feed's broadcast policy still gates transport."""
 
     class SilentRow(ChangeBroadcastMixin, models.Model):
         """Concrete row that opts out of generic change publication."""
@@ -389,90 +429,116 @@ def test_publish_change_keeps_silent_rows_local(
         def broadcasts_changes(self) -> bool:
             return False
 
-    payloads: list[ChangePayload] = []
+    payloads: list[signals.ModelChange] = []
     broadcasts: list[dict[str, Any]] = []
 
-    def receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
+    def receiver(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
         del sender, kwargs
         payloads.append(payload)
 
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append(event))
-    publishing.change_published.connect(
+    publishing.connect_publishers(SilentRow)
+    signals.change_published.connect(
         receiver,
         dispatch_uid="tests.publish_change_suppresses_non_broadcasting_rows",
     )
     try:
         row = SilentRow(id=1, name="hidden")
-        publishing.publish_change(row, action="update", update_fields=("name",))
+        signals.publish_change(row, action="update", update_fields=("name",))
     finally:
-        publishing.change_published.disconnect(
+        signals.change_published.disconnect(
             dispatch_uid="tests.publish_change_suppresses_non_broadcasting_rows",
         )
+        publishing.disconnect_publishers(SilentRow)
 
     assert len(payloads) == 1
     assert payloads[0].instance == row
-    assert not payloads[0].broadcasts
     assert broadcasts == []
 
 
-def test_publish_change_marks_sync_ingestion_and_still_broadcasts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Rows saved inside sync ingestion still broadcast with an internal flag."""
+@pytest.mark.django_db
+def test_related_records_project_without_view_expansion() -> None:
+    """Hook references reach the wire one-to-one; widening to inherited views is the hook's choice."""
 
-    payloads: list[ChangePayload] = []
-    broadcasts: list[dict[str, Any]] = []
+    from tests.mtidemo.models import MtiParent
 
-    def receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
-        del sender, kwargs
-        payloads.append(payload)
+    class ConcernGroup(Group):
+        class Meta:
+            proxy = True
+            app_label = "auth"
 
-    monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append(event))
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    publishing.change_published.connect(
-        receiver,
-        dispatch_uid="tests.publish_change_suppresses_sync_ingestion",
-    )
-    try:
-        with publication_ingestion_context():
-            publishing.publish_change(Group(id=9, name="backfill"), action="update", update_fields=("name",))
-    finally:
-        publishing.change_published.disconnect(dispatch_uid="tests.publish_change_suppresses_sync_ingestion")
+        def change_related_records(self) -> tuple[RecordRef, ...]:
+            return (RecordRef.from_model(MtiParent, 5),)
 
-    assert [payload.during_ingestion for payload in payloads] == [True]
-    assert len(broadcasts) == 1
-    assert "during_ingestion" not in broadcasts[0]
+    class WireConcernGroup(Group):
+        class Meta:
+            proxy = True
+            app_label = "auth"
+
+        def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+            return (ChangeRelatedRecord(MtiParent._meta.label, "5"),)
+
+    with CaptureQueriesContext(connection) as captured:
+        payload = ChangePayload.from_instance(ConcernGroup(id=1, name="concern"), action="update", update_fields=None)
+    assert payload.related_records == (ChangeRelatedRecord(MtiParent._meta.label, public_id_for(MtiParent, 5)),)
+    assert captured.captured_queries == []
+    with pytest.raises(TypeError, match="RecordRef"):
+        ChangePayload.from_instance(WireConcernGroup(id=2, name="wire"), action="update", update_fields=None)
+
+
+@pytest.mark.django_db
+def test_a_broken_feed_projection_fails_the_write(group_feed: Any) -> None:
+    """A related-records hook that breaks its contract aborts the save that observed it."""
+
+    class BrokenConcernGroup(Group):
+        class Meta:
+            proxy = True
+            app_label = "auth"
+
+        def change_related_records(self) -> tuple[str, ...]:
+            return ("not-a-record-ref",)
+
+    group_feed(BrokenConcernGroup, readable_fields=("name",))
+    with pytest.raises(TypeError, match="RecordRef"), transaction.atomic():
+        BrokenConcernGroup.objects.create(name="broken-feed")
+
+    assert not Group.objects.filter(name="broken-feed").exists()
 
 
 def test_publish_change_robust_receivers_log_and_continue(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failing receiver is logged and does not starve later receivers."""
+    """A failing receiver is logged and does not starve later receivers or adapters."""
 
     calls: list[str] = []
 
-    def failing_receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
+    def failing_receiver(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
         del sender, payload, kwargs
         calls.append("failing")
         raise RuntimeError("receiver exploded")
 
-    def later_receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
+    def later_receiver(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
         del sender, payload, kwargs
         calls.append("later")
 
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    publishing.change_published.connect(failing_receiver, dispatch_uid="tests.publish_change.failing")
-    publishing.change_published.connect(later_receiver, dispatch_uid="tests.publish_change.later")
-    try:
-        with caplog.at_level(logging.ERROR, logger="angee.graphql.publishing"):
-            publishing.publish_change(Group(id=10, name="ops"), action="update", update_fields=("name",))
-    finally:
-        publishing.change_published.disconnect(dispatch_uid="tests.publish_change.failing")
-        publishing.change_published.disconnect(dispatch_uid="tests.publish_change.later")
+    def adapter(sender: type[models.Model], payload: signals.ModelChange, **kwargs: object) -> None:
+        del sender, payload, kwargs
+        calls.append("adapter")
 
-    assert calls == ["failing", "later"]
+    signals.change_published.connect(failing_receiver, dispatch_uid="tests.publish_change.failing")
+    signals.change_published.connect(later_receiver, dispatch_uid="tests.publish_change.later")
+    signals.change_observed.connect(adapter, dispatch_uid="tests.publish_change.adapter")
+    try:
+        with caplog.at_level(logging.ERROR, logger="angee.base.signals"):
+            signals.publish_change(Group(id=10, name="ops"), action="update", update_fields=("name",))
+    finally:
+        signals.change_published.disconnect(dispatch_uid="tests.publish_change.failing")
+        signals.change_published.disconnect(dispatch_uid="tests.publish_change.later")
+        signals.change_observed.disconnect(dispatch_uid="tests.publish_change.adapter")
+
+    assert calls == ["failing", "later", "adapter"]
     assert "change_published receiver" in caplog.text
     assert "receiver exploded" in caplog.text
 
@@ -550,23 +616,14 @@ def test_prebuilt_publishers_do_not_build_schemas_on_first_partial_save(
         ]
     )
 
-    payloads: list[ChangePayload] = []
-
-    def receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
-        del sender, kwargs
-        payloads.append(payload)
+    payloads: list[dict[str, Any]] = []
 
     with model_tables((ReadyPublished,)):
-        monkeypatch.setattr(publishing, "_publisher_model_labels", publishing._publisher_model_labels)
         projection = schemas.render_publishers()
         monkeypatch.setattr(schemas, "build", lambda *args: pytest.fail("write rebuilt schema"))
-        monkeypatch.setattr(publishing, "_broadcast", lambda model, event: None)
+        monkeypatch.setattr(publishing, "_broadcast", lambda model, event: payloads.append(event))
         monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
         publishing.disconnect_publishers(ReadyPublished)
-        publishing.change_published.connect(
-            receiver,
-            dispatch_uid="tests.graphql_ready_connects_publishers_without_schema_build",
-        )
         try:
             publishing.connect_change_publishers(projection)
             row = ReadyPublished.objects.create(name="ready")
@@ -576,14 +633,11 @@ def test_prebuilt_publishers_do_not_build_schemas_on_first_partial_save(
             row.save(update_fields=("name", "code", "secret"))
         finally:
             publishing.disconnect_publishers(ReadyPublished)
-            publishing.change_published.disconnect(
-                dispatch_uid="tests.graphql_ready_connects_publishers_without_schema_build",
-            )
 
-        assert [payload.model for payload in payloads] == ["auth.ReadyPublished"] * 2
-        assert [payload.action for payload in payloads] == ["create", "update"]
-        assert payloads[0].changed_values is None
-        assert payloads[1].changed_values == {"code": "second", "name": "updated"}
+        assert [payload["model"] for payload in payloads] == ["auth.ReadyPublished"] * 2
+        assert [payload["action"] for payload in payloads] == ["create", "update"]
+        assert payloads[0]["changed_values"] is None
+        assert payloads[1]["changed_values"] == {"code": "second", "name": "updated"}
         assert tuple(sorted(schemas._builds)) == ("internal", "public")
 
 
@@ -698,7 +752,6 @@ def test_alias_imported_changes_declaration_connects_publisher(
         monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
         from angee.graphql.apps import GraphQLConfig
 
-        monkeypatch.setattr(publishing, "_publisher_model_labels", publishing._publisher_model_labels)
         GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
         assert schemas._builds == {}
         publishing.connect_change_publishers(schemas.render_publishers())

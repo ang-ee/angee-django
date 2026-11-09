@@ -214,8 +214,9 @@ person rows authenticate. Real-world faces link to it one way, one shape:
 **Service account** — a `kind=service` user row: the database-layer principal
 of an agent or automation. Non-login (unusable password, excluded from OIDC
 linking and human-only member pickers). Access pickers include readable service
-users; agents and workflows link one service user each, with their row lifecycle
-calling IAM's shared sync and deactivation helper.
+users; agents and workflows link one service user each by composing
+[`ServiceUserMixin`](../src/angee/iam/models.py), whose sync and deactivation
+verbs their saves and delete receivers call.
 
 **Workflow principal** — the workflow's linked service user. Trigger source
 grants are direct REBAC tuples for this user. Admission, source and domain checks,

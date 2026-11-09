@@ -11,7 +11,7 @@ from django.db.models.functions import Now
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
-from angee.graphql.publishing import change_published
+from angee.base.signals import change_published
 from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet
 from angee.workflows.runner import runner

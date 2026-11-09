@@ -22,8 +22,8 @@ from rebac import (
 )
 
 import tests.test_agents_graphql  # noqa: F401 -- register related models before native database setup
+from angee.base.signals import mute_changes
 from angee.graphql.deletion import DeletePreview
-from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
@@ -3276,12 +3276,13 @@ def test_channel_teardown_mutes_per_row_change_broadcasts(composed_tables: None)
     Fix 1 (the broadcast storm): each channel Message/Thread declares ``changes()``, so a
     naive bulk purge would emit one ``post_delete`` publisher per row — an ``exists()``
     thread probe plus a buffered ``group_send`` apiece. The teardown runs under
-    :func:`~angee.graphql.publishing.mute_changes`, so ``publish_change`` returns before the
+    :func:`~angee.base.signals.mute_changes`, so ``publish_change`` returns before the
     probe and nothing broadcasts. A positive control (an unmuted delete of a sibling row)
     proves the spy and publisher wiring are live, so the muted silence is real.
     """
 
-    from angee.graphql.publishing import change_published, connect_publishers, disconnect_publishers
+    from angee.base.signals import change_published
+    from angee.graphql.publishing import connect_publishers, disconnect_publishers
 
     channel = make_integration("chan-mute", model=Channel, backend_class="manual")
     with system_context(reason="test.channel.mute.seed"):

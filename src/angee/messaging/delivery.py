@@ -20,9 +20,9 @@ from django.db import transaction
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.locks import record_lock_key, task_lock
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.jobs.enqueue import celery_app, enqueue_task
-from angee.jobs.locks import record_lock_key, task_lock
 from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
 

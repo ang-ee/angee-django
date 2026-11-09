@@ -10,6 +10,7 @@ from django.db import transaction
 from django.views.decorators.debug import sensitive_variables
 from rebac import current_actor, system_context
 
+from angee.base.locks import task_locks_are_cross_process
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import (
     PairingProjection,
@@ -20,7 +21,6 @@ from angee.integrate.live import (
     skipped_password_marker,
 )
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
-from angee.jobs.locks import task_locks_are_cross_process
 
 
 class PairingActionError(ValueError):

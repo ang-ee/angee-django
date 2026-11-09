@@ -28,10 +28,9 @@ from rebac import system_context
 
 from angee.agents.grants import sync_builtin_tool_catalogue
 from angee.base.exceptions import TransitionNotAllowed
+from angee.base.locks import task_lock
 from angee.graphql.actions import ActionResult, resolve_action_target
 from angee.graphql.ids import PublicID
-from angee.iam.service_users import sync_service_user
-from angee.jobs.locks import task_lock
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonConflict, OperatorInstanceKind, WorkspaceStatus
 from angee.resources.exceptions import ResourceLoadError
 
@@ -185,7 +184,7 @@ def _provision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
 
     with system_context(reason="agents.graphql.provision_agent"):
         if agent.user_id is None:
-            sync_service_user(agent, prefix="agent")
+            agent.sync_service_user()
         if blocker := agent.provision_blocker():
             return ActionResult(ok=False, message=blocker)
         in_process = agent.runs_in_process
@@ -306,7 +305,7 @@ def _reprovision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
 
     with system_context(reason="agents.graphql.reprovision_agent"):
         if agent.user_id is None:
-            sync_service_user(agent, prefix="agent")
+            agent.sync_service_user()
         if blocker := agent.reprovision_blocker():
             return ActionResult(ok=False, message=blocker)
         try:

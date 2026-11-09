@@ -15,8 +15,8 @@ from django.test import override_settings
 from rebac import actor_context, system_context
 from rebac.models import active_relationship_model
 
+from angee.base.signals import change_published
 from angee.graphql.events import ChangePayload
-from angee.graphql.publishing import change_published
 from angee.jobs.enqueue import celery_app
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.testing.models import Resource

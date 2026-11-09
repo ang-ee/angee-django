@@ -4,7 +4,7 @@ from celery import shared_task
 from django.apps import apps
 from rebac import SubjectRef
 
-from angee.jobs.locks import LockKey, task_lock
+from angee.base.locks import LockKey, task_lock
 from angee.workflows.runner import runner
 
 

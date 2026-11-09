@@ -26,7 +26,7 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
 | `angee.jobs.enqueue` | `enqueue_task`: on-commit send, `queue`, `expires`, `robust` | `src/angee/jobs/enqueue.py` |
 | `angee.jobs.celery` | The one `Celery("angee")` app, `ANGEE_CELERY_TASK_CLASS`, autodiscovery | `app` in `src/angee/jobs/celery.py` |
 | `angee.jobs.timeouts` | `task_time_budget`, `task_claim_lease`, the settlement reserve | `TASK_SETTLEMENT_RESERVE_SECONDS`, `task_time_budget`, `task_claim_lease` in `src/angee/jobs/timeouts.py` |
-| `angee.jobs.locks` | `LockKey`, `task_lock`, `record_lock_key`, `task_locks_are_cross_process` | `src/angee/jobs/locks.py` |
+| `angee.base.locks` | `LockKey`, `task_lock` (try, or `blocking=True` to wait), `record_lock_key`, `task_locks_are_cross_process` | `task_lock` in `src/angee/base/locks.py` |
 | `angee.jobs.scheduler` | `DatabaseScheduler`: code-declared schedule written to `PeriodicTask` rows, stale rows pruned | `src/angee/jobs/scheduler.py` |
 | `angee.jobs.autoconfig` | Worker defaults: limits 840/900 s, prefetch 1, ignore results, beat scheduler path, broker from namespace | `SETTINGS` and `settings` in `src/angee/jobs/autoconfig.py` |
 | `angee.provenance.tasks.Task` | Attribution: a fresh `changeset(activity="system", change_reason="task.<name>")` per run | `src/angee/provenance/tasks.py`, `SETTINGS` in `src/angee/provenance/autoconfig.py` |
@@ -41,7 +41,7 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
   inside the jobs addon.
 - The verb the task calls: a manager or model method under `system_context(reason=...)` that owns the row lock,
   idempotency and state transition (`_refresh_handle_suggestions` in `src/angee/parties/tasks.py`, `wake_due_snoozes` in `src/angee/work/tasks.py`).
-- `task_lock(LockKey(...))` for duplicate-work suppression around external IO (`src/angee/jobs/locks.py`);
+- `task_lock(LockKey(...))` for duplicate-work suppression around external IO (`task_lock` in `src/angee/base/locks.py`);
   `task_time_budget()` for any bounded executor (`src/angee/jobs/timeouts.py`).
 
 ## Steps
@@ -58,7 +58,7 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
    from celery import shared_task
    from django.apps import apps
    from rebac import system_context
-   from angee.jobs.locks import LockKey, task_lock
+   from angee.base.locks import LockKey, task_lock
 
    @shared_task(name="parties.refresh_handle_suggestions",
                 autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
@@ -123,7 +123,7 @@ that owns the state change. Reference examples are `src/angee/parties/tasks.py` 
 6. **Make it idempotent.** A redelivered or duplicated task must converge: the verb locks the row
    (`lock_if_supported`), revalidates its state, and returns without writing when already done
    (`queue_message_delivery` in `src/angee/messaging/delivery.py`). Advisory `task_lock` is process-local on SQLite; derive liveness
-   from it only when `task_locks_are_cross_process()` (`src/angee/jobs/locks.py`). **Owner rule:**
+   from it only when `task_locks_are_cross_process()` (`src/angee/base/locks.py`). **Owner rule:**
    [Put behavior on the owning object](../../../../../docs/guidelines.md#put-behavior-on-the-owning-object): the
    manager owns convergence, the task owns none.
 
@@ -171,7 +171,7 @@ the dispatch test proves on-commit send with the expected `queue`/`expires`, the
 ## Pitfalls
 
 - A renamed task leaves a `PeriodicTask` row firing a missing name until beat restarts and prunes it (`DatabaseScheduler.setup_schedule` in `src/angee/jobs/scheduler.py`).
-- Postgres advisory locks are connection-scoped; a reconnect drops them under a running task, so a long loop re-checks the lock ([Task pitfalls](references/pitfalls.md) "A long-lived Celery task needs the three-check wake loop", `task_locks_are_cross_process` in `src/angee/jobs/locks.py`).
+- Postgres advisory locks are connection-scoped; a reconnect drops them under a running task, so a long loop re-checks the lock ([Task pitfalls](references/pitfalls.md) "A long-lived Celery task needs the three-check wake loop", `task_locks_are_cross_process` in `src/angee/base/locks.py`).
 - `enqueue_task` copies `kwargs` at call time; a later mutation of the dict does not reach the task (`test_enqueue_task_waits_for_outer_commit` in `tests/test_jobs.py`).
 - A static beat tick calls without `timestamp`; a wrapper that requires it breaks under beat ([Task pitfalls](references/pitfalls.md) "Celery periodic tasks accept `timestamp`").
 - The shared worker embeds beat and must never be scaled: beat has no leader lock (the `celery-{{ role }}` services in `templates/stacks/_shared/stack-body.yaml.jinja`; [stack](../../../../../docs/stack.md#backend), the Celery row).
@@ -187,10 +187,10 @@ the dispatch test proves on-commit send with the expected `queue`/`expires`, the
 
 <!--
 Docs: docs/stack.md #backend (Celery, channels, django-environ rows), #stack-serve-mode; docs/backend/guidelines.md sections Django-Native Rule, Composition owners, Integrations and workers, Persistence primitives, Naming (cited by anchor and bullet title); docs/composer.md #autoconfig; docs/checks.md #python-and-composition-contracts, #composition-and-schema, #browser-verification, #what-ci-actually-runs; docs/guidelines.md #put-behavior-on-the-owning-object; AGENTS.md (Run From The Root, Architecture Gate).
-Code: src/angee/jobs/{__init__.py,pyproject.toml,autoconfig.py,celery.py,enqueue.py,locks.py,scheduler.py,timeouts.py,management/commands/celery.py};
+Code: src/angee/jobs/{__init__.py,apps.py,pyproject.toml,autoconfig.py,celery.py,enqueue.py,scheduler.py,timeouts.py,management/commands/celery.py}; src/angee/base/locks.py;
 src/angee/provenance/{tasks.py,autoconfig.py}; src/angee/parties/{tasks.py,autoconfig.py}; src/angee/work/{tasks.py,autoconfig.py}; src/angee/messaging/{tasks.py,delivery.py,autoconfig.py};
 src/angee/workflows/tasks.py; src/angee/integrate/{tasks.py,scheduler.py,queue.py,constants.py,impl.py,session_runner.py};
 tests/test_jobs.py; tests/test_changesets.py; tests/settings.py; templates/stacks/_shared/stack-body.yaml.jinja.
-Doc gaps: src/angee/jobs has no README.md and no apps.py; the only prose owner is the Celery row of docs/stack.md#backend plus the Integrations-and-workers bullets; queue naming and the threads-pool worker are documented only in the stack template comment.
+Doc gaps: src/angee/jobs has no README.md; the only prose owner is the Celery row of docs/stack.md#backend plus the Integrations-and-workers bullets; queue naming and the threads-pool worker are documented only in the stack template comment.
 Mismatches: docs/stack.md#stack-serve-mode still says "Celery beat stays in its one separate worker service" while the Celery row of docs/stack.md#backend and the template embed it in the shared worker (`worker --beat`, templates/stacks/_shared/stack-body.yaml.jinja); owner: docs/stack.md.
 -->
