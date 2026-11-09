@@ -30,11 +30,11 @@ from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.widgets import (
     ContentTypeForeignKeyWidget,
     ContentTypeManyToManyWidget,
+    NativeJSONWidget,
     RecordRefField,
     XrefForeignKeyWidget,
     XrefManyToManyWidget,
     XrefWidgetMixin,
-    _NativeJSONWidget,
 )
 
 if TYPE_CHECKING:
@@ -58,7 +58,7 @@ class AngeeResource(resources.ModelResource):
 
     WIDGETS_MAP = {
         **resources.ModelResource.WIDGETS_MAP,
-        "JSONField": lambda **kwargs: _NativeJSONWidget(**kwargs),
+        "JSONField": NativeJSONWidget,
     }
     """Widget map that accepts native JSON values from structured files."""
 

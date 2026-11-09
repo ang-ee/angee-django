@@ -172,7 +172,7 @@ class ContentTypeManyToManyWidget(widgets.ManyToManyWidget):
         return [resolve_content_type(label) for label in many_to_many_values(value)]
 
 
-class _NativeJSONWidget(widgets.JSONWidget):
+class NativeJSONWidget(widgets.JSONWidget):
     """Accept native YAML/JSON values as already-clean JSON values."""
 
     def clean(
