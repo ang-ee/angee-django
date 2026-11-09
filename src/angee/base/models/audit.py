@@ -24,8 +24,8 @@ class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_M
         """Keep exact collector selection and alias while preserving native capture."""
 
         with system_context(reason="delete.retain"):
-            rows = self.model._base_manager.db_manager(self.db, hints=self._hints).get_queryset()
-            rows.query = self.query.chain()
+            owner = type(self.model._base_manager.get_queryset())
+            rows = owner(model=self.model, query=self.query.chain(), using=self.db, hints=self._hints)
             if isinstance(rows, ClosedUpdateQuerySet):
                 return rows.owner_update(**kwargs)
             return rows.update(**kwargs)
@@ -34,11 +34,12 @@ class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_M
 def retained_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
     """Schedule retained-edge removal as system work inside Django's delete transaction."""
 
-    rows: RetainedReferenceQuerySet[models.Model] = RetainedReferenceQuerySet(model=field.model, using=using)
+    rows: RetainedReferenceQuerySet[models.Model]
     if isinstance(sub_objs, models.QuerySet):
-        rows.query = sub_objs.query.chain()
+        rows = RetainedReferenceQuerySet(model=field.model, query=sub_objs.query.chain(), using=using)
         collector.add_field_update(field, None, rows)
     else:
+        rows = RetainedReferenceQuerySet(model=field.model, using=using)
         for batch in by_key(rows, [obj.pk for obj in sub_objs]):
             collector.add_field_update(field, None, batch)
 
