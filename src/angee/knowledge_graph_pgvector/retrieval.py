@@ -1,4 +1,4 @@
-"""Exact, permission-scoped vector/full-text retrieval and structural graph fusion."""
+"""Exact, permission-scoped vector/full-text retrieval and evidence graph fusion."""
 
 from __future__ import annotations
 
@@ -17,8 +17,10 @@ from angee.agents.models import InferenceModelUse
 from angee.base.search import SEARCH_CONFIG
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend, RetrievalHit
 from angee.knowledge_graph_pgvector.checks import require_pgvector
+from angee.knowledge_graph_pgvector.graph import local_passages
 
 RRF_K = 60
+RETRIEVAL_ARMS = ("vector", "lexical", "hybrid", "hybrid+G0", "hybrid+G1")
 
 
 def reciprocal_rank_fusion(*arms: Sequence[RetrievalHit], first: int) -> list[RetrievalHit]:
@@ -42,10 +44,10 @@ def reciprocal_rank_fusion(*arms: Sequence[RetrievalHit], first: int) -> list[Re
 
 
 class PgvectorRetrievalBackend(RetrievalBackend):
-    """Search top pages by their best passage, then expand visible wikilinks once.
+    """Fuse top passages, visible wikilinks and opt-in local entity evidence.
 
     No distance is compared across models. Each model contributes a ranking;
-    full-text and structural links contribute rankings through the same RRF.
+    Full-text, structural links and entities contribute rankings through the same RRF.
     Providers fail visibly. A vault without a model still contributes full-text.
     """
 
@@ -167,16 +169,31 @@ class PgvectorRetrievalBackend(RetrievalBackend):
         ]
 
     @classmethod
-    def search_many(cls, vaults: Iterable[Any], query: str, *, first: int = 20) -> list[RetrievalHit]:
+    def graph_arm(cls, pages: Any, seeds: Sequence[RetrievalHit], query: str, *, first: int) -> list[RetrievalHit]:
+        """Rank current evidence through the opt-in local entity graph."""
+
+        ranked = local_passages(cls._passages(pages), seeds, query, first=first)
+        scores = {row.page_id: score for row, score in ranked}
+        return [replace(hit, score=scores[hit.page.pk]) for hit in cls._hits([row for row, _ in ranked])]
+
+    @classmethod
+    def rankings(cls, vaults: Iterable[Any], query: str, *, first: int = 20) -> dict[str, list[RetrievalHit]]:
+        """Production arms and cumulative graph ablations, sharing each provider call.
+
+        ``hybrid+G1`` includes G0 and the opt-in entity arm. These are the exact
+        rankings used by search and the evaluation command, not a second pipeline.
+        """
+
         limit = max(0, min(first, MAX_SEARCH_PAGE_SIZE))
         if not limit or not query.strip():
-            return []
+            return {arm: [] for arm in RETRIEVAL_ARMS}
         require_pgvector()
         vaults = tuple(vaults)
         pages = cls._pages(vaults)
         # Candidate overfetch lets fusion recover pages outside either arm's top N.
         candidates = min(MAX_SEARCH_PAGE_SIZE, limit * 4)
-        arms = [cls.lexical_arm(pages, query, first=candidates)]
+        lexical = cls.lexical_arm(pages, query, first=candidates)
+        vector_arms = []
         groups: dict[int, list[Any]] = defaultdict(list)
         for vault in vaults:
             if vault.embedding_model_id is not None:
@@ -197,9 +214,22 @@ class PgvectorRetrievalBackend(RetrievalBackend):
                     count=1,
                     dimensions=model.embedding_dimensions,
                 )
-            arms.append(cls.vector_arm(group_pages, model_id, vectors[0], first=candidates))
+            vector_arms.append(cls.vector_arm(group_pages, model_id, vectors[0], first=candidates))
+        arms = [lexical, *vector_arms]
         seeds = reciprocal_rank_fusion(*arms, first=candidates)
-        return reciprocal_rank_fusion(*arms, cls.link_arm(pages, seeds, first=candidates), first=limit)
+        links = cls.link_arm(pages, seeds, first=candidates)
+        graph = cls.graph_arm(pages, seeds, query, first=candidates)
+        return {
+            "vector": reciprocal_rank_fusion(*vector_arms, first=limit),
+            "lexical": lexical[:limit],
+            "hybrid": seeds[:limit],
+            "hybrid+G0": reciprocal_rank_fusion(*arms, links, first=limit),
+            "hybrid+G1": reciprocal_rank_fusion(*arms, links, graph, first=limit),
+        }
+
+    @classmethod
+    def search_many(cls, vaults: Iterable[Any], query: str, *, first: int = 20) -> list[RetrievalHit]:
+        return cls.rankings(vaults, query, first=first)["hybrid+G1"]
 
     @classmethod
     def related_to(cls, page: Any, *, first: int = 5) -> list[RetrievalHit]:
