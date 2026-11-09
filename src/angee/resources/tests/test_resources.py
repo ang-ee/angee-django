@@ -2061,7 +2061,7 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
 
     hooks = []
 
-    class GrantDependentRow(AngeeModel):
+    class GrantDependentRow(ResourceLoadMixin, AngeeModel):
         """A row whose domain validation requires a preceding membership grant."""
 
         title = models.CharField(max_length=80)

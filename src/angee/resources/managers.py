@@ -475,19 +475,18 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         self,
         loaded_groups: list[tuple[ResourceGroup, Any]],
     ) -> None:
-        """Dispatch model-owned hooks after all selected resource rows load."""
+        """Dispatch ``ResourceLoadMixin.after_resource_load`` after all selected resource rows load."""
 
         for group, resource in loaded_groups:
-            hook = getattr(group.model, "after_resource_load", None)
-            if not callable(hook):
+            if not issubclass(group.model, ResourceLoadMixin):
                 continue
-            instances_by_pk: dict[Any, models.Model] = {}
+            instances_by_pk: dict[Any, ResourceLoadMixin] = {}
             for xref in group.dataset["_xref"]:
                 instance = resource.instance_for_xref(xref)
                 if instance is not None:
                     instances_by_pk[instance.pk] = instance
             if instances_by_pk:
-                hook(
+                group.model.after_resource_load(
                     tuple(instances_by_pk.values()),
                     tier=group.entry.tier,
                     source=group.entry.source,
