@@ -162,5 +162,4 @@ class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
             if value:
                 setattr(self, field, str(value))
                 changed = True
-        parent = getattr(super(), "fill_extension_fields_from_discovery", None)
-        return (bool(parent(discovery)) if parent is not None else False) or changed
+        return super().fill_extension_fields_from_discovery(discovery) or changed

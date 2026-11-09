@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib import parse
 
 import httpx2
@@ -41,6 +41,9 @@ from angee.integrate.oauth.errors import (
     USERINFO_FAILED,
     OAuthFlowError,
 )
+
+if TYPE_CHECKING:
+    from angee.integrate.models import OAuthClient
 
 HTTP_TIMEOUT_SECONDS = 10
 # An honest, non-browser User-Agent for all outbound connection requests. Must NOT
@@ -73,7 +76,7 @@ _GRANT_URI_ARGUMENTS = frozenset({"uri", "client_id", "response_type", "redirect
 class OAuthClientProtocol:
     """OAuth2 authorization-code + refresh protocol for one ``OAuthClient`` row."""
 
-    def __init__(self, oauth_client: Any) -> None:
+    def __init__(self, oauth_client: OAuthClient) -> None:
         """Bind the protocol to one OAuth client registration row."""
 
         self.oauth_client = oauth_client
@@ -117,7 +120,7 @@ class OAuthClientProtocol:
         """
 
         grant: dict[str, Any] = {"code": code, "redirect_uri": redirect_uri}
-        if getattr(self.oauth_client, "supports_pkce", False) and code_verifier:
+        if self.oauth_client.supports_pkce and code_verifier:
             grant["code_verifier"] = code_verifier
         if self._uses_json_token_request() and state:
             grant["state"] = state
@@ -181,7 +184,7 @@ class OAuthClientProtocol:
     def revoke_token(self, token: str) -> None:
         """Best-effort RFC 7009 token revocation for an OAuth credential."""
 
-        revoke_endpoint = str(getattr(self.oauth_client, "revoke_endpoint", "") or "")
+        revoke_endpoint = self.oauth_client.revoke_endpoint
         if not revoke_endpoint or not token:
             return
         session = self._session()
@@ -197,12 +200,15 @@ class OAuthClientProtocol:
             session.close()
 
     def ensure_endpoints(self) -> dict[str, Any]:
-        """Ask the OAuth client row to fill endpoints from OIDC metadata discovery."""
+        """Ask the OAuth client row to fill blank endpoints from OIDC metadata discovery.
 
-        discover = getattr(self.oauth_client, "discover_endpoints", None)
-        if not callable(discover):
-            return {}
-        return dict(discover())
+        A no-op when the row carries no ``discovery_url`` (its endpoints are then
+        configured explicitly). The document is cached per URL, and the filled
+        endpoints serve this protocol's request in memory; the operator's
+        discovery action persists them (``discover_endpoints(persist=True)``).
+        """
+
+        return dict(self.oauth_client.discover_endpoints())
 
     def exchange_grant(self, grant_type: str, **grant: Any) -> dict[str, Any]:
         """Exchange a standard or provider-specific grant for validated material.
@@ -215,9 +221,7 @@ class OAuthClientProtocol:
 
         token_endpoint = self._endpoint("token_endpoint")
         self._token_response_claims = {}
-        extra = self.oauth_client.provider.token_params(
-            grant_type, _param_values(self.oauth_client, "token_param_values"),
-        )
+        extra = self.oauth_client.provider.token_params(grant_type, self.oauth_client.token_param_values)
         if self._uses_json_token_request():
             return self._json_token_request(token_endpoint, grant_type, grant, extra)
         return self._authlib_token_request(token_endpoint, grant_type, grant, extra)
@@ -225,7 +229,7 @@ class OAuthClientProtocol:
     def _uses_json_token_request(self) -> bool:
         """Return whether this row uses the non-standard JSON token shim."""
 
-        return getattr(self.oauth_client, "token_request_format_value", "form") == "json"
+        return self.oauth_client.token_request_format_value == "json"
 
     def _authlib_token_request(
         self,
@@ -280,7 +284,7 @@ class OAuthClientProtocol:
 
         body: dict[str, Any] = {
             **extra,
-            "client_id": str(getattr(self.oauth_client, "client_id", "")),
+            "client_id": self.oauth_client.client_id,
             "grant_type": grant_type,
             **grant,
         }
@@ -322,7 +326,7 @@ class OAuthClientProtocol:
 
         secret = self._client_secret()
         return OAuth2Client(
-            client_id=str(getattr(self.oauth_client, "client_id", "")),
+            client_id=self.oauth_client.client_id,
             client_secret=secret or None,
             token_endpoint_auth_method="client_secret_post" if secret else "none",
             headers=dict(OUTBOUND_HEADERS),
@@ -370,7 +374,7 @@ class OAuthClientProtocol:
         """Log bounded token-request metadata without provider-controlled values."""
 
         del body
-        client_label = str(getattr(self.oauth_client, "slug", "") or "unknown")
+        client_label = self.oauth_client.slug or "unknown"
         logger.warning(
             "OAuth token request failed for %s: status=%s",
             client_label,
@@ -396,12 +400,12 @@ class OAuthClientProtocol:
         the secret is never read.
         """
 
-        challenge = code_challenge if getattr(self.oauth_client, "supports_pkce", False) else None
+        challenge = code_challenge if self.oauth_client.supports_pkce else None
         if not challenge and not self._client_secret():
             raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client needs PKCE or a client secret.")
         params = {
             key: value
-            for key, value in _string_param_values(self.oauth_client, "authorize_param_values").items()
+            for key, value in self.oauth_client.authorize_param_values.items()
             if key not in _GRANT_URI_ARGUMENTS
         }
         if challenge:
@@ -417,13 +421,12 @@ class OAuthClientProtocol:
             **params,
         )
 
-    def _endpoint(self, field: str) -> str:
-        """Return a configured endpoint value, or raise when the row omits it."""
+    def _endpoint(self, field: Literal["authorize_endpoint", "token_endpoint"]) -> str:
+        """Return one endpoint field, discovering blank endpoints first, or raise when still blank."""
 
-        value = str(getattr(self.oauth_client, field, "") or "")
-        if not value:
+        if not getattr(self.oauth_client, field):
             self.ensure_endpoints()
-            value = str(getattr(self.oauth_client, field, "") or "")
+        value = str(getattr(self.oauth_client, field))
         if not value:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
         return value
@@ -445,24 +448,6 @@ def _outbound_kwargs(transport: httpx2.BaseTransport | None) -> dict[str, Any]:
         "timeout": HTTP_TIMEOUT_SECONDS,
         "transport": transport if transport is not None else PinnedTransport(allow_private=True),
     }
-
-
-def _param_values(oauth_client: object, property_name: str) -> dict[str, Any]:
-    """Return provider-specific JSON/form params without changing scalar types."""
-
-    value = getattr(oauth_client, property_name, {})
-    if isinstance(value, Mapping):
-        return {str(key): item for key, item in value.items() if item is not None}
-    return {}
-
-
-def _string_param_values(oauth_client: object, property_name: str) -> dict[str, str]:
-    """Return provider-specific URL parameters as strings."""
-
-    value = getattr(oauth_client, property_name, {})
-    if isinstance(value, Mapping):
-        return {str(key): str(item) for key, item in value.items() if item is not None}
-    return {}
 
 
 def with_query(url: str, query: Mapping[str, str]) -> str:

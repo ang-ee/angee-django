@@ -809,43 +809,45 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
     def __str__(self) -> str:
         """Return a stable provider-qualified account label."""
 
-        client_slug = getattr(getattr(self, "oauth_client", None), "slug", "?")
+        client_slug = "?" if self.oauth_client_id is None else self.oauth_client.slug
         return f"{client_slug}:{self.external_id}"
 
     @property
     def credential_status(self) -> str:
         """Return the current OAuth credential status, if this account has one."""
 
-        credential = getattr(self, "credential", None)
-        return "" if credential is None else str(getattr(credential, "status", "") or "")
+        credential = self.credential
+        return "" if credential is None else str(credential.status)
+
+    @property
+    def account_label(self) -> str:
+        """Return the account's human subject: its email, display name, or external id."""
+
+        return self.email or self.display_name or self.external_id
 
     @property
     def provider_slug(self) -> str:
         """Return the originating OAuth client's slug."""
 
-        client = getattr(self, "oauth_client", None)
-        return str(getattr(client, "slug", "") or "")
+        return self.oauth_client.slug
 
     @property
     def provider_environment(self) -> str:
         """Return the originating OAuth client's environment."""
 
-        client = getattr(self, "oauth_client", None)
-        return str(getattr(client, "environment", "") or "")
+        return self.oauth_client.environment
 
     @property
     def provider_label(self) -> str:
         """Return the originating OAuth client's display label."""
 
-        client = getattr(self, "oauth_client", None)
-        return str(getattr(client, "display_name", "") or "")
+        return self.oauth_client.display_name
 
     @property
     def provider_icon(self) -> str:
         """Return the originating OAuth client's branding icon."""
 
-        client = getattr(self, "oauth_client", None)
-        return str(getattr(client, "icon", "") or "")
+        return self.oauth_client.icon
 
     @staticmethod
     def display_name_from_claims(claims: Mapping[str, Any], email: str) -> str:
@@ -1070,18 +1072,11 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         return instance
 
     @staticmethod
-    def _oauth_credential_name(oauth_client: Any, external_account: Any | None) -> str:
+    def _oauth_credential_name(oauth_client: OAuthClient, external_account: ExternalAccount | None) -> str:
         """Return a default label for an OAuth credential: the provider, plus its subject."""
 
-        label = str(getattr(oauth_client, "display_name", "") or getattr(oauth_client, "slug", "") or "OAuth")
-        subject = ""
-        if external_account is not None:
-            subject = str(
-                getattr(external_account, "email", "")
-                or getattr(external_account, "display_name", "")
-                or getattr(external_account, "external_id", "")
-                or ""
-            )
+        label = oauth_client.display_name or oauth_client.slug or "OAuth"
+        subject = "" if external_account is None else external_account.account_label
         return f"{label} ({subject})" if subject else label
 
     def create_local_credential(
@@ -1213,7 +1208,7 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         """Revoke this credential's OAuth token when its provider supports it."""
 
         oauth_client = self.oauth_client
-        if oauth_client is None or not getattr(oauth_client, "revoke_endpoint", ""):
+        if oauth_client is None or not oauth_client.revoke_endpoint:
             return
         token = str(self.reveal().get("access_token") or "")
         if not token:
@@ -1387,11 +1382,11 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         if self.name:
             return str(self.name)
-        client = getattr(self, "oauth_client", None)
+        client = self.oauth_client
         if client is not None:
-            provider = str(getattr(client, "slug", "") or getattr(client, "display_name", "") or "credential")
-            account = getattr(self, "external_account", None)
-            subject = str(getattr(account, "external_id", "") or "") if account else ""
+            provider = client.slug or client.display_name or "credential"
+            account = self.external_account
+            subject = "" if account is None else account.external_id
             return f"{provider}: {subject}" if subject else provider
         return "credential"
 
@@ -1401,17 +1396,8 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         if self.name:
             return str(self.name)
-        account = getattr(self, "external_account", None)
-        if account is not None:
-            subject = str(
-                getattr(account, "email", "")
-                or getattr(account, "display_name", "")
-                or getattr(account, "external_id", "")
-                or ""
-            )
-            if subject:
-                return subject
-        return "credential"
+        account = self.external_account
+        return (account.account_label if account is not None else "") or "credential"
 
     def ensure_fresh(self) -> None:
         """Renew this credential's token in place when it is near expiry and can refresh.
@@ -1510,8 +1496,10 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                 raise ValueError("This credential cannot be refreshed; reconnect the account.")
             refresh_value = str(current.reveal().get("refresh_token") or "")
             fence = current.refresh_fence
+            oauth_client = current.oauth_client
+            assert oauth_client is not None  # ``refreshable`` requires the OAuth client.
             try:
-                tokens = OAuthClientProtocol(current.oauth_client).refresh_token(refresh_token=refresh_value)
+                tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
             except (IntegrationError, ValueError) as error:
                 if not (isinstance(error, IntegrationError) and error.transient):
                     with system_context(reason="integrate.credential.refresh.failed"), transaction.atomic():

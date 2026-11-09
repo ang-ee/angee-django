@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import MethodType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any
 from urllib import parse
 
@@ -38,7 +38,6 @@ from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
 from angee.iam_integrate_oidc import schema as oidc_schema
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
-from angee.iam_integrate_oidc.models import OAuthClientOidc
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.iam_integrate_oidc.providers import GoogleType
 from angee.integrate import schema as integrate_schema
@@ -1909,9 +1908,6 @@ def _stub_login_oauth_client(*, oauth_client: OAuthClient | None = None, **overr
     for key, value in defaults.items():
         setattr(client, key, value)
     client.oauth_client = client
-    client.fill_extension_fields_from_discovery = MethodType(
-        OAuthClientOidc.fill_extension_fields_from_discovery, client
-    )
     return client
 
 

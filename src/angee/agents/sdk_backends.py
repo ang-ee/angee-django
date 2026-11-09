@@ -94,9 +94,7 @@ class SDKInferenceBackend(InferenceBackend):
             if not self.requires_credential:
                 return {"api_key": "not-required"}
             raise ValueError(f"{self.label} inference requires an attached credential.")
-        ensure_fresh = getattr(credential, "ensure_fresh", None)
-        if callable(ensure_fresh):
-            ensure_fresh()
+        credential.ensure_fresh()
         secret = str(credential.secret_value() or "")
         if not secret:
             raise ValueError(f"{self.label} inference credential has no secret.")
