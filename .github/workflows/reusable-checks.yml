@@ -218,11 +218,14 @@ jobs:
             tests/test_knowledge_clone_concurrency_campaign.py tests/test_knowledge_search.py \
             tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_locks_replay_and_rollback \
             tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
+            tests/test_messaging_channel_concurrency.py tests/test_messaging_webform_submission.py \
             tests/test_messaging_inbox_read.py tests/test_inbox_explorer.py tests/test_inbox_part_reads.py \
             tests/test_group_rows.py \
             tests/test_optimistic_lock.py \
-            tests/test_ownership_seams.py tests/test_proposals_campaign_queries.py \
-            tests/test_proposals_concurrency.py tests/test_sequence.py \
+            tests/test_ownership_seams.py tests/test_portfolio_concurrency.py \
+            tests/test_proposals_campaign_queries.py tests/test_proposals_concurrency.py \
+            tests/test_resource_ledger.py::test_concurrent_upserts_converge_on_one_row_and_refuse_another_model \
+            tests/test_sequence.py \
             tests/test_spaces_concurrency_campaign.py tests/test_stage_fractional_transition.py \
             tests/test_storage.py tests/test_storage_upload_campaign.py \
             tests/test_system_queryset.py::test_system_queryset_emits_for_update_on_postgresql \
