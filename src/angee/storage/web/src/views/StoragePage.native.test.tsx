@@ -3,7 +3,7 @@
 import { createUiTestProviders } from "@angee/ui/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterContextProvider, RouterProvider } from "@tanstack/react-router";
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
 import { ResourceQuery, type Row } from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { testDataResource, testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
@@ -427,17 +427,18 @@ test("a directly shared file opens when no drive is visible", async () => {
 
 /** Mount a storage view outside the shell, acting through the given file verbs. */
 function renderView(view: ReactElement, rows: readonly Row[]) {
-  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/storage"] }) });
+  const root = createRootRoute();
+  const page = createRoute({ getParentRoute: () => root, path: "/storage", component: () => view });
+  const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: ["/storage"] }),
+    parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch });
   render(<Provider resources={resources} dataProvider={{
     custom: vi.fn(async () => ({ data: { files_by_pk: rows[0] ?? null } })),
     getOne: vi.fn(async () => ({ data: rows[0] ?? null })),
     getList: vi.fn(async () => ({ data: [...rows], total: rows.length })),
   }} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
-    <RouterContextProvider router={router}>
-      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
-        <ModalsHost><ToastProvider>{view}</ToastProvider></ModalsHost>
-      </AppRuntimeProvider>
-    </RouterContextProvider>
+    <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
+      <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
+    </AppRuntimeProvider>
   </Provider>);
 }
 
