@@ -7,11 +7,12 @@ import type { ListViewNavigationScope, RowRecord } from "./types";
 
 /** The native server-list read shared by rendered tables and record navigation. */
 export function useResourceListQuery({
-  resource, scope, fields, enabled = true, refetchInterval,
+  resource, scope, fields, relatedModels, enabled = true, refetchInterval,
 }: {
   resource: DataResourceMetadata | null | undefined;
   scope: ListViewNavigationScope | null;
   fields: readonly string[];
+  relatedModels?: readonly string[];
   enabled?: boolean;
   refetchInterval?: number | false;
 }) {
@@ -31,6 +32,7 @@ export function useResourceListQuery({
     dataProviderName: resource?.schemaName,
     pagination: { mode: "server", currentPage: scope?.page ?? 1, pageSize: scope?.pageSize ?? 1 },
     filters: [], sorters: [], meta: request.meta,
+    liveParams: { relatedModels },
     queryOptions: { enabled: enabled && Boolean(resource && scope) && !request.error, placeholderData: undefined, refetchInterval },
   });
   if (!request.error) return result;

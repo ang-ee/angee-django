@@ -61,7 +61,7 @@ export interface DialectDocumentOptions {
 }
 
 type DialectQueryOptions = DialectDocumentOptions
-  & Pick<AuthoredQueryOptions, "enabled" | "refetchInterval">;
+  & Pick<AuthoredQueryOptions, "enabled" | "refetchInterval" | "relatedModels">;
 
 export interface UseAngeeAggregateResult {
   aggregate: AggregateBucket | null;
@@ -187,11 +187,20 @@ const EMPTY_FACETS: readonly FacetRequestSpec[] = [];
 const EMPTY_GROUP_BY_SCOPES: readonly GroupByBatchScope[] = [];
 const EMPTY_LIST_SCOPES: readonly AngeeListBatchScope[] = [];
 
+/** Collection reads include records that can enter their filter from outside the current page. */
+function collectionLiveInterest(model: string | undefined, relatedModels: readonly string[] = []) {
+  return {
+    models: model ? [model, ...relatedModels] : [],
+    records: model && relatedModels.length > 0 ? [{ model }] : [],
+    relatedModels: relatedModels.filter((related) => related !== model),
+  };
+}
+
 export function useAngeeAggregate(
   target: CustomGraphQLOperationTarget | null,
   options: AggregateRequestOptions & DialectQueryOptions,
 ): UseAngeeAggregateResult {
-  const { document, enabled = true, refetchInterval, ...query } = options;
+  const { document, enabled = true, refetchInterval, relatedModels, ...query } = options;
   const queryKey = stableKey(query);
   const request = useMemo(
     () => (target ? aggregateRequest(target, query, { document }) : null),
@@ -201,8 +210,8 @@ export function useAngeeAggregate(
     key: "single",
     document: graphqlDocumentIdentity(request.meta.gqlQuery).document as TypedDocumentNode<unknown, Record<string, unknown>>,
     variables: request.meta.gqlVariables as Record<string, unknown>,
-    models: target?.modelLabel ? [target.modelLabel] : [],
-  }] : [], [request, target?.modelLabel]);
+    ...collectionLiveInterest(target?.modelLabel, relatedModels),
+  }] : [], [request, target?.modelLabel, relatedModels]);
   const run = useAuthoredQueryBatch(scopes, {
     enabled: enabled && target !== null,
     dataProviderName: request?.dataProviderName,
@@ -221,13 +230,13 @@ export function useAngeeGroupBy(
   target: CustomGraphQLOperationTarget | null,
   options: GroupByRequestOptions & DialectQueryOptions,
 ): UseAngeeGroupByResult {
-  const { document, enabled = true, refetchInterval, ...query } = options;
+  const { document, enabled = true, refetchInterval, relatedModels, ...query } = options;
   const queryKey = stableKey(query);
   const scopes = useMemo<readonly GroupByBatchScope[]>(
     () => [{ key: "single", query }],
     [queryKey],
   );
-  const run = useGroupByRequestBatch(target, scopes, { document, enabled, refetchInterval });
+  const run = useGroupByRequestBatch(target, scopes, { document, enabled, refetchInterval, relatedModels });
   const entry = run.get("single");
   let result = EMPTY_GROUP_BY_RESULT;
   let decodeError: Error | null = null;
@@ -292,7 +301,7 @@ function useGroupByRequestBatch(
   scopes: readonly GroupByBatchScope[],
   options: DialectQueryOptions,
 ): ReadonlyMap<string, GroupByRequestBatchEntry> {
-  const { document, enabled = true, refetchInterval } = options;
+  const { document, enabled = true, refetchInterval, relatedModels } = options;
   const canQuery = enabled && target !== null;
   const activeScopes = canQuery ? scopes : EMPTY_GROUP_BY_SCOPES;
   const scopesKey = stableKey(activeScopes);
@@ -304,10 +313,10 @@ function useGroupByRequestBatch(
         key: scope.key,
         document: graphqlDocumentIdentity(request.meta.gqlQuery).document as TypedDocumentNode<unknown, Record<string, unknown>>,
         variables: request.meta.gqlVariables as Record<string, unknown>,
-        models: target.modelLabel ? [target.modelLabel] : [],
+        ...collectionLiveInterest(target.modelLabel, relatedModels),
       };
     });
-  }, [activeScopes, document, target, scopesKey]);
+  }, [activeScopes, document, target, scopesKey, relatedModels]);
   // The authored owner deduplicates requests and unions invalidation interests;
   // the dialect owns only group variables and the caller's result labels.
   const batch = useAuthoredQueryBatch(requests, {
@@ -379,7 +388,7 @@ function combineListQueries(queries: UseQueryResult<GetListResponse<BaseRecord>>
 export function useAngeeListBatch(
   target: ListBatchTarget | null,
   scopes: readonly AngeeListBatchScope[],
-  options: { fields: readonly string[]; enabled?: boolean },
+  options: { fields: readonly string[]; enabled?: boolean; relatedModels?: readonly string[] },
 ): ReadonlyMap<string, AngeeListBatchEntry> {
   const enabled = options.enabled ?? true;
   const canQuery = enabled && target !== null;
@@ -412,7 +421,7 @@ export function useAngeeListBatch(
     channel: `resources/${resourceName}`,
     resource: resourceName,
     types: ["*"],
-    params: { subscriptionType: "useList" },
+    params: { subscriptionType: "useList", relatedModels: options.relatedModels },
     enabled: canQuery,
     meta: { dataProviderName: schemaName },
   });
