@@ -502,7 +502,7 @@ class HistoryMixin(models.Model):
                 if history is not None and history.capture_enabled:
                     current_changeset(required=True, record=True)
                     if not self._state.adding:
-                        history.record_baselines(type(self)._meta.concrete_model, [self.pk])
+                        history.record_baselines(type(self)._meta.concrete_model or type(self), [self.pk])
             super().save_base(raw, force_insert, force_update, alias, update_fields)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
