@@ -22,6 +22,7 @@ export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }
   const fileHref = target?.file ? recordHref("storage.File", target.file.id) : undefined;
   const fileLink = useInAppLink(fileHref);
   const file = target?.file?.url ? {
+    identity: { id: target.file.id, version: target.file.content_hash },
     url: target.file.url, name: target.label, mime: target.file.mime_type?.mime_type, size: target.file.size_bytes,
   } : undefined;
   const source = useMemo(() => relatedSource(navigation.related, target?.unit ?? "messages", t), [navigation.related, target?.unit, t]);

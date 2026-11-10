@@ -11,9 +11,10 @@ import sys
 from collections.abc import Callable
 from functools import partial
 from inspect import getattr_static
+from typing import cast
 
 from django.apps import apps
-from django.conf import settings
+from django.conf import Settings, UserSettingsHolder, settings
 from django.db import models
 from mypy.build import PRI_MYPY
 from mypy.nodes import MypyFile, TypeInfo
@@ -124,12 +125,10 @@ class ProvenancePlugin(Plugin):
 
         if not settings.configured or not apps.apps_ready:
             return None
-        try:
-            label = changeset_model_label()
-        except AttributeError:
-            # A shared plugin configuration need not activate provenance storage.
-            return None
-        if not label:
+        # LazySettings forwards this public API, but its dynamic-setting stub
+        # does not expose the method declared on Django's two settings owners.
+        configured = cast(Settings | UserSettingsHolder, settings)
+        if not configured.is_overridden("ANGEE_CHANGESET_MODEL") or not changeset_model_label():
             return None
         try:
             return changeset_model()

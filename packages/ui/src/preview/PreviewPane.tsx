@@ -1,4 +1,4 @@
-import { type ReactElement, type ReactNode } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 import { usePreviews } from "../runtime";
 
 import { EmptyState } from "../fragments/EmptyState";
@@ -38,6 +38,7 @@ export function PreviewPane({
   fallback,
 }: PreviewPaneProps): ReactElement {
   const t = useUiT();
+  const url = usePreviewUrl(file);
   const resolvedMime = mime ?? displayMime(file);
   // Addon-contributed providers first so one can override a built-in at an equal
   // priority (resolve sorts stably); built-ins are always available. The SDK
@@ -55,14 +56,33 @@ export function PreviewPane({
   // Key the renderer by provider + file so it remounts (not just re-renders)
   // when the previewed file changes — a renderer's per-file state (e.g. a PDF's
   // page index) must not carry across files in a persistent pane.
-  const instanceKey = `${provider.id}:${file.url}`;
+  const instanceKey = JSON.stringify([provider.id, previewIdentity(file)]);
   return (
     <LazyBoundary
       pending={<PreviewSkeleton label={t("preview.loading")} />}
       fallback={empty}
       resetKey={instanceKey}
     >
-      <Renderer key={instanceKey} file={file} mime={resolvedMime} page={page} />
+      <Renderer key={instanceKey} file={{ ...file, url }} mime={resolvedMime} page={page} />
     </LazyBoundary>
   );
+}
+
+function previewIdentity(file: Pick<PreviewFile, "identity" | "url">): string {
+  return file.identity ? JSON.stringify([file.identity.id, file.identity.version]) : file.url;
+}
+
+/** Retain loaded bytes across credential rotation; adopt the latest URL on a
+ * file/content change. Preview renderers and gallery images share this owner.
+ * State follows identity during render so no frame loads the previous file.
+ * @owner PreviewPane
+ */
+export function usePreviewUrl(file: Pick<PreviewFile, "identity" | "url">): string {
+  const identity = previewIdentity(file);
+  const [loaded, setLoaded] = useState({ identity, url: file.url });
+  if (loaded.identity !== identity || (!loaded.url && file.url)) {
+    setLoaded({ identity, url: file.url });
+    return file.url;
+  }
+  return loaded.url;
 }

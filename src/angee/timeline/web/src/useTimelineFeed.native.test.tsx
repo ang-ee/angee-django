@@ -40,7 +40,14 @@ test("header and rail share a read and subscribe to the exact record", async () 
   await act(async () => root.render(<Provider queryClient={client} dataProvider={{ custom }}
     liveProvider={{ subscribe, unsubscribe: vi.fn() }}><Read /></Provider>));
   await vi.waitFor(() => expect(document.querySelector("button")?.textContent).toBe("1:1"));
-  expect(subscribe).toHaveBeenCalledWith(expect.objectContaining({ params: { models: ["notes.Note"] } }));
+  expect(subscribe).toHaveBeenCalledWith(expect.objectContaining({
+    meta: expect.objectContaining({
+      gqlSubscription: expect.stringContaining("timelineChanged(model: $model, id: $id)"),
+      gqlVariables: { model: "notes.Note", id: "nte_7" },
+    }),
+    params: { queryKey: expect.any(Array) },
+  }));
+  expect(subscribe.mock.calls.every(([request]) => !request.params?.models)).toBe(true);
   expect(client.getQueryCache().findAll()[0]?.meta).toMatchObject({
     angeeRecords: [{ model: "notes.Note", id: "nte_7" }],
   });
@@ -90,4 +97,33 @@ test("refresh discovers older pages from the new head instead of retaining obsol
   await vi.waitFor(() => expect(document.querySelector("output")?.textContent).toBe("7,6,5,4"));
   await act(async () => document.querySelector<HTMLButtonElement>("#older")?.click());
   await vi.waitFor(() => expect(document.querySelector("output")?.textContent).toBe("7,6,5,4,3,2"));
+});
+
+test("changing the record or timeline filter replaces the live read interest", async () => {
+  const custom = vi.fn(async () => ({ data: { timeline: {
+    entries: [], kinds: [], needs_me: 0, has_more: false, next_before: null,
+  } } }));
+  const unsubscribe = vi.fn();
+  const subscribe = vi.fn<Subscribe>(() => () => undefined);
+  function Read({ id, needsMe }: { id: string; needsMe: boolean }) {
+    useTimelineFeed({ model: "notes.Note", id, needsMe });
+    return null;
+  }
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  const liveProvider = { subscribe, unsubscribe };
+  const dataProvider = { custom };
+  const view = (id: string, needsMe: boolean) => <Provider queryClient={client} dataProvider={dataProvider} liveProvider={liveProvider}>
+    <Read id={id} needsMe={needsMe} />
+  </Provider>;
+  await act(async () => root.render(view("nte_7", false)));
+  const first = subscribe.mock.calls.at(-1)?.[0];
+  await act(async () => root.render(view("nte_8", false)));
+  expect(unsubscribe).toHaveBeenCalled();
+  expect(subscribe.mock.calls.at(-1)?.[0].meta?.gqlVariables).toEqual({ model: "notes.Note", id: "nte_8" });
+  const second = subscribe.mock.calls.at(-1)?.[0];
+  expect(second?.params?.queryKey).not.toEqual(first?.params?.queryKey);
+  await act(async () => root.render(view("nte_8", true)));
+  const third = subscribe.mock.calls.at(-1)?.[0];
+  expect(third?.meta?.gqlVariables).toEqual(second?.meta?.gqlVariables);
+  expect(third?.params?.queryKey).not.toEqual(second?.params?.queryKey);
 });

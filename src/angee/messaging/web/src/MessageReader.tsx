@@ -142,6 +142,7 @@ export function MessageReader({
           </div>
           <PreviewPane
             file={{
+              identity: preview.file ? { id: preview.file.id, version: preview.file.content_hash } : undefined,
               url: previewUrl,
               name: preview.name || preview.file?.filename || t("message.attachment"),
               mime: preview.type || preview.file?.mime_type?.mime_type,

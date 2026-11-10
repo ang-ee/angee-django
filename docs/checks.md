@@ -80,7 +80,8 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_workflows_review_concurrency.py),
 [execution links](../tests/test_workflows_review_graphql.py), and
 [inbox predicates](../tests/test_decisions_inbox.py),
-[committed timeline waits and inherited record feeds](../tests/test_timeline_workflows.py), plus the
+[committed timeline waits and inherited timeline subscriptions](../tests/test_timeline_workflows.py),
+[timeline stream authorization](../tests/test_timeline_subscriptions.py), plus the
 [agent session loop](../tests/test_agent_sessions.py) and its
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
@@ -94,7 +95,9 @@ knowledge, [pgvector test-database readiness](../tests/test_postgresql_extension
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py)
 and [webform submission](../tests/test_messaging_webform_submission.py) races,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
-sequences, spaces, storage, the system queryset, work and task ordering locks,
+sequences, spaces, storage with its
+[window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
+the system queryset, work and task ordering locks,
 integrate streams and workflow integrate steps, the
 [grouped rows](../tests/test_group_rows.py) partitions, the
 messaging inbox's [explorer](../tests/test_inbox_explorer.py),

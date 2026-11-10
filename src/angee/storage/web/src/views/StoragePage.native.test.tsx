@@ -26,7 +26,7 @@ const fileResource = testDataResource("storage.File", {
   } }),
   typeNames: { filter: "files_bool_exp", order: "files_order_by" },
   recordRepresentation: "title", updateFields: ["title"], roots: { deletePreview: "delete_files_preview", aggregate: "files_aggregate" },
-  fields: ["title", "filename", "created_by_label", "upload_state", "visibility", "created_at", "updated_at"].map((name) => ({
+  fields: ["title", "filename", "content_hash", "created_by_label", "upload_state", "visibility", "created_at", "updated_at"].map((name) => ({
     name, kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: false,
     updatable: name === "title", requiredOnCreate: false,
@@ -45,7 +45,7 @@ const resources = [fileResource, driveResource, folderResource];
 const scope = { filter: { drive: { exact: "drive-a" }, is_trashed: { exact: false } }, order: { updated_at: "DESC" as const }, page: 1, pageSize: 50 };
 const drive = { id: "drive-a", slug: "assets", name: "Assets" };
 function file(id: string, title: string) {
-  return { id, title, filename: `${title}.bin`, url: "", drive: drive.id, folder: null,
+  return { id, title, filename: `${title}.bin`, content_hash: "digest", url: "", drive: drive.id, folder: null,
     is_trashed: false, upload_state: "ready", visibility: "inherited", size_bytes: 1, mime_type: null,
     created_by_label: "", created_at: "2026-09-04T00:00:00Z", updated_at: "2026-09-05T00:00:00Z" };
 }
@@ -214,7 +214,7 @@ test("All files starts with server folder grouping and a clean URL; changing the
   installTestLocalStorage();
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 768));
   Element.prototype.getAnimations ??= () => [];
-  const fields = { id: { scalar: "ID" }, title: { scalar: "String" }, filename: { scalar: "String" },
+  const fields = { id: { scalar: "ID" }, title: { scalar: "String" }, filename: { scalar: "String" }, content_hash: { scalar: "String" },
     created_by_label: { scalar: "String" }, upload_state: { scalar: "String" }, visibility: { scalar: "String" },
     updated_at: { scalar: "DateTime" }, size_bytes: { scalar: "Int" }, is_trashed: { scalar: "Boolean" },
     drive: { scalar: "ID" }, folder: { scalar: "ID" }, "mime_type.label": { scalar: "String" },

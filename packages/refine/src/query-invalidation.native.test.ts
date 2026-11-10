@@ -447,3 +447,25 @@ test("authored and resource reads share one burst and settle tracking without to
     stop.forEach((unsubscribe) => unsubscribe()); cache.clear();
   }
 });
+
+test("dedicated subscriptions let a slow rail finish then read once after the buffered event", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const first = pending<number>();
+  let reads = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["timeline", "integration-1"],
+    queryFn: () => ++reads === 1 ? first.promise : Promise.resolve(reads),
+  });
+  const stop = observer.subscribe(() => undefined);
+  const live = createLiveInvalidation(cache);
+  try {
+    live.pushQuery(["timeline", "integration-1"]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(1);
+    first.resolve(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toBe(2);
+    expect(observer.getCurrentResult().data).toBe(2);
+  } finally { live.clear(); stop(); cache.clear(); }
+});
