@@ -146,12 +146,5 @@ class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
     def fill_extension_fields_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
         """Fill blank OIDC fields from a discovery document; return whether changed."""
 
-        changed = False
-        for field, key in self.DISCOVERY_FIELDS.items():
-            if getattr(self, field, ""):
-                continue
-            value = discovery.get(key)
-            if value:
-                setattr(self, field, str(value))
-                changed = True
+        changed = self.fill_discovery_fields(discovery, self.DISCOVERY_FIELDS)
         return super().fill_extension_fields_from_discovery(discovery) or changed

@@ -95,7 +95,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
    ```
 
    `streams()` declares each partition once with its `StreamDefinition` knobs (`kind`, `direction`, `cursor`,
-   `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `config`;
+   `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `snapshot`, `authoritative`, `mapping_version`, `config`;
    `StreamDefinition` in `src/angee/integrate/states.py`). `extract` returns one page and the cursor that covers it; the
    driver commits both. If the source is a mutable replica → return `RecordChange` rows and implement
    `enumerate_keys`, `read_keys` (set `supports_identity_reads = True`) and, for two-way, `local_changes` +
@@ -175,7 +175,7 @@ session exits within one wake on stop, shutdown and lost lock.
 
 ## Pitfalls
 
-- Declaration knobs `cursor`, `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `config` seed the first generation only; a changed `direction`/`snapshot` opens a new baseline and a changed `kind` is refused (`src/angee/integrate/README.md`).
+- Declaration knobs `cursor`, `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `config` seed the first generation only; a changed `direction`/`snapshot` or increased `mapping_version` opens a new baseline and a changed `kind` is refused (`src/angee/integrate/README.md`).
 - A declared snapshot without `reconcile_interval` closes after its baseline; a missing interval alone never means read-once ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "Read-once requires a snapshot source and closure").
 - Advisory locks are process-local on SQLite: `claim_account` is serialized by the lock, not the database (`claim_account` in `src/angee/integrate/impl.py`, `task_locks_are_cross_process` in `src/angee/base/locks.py`).
 - A child capability's second intent axis (live desire) is unset by generic lifecycle verbs; the reconciler selects on lifecycle and closes it ([Integrate pitfalls](references/pitfalls.md) "An Integration child's second intent axis").

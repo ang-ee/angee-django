@@ -43,6 +43,7 @@ from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
+from angee.graphql.testing import capture_broadcasts
 from angee.iam import schema as iam_schema
 from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import UserAccountAction
@@ -409,22 +410,21 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
         def broadcasts_changes(self) -> bool:
             return self.name != "hidden"
 
-    sent: list[dict[str, object]] = []
-    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
     # Run the on_commit callback inline so the (non-)broadcast is observable now.
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.connect_publishers(OptOutGroup)
     publishing.connect_publishers(Group)
     try:
-        publish_change(OptOutGroup(id=1, name="hidden"), action="update", update_fields=None)
-        assert sent == []
+        with capture_broadcasts() as sent:
+            publish_change(OptOutGroup(id=1, name="hidden"), action="update", update_fields=None)
+            assert sent == []
 
-        publish_change(OptOutGroup(id=2, name="shown"), action="delete", update_fields=None)
-        assert [(event["id"], event["action"]) for event in sent] == [("2", "delete")]
+            publish_change(OptOutGroup(id=2, name="shown"), action="delete", update_fields=None)
+            assert [(event["id"], event["action"]) for event in sent] == [("2", "delete")]
 
-        # A feed row with no hook keeps the default broadcast behavior.
-        publish_change(Group(id=3, name="plain"), action="create", update_fields=None)
-        assert [(event["id"], event["action"]) for event in sent] == [("2", "delete"), ("3", "create")]
+            # A feed row with no hook keeps the default broadcast behavior.
+            publish_change(Group(id=3, name="plain"), action="create", update_fields=None)
+            assert [(event["id"], event["action"]) for event in sent] == [("2", "delete"), ("3", "create")]
     finally:
         publishing.disconnect_publishers(OptOutGroup)
         publishing.disconnect_publishers(Group)

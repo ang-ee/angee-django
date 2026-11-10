@@ -43,7 +43,7 @@ from angee.iam_integrate_oidc.providers import GoogleType
 from angee.integrate import schema as integrate_schema
 from angee.integrate.connect import complete_account_connect
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import _PinnedBackend
+from angee.integrate.http import HttpClient, _PinnedBackend
 from angee.integrate.models import AccountStatus, CredentialStatus
 from angee.integrate.oauth import client as oauth_protocol
 from angee.integrate.oauth import discovery as oauth_discovery
@@ -75,12 +75,12 @@ def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.M
         discovery_url="https://issuer.example/.well-known/openid-configuration",
     )
 
-    def get_json(url: str, *, headers: dict[str, str] | None = None, error_code: str | None = None) -> dict[str, Any]:
-        del headers, error_code
+    def get_json(url: str, *, headers: dict[str, str] | None = None, allow_private: bool = False) -> dict[str, Any]:
+        del headers, allow_private
         calls.append(url)
         return {"authorization_endpoint": "https://issuer.example/oauth/authorize"}
 
-    monkeypatch.setattr(oauth_discovery, "_get_json", get_json)
+    monkeypatch.setattr(oauth_discovery, "HttpClient", lambda: SimpleNamespace(get_json=get_json))
 
     url = OAuthClientOidcProtocol(oidc).authorize_url(
         state="state-token",
@@ -113,8 +113,8 @@ def test_ensure_endpoints_caches_document_by_discovery_url(monkeypatch: pytest.M
         cache_sets.append((key, timeout))
         cached_documents[key] = value
 
-    def get_json(url: str, *, headers: dict[str, str] | None = None, error_code: str | None = None) -> dict[str, Any]:
-        del headers, error_code
+    def get_json(url: str, *, headers: dict[str, str] | None = None, allow_private: bool = False) -> dict[str, Any]:
+        del headers, allow_private
         fetches.append(url)
         return {
             "issuer": "https://cached.example",
@@ -126,7 +126,7 @@ def test_ensure_endpoints_caches_document_by_discovery_url(monkeypatch: pytest.M
 
     monkeypatch.setattr(oauth_discovery.cache, "get", cache_get)
     monkeypatch.setattr(oauth_discovery.cache, "set", cache_set)
-    monkeypatch.setattr(oauth_discovery, "_get_json", get_json)
+    monkeypatch.setattr(oauth_discovery, "HttpClient", lambda: SimpleNamespace(get_json=get_json))
 
     protocol = OAuthClientOidcProtocol(oidc)
     first = protocol.ensure_endpoints()
@@ -137,6 +137,27 @@ def test_ensure_endpoints_caches_document_by_discovery_url(monkeypatch: pytest.M
     assert len(cache_gets) == 2
     assert len(cache_sets) == 1
     assert cache_sets[0][1] == 3600
+
+
+@pytest.mark.parametrize(("result", "status"), [([], 400), (ValueError("invalid JSON"), 400),
+                                                 (httpx2.ConnectError("unavailable"), 503)])
+def test_discovery_rejects_invalid_documents_without_caching(monkeypatch, result, status):
+    cached = []
+
+    def fetch(url, **kwargs):
+        assert kwargs["allow_private"] is True
+        assert kwargs["headers"] == oauth_protocol.OUTBOUND_HEADERS
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(oauth_discovery.cache, "get", lambda key: None)
+    monkeypatch.setattr(oauth_discovery.cache, "set", lambda *args, **kwargs: cached.append(args))
+    monkeypatch.setattr(oauth_discovery, "HttpClient", lambda: SimpleNamespace(get_json=fetch))
+    with pytest.raises(OAuthFlowError) as refused:
+        oauth_discovery.discovery_document("https://invalid-document.example/discovery")
+    assert (refused.value.code, refused.value.http_status) == (DISCOVERY_FAILED, status)
+    assert not cached
 
 
 def test_outbound_requests_send_honest_user_agent() -> None:
@@ -155,9 +176,9 @@ def test_outbound_requests_send_honest_user_agent() -> None:
 
     transport = httpx2.MockTransport(handler)
 
-    oauth_protocol._get_json(
+    HttpClient().get_json(
         "https://idp.example/.well-known/openid-configuration",
-        error_code=DISCOVERY_FAILED,
+        headers=oauth_protocol.OUTBOUND_HEADERS,
         transport=transport,
     )
     protocol = OAuthClientProtocol(_stub_oauth_client())
@@ -2065,7 +2086,7 @@ def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override
         assert str(request.url) == endpoint
         return httpx2.Response(200, json={"sub": "seed-subject"})
 
-    monkeypatch.setattr(oauth_discovery, "_get_json", discover)
+    monkeypatch.setattr(oauth_discovery, "HttpClient", lambda: SimpleNamespace(get_json=discover))
     monkeypatch.setattr(oauth_discovery.cache, "get", lambda key: None)
     protocol = OAuthClientProtocol(client)
     protocol._transport = httpx2.MockTransport(profile)
@@ -2162,7 +2183,7 @@ def test_oauth_helpers_map_refused_endpoint_to_transient_flow_error(operation: s
             if operation == "revoke":
                 OAuthClientProtocol(_stub_oauth_client(revoke_endpoint=endpoint)).revoke_token("synthetic-token")
             else:
-                oauth_protocol._get_json(endpoint, error_code=DISCOVERY_FAILED)
+                oauth_discovery.discovery_document(endpoint)
     assert raised.value.http_status == 503 and raised.value.transient
     assert raised.value.code == (TOKEN_EXCHANGE_FAILED if operation == "revoke" else DISCOVERY_FAILED)
 

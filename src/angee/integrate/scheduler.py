@@ -63,7 +63,7 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
                 with transaction.atomic():
                     bridge = (
                         due
-                        .lock_if_supported()
+                        .lock_if_supported(skip_locked=True)
                         .filter(pk=pk)
                         .first()
                     )

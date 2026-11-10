@@ -1011,7 +1011,7 @@ def open_stream(
     """Open a partition against its current declaration and retained stream progress.
 
     Opening reconciles: the stream takes what its declaration says now (direction,
-    snapshot, authority) through ``SyncStream.objects.current``, so a changed
+    snapshot, authority, mapping version) through ``SyncStream.objects.current``, so a changed
     declaration reaches an existing stream on every path. A caller that already
     discovered declarations supplies its matching definition to avoid repeating
     transport discovery; without one the adapter declares again. A drain opens its

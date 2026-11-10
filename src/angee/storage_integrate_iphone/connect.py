@@ -18,7 +18,7 @@ def create_iphone_backup_mount(
     *,
     name: str,
     path: str,
-    mode: MountMode | str,
+    mode: MountMode,
 ) -> Any:
     """Validate and provision one unencrypted iPhone-backup Mount."""
 

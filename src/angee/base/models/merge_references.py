@@ -192,7 +192,7 @@ class Reference:
         if self.rows(record).exists():
             return True
         return issubclass(self.model, PersistenceMixin) and self.model.retained_reference_exists(
-            record, self.lookup(record),
+            self.lookup(record),
         )
 
     def blocks_target_delete(self, target: type[models.Model]) -> bool:

@@ -31,10 +31,10 @@ class PersistenceMixin(models.Model):
         yield False
 
     @classmethod
-    def retained_reference_exists(cls, record: models.Model, lookup: Mapping[str, Any]) -> bool:
+    def retained_reference_exists(cls, lookup: Mapping[str, Any]) -> bool:
         """Whether an owned retained representation still names this target."""
 
-        del record, lookup
+        del lookup
         return False
 
     def prepare_lock_subject(self, values: Mapping[str, Any]) -> Self:

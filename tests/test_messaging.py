@@ -50,6 +50,7 @@ from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.graphql.testing import capture_broadcasts
 from angee.messaging import managers as messaging_managers
 from angee.messaging.backends import (
     ManualChannelBackend,
@@ -2741,19 +2742,19 @@ def _collecting_broadcasts(
 ) -> Iterator[list[tuple[Any, dict[str, Any]]]]:
     """Yield the change payloads broadcast for ``models`` while their publishers are wired.
 
-    Runs ``_broadcast`` and ``on_commit`` inline so a post's broadcast is observable
-    now, and restores each model's prior publisher wiring on exit through the public
+    Runs ``on_commit`` inline so a post's broadcast is observable now, and
+    restores each model's prior publisher wiring on exit through the public
     ``connect_publishers`` / ``disconnect_publishers`` seam.
     """
 
     sent: list[tuple[Any, dict[str, Any]]] = []
-    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append((model, payload)))
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     already_wired = {model: publishing.disconnect_publishers(model) for model in models}
     for model in models:
         publishing.connect_publishers(model)
     try:
-        yield sent
+        with capture_broadcasts(observer=lambda model, payload: sent.append((model, payload))):
+            yield sent
     finally:
         for model in models:
             publishing.disconnect_publishers(model)

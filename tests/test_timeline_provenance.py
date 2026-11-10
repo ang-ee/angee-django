@@ -10,6 +10,7 @@ from rebac import actor_context, system_context
 
 from angee.base.models.identity import public_id_of
 from angee.base.refs import generic_pointer_target
+from angee.graphql.testing import capture_broadcasts
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Channel
@@ -42,7 +43,7 @@ def test_only_explicit_closure_invalidates_and_changesets_never_gain_a_transport
     composed_permissions, monkeypatch,
 ) -> None:
     owner = create_platform_admin("timeline-explicit-close")
-    states, broadcasts = [], []
+    states = []
     original = ChangeKind.records
 
     def project(self, row):
@@ -50,14 +51,11 @@ def test_only_explicit_closure_invalidates_and_changesets_never_gain_a_transport
         return original(self, row)
 
     monkeypatch.setattr(ChangeKind, "records", project)
-    monkeypatch.setattr(
-        "angee.graphql.publishing._broadcast", lambda model, payload: broadcasts.append(model._meta.label),
-    )
-    with open_changeset(fresh=True):
+    with capture_broadcasts() as broadcasts, open_changeset(fresh=True):
         vault_for(owner)
         assert states == []
     assert states == ["closed"]
-    assert "provenance.Changeset" not in broadcasts
+    assert all(payload["model"] != "provenance.Changeset" for payload in broadcasts)
 
 
 def test_notification_failure_keeps_the_closed_changeset_readable(
