@@ -10,6 +10,46 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `StateTransitionsMixin.transition_fields` replaces `_transition_fields` as the
+  public set of companion field names, defaulting to `frozenset()`.
+  `save_state` writes them with the guarded state and resets the collection even
+  when its concurrency check or save fails. Callers assign/read the attribute
+  directly and reset it with `frozenset()`, never `hasattr`/`delattr`.
+- IAM authentication checks Django's configured `get_user_model()` so composed
+  and swapped user models share the active-person login contract.
+- Jobs consumes provenance's optional `ANGEE_CELERY_TASK_CLASS` setting; without
+  provenance's scalar default it uses Celery's native `DjangoTask`.
+- Declaration owners: `AngeeModel.decision_methods` defaults to `()`;
+  `HistoryDocumentMixin.timeline_subject` defaults to `True` and controls
+  provenance timeline admission. The `DecisionMethods` and `TimelineSubject`
+  runtime Protocols and the `timeline.kinds.timeline_subject` reader are removed.
+  `ChangesetHistory._provenance_history` defaults to `None` until the native
+  history factory binds its capture declaration; `ModelHistory` composes it
+  alongside custom history bases. `ImplBase.key` retains its `""` default;
+  `StorageBackend.key` explicitly defaults to `""` for registry-only native
+  backends, while nonempty keys must match their registry entry.
+- `StatementField` is an explicit Django field base with a `for_statement`
+  default returning the copied field. Custom adapters inherit it; ordinary
+  fields are unchanged. Document-save backends extend
+  `AngeeHasuraWriteBackend`; the probing `LinesWriteBackend` Protocol is removed.
+- `base.addons.addon_contribution` reads ordered iterables, mappings and callable
+  exports with typed return variants. Mapping factories can require a callable;
+  callable exports are returned without invocation. ASGI protocols, GraphQL
+  schemas and MCP registrars share this owner; malformed present exports still
+  fail, and absent exports contribute nothing.
+- Autoconfig owns optional settings defaults. Bare settings modules using these
+  capabilities must explicitly declare `ANGEE_BUILTIN_MCP_URL`,
+  `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, `ANGEE_CHANGESET_MODEL`,
+  `ANGEE_ADDON_INSTALLER_BACKEND`, `ANGEE_OPENCODE_OAUTH_ENABLED`, and the
+  operator's `ANGEE_OPERATOR_GRAPHQL_ENDPOINT`, `ANGEE_OPERATOR_URL`,
+  `ANGEE_OPERATOR_TOKEN` and `ANGEE_OPERATOR_RESTART_JOB`; readers no longer
+  invent missing-setting defaults.
+  Money declares `ANGEE_MONEY_REFERENCE_CURRENCY=None`; conversion still requires
+  a project-selected currency. Named hook, live implementation-registry and
+  transition-policy settings are required inputs: empty hook/registry collections
+  and `None` policy overlays express inactivity. Retained migration fields may
+  outlive retired settings.
+
 - Base: `AngeeModel` declares `change_read_resource`, `change_related_records`
   and `change_batch_targets`; adapters dispatch through these contracts.
   `AngeeQuerySetMixin` and `SCHEMA_BINDING` replace their underscored names.

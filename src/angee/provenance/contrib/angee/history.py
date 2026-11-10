@@ -48,6 +48,9 @@ class HistoryDocumentMixin(models.Model):
     capture managers. HistoryMixin opts into capture separately.
     """
 
+    timeline_subject: ClassVar[bool] = True
+    """Whether this record admits its own history timeline; bookkeeping rows may opt out."""
+
     class Meta:
         abstract = True
 
@@ -58,9 +61,7 @@ class HistoryDocumentMixin(models.Model):
         return {}
 
     @classmethod
-    def history_related_scopes(
-        cls, predicate: Q, root_pk: Any, *, direct: bool
-    ) -> dict[type[models.Model], Q]:
+    def history_related_scopes(cls, predicate: Q, root_pk: Any, *, direct: bool) -> dict[type[models.Model], Q]:
         """Predicates on owned representations admitted with this document."""
 
         return {}
@@ -115,9 +116,7 @@ class ModelHistory(CaptureHistory):
 
         return concrete_child_models(model)
 
-    def changeset_states(
-        self, model: Any, changeset: Any
-    ) -> Iterable[tuple[Any, Any, Any]]:
+    def changeset_states(self, model: Any, changeset: Any) -> Iterable[tuple[Any, Any, Any]]:
         """Yield first, last and pre-boundary versions; sequence IDs break date ties.
 
         A later write, including an unattributed one, refuses the whole revert.
@@ -444,7 +443,6 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
             ).items():
                 related[representation] = related[representation] | scope if representation in related else scope
         return {**scopes, **related}
-
 
     def admitted_reverts(self, changesets: Iterable[Any]) -> frozenset[Any]:
         """Return page changeset keys belonging wholly to this history document.

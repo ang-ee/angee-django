@@ -2518,7 +2518,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def connect(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
         """Mark this integration connected, optionally attaching connection rows."""
 
-        self._transition_fields = self._set_connection_fields(credential=credential, account=account)
+        self.transition_fields = self._set_connection_fields(credential=credential, account=account)
 
     def _set_connection_fields(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> set[str]:
         """Attach connection rows and reset health, returning the fields changed."""
@@ -2610,7 +2610,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         """Disconnect this integration without changing its runtime health."""
 
         self.discovery_retry_at = None
-        self._transition_fields = {"discovery_retry_at"}
+        self.transition_fields = {"discovery_retry_at"}
 
     def set_lifecycle(self, lifecycle: IntegrationLifecycle | str) -> None:
         """Move to one declared lifecycle state using this model's transition methods."""

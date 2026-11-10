@@ -1641,7 +1641,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
 
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self._transition_fields = {"runtime_status", "last_error"}
+        self.transition_fields = {"runtime_status", "last_error"}
 
     @transition(
         lifecycle,
@@ -1663,7 +1663,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         self.conflict_name = ""
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self._transition_fields = {
+        self.transition_fields = {
             "workspace",
             "service",
             "conflict_kind",
@@ -1683,7 +1683,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
 
         self.workspace = workspace
         self.last_error = ""
-        self._transition_fields = {"workspace", "last_error"}
+        self.transition_fields = {"workspace", "last_error"}
 
     @transition(
         lifecycle,
@@ -1696,7 +1696,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
 
         self.service = service
         self.last_error = ""
-        self._transition_fields = {"service", "last_error"}
+        self.transition_fields = {"service", "last_error"}
 
     @transition(
         lifecycle,
@@ -1712,7 +1712,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         """
 
         self.service = ""
-        self._transition_fields = {"service"}
+        self.transition_fields = {"service"}
 
     @transition(
         lifecycle,
@@ -1733,7 +1733,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         self.service = service
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.RUNNING)
         self.last_error = ""
-        self._transition_fields = {"workspace", "service", "runtime_status", "last_error"}
+        self.transition_fields = {"workspace", "service", "runtime_status", "last_error"}
 
     @transition(
         lifecycle,
@@ -1754,7 +1754,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         self.last_error = ""
         self.conflict_kind = None
         self.conflict_name = ""
-        self._transition_fields = {
+        self.transition_fields = {
             "workspace",
             "service",
             "runtime_status",
@@ -1791,7 +1791,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
             self.conflict_kind = None
             self.conflict_name = ""
             transition_fields.update({"workspace", "service", "conflict_kind", "conflict_name"})
-        self._transition_fields = transition_fields
+        self.transition_fields = transition_fields
 
     def mark_provision_failed(
         self,
@@ -1829,7 +1829,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
             transition_fields.update({"conflict_kind", "conflict_name"})
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.ERROR)
         self.last_error = message[:2000]
-        self._transition_fields = transition_fields
+        self.transition_fields = transition_fields
         self.lifecycle_transitions.force_state(
             self,
             cast(AgentLifecycle, AgentLifecycle.READY if self.workspace else AgentLifecycle.DRAFT),
@@ -2414,7 +2414,7 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         """Project active turn execution onto the session."""
 
         self.last_error = ""
-        self._transition_fields = {"last_error"}
+        self.transition_fields = {"last_error"}
 
     @transition(
         status,
@@ -2426,7 +2426,7 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         """Project a parked session awaiting its next user turn."""
 
         self.last_error = ""
-        self._transition_fields = {"last_error"}
+        self.transition_fields = {"last_error"}
 
     @transition(
         status,
@@ -2456,7 +2456,7 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         """Project a session-level runtime error."""
 
         self.last_error = message
-        self._transition_fields = {"last_error"}
+        self.transition_fields = {"last_error"}
 
 
 class AgentTurnQuerySet[TurnT: AgentTurn](AngeeHistoryQuerySet[TurnT]):
@@ -2572,7 +2572,7 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
         """Claim this pending turn for its single runtime execution."""
 
         self.error = ""
-        self._transition_fields = {"error"}
+        self.transition_fields = {"error"}
 
     @transition(
         status,
@@ -2595,7 +2595,7 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
         self.text = text
         self.usage = dict(usage)
         self.error = ""
-        self._transition_fields = {"text", "usage", "error"}
+        self.transition_fields = {"text", "usage", "error"}
 
     @transition(
         status,
@@ -2608,7 +2608,7 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
 
         self.error = message
         self.usage = dict(usage)
-        self._transition_fields = {"error", "usage"}
+        self.transition_fields = {"error", "usage"}
 
     @transition(
         status,

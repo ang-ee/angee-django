@@ -57,6 +57,9 @@ class AngeeModel(
 ):
     """Abstract base model for Angee source and runtime models."""
 
+    decision_methods: ClassVar[tuple[str, ...]] = ()
+    """Model methods explicitly admitted for decision proposals; empty by default."""
+
     objects: ClassVar[RebacManager[Self]] = AngeeManager()
     """Default REBAC manager with Angee queryset conveniences."""
 
@@ -128,15 +131,18 @@ class AngeeModel(
                 position = None
             if isinstance(position, FractionalRankField):
                 moving = [
-                    by_public_id[pid] for pid, values in desired
-                    if pid is not None and values.get(position.name) is not None
+                    by_public_id[pid]
+                    for pid, values in desired
+                    if pid is not None
+                    and values.get(position.name) is not None
                     and position.to_python(values[position.name]) != getattr(by_public_id[pid], position.attname)
                 ]
                 if moving:
                     # Immediate uniqueness forbids cyclic swaps: stage the moving
                     # lines on free ranks, then save their exact final values below.
                     temporary = position.get_temporary_ranks(
-                        moving, (values.get(position.name) for _pid, values in desired),
+                        moving,
+                        (values.get(position.name) for _pid, values in desired),
                     )
                     staged = [copy(line) for line in moving]
                     for line, rank in zip(staged, temporary, strict=True):
@@ -214,13 +220,9 @@ class AngeeModel(
         """
 
         live_references = (
-            reference
-            for reference in references(type(self))
-            if reference.blocks_target_delete(type(self))
+            reference for reference in references(type(self)) if reference.blocks_target_delete(type(self))
         )
-        if named_in_relationships(self) or any(
-            reference.rows(self).exists() for reference in live_references
-        ):
+        if named_in_relationships(self) or any(reference.rows(self).exists() for reference in live_references):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()
 
@@ -466,7 +468,8 @@ class AngeeModel(
         return self._stored_record_access(selected)
 
     def _declared_record_access(
-        self, relations: Sequence[str] | None,
+        self,
+        relations: Sequence[str] | None,
     ) -> tuple[Mapping[str, str], tuple[str, ...]]:
         """The model's share declaration and the requested subset of its relations."""
 

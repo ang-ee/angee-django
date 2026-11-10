@@ -320,7 +320,7 @@ def addon_installer() -> AddonInstaller:
     ``AddonInstallerBackend`` subclass check).
     """
 
-    key = getattr(settings, _BACKEND_SETTING, "local")
+    key = settings.ANGEE_ADDON_INSTALLER_BACKEND
     backend_cls = resolve_impl_class(AddonInstallerBackend, key)
     return AddonInstaller(backend_cls())
 
@@ -340,15 +340,15 @@ def check_installer_backend_selection(app_configs: Any, **kwargs: Any) -> list[C
             Error(
                 f"settings.{_REGISTRY_SETTING} must be a non-empty mapping of key to dotted path.",
                 id="angee.platform.E001",
-            )
+            ),
         ]
-    selected = getattr(settings, _BACKEND_SETTING, "local")
+    selected = settings.ANGEE_ADDON_INSTALLER_BACKEND
     if selected not in registry:
         return [
             *errors,
             Error(
                 f"settings.{_BACKEND_SETTING} = {selected!r} is not a key in settings.{_REGISTRY_SETTING}.",
                 id="angee.platform.E004",
-            )
+            ),
         ]
     return errors

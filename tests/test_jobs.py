@@ -20,7 +20,10 @@ from angee.jobs.timeouts import task_claim_lease, task_time_budget
 
 @pytest.mark.parametrize("soft,hard,seconds", [(840, 900, 810), (180, 120, 90), (30, 60, 0)])
 def test_task_time_budget_reserves_settlement_below_both_limits(
-    settings: Any, soft: int, hard: int, seconds: int,
+    settings: Any,
+    soft: int,
+    hard: int,
+    seconds: int,
 ) -> None:
     """Bounded task bodies finish before whichever worker limit comes first."""
 
@@ -47,6 +50,23 @@ def test_jobs_app_exports_celery_app() -> None:
     assert app.main == "angee"
 
 
+def test_workflow_app_discovery_leaves_celery_unconstructed() -> None:
+    """App discovery must finish autoconfig before Celery selects its task base."""
+
+    environment = dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path))
+    environment.pop("DJANGO_SETTINGS_MODULE", None)
+    script = "import sys; import angee.workflows_agents.apps; assert 'angee.jobs.celery' not in sys.modules"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_core_celery_app_uses_native_task_without_loading_provenance() -> None:
     """Jobs can construct its native app and task class with no provenance owner."""
 
@@ -65,12 +85,16 @@ assert os.environ["DJANGO_SETTINGS_MODULE"] == "settings"
 assert settings.SECRET_KEY == "native-jobs"
 """
     environment = {
-        key: value for key, value in os.environ.items()
-        if key not in {"DJANGO_SETTINGS_MODULE", "ANGEE_PROJECT_DIR"}
+        key: value for key, value in os.environ.items() if key not in {"DJANGO_SETTINGS_MODULE", "ANGEE_PROJECT_DIR"}
     }
     environment["PYTHONPATH"] = os.pathsep.join(sys.path)
     result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, env=environment, timeout=30, check=False,
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=30,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
 
@@ -271,13 +295,18 @@ def test_addons_own_their_periodic_celery_schedules() -> None:
     ],
 )
 def test_celery_command_loads_declared_roots_before_importing_jobs(
-    tmp_path: Path, installed: bool, arguments: list[str], code: int, message: str,
+    tmp_path: Path,
+    installed: bool,
+    arguments: list[str],
+    code: int,
+    message: str,
 ) -> None:
     """Native installed roots expose Celery without activating provenance."""
 
     source = Path(__file__).resolve().parents[1]
     (tmp_path / "settings.yaml").write_text(
         "SECRET_KEY: celery-entrypoint-test\n"
+        "ANGEE_SERVER_COMMAND_CONTEXT: []\n"
         f"COMPOSE_OUTPUT_DIR: {str(tmp_path / 'runtime')!r}\n"
         "COMPOSE_OUTPUT_MODULE: runtime\n"
         f"INSTALLED_APPS: {['angee.jobs'] if installed else []!r}\n"
@@ -297,18 +326,29 @@ def test_celery_command_loads_declared_roots_before_importing_jobs(
     )
     (tmp_path / "manage.py").write_text(launcher)
     environment = {
-        key: value for key, value in os.environ.items()
+        key: value
+        for key, value in os.environ.items()
         if not key.startswith(("ANGEE_", "COMPOSE_", "YAMLCONF_", "SENTRY_"))
         and key not in {"DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL", "PYTHONPATH"}
     }
     built = subprocess.run(
         [sys.executable, str(tmp_path / "manage.py"), "compose"],
-        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     assert built.returncode == 0, built.stdout + built.stderr
     result = subprocess.run(
         [sys.executable, str(tmp_path / "manage.py"), "celery", *arguments],
-        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=30, check=False,
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     assert result.returncode == code, result.stdout + result.stderr
     assert message in result.stdout + result.stderr
@@ -323,7 +363,8 @@ def test_celery_command_loads_declared_roots_before_importing_jobs(
     ],
 )
 def test_celery_management_command_delegates_native_arguments_and_exit_status(
-    monkeypatch: pytest.MonkeyPatch, arguments: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
 ) -> None:
     """The Django adapter adds no worker parser or worker lifecycle."""
 

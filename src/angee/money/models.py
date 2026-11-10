@@ -60,7 +60,7 @@ def reference_currency_code() -> str:
     default (the project owns this choice).
     """
 
-    code = getattr(settings, REFERENCE_CURRENCY_SETTING, None)
+    code = settings.ANGEE_MONEY_REFERENCE_CURRENCY
     if not code:
         raise ImproperlyConfigured(
             f"{REFERENCE_CURRENCY_SETTING} is required for currency conversion but is not set. "

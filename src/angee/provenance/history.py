@@ -37,6 +37,9 @@ def _copy_history_metadata(source: models.Model, target: models.Model) -> None:
 class ChangesetHistory(models.Model):
     """The writing changeset's foreign key, shared by generated history models and retained statements."""
 
+    _provenance_history: ClassVar[ModelHistory | None] = None
+    """Capture declaration bound by ModelHistory's native model factory."""
+
     changeset = models.ForeignKey(
         changeset_model_label(),
         null=True,
@@ -168,6 +171,8 @@ class ModelHistory(HistoricalRecords):
         kwargs.setdefault("historical_queryset", ModelHistoricalQuerySet)
         kwargs.setdefault("bases", (ChangesetHistory,))
         super().__init__(*args, **kwargs)
+        if not any(issubclass(base, ChangesetHistory) for base in self.bases):
+            self.bases = tuple(base for base in self.bases if base is not models.Model) + (ChangesetHistory,)
 
     def contribute_to_class(self, cls: Any, name: str) -> None:
         super().contribute_to_class(cls, name)

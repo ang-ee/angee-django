@@ -8,13 +8,11 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import BaseBackend
 from django.contrib.auth.backends import ModelBackend as DjangoModelBackend
 
-from angee.iam.models import User
-
 
 def can_authenticate_user(user: object) -> bool:
-    """Return whether ``user`` is a login-capable human principal."""
+    """Admit active people from Django's configured user model, including swaps."""
 
-    return isinstance(user, User) and bool(user.is_active and user.is_person)
+    return isinstance(user, get_user_model()) and bool(user.is_active and user.is_person)
 
 
 class ModelBackend(BaseBackend):

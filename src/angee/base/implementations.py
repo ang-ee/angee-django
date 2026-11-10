@@ -1,10 +1,11 @@
 """Keyed implementation declarations, native config schemas and registry checks."""
+
 from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
-from typing import Any, ClassVar, Protocol, cast, runtime_checkable
+from typing import Any, ClassVar, Protocol, cast
 
 from django.conf import settings
 from django.core import checks
@@ -32,13 +33,7 @@ class RegistryBase(Protocol):
     """The declared setting that owns a family of native implementation classes."""
 
     registry_setting: ClassVar[str]
-
-
-@runtime_checkable
-class _KeyedImplementation(Protocol):
-    """Optional class key declaration, also supported on native implementation classes."""
-
-    key: ClassVar[str | None] = None
+    key: ClassVar[str]
 
 
 class ImplBase:
@@ -165,7 +160,7 @@ class ImplBase:
 def impl_registry(registry_setting: str) -> dict[str, str]:
     """Return the configured ``key -> dotted path`` mapping for ``registry_setting``."""
 
-    mapping = getattr(settings, registry_setting, {}) if registry_setting else {}
+    mapping = getattr(settings, registry_setting) if registry_setting else {}
     if not isinstance(mapping, Mapping):
         raise ImproperlyConfigured(f"settings.{registry_setting} must be a mapping of key to dotted path.")
     return {str(key): str(value) for key, value in mapping.items()}
@@ -191,10 +186,9 @@ def resolve_impl_class[T: RegistryBase](base_class: type[T], key: str) -> type[T
     if not (isinstance(impl, type) and issubclass(impl, base_class)):
         base_name = base_class.__name__
         raise ImproperlyConfigured(f"settings.{registry_setting}[{key!r}] = {dotted!r} is not a {base_name}.")
-    declared_key = impl.key if isinstance(impl, _KeyedImplementation) else _KeyedImplementation.key
-    if declared_key is not None and declared_key != key:
+    if impl.key != key and (issubclass(impl, ImplBase) or impl.key):
         raise ImproperlyConfigured(
-            f"settings.{registry_setting}[{key!r}] resolves {impl.__name__} with key {declared_key!r}."
+            f"settings.{registry_setting}[{key!r}] resolves {impl.__name__} with key {impl.key!r}."
         )
     return impl
 
@@ -216,7 +210,9 @@ def resolve_all_impl_classes[T: RegistryBase](
 
 
 def _impl_classes[T: RegistryBase](
-    base_class: type[T], *, on_error: Callable[[Exception], None] | None = None,
+    base_class: type[T],
+    *,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> Iterator[tuple[str, type[T]]]:
     """Enumerate trusted keyed classes once for checks and metadata projections."""
 
@@ -269,7 +265,9 @@ def check_impl_registry(
 
 
 def impl_choices[T: RegistryBase](
-    base_class: type[T], *, include: Callable[[type[object]], bool] | None = None,
+    base_class: type[T],
+    *,
+    include: Callable[[type[object]], bool] | None = None,
 ) -> list[ImplChoice]:
     """Project pickable metadata in registry-key order, without requiring a column."""
 

@@ -58,7 +58,7 @@ def check_reference_currency_setting(
 
     from angee.money.models import REFERENCE_CURRENCY_SETTING
 
-    if getattr(settings, REFERENCE_CURRENCY_SETTING, None):
+    if settings.ANGEE_MONEY_REFERENCE_CURRENCY:
         return []
     return [
         checks.Warning(

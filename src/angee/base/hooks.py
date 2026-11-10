@@ -1,4 +1,5 @@
 """Resolve declared Django-setting hooks without importing model implementations."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -14,7 +15,7 @@ from django.utils.module_loading import import_string
 def _hook_paths(setting: str) -> tuple[str, ...]:
     """Read one single or ordered multi-hook declaration without importing it."""
 
-    configured = getattr(settings, setting, "")
+    configured = getattr(settings, setting)
     if isinstance(configured, str):
         paths = (configured,) if configured else ()
     elif isinstance(configured, list | tuple) and all(isinstance(path, str) for path in configured):
