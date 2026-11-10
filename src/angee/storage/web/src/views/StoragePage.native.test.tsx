@@ -3,17 +3,25 @@
 import { createUiTestProviders } from "@angee/ui/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterContextProvider, RouterProvider } from "@tanstack/react-router";
 import { ResourceQuery, type Row } from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { testDataResource, testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
 import { composeAddons, parseFlatSearch, stringifyFlatSearch } from "@angee/app";
 import { installTestLocalStorage } from "@angee/app/testing";
-import { AppRuntimeProvider, ConsoleLayout, ModalsHost, ToastProvider, baseIcons, createRouteHref, defaultWidgets, recordNavigationSearch } from "@angee/ui";
+import {
+  AppRuntimeProvider, ConsoleLayout, ModalsHost, ResourceViewProvider, ToastProvider, baseIcons, createRouteHref, defaultWidgets,
+  recordNavigationSearch,
+} from "@angee/ui";
+import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import storage from "../index";
 import { StorageFileById, StorageFoldersPage, StorageFolderById, StorageDriveById } from "../data/documents";
+import { ALL_SCOPE, TRASH_SCOPE } from "../data/file-rows";
+import { FilePreviewFrame } from "./FilePreviewFrame";
+import type { StorageExplorerController } from "./StorageExplorer";
+import { StorageListContent } from "./StorageListContent";
 import { StoragePage } from "./StoragePage";
 
 const fileResource = testDataResource("storage.File", {
@@ -37,8 +45,9 @@ const folderResource = testDataResource("storage.Folder", {
   roots: { deletePreview: "delete_folders_preview" },
   query: testResourceQuery({ fields: {
     name: testQueryField("name", { sort: { field: "name" }, filter: { field: "name", scalar: "String", values: [], operators: ["contains"] } }),
-    drive: testQueryField("drive", { scalar: "ID" }), parent: testQueryField("parent", { scalar: "ID" }),
-    is_virtual: testQueryField("is_virtual", { scalar: "Boolean" }),
+    drive: testQueryField("drive", { scalar: "ID", filter: { field: "drive", scalar: "ID", values: [], operators: ["exact"] } }),
+    parent: testQueryField("parent", { scalar: "ID", filter: { field: "parent", scalar: "ID", values: [], operators: ["exact", "isNull"] } }),
+    is_virtual: testQueryField("is_virtual", { scalar: "Boolean", filter: { field: "is_virtual", scalar: "Boolean", values: [], operators: ["exact"] } }),
   } }),
 });
 const resources = [fileResource, driveResource, folderResource];
@@ -60,7 +69,6 @@ afterEach(() => { cleanup(); clearClients(); vi.restoreAllMocks(); });
 
 test("cold Files navigation preserves the real shell, tree, pager and the details form while native reads run in parallel", async () => {
   installTestLocalStorage();
-  Element.prototype.getAnimations ??= () => [];
   vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
     matches: query === "(min-width: 64rem)", media: query, onchange: null,
     addListener: () => {}, removeListener: () => {}, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
@@ -213,7 +221,6 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
 test("All files starts with server folder grouping and a clean URL; changing the folder scope changes its default", async () => {
   installTestLocalStorage();
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 768));
-  Element.prototype.getAnimations ??= () => [];
   const fields = { id: { scalar: "ID" }, title: { scalar: "String" }, filename: { scalar: "String" },
     created_by_label: { scalar: "String" }, upload_state: { scalar: "String" }, visibility: { scalar: "String" },
     updated_at: { scalar: "DateTime" }, size_bytes: { scalar: "Int" }, is_trashed: { scalar: "Boolean" },
@@ -265,4 +272,211 @@ test("All files starts with server folder grouping and a clean URL; changing the
   await waitFor(() => expect(screen.queryByRole("button", { name: "folder-a" })).toBeNull());
   expect(groupRequests).toHaveBeenCalledTimes(reads);
   expect(router.state.location.search).toEqual({ folder: "trash" });
+});
+
+// One storage world for the URL-owned navigator scope: two drives, a nested folder,
+// a root file, a filed file and a trashed one, all served by the native provider.
+const drives = [{ id: "drive-a", slug: "alpha", name: "Drive A" }, { id: "drive-b", slug: "beta", name: "Drive B" }];
+function folder(id: string, name: string, driveId: string, parent: string | null = null) {
+  return { id, name, description: "", is_virtual: false, drive: driveId, parent };
+}
+const folders = [folder("folder-a", "Folder A", "drive-a"), folder("folder-a-child", "Folder A Child", "drive-a", "folder-a"),
+  folder("folder-b", "Folder B", "drive-b")];
+const worldFiles = [{ ...file("file-a", "Alpha"), drive: "drive-a" }, { ...file("file-child", "Child"), drive: "drive-a", folder: "folder-a-child" },
+  { ...file("file-old", "Old"), drive: "drive-a", is_trashed: true }];
+type FolderRead = { data: { folders_by_pk: unknown } };
+
+/** Hasura `where` over in-memory rows: the `_eq`, `_is_null` and `_and` terms storage reads send. */
+function matches(row: Record<string, unknown>, where: unknown): boolean {
+  if (!where || typeof where !== "object" || Array.isArray(where)) return true;
+  return Object.entries(where as Record<string, unknown>).every(([field, lookup]) => {
+    if (field === "_and") return (Array.isArray(lookup) ? lookup : [lookup]).every((part) => matches(row, part));
+    if (!lookup || typeof lookup !== "object") return row[field] === lookup;
+    const comparison = lookup as Record<string, unknown>;
+    if ("_is_null" in comparison) return (row[field] == null) === comparison._is_null;
+    return !("_eq" in comparison) || row[field] === comparison._eq;
+  });
+}
+
+function folderWithAncestors(id: string): FolderRead {
+  const row = folders.find((candidate) => candidate.id === id);
+  const ancestors: typeof folders = [];
+  for (let parent = row?.parent; parent;) {
+    const ancestor = folders.find((candidate) => candidate.id === parent)!;
+    ancestors.unshift(ancestor);
+    parent = ancestor.parent;
+  }
+  return { data: { folders_by_pk: row ? { ...row, ancestors } : null } };
+}
+
+/** The Files page in the desktop shell at `path`, over the storage world. */
+function mountStorage(path: string, { visibleDrives = drives, folderRead }: {
+  visibleDrives?: readonly (typeof drives)[number][];
+  folderRead?: (id: string) => Promise<FolderRead>;
+} = {}) {
+  installTestLocalStorage();
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 768));
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+    matches: query === "(min-width: 64rem)", media: query, onchange: null,
+    addListener: () => {}, removeListener: () => {}, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+  }));
+  const provider = {
+    custom: vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+      const variables = (meta?.gqlVariables ?? {}) as { id: string; where?: unknown; limit: number; offset: number };
+      if (meta?.gqlQuery === StorageDriveById) return { data: { drives_by_pk: visibleDrives.find((row) => row.id === variables.id) ?? null } };
+      if (meta?.gqlQuery === StorageFolderById) return folderRead ? folderRead(variables.id) : folderWithAncestors(variables.id);
+      if (meta?.gqlQuery === StorageFoldersPage) {
+        const rows = folders.filter((row) => matches(row, variables.where));
+        return { data: { folders: rows.slice(variables.offset, variables.offset + variables.limit),
+          folders_aggregate: { aggregate: { count: rows.length } } } };
+      }
+      if (meta?.gqlQuery === StorageFileById) return { data: { files_by_pk: worldFiles.find((row) => row.id === variables.id) ?? null } };
+      return { data: { files_groups: [], totalCount: 0 } };
+    }),
+    getOne: vi.fn(async ({ id }: { id?: string | number }) => ({ data: worldFiles.find((row) => row.id === id) ?? null })),
+    getList: vi.fn(async ({ resource, meta }) => {
+      if (resource === "drives") return { data: [...visibleDrives], total: visibleDrives.length };
+      const rows = worldFiles.filter((row) => matches(row, meta?.gqlVariables?.where));
+      return { data: rows, total: rows.length };
+    }),
+  } satisfies RefineTestDataProvider;
+  const root = createRootRoute({ component: () => <ConsoleLayout><Outlet /></ConsoleLayout> });
+  const page = createRoute({ getParentRoute: () => root, path: "/storage", component: StoragePage });
+  const detail = createRoute({ getParentRoute: () => page, path: "$id" });
+  const router = createRouter({ routeTree: root.addChildren([page.addChildren([detail])]),
+    history: createMemoryHistory({ initialEntries: [path] }), parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch });
+  render(<Provider resources={resources} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
+    <OperationDocumentsProvider documents={{ console: { groups: { "storage.File": "query Groups { files_groups { key } totalCount }" } } }}>
+      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []),
+        containers: composeAddons([storage], { canonicalModelLabel: (model) => model }).containers }}>
+        <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
+      </AppRuntimeProvider>
+    </OperationDocumentsProvider>
+  </Provider>);
+  return router;
+}
+
+const TREE_LABELS = ["All files", "Trash", ...folders.map((row) => row.name)];
+/** A navigator row's own label; a parent row also contains its children's labels. */
+function treeLabel(row: HTMLElement): string | undefined {
+  return TREE_LABELS.find((label) => within(row).queryByText(label, { exact: true }));
+}
+const treeLabels = () => screen.getAllByRole("treeitem").map(treeLabel);
+const selectedTreeLabel = () => {
+  const row = screen.queryByRole("treeitem", { selected: true });
+  return row ? treeLabel(row) : undefined;
+};
+const treeRow = (label: string) => screen.getAllByRole("treeitem").find((row) => treeLabel(row) === label)!;
+
+test("a `?folder=` deep link selects its folder, reveals its readable ancestors and scopes the list", async () => {
+  mountStorage("/storage?folder=folder-a-child");
+  await waitFor(() => expect(selectedTreeLabel()).toBe("Folder A Child"));
+  expect(treeLabels()).toEqual(["All files", "Trash", "Folder A", "Folder A Child"]);
+  expect(await screen.findByText("Child")).toBeTruthy();
+  expect(screen.queryByText("Alpha")).toBeNull();
+});
+
+test("leaving Trash for All files drops the folder scope, and switching drives resets a folder scope", async () => {
+  const router = mountStorage("/storage?folder=trash");
+  await waitFor(() => expect(selectedTreeLabel()).toBe("Trash"));
+  expect(await screen.findByText("Old")).toBeTruthy();
+  fireEvent.click(treeRow("All files"));
+  await waitFor(() => expect(router.state.location.search).toEqual({}));
+  await waitFor(() => expect(treeLabels()).toContain("Folder A"));
+  fireEvent.click(treeRow("Folder A"));
+  await waitFor(() => expect(router.state.location.search).toEqual({ folder: "folder-a" }));
+  fireEvent.click(await screen.findByRole("combobox", { name: "Drive: Drive A" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Drive B" }));
+  await waitFor(() => expect(router.state.location.search).toEqual({}));
+  await waitFor(() => expect(treeLabels()).toEqual(["All files", "Trash", "Folder B"]));
+});
+
+test.each(["pending", "missing", "denied"] as const)("a %s deep-linked folder selects nothing and offers no upload target", async (state) => {
+  const pending = deferred<FolderRead>();
+  const router = mountStorage("/storage?folder=folder-b", { folderRead: (id) => state === "pending" ? pending.promise
+    : state === "missing" ? Promise.resolve({ data: { folders_by_pk: null } }) : Promise.reject(new Error(`Folder ${id} access denied`)) });
+  const navigator = await screen.findByRole("navigation", { name: "Files" });
+  const create = () => within(navigator).getByRole("button", { name: "New" }) as HTMLButtonElement;
+  await waitFor(() => expect(create().disabled).toBe(true));
+  expect(selectedTreeLabel()).toBeUndefined();
+  expect(router.state.location.search).toEqual({ folder: "folder-b" });
+  if (state !== "pending") return;
+  await act(async () => pending.resolve(folderWithAncestors("folder-b")));
+  expect(await within(navigator).findByRole("combobox", { name: "Drive: Drive B" })).toBeTruthy();
+  await waitFor(() => expect(create().disabled).toBe(false));
+  await waitFor(() => expect(selectedTreeLabel()).toBe("Folder B"));
+});
+
+test("a folder scope's collection header carries the drive picker, New and the folder verbs", async () => {
+  mountStorage("/storage?folder=folder-a");
+  const toolbar = within(await screen.findByRole("navigation", { name: "Files" })).getByRole("toolbar", { name: "" });
+  expect(await within(toolbar).findByRole("combobox", { name: "Drive: Drive A" })).toBeTruthy();
+  expect(within(toolbar).getByRole("button", { name: "New" })).toBeTruthy();
+  await waitFor(() => expect(selectedTreeLabel()).toBe("Folder A"));
+  fireEvent.click(within(toolbar).getByRole("button", { name: "More" }));
+  expect(await screen.findByRole("menuitem", { name: "Rename folder" })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: "Delete folder" })).toBeTruthy();
+  expect(screen.getByRole("menuitemradio", { name: "Folder name, ascending" })).toBeTruthy();
+});
+
+test("a directly shared file opens when no drive is visible", async () => {
+  mountStorage("/storage/file-a", { visibleDrives: [] });
+  expect((await screen.findAllByRole("heading", { level: 1, name: "Alpha" }))[0]).toBeTruthy();
+  expect(screen.queryByText("No drives are available to you.")).toBeNull();
+});
+
+/** Mount a storage view outside the shell, acting through the given file verbs. */
+function renderView(view: ReactElement, rows: readonly Row[]) {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/storage"] }) });
+  render(<Provider resources={resources} dataProvider={{
+    custom: vi.fn(async () => ({ data: { files_by_pk: rows[0] ?? null } })),
+    getOne: vi.fn(async () => ({ data: rows[0] ?? null })),
+    getList: vi.fn(async () => ({ data: [...rows], total: rows.length })),
+  }} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
+    <RouterContextProvider router={router}>
+      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
+        <ModalsHost><ToastProvider>{view}</ToastProvider></ModalsHost>
+      </AppRuntimeProvider>
+    </RouterContextProvider>
+  </Provider>);
+}
+
+function fileActions(completed: boolean) {
+  const settle = vi.fn(async () => completed);
+  return { busy: false, trash: settle, restore: settle, move: settle, trashMany: settle, restoreMany: settle };
+}
+
+// The file verbs settle their own refusals (data/actions.test.tsx); the views act on the resolved outcome.
+test.each(["blocked", "cancel", "success"] as const)("the open file closes only after its confirmed trash completes (%s)", async (outcome) => {
+  const actions = fileActions(outcome === "success");
+  const close = vi.fn();
+  renderView(<FilePreviewFrame id="file-a" fileNavigation={null} closeDetail={close} fileActions={actions} />, [file("file-a", "Alpha")]);
+  const trash = await screen.findByRole("button", { name: "Trash" }) as HTMLButtonElement;
+  await waitFor(() => expect(trash.disabled).toBe(false));
+  fireEvent.click(trash);
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: outcome === "cancel" ? "Cancel" : "Trash" }));
+  if (outcome === "cancel") await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  else await waitFor(() => expect(actions.trash).toHaveBeenCalledWith("file-a"));
+  if (outcome === "success") await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  else expect(close).not.toHaveBeenCalled();
+  if (outcome === "cancel") expect(actions.trash).not.toHaveBeenCalled();
+});
+
+test.each([
+  { scope: ALL_SCOPE, verb: "Trash", completed: true },
+  { scope: ALL_SCOPE, verb: "Trash", completed: false },
+  { scope: TRASH_SCOPE, verb: "Restore", completed: false },
+])("a bulk $verb keeps the selection unless it completed (completed=$completed)", async ({ scope, verb, completed }) => {
+  const actions = fileActions(completed);
+  const controller = { rootId: "drive-a", selectedId: scope, uploadTarget: null } as StorageExplorerController;
+  renderView(<ResourceViewProvider resource="storage.File">
+    <StorageListContent controller={controller} fileResource={undefined} navigationScope={null} fileActions={actions}
+      uploads={{ tasks: [], upload: vi.fn(), retry: vi.fn(), clearFinished: vi.fn() }} onListStateChange={() => undefined} />
+  </ResourceViewProvider>, [{ ...file("file-a", "Alpha"), is_trashed: scope === TRASH_SCOPE }]);
+  const select = () => within(screen.getByText("Alpha").closest("tr")!).getByRole("checkbox", { name: "Select row" });
+  await screen.findByText("Alpha");
+  fireEvent.click(select());
+  fireEvent.click(await screen.findByRole("button", { name: verb }));
+  await waitFor(() => expect(scope === TRASH_SCOPE ? actions.restoreMany : actions.trashMany).toHaveBeenCalledWith(new Set(["file-a"])));
+  await waitFor(() => expect(select().getAttribute("aria-checked")).toBe(String(!completed)));
 });
