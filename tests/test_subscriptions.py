@@ -468,6 +468,7 @@ def test_ws_consumer_uses_rebac_channels_mixin() -> None:
     assert issubclass(AngeeGraphQLWSConsumer, RebacChannelsConsumerMixin)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_ws_query_runs_inside_actor_context() -> None:
     """GraphQL-over-WebSocket queries install the connection actor."""
 

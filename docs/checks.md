@@ -162,8 +162,11 @@ Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
 the plugin; change `--randomly-seed` to reproduce or vary test order. Use `-n 0`
 or `-p no:xdist` for serial debugging. `--dist loadfile` keeps each test module on
-one worker. Pytest-django isolates worker databases; custom database and composed
-host fixtures must use process-local connections or pytest's worker-local
+one worker. Pytest-django isolates worker databases, suffixing the source host's
+stable `.test-db/` SQLite name per worker, so `--reuse-db` keeps them between runs
+and `--create-db` rebuilds them after a model change; concurrent runs need separate
+checkouts. Custom database and composed host fixtures must use process-local
+connections or pytest's worker-local
 `tmp_path`/`tmp_path_factory`, and restore registry changes after each test; the
 installed app registry is restored for every host loading the base fixtures (see
 [Source-addon Test Models](#source-addon-test-models)).
@@ -177,11 +180,19 @@ Share source-addon compositions through their owning test apps:
 package docstrings own the adoption contract. Other reusable concrete
 compositions, including [`decisions`](../src/angee/decisions/testing/models.py)
 and [`messaging`](../src/angee/messaging/testing/models.py), register once
-through imports in the root conftest before database setup. The framework-generic
-[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture uses native transactional
-isolation and synchronizes REBAC after each flush; use the native `db` fixture
-when a test needs neither transaction behavior nor permission synchronization.
-Composed hosts also install their schema during native database setup. Register
+through imports in the root conftest before database setup. Tests roll back by
+default over a session baseline: the base plugin binds the installed addons' merged
+permission inputs (a composed host binds its generated ones), and its
+`django_db_setup` synchronizes REBAC once per worker; a host extends that fixture
+to load its own baseline rows. The framework-generic
+[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture is the native
+`db` fixture over that baseline. Declare `django_db(transaction=True)` only when the
+contract needs real commits: other threads or connections, row locks, or
+`on_commit` work a real worker runs; its flush restores the baseline through
+`post_migrate`. Assert `on_commit` callbacks with pytest-django's
+`django_capture_on_commit_callbacks`. A test synchronizes REBAC itself only after
+binding its own schema; `composed_permissions` binds a test-owned copy of the merged
+inputs for a test that edits one on disk. Register
 `angee.base.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
 that loads it explicitly must pass `-p django -p angee.base.testing.fixtures` in that
 order so pytest-django cannot shadow the shared `django_db_setup` override.
@@ -192,7 +203,7 @@ A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
 [`angee.parties.testing.fixtures`](../src/angee/parties/testing/fixtures.py) in
 `pytest_plugins` and request its `statement_sources` fixture (the framework's own
-hosts load them after every REBAC sync).
+hosts load them into their baseline).
 
 Declare a test-local model under Django's `isolate_apps` when the code under test
 accepts a registry. When its owner reads the installed registry (content types, the
@@ -465,8 +476,6 @@ pushes to `main`. The current tiers are:
   remain part of this suite. Per-file scheduling keeps a file on one worker, so the
   heaviest files (the proposals access, owner-gate adopters and agents GraphQL
   campaigns, about 700 stored seconds each) set a floor near 25 minutes on CI.
-  Their cost is per-test fixture setup, a `rebac sync` before every test; making
-  that setup cheaper is how the limit comes down.
 - **PostgreSQL:** in six groups of its own beside the SQLite shards, assigned
   by pytest-split's `least_duration` algorithm over the
   [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute

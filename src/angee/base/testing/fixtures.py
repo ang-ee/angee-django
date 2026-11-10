@@ -1,8 +1,9 @@
 """Foundation registry and permission fixtures requiring pytest and pytest-django."""
 
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from typing import Any
 
 import pytest
@@ -15,6 +16,8 @@ from pytest_django.plugin import DjangoDbBlocker
 
 from angee.base.permissions import SCHEMA_BINDING
 from angee.base.testing.permissions import composed_permissions as composed_permissions
+from angee.base.testing.permissions import declared_permissions as declared_permissions
+from angee.base.testing.permissions import emit_permissions
 
 
 @contextmanager
@@ -95,40 +98,73 @@ def monkeypatch(installed_app_registry: None) -> Iterator[pytest.MonkeyPatch]:
         yield patch
 
 
+@pytest.fixture(scope="session", autouse=True)
+def composed_permission_inputs(tmp_path_factory: pytest.TempPathFactory) -> Callable[[], object]:
+    """Bind the installed addons' merged permission inputs for the whole session.
+
+    A composed host binds its generated inputs when it starts; a bare source host
+    gets the same composition here, before any test reads a declaration or the
+    database synchronizes it. The returned callable binds them again, rewriting
+    any session file a test edited.
+    """
+
+    if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None:
+        return lambda: None
+    configs = tuple(apps.get_app_configs())
+    runtime = tmp_path_factory.mktemp("permissions")
+    return partial(emit_permissions, configs, runtime, sources=emit_permissions(configs, runtime))
+
+
 @pytest.fixture(scope="session")
 def django_db_setup(
     django_db_setup: None,
     django_db_blocker: DjangoDbBlocker,
+    composed_permission_inputs: Callable[[], object],
 ) -> Iterator[None]:
-    """Install the host's permission schema and restore it after transaction flushes.
+    """Synchronize the session's permission baseline once and restore it after transactional flushes.
 
-    Native Django database setup owns table creation. A composed host gets the
-    current generated REBAC declarations, including on a reused test database.
-    Disposable test policy has no local overrides to preserve. Bare source-model
-    tests own their per-test schemas through ``composed_permissions`` instead.
+    Native Django database setup owns table creation. REBAC synchronizes the bound
+    inputs with a forced overwrite: a disposable or reused test database has no
+    local policy to preserve. Tests roll back to this baseline; a transactional
+    test's flush re-sends ``post_migrate``, on which REBAC resynchronizes at its own
+    app's turn and Django's content-type cache, cleared by every app's
+    ``create_contenttypes``, is primed at the last app's, so every test starts from
+    the same policy and the same warm cache.
     """
 
-    if not getattr(settings, "COMPOSE_OUTPUT_DIR", None):
-        yield
-        return
+    rebac = apps.get_app_config("rebac")
+    last = [config for config in apps.get_app_configs() if config.models_module is not None][-1]
 
-    rebac_app = apps.get_app_config("rebac")
-
-    def sync_rebac_schema(**kwargs: Any) -> None:
+    def synchronize(**kwargs: Any) -> None:
+        composed_permission_inputs()
         call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
 
-    post_migrate.connect(sync_rebac_schema, sender=rebac_app, weak=False)
+    def prime_content_types(**kwargs: Any) -> None:
+        content_types = apps.get_model("contenttypes", "ContentType").objects
+        content_types.get_for_models(*apps.get_models(), for_concrete_models=False)
+
+    receivers = ((synchronize, rebac), (prime_content_types, last))
+    for receiver, sender in receivers:
+        post_migrate.connect(receiver, sender=sender, weak=False)
     try:
         with django_db_blocker.unblock():
-            sync_rebac_schema()
+            synchronize()
+            prime_content_types()
         yield
     finally:
-        post_migrate.disconnect(sync_rebac_schema, sender=rebac_app)
+        for receiver, sender in receivers:
+            post_migrate.disconnect(receiver, sender=sender)
 
 
 @pytest.fixture(autouse=True)
-def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Restore generated permission paths and source annotations after each test."""
+def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Restore generated permission paths, source annotations and REBAC's backend after each test.
+
+    A test may install its own schema on the process backend
+    (``rebac.testing.install_schema``); the next test reads the stored baseline again.
+    """
+
+    from rebac.backends import reset_backend
 
     for config in apps.get_app_configs():
         for key in ("rebac_schema", SCHEMA_BINDING):
@@ -136,16 +172,20 @@ def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> Non
             monkeypatch.setitem(config.__dict__, key, config.__dict__.get(key))
             if not existed:
                 del config.__dict__[key]
+    yield
+    reset_backend()
 
 
 @pytest.fixture()
-def composed_tables(transactional_db: None) -> None:
-    """Use Django's test tables and synchronize their REBAC permissions.
+def composed_tables(db: None) -> None:
+    """Use Django's rollback-isolated test tables over the session's permission baseline.
 
-    ``transactional_db`` delegates table creation and per-test cleanup to
-    pytest-django and Django. Permission synchronization runs after native
-    database setup and after the previous test's flush.
+    Each test runs in a transaction rolled back at its end, so the REBAC schema and
+    every row the session baseline loads stay in place. A test whose contract needs
+    real commits (other threads or connections, row locks, ``on_commit`` work run
+    by a real worker) declares ``django_db(transaction=True)``; its flush restores
+    the baseline through ``post_migrate``. Assert ``on_commit`` callbacks with
+    pytest-django's ``django_capture_on_commit_callbacks`` instead.
     """
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db

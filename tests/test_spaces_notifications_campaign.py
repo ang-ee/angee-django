@@ -15,7 +15,6 @@ from tests.spaces_campaign_helpers import ROLES
 from tests.spaces_campaign_helpers import roster as roster
 from tests.spaces_campaign_helpers import spaces_console as spaces_console
 from tests.test_productivity_write_behavior import Queue
-from tests.test_spaces import spaces_tables as spaces_tables
 
 
 def test_only_confirmed_undismissed_holder_can_set_preferences_in_model_and_graphql(roster, spaces_console):

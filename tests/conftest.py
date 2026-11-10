@@ -16,9 +16,11 @@ from typing import Any, cast
 
 import pytest
 import tomlkit
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.db.models.signals import post_migrate
+from pytest_django.plugin import DjangoDbBlocker
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
@@ -113,19 +115,30 @@ def source_change_publishers() -> Iterator[None]:
             disconnect_publishers(model)
 
 
-@pytest.fixture
-def composed_tables(composed_tables: None) -> None:
-    """The source host's composed tables also carry the declared statement principals.
+@pytest.fixture(scope="session")
+def django_db_setup(django_db_setup: None, django_db_blocker: DjangoDbBlocker) -> Iterator[None]:
+    """The source host's session baseline also carries the declared statement principals.
 
     Extends the ``angee.base.testing`` plugin fixture of the same name: after its REBAC
     sync, the install-tier principals and grants that admission reads are loaded
-    (``angee.provenance.testing.load_statement_sources``), exactly as the composed
-    host does.
+    (``angee.provenance.testing.load_statement_sources``), as the composed host's
+    install tier loads them, and again at provenance's turn of the ``post_migrate``
+    a transactional flush sends, after REBAC's resync.
     """
 
-    del composed_tables
-    load_statement_sources("parties")
-    load_statement_sources("messaging")
+    provenance = apps.get_app_config("provenance")
+
+    def load(**kwargs: Any) -> None:
+        load_statement_sources("parties")
+        load_statement_sources("messaging")
+
+    post_migrate.connect(load, sender=provenance, weak=False)
+    try:
+        with django_db_blocker.unblock():
+            load()
+        yield
+    finally:
+        post_migrate.disconnect(load, sender=provenance)
 
 
 @pytest.fixture

@@ -17,7 +17,7 @@ from tests.conftest import SchemaAddon, create_user
 from tests.test_workflows_cancel import cancellations
 from tests.workflow_steps import Echo, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
@@ -88,6 +88,7 @@ def test_workflow_operator_retries_and_reprocesses_another_users_run(operator_ru
     assert replacement.reprocess_of_id == run.pk
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("revoke_before_delivery", [False, True])
 def test_workflow_operator_deferred_cancel_rechecks_the_workflow_grant(
     operator_run, execution, revoke_before_delivery,
@@ -110,6 +111,7 @@ def test_workflow_operator_deferred_cancel_rechecks_the_workflow_grant(
     assert run.status == ("running" if revoke_before_delivery else "canceled")
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("authorized", [False, True])
 def test_context_cancellation_uses_workflow_operator_authority(operator_run, execution, register_step, authorized):
     _workflow, target, _author, starter, operator, other = operator_run

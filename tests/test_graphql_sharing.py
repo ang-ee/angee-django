@@ -21,7 +21,6 @@ from angee.graphql.sharing import RecordAccessMutation, _grant_subject
 from angee.projects.testing.models import Project
 from tests.conftest import Backend, Drive, Folder
 from tests.iam_models import Group
-from tests.test_project_access import project_access_schema as project_access_schema
 
 
 @pytest.mark.django_db
@@ -51,8 +50,7 @@ def test_grant_subject_rejects_missing_malformed_and_wildcard_subjects() -> None
         _grant_subject("auth/user:*")
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("project_access_schema")
+@pytest.mark.usefixtures("composed_tables")
 def test_record_access_mutations_are_atomic_and_delegate_subject_policy() -> None:
     """The mutation preflights all targets and delegates tuple validity to REBAC."""
 

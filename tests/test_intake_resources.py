@@ -53,7 +53,6 @@ NEEDS = (
 )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_rows_answer_open_access_questions_as_the_named_decider(composed_tables: None, tmp_path: Path) -> None:
     del composed_tables
     addon = _addon(tmp_path, NEEDS)
@@ -81,7 +80,6 @@ def test_rows_answer_open_access_questions_as_the_named_decider(composed_tables:
         assert need.objects.get(pk=approved.pk).access_decision_id == approved.access_decision_id
 
 
-@pytest.mark.django_db(transaction=True)
 def test_an_answered_question_keeps_its_answer_when_the_row_changes(composed_tables: None, tmp_path: Path) -> None:
     del composed_tables
     addon = _addon(tmp_path, NEEDS)
@@ -96,7 +94,6 @@ def test_an_answered_question_keeps_its_answer_when_the_row_changes(composed_tab
         assert denied.access_verdict == [NeedAccessAction.INTAKE_DENY]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_the_request_owner_refuses_a_decider_without_share(composed_tables: None, tmp_path: Path) -> None:
     del composed_tables
     addon = _addon(tmp_path, NEEDS, task_owner="outsider")

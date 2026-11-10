@@ -8,7 +8,6 @@ import pytest
 import strawberry
 import strawberry_django
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import IntegrityError
 from rebac import (
     PermissionDenied,
@@ -102,7 +101,6 @@ _SHARED_SCHEMA = strawberry.Schema(query=_SHARED_RESOURCE.query, mutation=_SHARE
 def test_hasura_prepared_factory_creates_one_companion_or_neither_row(allowed: bool) -> None:
     """A readable relation reaches the insert gate, which authorizes the aggregate."""
 
-    call_command("rebac", "sync", verbosity=0)
     actor = create_platform_admin("factory-admin") if allowed else create_user("factory-reader")
     with system_context(reason="factory test scope"):
         scope = Scope.objects.create(name="Factory scope")
@@ -127,7 +125,6 @@ def test_hasura_prepared_factory_creates_one_companion_or_neither_row(allowed: b
 def test_hasura_factory_companion_failure_rolls_back_document(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failure after root persistence rolls the whole factory transaction back."""
 
-    call_command("rebac", "sync", verbosity=0)
     actor = create_platform_admin("factory-rollback")
     with system_context(reason="factory rollback scope"):
         scope = Scope.objects.create(name="Rollback scope")
@@ -151,7 +148,6 @@ def test_hasura_factory_companion_failure_rolls_back_document(monkeypatch: pytes
 def test_hasura_rejected_relation_reports_its_field_without_disclosing_the_target(hidden: bool) -> None:
     """An unavailable foreign key points to its input with the same safe refusal."""
 
-    call_command("rebac", "sync", verbosity=0)
     actor = create_user("missing-scope-author")
     with system_context(reason="test.field_validation.hidden_scope"):
         scope = Scope.objects.create(name="Private scope")
@@ -176,7 +172,6 @@ def test_hasura_rejected_relation_reports_its_field_without_disclosing_the_targe
 def test_hasura_create_unknown_relation_denies_even_in_exclusion() -> None:
     """Insert-dependent siblings cannot be mistaken for an empty exclusion arm."""
 
-    call_command("rebac", "sync", verbosity=0)
     actor = create_user("projection-actor")
     with system_context(reason="projection parent seed"):
         parent = ProjectionDoc.objects.create(title="Parent")
@@ -202,7 +197,6 @@ def test_hasura_create_unknown_relation_denies_even_in_exclusion() -> None:
 def test_hasura_create_uses_filtered_constant(eligible: bool) -> None:
     """The create gate and persisted read agree without a wildcard tuple."""
 
-    call_command("rebac", "sync", verbosity=0)
     actor = create_user("shared-create-actor")
     result = execute_schema(
         _SHARED_SCHEMA,

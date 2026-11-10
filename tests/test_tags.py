@@ -4,7 +4,7 @@ The vocabulary is an admin-curated surface, so tag rows are created under
 ``system_context``; the scope reads run under ``actor_context`` after
 ``rebac sync`` loads the schema. A tag assignment is authorized by the record it
 tags: each taggable type's app declares its relation on ``tags/tag_assignment``
-from its ``permissions.extends.zed``, which ``composed_permissions`` merges.
+from its ``permissions.extends.zed``, which the session's permission baseline merges.
 ``parties.Party`` stands in for a taggable record and ``knowledge.Vault`` for a
 type no relation names.
 """
@@ -282,10 +282,10 @@ def test_marker_bulk_writes_need_no_reader_reconciliation(composed_tables: None)
 
 
 @pytest.fixture()
-def party_edge(composed_permissions: None) -> SimpleNamespace:
+def party_edge(composed_tables: None) -> SimpleNamespace:
     """Seed a shared tag, a party its owner writes, and an outsider, with every taggable type declared."""
 
-    del composed_permissions
+    del composed_tables
     owner = create_user("tags-party-owner")
     outsider = create_user("tags-outsider")
     with system_context(reason="tags test setup"):
@@ -402,9 +402,10 @@ def test_a_tag_reader_who_cannot_read_the_record_sees_none_of_its_edges(party_ed
 
 
 @pytest.fixture()
-def curated_vocabulary(party_edge: SimpleNamespace) -> SimpleNamespace:
+def curated_vocabulary(party_edge: SimpleNamespace, composed_permissions: None) -> SimpleNamespace:
     """Narrow tag reads to tag administrators, so a record's reader can lack its tag's read."""
 
+    del composed_permissions
     schema = Path(apps.get_app_config("tags").rebac_schema)
     source = schema.read_text(encoding="utf-8")
     shared = "permission read = ((authenticated + admin->member) + manager->effective_member)"
@@ -587,14 +588,15 @@ def _tag_errors(errors: list[Any]) -> list[Any]:
     ]
 
 
-def test_the_check_accepts_matching_taggable_models_and_relations(composed_permissions: None) -> None:
+def test_the_check_accepts_matching_taggable_models_and_relations(composed_tables: None) -> None:
     """Every model composing TaggedModel has its relation, and every relation its model."""
 
-    del composed_permissions
+    del composed_tables
     assert set(TagAssignment.declared_target_models().values()) == _taggable_test_models()
     assert _tag_errors(TagAssignment.check()) == []
 
 
+@pytest.mark.usefixtures("declared_permissions")
 def test_the_check_reports_a_taggable_model_without_a_relation() -> None:
     """Without their owners' fragments, the base schema names no taggable type."""
 

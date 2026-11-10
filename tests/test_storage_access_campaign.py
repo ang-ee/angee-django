@@ -39,8 +39,6 @@ from tests.mtidemo.models import MtiChild, MtiChildProxy, MtiParent
 from tests.test_storage import PNG_BYTES, _proxy_upload
 from tests.test_storage import drive as drive
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
 
 def test_download_urls_are_window_aligned_and_expire_from_the_window_start(drive: Any, monkeypatch) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
@@ -230,6 +228,7 @@ def test_guarded_relation_rechecks_sudo_cache_and_reuses_actor_scoped_cache(
             assert factory("folder").base_resolver.wrapped_func(empty) is None
 
 
+@pytest.mark.django_db(transaction=True)
 def test_download_bearer_rechecks_issuing_actor_before_conditional_response(drive: Any) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     reader = create_user("download-viewer")
@@ -273,7 +272,7 @@ def test_download_rejects_legacy_and_malformed_actor_claims(drive: Any, actor_cl
     "missing", ["file_read", "file_write", "target_write", "undeclared_target", "untyped_target"],
 )
 def test_attach_rejects_missing_authority_even_with_sudo_loaded_inputs(
-    drive: Any, composed_permissions: None, missing: str,
+    drive: Any, composed_tables: None, missing: str,
 ) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     actor = create_user("attach-actor")
@@ -306,7 +305,7 @@ def test_attach_rejects_missing_authority_even_with_sudo_loaded_inputs(
 
 
 def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
-    drive: Any, composed_permissions: None,
+    drive: Any, composed_tables: None,
 ) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     editor, reader = create_user("attach-editor"), create_user("attach-file-reader")
@@ -334,7 +333,7 @@ def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
         assert not FileAttachment.objects.exists()
 
 
-def test_composed_edge_target_relations_pass_the_backing_check(composed_permissions: None) -> None:
+def test_composed_edge_target_relations_pass_the_backing_check(composed_tables: None) -> None:
     schema = rebac_backend().schema()
     for resource_type, relations in (
         ("storage/file_attachment", {"task", "drive", "mti_parent"}),

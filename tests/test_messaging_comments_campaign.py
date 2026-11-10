@@ -181,6 +181,7 @@ def test_webform_accessor_keeps_claimed_email_unverified_and_returns_a_copy():
     assert answers == {"summary": "A question"}
 
 
+@pytest.mark.usefixtures("declared_permissions")
 @pytest.mark.parametrize("operation", ["edit", "delete"])
 def test_record_moderator_cannot_change_retained_notification_hidden_from_generic_scope(comment_record, operation):
     case = comment_record

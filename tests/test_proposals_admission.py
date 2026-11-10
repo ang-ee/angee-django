@@ -9,7 +9,6 @@ from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
 from tests.proposals_models import Answer, Proposal
 from tests.t3_campaign import relationship_snapshot
-from tests.test_project_access import project_access_schema as project_access_schema
 
 
 def private_inputs(campaign):

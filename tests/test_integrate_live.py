@@ -13,7 +13,6 @@ from typing import Any, ClassVar
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from django.core.management import call_command
 from django.utils import timezone
 from rebac import system_context
 
@@ -165,7 +164,7 @@ class _QueuedLiveMessage:
 
 @pytest.fixture
 def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Register the fake live backend and sync its policy."""
+    """Register the fake live backend."""
 
     settings.ANGEE_DATA_DIR = str(tmp_path / "data")
     settings.ANGEE_CHANNEL_BACKEND_CLASSES = {
@@ -173,7 +172,6 @@ def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         "fake_live": "tests.test_integrate_live.FakeLiveChannelBackend",
     }
     monkeypatch.setattr("angee.integrate.tasks.models_with", lambda *, base: (Channel,))
-    call_command("rebac", "sync", verbosity=0)
 
 
 def _live_channel(slug: str = "fake-live") -> Any:

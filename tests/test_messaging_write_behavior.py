@@ -21,7 +21,6 @@ from angee.messaging.testing.models import Message
 from tests.test_messaging import channel as channel
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("kind", list(Message.MessageKind))
 def test_content_edit_validation_uses_retained_kind(
     composed_tables: None,
@@ -35,7 +34,6 @@ def test_content_edit_validation_uses_retained_kind(
         assert (message.delete_error() is None) == (kind == Message.MessageKind.COMMENT)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_notification_messages_remain_readonly(composed_tables: None) -> None:
     """The retained notification kind, not obsolete payload metadata, owns edit policy."""
     message = Message(direction="internal", message_type="notification")
@@ -102,7 +100,6 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
         assert message.sent_at is not None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reserve_delivery_leases_a_due_draft_once_and_publishes_nothing(
     channel: Any, composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -131,7 +128,6 @@ def test_reserve_delivery_leases_a_due_draft_once_and_publishes_nothing(
     assert sent == []
 
 
-@pytest.mark.django_db(transaction=True)
 def test_reserve_delivery_refuses_an_unsaved_or_inbound_message(channel: Any, composed_tables: None) -> None:
     """Reservation requires the persisted outbound envelope every delivery entrypoint shares."""
     with system_context(reason="messaging reservation refusal"), mute_changes():

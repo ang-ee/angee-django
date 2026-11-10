@@ -65,7 +65,6 @@ def test_a_statement_owns_its_shared_fact_authority(source_kind: SourceKind, aut
     assert statement.fact_authority is authority
 
 
-@pytest.mark.django_db(transaction=True)
 def test_a_donor_aspect_asserts_and_resolves_through_the_subject(composed_tables: None) -> None:
     del composed_tables
     writer = create_user("donor-aspect-writer")

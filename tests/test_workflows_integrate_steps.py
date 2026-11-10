@@ -52,6 +52,8 @@ from tests.conftest import make_integration
 from tests.integrate_fixtures import ConnectionBridge
 from tests.stream_adapters import applied_history, failure_state
 
+pytestmark = pytest.mark.django_db(transaction=True)
+
 
 class WorkerLost(BaseException):
     """Interrupt the worker after an independently committed driver page."""

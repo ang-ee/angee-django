@@ -124,7 +124,6 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
     assert calls == [agent]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_native_tool_grants_run_as_agent_service_user_and_regate(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -213,7 +212,6 @@ def test_native_tool_grants_run_as_agent_service_user_and_regate(
         )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_toolrole_and_group_grantee_paths(
     composed_tables: None,
 ) -> None:
@@ -290,7 +288,6 @@ def test_toolrole_and_group_grantee_paths(
     ).allowed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_server_qualified_grants_do_not_collide(composed_tables: None) -> None:
     """Same-named tools on two servers grant and revoke independently."""
 
@@ -324,7 +321,6 @@ def test_server_qualified_grants_do_not_collide(composed_tables: None) -> None:
     ).allowed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_tool_grant_identity_is_the_catalogue_primary_key(composed_tables: None) -> None:
     """Renaming catalogue metadata preserves the PK-backed authorization identity."""
 
@@ -342,7 +338,6 @@ def test_tool_grant_identity_is_the_catalogue_primary_key(composed_tables: None)
         assert tool_grant_ref(str(server.sqid), "bulk-search").resource_id == str(bulk_tool.pk)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_builtin_server_manager_adopts_refuses_and_requires_one_row(composed_tables: None) -> None:
     """The manager adopts an authored builtin, refuses a foreign name, and never picks among two."""
 
@@ -365,7 +360,6 @@ def test_builtin_server_manager_adopts_refuses_and_requires_one_row(composed_tab
             MCPServer.objects.builtin(create=True)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_m2m_grant_write_is_discarded_with_rolled_back_edit(composed_tables: None) -> None:
     """The on-commit mirror cannot outlive a rolled-back Agent.mcp_tools edit."""
 
@@ -411,7 +405,6 @@ def test_tool_grants_enumerate_the_canonical_catalogue(
     )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -484,7 +477,6 @@ def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
     ) == {tool_grant_ref(str(server.sqid), "query_records").resource_id}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_production_reader_grant_path_advertises_and_executes_generated_tool(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -566,7 +558,6 @@ def test_tool_role_anchor_is_tableless() -> None:
     assert ToolRole._meta.abstract and not ToolRole._meta.managed
 
 
-@pytest.mark.django_db(transaction=True)
 def test_native_tool_error_mapping_and_ceiling(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -659,7 +650,6 @@ def test_builtin_tools_declare_actor_execution_and_missing_meta_fails_closed() -
         require_actor_tool(Tool.from_function(plain_read, meta=ACTOR_EXECUTION_META))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_graphql_read_hint_cannot_override_structural_mutation_posture(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,

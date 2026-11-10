@@ -22,28 +22,57 @@ def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[s
     return field_gate_owners(ModelComposition.discover(app_configs))
 
 
-def emit_permissions(app_configs: Iterable[AppConfig], runtime: Path, *, sources: Mapping[Path, str]) -> None:
-    """Bind temporary merged inputs through the native AppConfig schema seam."""
+def emit_permissions(
+    app_configs: Iterable[AppConfig],
+    runtime: Path,
+    *,
+    sources: Mapping[Path, str] | None = None,
+) -> Mapping[Path, str]:
+    """Bind merged inputs under ``runtime`` through the native AppConfig schema seam.
+
+    ``sources`` defaults to the installed addons' merged permission fragments, the
+    inputs the compiler emits for a composed host; the bound sources are returned.
+    """
 
     from angee.base.permissions import bind_rebac_schema, declared_schema_path, merged_schema_relpath
 
+    configs = tuple(app_configs)
+    if sources is None:
+        # Permission compilation reads Django models; callers run after setup.
+        from angee.base.build import extension_source_map
+
+        sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
     for relative, content in sorted(sources.items()):
         atomic_write(runtime / relative, content.encode("utf-8"))
-    for config in app_configs:
+    for config in configs:
         relative = merged_schema_relpath(config.name)
         path = runtime / relative if relative in sources else declared_schema_path(config)
         bind_rebac_schema(config, path)
+    return sources
 
 
 @pytest.fixture
-def composed_permissions(composed_tables: None, restore_composed_permission_bindings: None, tmp_path: Path) -> None:
-    """Bind installed contributions and let native sync persist their schema."""
+def composed_permissions(restore_composed_permission_bindings: None, tmp_path: Path) -> None:
+    """Bind a test-owned copy of the merged permission inputs, for a test that edits one on disk.
 
-    # Permission compilation reads Django models; fixture execution follows setup.
-    from angee.base.build import extension_source_map
+    The session already binds and synchronizes these inputs; a test that rewrites a
+    bound ``.zed`` edits this copy instead of the session's, and synchronizes the
+    edit itself.
+    """
 
-    configs = list(apps.get_app_configs())
-    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
-    runtime = tmp_path / "permissions"
-    emit_permissions(configs, runtime, sources=sources)
+    emit_permissions(apps.get_app_configs(), tmp_path / "permissions")
+
+
+@pytest.fixture
+def declared_permissions(composed_tables: None, restore_composed_permission_bindings: None) -> None:
+    """Bind and synchronize each app's authored declaration alone, without other addons' fragments.
+
+    For a test asserting the policy an addon declares by itself; every other test
+    reads the composed policy the session baseline synchronizes.
+    """
+
+    from angee.base.permissions import bind_rebac_schema
+
+    for config in apps.get_app_configs():
+        bind_rebac_schema(config, None)
     call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)

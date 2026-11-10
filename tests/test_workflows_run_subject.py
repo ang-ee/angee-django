@@ -14,7 +14,7 @@ from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import RunSubjectRecord, StepRecord, StepRun, WorkflowRun
 from tests.workflow_steps import Echo, document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture
@@ -124,6 +124,7 @@ def test_retry_readmits_and_refusal_keeps_run_and_step_failed(execution, subject
     assert subject.settlements == [{"run": run.pk, "status": RunStatus.FAILED, "output": {}}] * 2
 
 
+@pytest.mark.django_db(transaction=True)
 def test_deleted_subject_stops_its_run(execution, subject):
     actor, sent = execution
     run = WorkflowRun.objects.start(workflow_for(actor), actor=actor, subject=subject)

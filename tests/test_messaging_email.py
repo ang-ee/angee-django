@@ -175,7 +175,6 @@ def test_default_sender_requires_a_configured_transport() -> None:
     assert refused.value.message_dict == {"channel": ["Outbound email delivery is not configured."]}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_outbound_email_admits_every_connected_backend_declaring_configured_email(composed_tables: None) -> None:
     """Email and IMAP channels qualify while email is configured; paused and non-email channels never do."""
 
@@ -198,7 +197,6 @@ def test_outbound_email_admits_every_connected_backend_declaring_configured_emai
                 paused.outbound_sender()
 
 
-@pytest.mark.django_db(transaction=True)
 def test_outbound_email_names_why_its_selection_is_empty(composed_tables: None) -> None:
     """An empty selection is refused with a coded reason: no transport, or no connected channel."""
 

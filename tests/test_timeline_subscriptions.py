@@ -33,7 +33,7 @@ from tests.conftest import SchemaAddon, create_user, vault_for
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def test_timeline_publisher_never_emits_record_updates_and_discards_rollbacks(composed_permissions):
+def test_timeline_publisher_never_emits_record_updates_and_discards_rollbacks(composed_tables):
     record = vault_for(create_user("timeline-publisher"))
     with capture_broadcasts() as records, patch("angee.timeline.events.broadcast_group") as timelines:
         with transaction.atomic():
@@ -52,7 +52,7 @@ def test_timeline_publisher_never_emits_record_updates_and_discards_rollbacks(co
 
 @pytest.mark.parametrize("admitted", [False, True])
 def test_timeline_subscription_authorizes_admission_and_each_delivery(
-    composed_permissions, monkeypatch, tmp_path, admitted,
+    composed_tables, monkeypatch, tmp_path, admitted,
 ):
     owner, reader = create_user("timeline-stream-owner"), create_user("timeline-stream-reader")
     record = vault_for(owner)

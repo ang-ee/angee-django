@@ -291,7 +291,6 @@ def test_publish_checks_step_subject_against_workflow_identity(register_step):
         assert any(issue.code == "subject" and not issue.blocks_draft for issue in issues)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_publish_canonicalizes_mixed_case_step_subject(execution, register_step):
     """A declared model name publishes against the same canonical workflow subject."""
     actor, _ = execution

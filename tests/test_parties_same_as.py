@@ -25,7 +25,6 @@ def _same_as_pair(owner: Any) -> set[Any]:
     return {left.pk, right.pk}
 
 
-@pytest.mark.django_db(transaction=True)
 def test_same_as_pairs_scope_handles_to_the_pinned_actor(composed_tables: None) -> None:
     """A queryset pinned to an actor finds that actor's same_as pairs without an ambient actor."""
 
@@ -38,7 +37,6 @@ def test_same_as_pairs_scope_handles_to_the_pinned_actor(composed_tables: None) 
     assert [{candidate.left.pk, candidate.right.pk} for candidate in candidates] == [pair]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_same_as_pairs_run_under_system_context_without_an_actor(composed_tables: None) -> None:
     """A system scan with no actor at all still finds the pair."""
 
@@ -51,7 +49,6 @@ def test_same_as_pairs_run_under_system_context_without_an_actor(composed_tables
     assert [{candidate.left.pk, candidate.right.pk} for candidate in candidates] == [pair]
 
 
-@pytest.mark.django_db(transaction=True)
 def test_merge_scalar_fields_admit_person_choices_only_between_people(composed_tables: None) -> None:
     """Merge validation and its GraphQL metadata share the row's declared scalar choices."""
 

@@ -24,9 +24,9 @@ from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
-from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("size", (100, 1500))
 def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half(
     campaign_access,

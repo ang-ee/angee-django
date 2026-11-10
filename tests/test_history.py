@@ -183,7 +183,7 @@ def test_native_bulk_history_defaults_reach_every_tracked_mti_table(composed_tab
 
 
 @pytest.mark.entrypoint_boundaries
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_native_bulk_capture_can_be_unattributed_when_storage_policy_allows(settings):
     from rebac import system_context
 

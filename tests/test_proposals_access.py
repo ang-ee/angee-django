@@ -31,14 +31,13 @@ from angee.projects.testing.models import Project, Task
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import Backend, Drive, create_platform_admin
 from tests.proposals_models import Answer, Proposal, Round, Topic
-from tests.test_project_access import project_access_schema as project_access_schema
 
 
 @pytest.fixture
-def proposal_schema(project_access_schema: Any) -> None:
+def proposal_schema(composed_tables: Any) -> None:
     """Synchronize the composed proposal schema."""
 
-    del project_access_schema
+    del composed_tables
 
 
 def _grant(resource: Any, relation: str, subject: Any) -> None:
@@ -55,7 +54,6 @@ def _create_proposal(*, actor: Any, round: Round, responder: Any) -> Proposal:
         return Proposal.objects.insert(proposal)
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("target_kind", ("project", "task"))
 def test_proposals_follow_admission_and_scope_hierarchy(
     proposal_schema: None,
@@ -195,7 +193,6 @@ def test_proposals_follow_admission_and_scope_hierarchy(
     }
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("model_name", ("round", "topic", "proposal"))
 def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
     proposal_schema: None,
@@ -255,7 +252,6 @@ def _review_round(admin, *, policy="drafts_and_tracks", **fields):
     return round
 
 
-@pytest.mark.django_db(transaction=True)
 def test_submit_attributes_receipt_to_the_pinned_actor_over_the_ambient_actor(proposal_schema):
     admin = create_platform_admin("submit-pinned-manager")
     user_model = apps.get_model("iam", "User")
@@ -271,7 +267,6 @@ def test_submit_attributes_receipt_to_the_pinned_actor_over_the_ambient_actor(pr
     assert stored.updated_by_id == admin.pk
 
 
-@pytest.mark.django_db(transaction=True)
 def test_disclosure_excludes_preopening_withdrawal_and_hides_peer_identity(proposal_schema):
     admin = create_platform_admin("disclosure-manager")
     user_model = apps.get_model("iam", "User")
@@ -302,7 +297,6 @@ def test_disclosure_excludes_preopening_withdrawal_and_hides_peer_identity(propo
     assert bob_proposal.with_actor(bob).has_access("read__responder")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_retirement_cleans_peer_tracks_and_excludes_group_shared_answers(proposal_schema, settings):
     admin = create_platform_admin("retirement-manager")
     user_model = apps.get_model("iam", "User")
@@ -346,7 +340,6 @@ def test_retirement_cleans_peer_tracks_and_excludes_group_shared_answers(proposa
         round.with_actor(admin).remove_responder(admin)
 
 
-@pytest.mark.django_db(transaction=True)
 def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
     admin = create_platform_admin("question-manager")
     user_model = apps.get_model("iam", "User")
@@ -377,7 +370,6 @@ def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
             row.save(update_fields=("visibility",))
 
 
-@pytest.mark.django_db(transaction=True)
 def test_task_holder_ceiling_asks_the_round_only_for_track_items(proposal_schema, settings, monkeypatch):
     """A track task keeps the requester out through its round; a question on the
     round's target project never consults that project's own holder policy."""
@@ -417,7 +409,6 @@ def test_task_holder_ceiling_asks_the_round_only_for_track_items(proposal_schema
     assert question.with_actor(requester).has_access("read")
 
 
-@pytest.mark.django_db(transaction=True)
 def test_answer_insert_cannot_widen_responder_audience(proposal_schema):
     admin = create_platform_admin("answer-manager")
     responder = apps.get_model("iam", "User").objects.create_user(username="answer-responder")
@@ -434,7 +425,6 @@ def test_answer_insert_cannot_widen_responder_audience(proposal_schema):
     assert answer.shared_with_responders
 
 
-@pytest.mark.django_db(transaction=True)
 def test_facilitator_only_publication_does_not_admit_peer_to_track(proposal_schema, settings):
     admin = create_platform_admin("private-track-manager")
     user_model = apps.get_model("iam", "User")

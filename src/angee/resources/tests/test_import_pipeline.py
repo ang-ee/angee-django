@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 import tablib
 from django.contrib.auth import get_user_model
-from django.core.management import call_command
 from django.db import models, transaction
 from django.db.models.fields import NOT_PROVIDED
 from rebac import system_context
@@ -147,7 +146,6 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
         },
     )
     with model_tables((PipelineTag, PipelineItem, PipelineLedger)):
-        call_command("rebac", "sync", verbosity=0)
         relationships = active_relationship_model()._default_manager
         relationship_count = relationships.count()
 

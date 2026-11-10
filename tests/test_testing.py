@@ -61,7 +61,7 @@ assert not settings.configured
     messaging_models, nexus_models, portfolio_models, projects_models,
     sequence_models, spaces_models, tags_models, uom_models, workflow_models,
 ))
-def test_native_database_setup_creates_shared_model_tables(transactional_db: None, shared_models) -> None:
+def test_native_database_setup_creates_shared_model_tables(db: None, shared_models) -> None:
     """Shared tables exist without requesting the permission-sync fixture."""
 
     tables = {
@@ -75,8 +75,8 @@ def test_native_database_setup_creates_shared_model_tables(transactional_db: Non
 
 
 @pytest.mark.parametrize("case", ("first", "second"))
-def test_native_database_cleanup_isolates_shared_models(transactional_db: None, case: str) -> None:
-    """Each native transactional fixture starts with no prior shared-model row."""
+def test_native_database_cleanup_isolates_shared_models(db: None, case: str) -> None:
+    """Each native rollback-isolated test starts with no prior shared-model row."""
 
     with system_context(reason="test native database isolation"):
         assert not Workflow.objects.filter(key="native-table-isolation").exists()

@@ -44,10 +44,10 @@ from tests.recordrefdemo.models import (
 
 
 @pytest.fixture()
-def record_ref_tables(transactional_db: Any) -> Any:
+def record_ref_tables(db: Any) -> Any:
     """Use the probe tables Django creates for the installed ``tests.recordrefdemo`` app."""
 
-    del transactional_db
+    del db
     yield
 
 
@@ -388,10 +388,10 @@ def test_target_delete_nulls_declared_record_edges_from_a_queryset(
     assert (edge.content_type_id, edge.object_id) == (None, None)
 
 
-def test_declared_target_models_read_the_schema_target_relations(composed_permissions: None) -> None:
+def test_declared_target_models_read_the_schema_target_relations(composed_tables: None) -> None:
     """An edge's accepted target types are the schema's `target`-backed relations, by label."""
 
-    del composed_permissions
+    del composed_tables
     assert set(Link.declared_target_models()) == {"projects.project", "projects.task"}
     assert Link.declared_target_model("projects.Task") is Link._meta.apps.get_model("projects", "Task")
     with pytest.raises(ValidationError, match="Link may target only: project, task"):
@@ -399,10 +399,10 @@ def test_declared_target_models_read_the_schema_target_relations(composed_permis
     assert {"projects.task", "storage.drive", "mtidemo.mtiparent"} <= set(FileAttachment.declared_target_models())
 
 
-def test_record_edges_invert_the_declared_targets_into_resource_metadata(composed_permissions: None) -> None:
+def test_record_edges_invert_the_declared_targets_into_resource_metadata(composed_tables: None) -> None:
     """A type carries every edge accepting its canonical type; its resource lists them."""
 
-    del composed_permissions
+    del composed_tables
     index = record_edges_by_target()
     # A task is itself an edge: its subject may be another task.
     assert [edge._meta.label for edge in index[Task]] == [

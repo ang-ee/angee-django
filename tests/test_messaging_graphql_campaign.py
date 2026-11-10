@@ -37,6 +37,7 @@ def campaign_schema():
     return _schema()
 
 
+@pytest.mark.usefixtures("declared_permissions")
 def test_message_only_reader_gets_null_for_every_private_to_one_relation(composed_tables, campaign_schema, tmp_path):
     viewer, owner = make_user("message-viewer"), make_user("private-owner")
     with system_context(reason="test.messaging.graphql.relations"):

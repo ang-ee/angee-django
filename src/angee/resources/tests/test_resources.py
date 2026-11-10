@@ -1954,7 +1954,6 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
     """
 
     from django.contrib.auth import get_user_model
-    from django.core.management import call_command
     from rebac import to_subject_ref
     from rebac.models import active_relationship_model
 
@@ -1981,8 +1980,7 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
 
     user_model = get_user_model()
     with model_tables((GrantLoadLedger,)):
-        # Grants are validated against the composed REBAC schema on write.
-        call_command("rebac", "sync", verbosity=0)
+        # Grants are validated on write against the session's composed REBAC schema.
         with system_context(reason="grant load setup"):
             alice = user_model.objects.create(username="grant-alice")
         with system_context(reason="test.resources.ledger_seed"):
@@ -2051,7 +2049,6 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
     """Dependent rows and hooks see grants; failed imports and dry runs roll them back."""
 
     from django.core.exceptions import ValidationError
-    from django.core.management import call_command
     from rebac.models import active_relationship_model
 
     def grant_exists() -> bool:
@@ -2100,7 +2097,6 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
         {"path": "grants.yaml", "kind": "grants"},
     )})
     with model_tables((GrantDependentRow, OrderedGrantLedger)):
-        call_command("rebac", "sync", verbosity=0)
         def load(*, dry_run=False):
             return OrderedGrantLedger.objects.load_addons(
                 (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True, dry_run=dry_run,
@@ -2170,7 +2166,6 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     """
 
     from django.contrib.auth import get_user_model
-    from django.core.management import call_command
     from rebac import ObjectRef, to_object_ref, to_subject_ref
     from rebac.backends import backend
     from rebac.models import active_relationship_model
@@ -2189,8 +2184,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
     user_model = get_user_model()
     with model_tables((MtiGrantLedger,)):
-        # Grants are checked against the composed REBAC schema on read; sync loads it.
-        call_command("rebac", "sync", verbosity=0)
+        # Grants are checked on read against the session's composed REBAC schema.
         with system_context(reason="mti grant setup"):
             child = MtiChild.objects.create(title="Acme", detail="org")
             plain = MtiParent.objects.create(title="Plain")
@@ -2278,7 +2272,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     ],
     ids=["shared", "child-only", "different-subject", "field-backed", "const-backed"],
 )
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_mti_grants_follow_ancestor_relation_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parent_relation: str, expected_parent: bool
 ) -> None:
@@ -2316,7 +2310,7 @@ def test_mti_grants_follow_ancestor_relation_contract(
     assert all(grant.subject == subject and grant.relation == "reviewer" for grant in tuples)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_invalid_explicit_mti_grant_still_fails_native_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

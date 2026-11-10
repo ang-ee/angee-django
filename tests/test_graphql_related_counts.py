@@ -18,7 +18,7 @@ from angee.graphql.related_counts import RelatedCount, check_related_counts, cou
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import Backend, Drive, File, Page, addon_schema, create_user, vault_for
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.django_db
 
 QUERY = """query($model: String!, $id: ID!, $groups: [String!]!) {
   related_counts(model: $model, id: $id, groups: $groups) { group count }
@@ -95,6 +95,7 @@ def count_and_reads(captured):
     return [sql for sql in statements if "COUNT(" in sql], [sql for sql in statements if "COUNT(" not in sql]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_every_applicable_group_shares_one_count_statement(schema, referenced):
     owner, _outsider, _records, decisions = referenced
     # Measured warm, as document budgets are: Django caches each content type on first use.

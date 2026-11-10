@@ -36,7 +36,6 @@ from tests.conftest import Page, Vault, create_platform_admin, make_integration
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
-from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 from tests.test_zed_extensions import _addon, _apply_emitted_schema_paths, _contrib_addon
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)

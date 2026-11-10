@@ -11,9 +11,8 @@ from tests.test_messaging_source_threads import sourced as sourced  # noqa: F401
 from tests.test_timeline import timeline_entries
 from tests.test_timeline_occurs import assert_branch_omitted, assert_occurs
 
-pytestmark = pytest.mark.django_db(transaction=True)
 
-
+@pytest.mark.django_db(transaction=True)
 def test_comments_elsewhere_do_not_compile_a_branch(comment_record, monkeypatch):
     record, author = comment_record.record, comment_record.author
     with actor_context(author):
@@ -43,6 +42,7 @@ def test_comment_probe_includes_messages_on_a_redirected_thread(comment_record, 
     assert_occurs(kind, survivor, False, author)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_source_attachments_elsewhere_do_not_compile_a_branch(sourced, monkeypatch):
     owner, record, thread = sourced["owner"], sourced["task"], sourced["thread"]
     with actor_context(owner):

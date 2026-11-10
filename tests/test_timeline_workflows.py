@@ -30,7 +30,7 @@ from tests.test_workflows_review import review as review  # noqa: F401 -- shared
 from tests.test_workflows_review import start_review
 from tests.workflow_steps import document
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +41,7 @@ def kinds(settings):
     ]
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("viewer", ["admin", "member"])
 def test_timeline_read_planner_memory(review, settings, viewer, record_property):
     """Budget the actual page statement, with a waiting run and folded and standalone decisions."""
@@ -162,6 +163,7 @@ def test_run_follows_execution_without_an_explicit_projection(execution) -> None
     assert next(kind["count"] for kind in data["timeline"]["kinds"] if kind["id"] == "workflows.run") == 0
 
 
+@pytest.mark.django_db(transaction=True)
 def test_waiting_run_folds_readable_children_and_computes_attention(review) -> None:
     actor, reviewers, sent, question = review
     batches = []
@@ -216,6 +218,7 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
 
 
+@pytest.mark.django_db(transaction=True)
 def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(review) -> None:
     _, reviewers, sent, question = review
     run, step = start_review(review)
@@ -241,6 +244,7 @@ def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(rev
     assert not data["timeline"]["entries"][0]["needs_me"]
 
 
+@pytest.mark.django_db(transaction=True)
 def test_later_step_decision_link_folds_the_question_and_claims_are_silent(review) -> None:
     actor, reviewers, _, question = review
     subject = question.review_subject
@@ -281,6 +285,7 @@ def test_later_step_decision_link_folds_the_question_and_claims_are_silent(revie
     assert {child.kind: child.count for child in line.children}["decisions.decision"] == 1
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("assigned", [True, False])
 def test_each_committed_workflow_wait_refreshes_the_inherited_timeline(
     execution, register_step, assigned,

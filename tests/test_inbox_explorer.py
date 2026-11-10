@@ -50,6 +50,7 @@ def test_same_named_conversations_keep_identity_and_show_source_context():
         assert all(row.platform == "email" and row.account == account.display_name for row in groups.rows)
 
 
+@pytest.mark.usefixtures("declared_permissions")
 def test_file_backlinks_allow_empty_files_and_deduplicate_authorized_messages(tmp_path):
     owner = User.objects.create_user(username="explorer-file-uses")
     other = User.objects.create_user(username="explorer-file-hidden")
