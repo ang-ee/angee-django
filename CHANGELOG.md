@@ -10,6 +10,25 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Timeline invalidations use `timelineChanged(model: String!, id: ID!): Boolean!`
+  on the console schema, with the timeline read's record authorization at
+  admission and each delivery. Synthetic record-feed updates are removed.
+  The rail and attention read use Refine's shared 300 ms / 2 s coalescer over
+  their own query keys, so workflow/provenance activity no longer refreshes
+  unrelated inbox reads of the record's model.
+  The existing Refine patch makes native subscription effects track their
+  channel, arguments, provider and callback across navigation, removing the
+  actor-keyed user-preferences remount workaround.
+- Download tokens use Django timestamp signatures aligned to 300-second windows.
+  URLs are stable within each window; the 900-second maximum age leaves
+  600–900 seconds of validity from issue. Download lookup still checks expiry
+  and the issuing actor's current read permission. URLs include the content
+  digest for cache versioning. Preview renderers and storage gallery images
+  retain their loaded URL by public file ID plus digest across token rollover;
+  changed content or a different file loads the current URL.
+- The provenance typing plugin preserves its declared protocol when Django
+  has no configured storage setting; it does not invent that setting. Bare-host
+  fixtures declare the required settings of the capabilities they exercise.
 - Source retirement: `ChangesetQuerySet.history_written_only_by(record, predicate)`
   shares document history selection with `touching_filter`, requires a creation
   snapshot and refuses unmatched or unattributed writes. The reference owner adds

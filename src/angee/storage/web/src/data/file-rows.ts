@@ -55,6 +55,7 @@ export function folderScopeToParam(scope: string): string | undefined {
 export interface StorageFileRow extends Record<string, unknown> {
   id: string;
   filename: string;
+  content_hash: string;
   title: string;
   size_bytes: number;
   upload_state: string;

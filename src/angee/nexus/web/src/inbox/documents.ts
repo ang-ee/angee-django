@@ -139,6 +139,7 @@ export const InboxResultRowFields = graphql(`
     file {
       id
       filename
+      content_hash
       url
       size_bytes
       mime_type {
@@ -248,6 +249,7 @@ export const InboxRelatedTarget = graphql(`
       file {
         id
         filename
+        content_hash
         url
         size_bytes
         mime_type {

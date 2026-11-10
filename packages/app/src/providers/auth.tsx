@@ -502,6 +502,14 @@ export function UserPreferencesProvider({
     },
     [queryClient, queue, userId],
   );
+  useSubscription({
+    channel: `angee/user-preferences/${userId}`,
+    params: { models: USER_PREFERENCES_LIVE_MODELS },
+    types: ["updated"],
+    enabled: userId !== null && !previewBlocked,
+    onLiveEvent: onPreferencesChange,
+    meta: { dataProviderName },
+  });
 
   useEffect(() => {
     queue.open();
@@ -533,41 +541,9 @@ export function UserPreferencesProvider({
   );
   return (
     <UserPreferencesContext.Provider value={value}>
-      {userId && !previewBlocked ? (
-        <UserPreferencesSubscription
-          key={userId}
-          userId={userId}
-          dataProviderName={dataProviderName}
-          onLiveEvent={onPreferencesChange}
-        />
-      ) : null}
       {children}
     </UserPreferencesContext.Provider>
   );
-}
-
-interface UserPreferencesSubscriptionProps {
-  userId: string;
-  dataProviderName?: string;
-  onLiveEvent: (event: LiveEvent) => void;
-}
-
-function UserPreferencesSubscription({
-  userId,
-  dataProviderName,
-  onLiveEvent,
-}: UserPreferencesSubscriptionProps): null {
-  // Refine's subscription effect re-subscribes only when ``enabled`` changes;
-  // the actor-keyed child remount makes the user-bound callback honest.
-  useSubscription({
-    channel: `angee/user-preferences/${userId}`,
-    params: { models: USER_PREFERENCES_LIVE_MODELS },
-    types: ["updated"],
-    enabled: true,
-    onLiveEvent,
-    meta: { dataProviderName },
-  });
-  return null;
 }
 
 /**

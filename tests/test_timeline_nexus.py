@@ -187,18 +187,17 @@ def test_nexus_observes_party_descendants_and_merge_redirects(correspondence, su
     survivor = model._base_manager.create(
         display_name="Survivor", owner=data.parent.owner, created_by=data.parent.owner,
     )
-    with capture_broadcasts() as broadcasts:
+    with capture_broadcasts() as broadcasts, patch("angee.timeline.events.broadcast_group") as timelines:
         data.handle.party = source
         data.handle.save(update_fields=["party"])
         assert timeline_entries(source, data.actor)
-        # Inherited record panes use their canonical Party feed; they gain no
-        # undeclared Person/Organization transport just by contributing a kind.
-        assert any(
-            payload["model"] == "parties.Party" and payload["id"] == public_id_of(source)
-            and {"model": "parties.Party", "id": public_id_of(source)} in payload.get("related_records", ())
-            for payload in broadcasts
-        ), broadcasts
-        assert all(payload["model"] != model._meta.label for payload in broadcasts)
+        # Canonical and inherited timeline views get their own notifications;
+        # the handle edit does not pretend that either record was updated.
+        assert any(call.args[1] == {"model": "parties.Party", "id": public_id_of(source)}
+                   for call in timelines.call_args_list)
+        assert any(call.args[1] == {"model": model._meta.label, "id": public_id_of(source)}
+                   for call in timelines.call_args_list)
+        assert all(payload["model"] not in {"parties.Party", model._meta.label} for payload in broadcasts)
         source.is_trashed = True
         source.save(update_fields=["is_trashed"])
         assert timeline_entries(source, data.actor) == []
@@ -217,12 +216,12 @@ def test_reassignment_invalidates_old_and_new_records_after_commit(correspondenc
     data = correspondence
     observed = []
 
-    def broadcast(model, payload):
-        if model._meta.label == "parties.Party":
+    def broadcast(group, payload):
+        if payload["model"] == "parties.Party":
             assert not connection.in_atomic_block
             observed.append(payload["id"])
 
-    with capture_broadcasts(observer=broadcast), transaction.atomic():
+    with patch("angee.timeline.events.broadcast_group", side_effect=broadcast), transaction.atomic():
         data.handle.party = data.other
         data.handle.save(update_fields=["party"])
         assert observed == []

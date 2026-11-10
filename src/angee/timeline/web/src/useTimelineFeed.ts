@@ -1,7 +1,7 @@
 import { useAuth } from "@angee/app";
 import { useAuthoredKeysetFeed, type AuthoredVariables } from "@angee/refine";
 
-import { TimelineDocument } from "./documents.console";
+import { TimelineChangedDocument, TimelineDocument } from "./documents.console";
 
 type Variables = Omit<AuthoredVariables<typeof TimelineDocument>, "before">;
 
@@ -12,6 +12,7 @@ export function useTimelineFeed(variables: Variables) {
     enabled: Boolean(variables.model && variables.id),
     models: [variables.model],
     records: [{ model: variables.model, id: String(variables.id) }],
+    subscription: { document: TimelineChangedDocument, variables: { model: variables.model, id: variables.id } },
     pageSize: variables.limit ?? 25,
     window: {
       document: TimelineDocument,
