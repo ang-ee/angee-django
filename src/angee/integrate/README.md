@@ -59,14 +59,19 @@ The adapter's `StreamDefinition` declaration owns every stream policy knob.
 Its `authoritative` flag marks the source as the system of record for
 what the stream states (`SyncStream.authoritative`, read by statement survivorship);
 changing it re-derives the linked subjects through `SyncStreamManager.set_authoritative`.
-Direction or snapshot changes open a new baseline generation and retain links,
-policy and failures. Adapter-private deletion policy remains in stream `config`.
+Direction, snapshot or newer mapping-version declarations open a new baseline
+generation and retain links, policy and failures. Adapter-private deletion policy
+remains in stream `config`.
 A changed declaration reaches an existing stream when a drain opens it:
 [`open_stream`](streams.py) always reconciles the stream with its declaration, on
 the generic sync and on a workflow cycle alike. What reaches it is limited to the
 declaration's facts: `authoritative` flips and re-derives, a changed `direction` or
-`snapshot` opens a new baseline generation (a full re-read of that stream), and a
-changed `kind` is refused. `cursor`, `reconcile_interval`, `absence_threshold`,
+`snapshot` or increased `mapping_version` opens a new baseline generation (a full
+re-read of that stream), and a changed `kind` is refused. The generation records
+its mapping version, so reopening
+the same declaration preserves progress; an older declaration cannot lower it.
+Adapters declare the version in `StreamDefinition` and use it in their record and
+applied evidence. `cursor`, `reconcile_interval`, `absence_threshold`,
 `tombstone_retention` and `config` seed the first generation only; changing them in
 a declaration never changes an existing stream.
 A declared snapshot with no reconciliation interval closes after its baseline;

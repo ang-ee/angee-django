@@ -55,7 +55,7 @@ def _actor_user_id(instance: models.Model) -> Any | None:
     return actor_user_id(actor if actor is not None else current_actor())
 
 
-def _user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
+def user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
     """Return the REBAC subject ref for a user instance or a bare user id.
 
     The user model owns its subject identity, so a bare ``user_id`` is loaded and

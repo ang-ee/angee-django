@@ -358,10 +358,9 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
     """
 
     @classmethod
-    def retained_reference_exists(cls, record: models.Model, lookup: Mapping[str, Any]) -> bool:
+    def retained_reference_exists(cls, lookup: Mapping[str, Any]) -> bool:
         """Include stored pointer versions even while capture is disabled."""
 
-        del record
         return get_history_manager_for_model(cls).filter(**lookup).exists()
 
     @classmethod

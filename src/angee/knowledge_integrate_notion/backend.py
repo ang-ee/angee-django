@@ -226,7 +226,7 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Keep one identity namespace even when pages move between data sources."""
         self.bridge.ensure_vault()
-        return (StreamDefinition("pages", kind=StreamKind.RECORD_REPLICA),)
+        return (StreamDefinition("pages", kind=StreamKind.RECORD_REPLICA, mapping_version=4),)
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Commit each bounded batch with its continuation; search absence never deletes."""
@@ -402,7 +402,7 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                     node.last_edited_time.isoformat(),
                     target=target,
                     projection=self._projection(target),
-                    mapping_version=4,
+                    mapping_version=stream.mapping_version,
                     mapped_payload=mapped,
                     dependency_digest=canonical_json_sha256([mapped["parent"], resolved_links]),
                     tombstone=node.is_trashed,

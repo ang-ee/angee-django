@@ -10,6 +10,7 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.graphql.testing import capture_broadcasts
 from angee.projects.testing.models import Task
 from angee.tags.testing.models import Tag
 from angee.timeline.reading import Timeline
@@ -121,7 +122,7 @@ def test_unassigned_attention_uses_answer_permission_without_claiming_others_ass
     assert read_timeline(subject, reviewer)["timeline_attention"] == 1
 
 
-def test_subscribers_read_committed_sources_at_the_change_broadcast(people, monkeypatch) -> None:
+def test_subscribers_read_committed_sources_at_the_change_broadcast(people) -> None:
     subject = people[3]
     seen = []
 
@@ -130,8 +131,8 @@ def test_subscribers_read_committed_sources_at_the_change_broadcast(people, monk
             assert not transaction.get_connection().in_atomic_block
             seen.append([line.target_id for line in timeline_entries(subject, people[1])])
 
-    monkeypatch.setattr("angee.graphql.publishing._broadcast", broadcast)
-    question = ask(people)
+    with capture_broadcasts(observer=broadcast):
+        question = ask(people)
     assert seen == [[public_id_of(question)]]
 
 
@@ -170,11 +171,9 @@ def test_merge_keeps_one_occurrence_on_the_survivor(composed_permissions, both_r
     assert len(timeline_entries(survivor, reviewer)) == 1
 
 
-def test_rollback_discards_invalidations_and_source_rows(people, monkeypatch):
+def test_rollback_discards_invalidations_and_source_rows(people):
     _, reviewer, _, subject = people
-    broadcasts = []
-    monkeypatch.setattr("angee.graphql.publishing._broadcast", lambda model, payload: broadcasts.append(payload))
-    with transaction.atomic():
+    with capture_broadcasts() as broadcasts, transaction.atomic():
         with pytest.raises(ValueError, match="rollback"):
             with transaction.atomic():
                 ask(people)

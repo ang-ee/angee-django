@@ -508,6 +508,66 @@ def test_mapping_evidence_change_reapplies_unchanged_source(
         assert getattr(revision, name) == expected
 
 
+@pytest.mark.parametrize("snapshot", [False, True])
+def test_new_mapping_declaration_replays_applied_rows_once(stream_bridge: Channel, snapshot: bool) -> None:
+    class MappingAdapter(MemoryAdapter):
+        mapping_version = 1
+
+        def streams(self, *, deadline=None):
+            return (StreamDefinition(
+                "records", kind=StreamKind.RECORD_REPLICA, snapshot=snapshot, mapping_version=self.mapping_version,
+            ),)
+
+        def extract(self, stream, page_bound, *, deadline=None):
+            # A delta cursor never redelivers this unchanged remote row.
+            target = AppliedRecord.objects.filter(key="person:1").first()
+            records = () if stream.cursor else (RecordChange(
+                "person:1", {"name": "Ada"}, "unchanged-source", mapped_payload={"name": "Ada"},
+                target=target, projection=target.payload if target else None, mapping_version=stream.mapping_version,
+            ),)
+            return StreamPage(records, {"done": True})
+
+    adapter = MappingAdapter()
+    adapter.integration = stream_bridge
+    initial = open_stream(stream_bridge, "records", "", adapter)
+    assert advance_stream(initial, adapter).count == 1
+    link = RecordLink.objects.get(stream=initial)
+    target_id = link.target_object_id
+
+    adapter.mapping_version = 2
+    upgraded = open_stream(stream_bridge, "records", "", adapter)
+    assert upgraded.generation == initial.generation + 1
+    assert upgraded.mapping_version == 2 and upgraded.cursor == {}
+    assert upgraded.phase == StreamPhase.BASELINE
+    assert open_stream(stream_bridge, "records", "", adapter).pk == upgraded.pk
+
+    # A failed first page retains the requested generation for the next open.
+    adapter.infrastructure_key = "person:1"
+    with pytest.raises(OperationalError, match="database unavailable"):
+        advance_stream(upgraded, adapter)
+    retried = open_stream(stream_bridge, "records", "", adapter)
+    assert retried.pk == upgraded.pk and retried.cursor == {}
+    adapter.infrastructure_key = ""
+    assert advance_stream(retried, adapter).count == 1
+    link.refresh_from_db()
+    assert link.stream_id == upgraded.pk and link.target_object_id == target_id
+    assert link.last_verified_generation == upgraded.generation
+    assert link.mapping_version == 2 and applied_history().count() == 2
+
+    # Reopening the same declaration or an older deployment never resets progress.
+    for version in (2, 1):
+        adapter.mapping_version = version
+        current = open_stream(stream_bridge, "records", "", adapter)
+        assert (current.pk, current.mapping_version, current.cursor) == (upgraded.pk, 2, {"done": True})
+    assert SyncStream.objects.count() == 2 and RecordLink.objects.count() == 1
+
+    # An explicit later reset carries the mapping, rather than triggering another upgrade.
+    reset = SyncStream.objects.bump_generation(current)
+    assert reset.mapping_version == 2
+    adapter.mapping_version = 2
+    assert open_stream(stream_bridge, "records", "", adapter).pk == reset.pk
+
+
 @pytest.mark.parametrize(("remote_version", "snapshots"), [("v1", 1), ("v2", 2)])
 def test_unchanged_redelivery_snapshots_only_what_changed(
     stream_bridge: Channel, remote_version: str, snapshots: int

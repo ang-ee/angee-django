@@ -15,6 +15,7 @@ from angee.base.signals import bulk_updated, change_published
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql import publishing
+from angee.graphql.testing import capture_broadcasts
 from angee.provenance.context import changeset
 from angee.timeline.reading import Timeline
 from angee.workflows.decision_steps import DecisionStep
@@ -309,29 +310,29 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
             # Read exactly when a subscriber receives the committed invalidation.
             snapshots.append(read_timeline(subject, actor))
 
-    monkeypatch.setattr("angee.graphql.publishing._broadcast", broadcast)
-    workflow = load_workflow({
-        "nodes": {
-            "first": {"step": Question.key, "label": "First review", "next": {"done": ["second"]}},
-            "second": {"step": Question.key, "label": "Second review"},
-        },
-        "results": [{"from": "second", "when": ["done"], "as": "done"}],
-    }, key="timeline-committed-waits", actor=actor)
-    run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
-    for node in ("first", "second"):
-        snapshots.clear()
+    with capture_broadcasts(observer=broadcast):
+        workflow = load_workflow({
+            "nodes": {
+                "first": {"step": Question.key, "label": "First review", "next": {"done": ["second"]}},
+                "second": {"step": Question.key, "label": "Second review"},
+            },
+            "results": [{"from": "second", "when": ["done"], "as": "done"}],
+        }, key="timeline-committed-waits", actor=actor)
+        run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
+        for node in ("first", "second"):
+            snapshots.clear()
+            run_until(run)
+            step = StepRun.system_queryset().get(run=run, node_key=node)
+            event, = timeline_entries(subject, actor, kind="workflows.run")
+            assert event.detail == f"Waiting · {step.node_label}"
+            assert snapshots, "The declared child feed must refresh after the source write commits."
+            page = snapshots[-1]
+            assert page["timeline_attention"] == page["timeline"]["needs_me"] == 1
+            (line,) = page["timeline"]["entries"]
+            assert line["detail"] == event.detail and line["needs_me"]
+            assert {"kind": "decisions.decision", "count": 1 if node == "first" else 2} in line["children"]
+            decide(step.decision, actor=actor, chosen=["done"])
+            assert deliver_decision_wakes(sent, step.decision_id) == [1]
         run_until(run)
-        step = StepRun.system_queryset().get(run=run, node_key=node)
-        event, = timeline_entries(subject, actor, kind="workflows.run")
-        assert event.detail == f"Waiting · {step.node_label}"
-        assert snapshots, "The declared child feed must refresh after the source write commits."
-        page = snapshots[-1]
-        assert page["timeline_attention"] == page["timeline"]["needs_me"] == 1
-        (line,) = page["timeline"]["entries"]
-        assert line["detail"] == event.detail and line["needs_me"]
-        assert {"kind": "decisions.decision", "count": 1 if node == "first" else 2} in line["children"]
-        decide(step.decision, actor=actor, chosen=["done"])
-        assert deliver_decision_wakes(sent, step.decision_id) == [1]
-    run_until(run)
-    assert snapshots[-1]["timeline_attention"] == 0
-    assert snapshots[-1]["timeline"]["entries"][0]["detail"] == "Succeeded"
+        assert snapshots[-1]["timeline_attention"] == 0
+        assert snapshots[-1]["timeline"]["entries"][0]["detail"] == "Succeeded"

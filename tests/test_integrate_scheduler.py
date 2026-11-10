@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from django.db import connection, transaction
+from django.db import close_old_connections, connection, connections, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import system_context
@@ -1002,3 +1003,35 @@ def test_scheduled_admission_uses_the_schedulers_single_row_lock(transactional_d
         if "FOR UPDATE" in query["sql"] and bridge._meta.db_table in query["sql"]
     ]
     assert len(locks) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires PostgreSQL skip-locked row semantics")
+def test_scheduler_skips_row_locked_bridge_and_enqueues_other_due_bridges(transactional_db, monkeypatch):
+    now = timezone.now()
+    enqueued = []
+    monkeypatch.setattr(SchedulerBridge, "request_sync", lambda self, **kwargs: enqueued.append(self.pk))
+    with system_context(reason="test.scheduler.locked_rows"):
+        locked = make_integration("locked-due", model=SchedulerBridge, next_sync_at=now)
+        available = make_integration("available-due", model=SchedulerBridge, next_sync_at=now)
+
+    def schedule():
+        close_old_connections()
+        try:
+            # A regression must fail promptly, not hang behind this test's lock.
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout = '1s'")
+            return enqueue_due_bridges(now=now)
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            SchedulerBridge._base_manager.lock_if_supported().get(pk=locked.pk)
+            assert pool.submit(schedule).result(timeout=10) == {"enqueued": 1, "skipped": 1}
+            assert enqueued == [available.pk]
+            locked.refresh_from_db()
+            assert locked.next_sync_at == now and locked.sync_stage == Bridge.SyncStage.IDLE
+
+    assert enqueue_due_bridges(now=now) == {"enqueued": 1, "skipped": 0}
+    assert enqueued == [available.pk, locked.pk]

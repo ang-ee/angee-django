@@ -586,8 +586,13 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         set them by name.
         """
 
+        return self.fill_discovery_fields(discovery, self.DISCOVERY_ENDPOINT_FIELDS)
+
+    def fill_discovery_fields(self, discovery: Mapping[str, Any], fields: Mapping[str, str]) -> bool:
+        """Fill declared blank fields without replacing explicit configuration."""
+
         changed = False
-        for field, key in self.DISCOVERY_ENDPOINT_FIELDS.items():
+        for field, key in fields.items():
             if getattr(self, field, ""):
                 continue
             value = discovery.get(key)
@@ -4225,6 +4230,8 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         Cursor and policy arguments seed only the first epoch; subsequent calls
         preserve persisted progress and policy. Kind is immutable; direction or
         snapshot changes start a new baseline generation with the persisted policy.
+        A newer mapping version also starts one baseline: its persisted version
+        makes repeated opens idempotent and revisits already-applied identities.
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
         flips it from inside a page.
@@ -4232,6 +4239,8 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
 
         if definition.absence_threshold < 1:
             raise ValidationError("A stream absence threshold must be positive.")
+        if definition.mapping_version < 1:
+            raise ValidationError("A stream mapping version must be positive.")
         integration_model = self.model.integration.field.related_model
         if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
@@ -4247,11 +4256,16 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 return self.create(integration_id=bridge.pk, **definition.stream_fields())
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
-            if stream.direction != definition.direction or stream.snapshot != definition.snapshot:
+            if (
+                stream.direction != definition.direction
+                or stream.snapshot != definition.snapshot
+                or definition.mapping_version > stream.mapping_version
+            ):
                 stream = self.bump_generation(
                     stream,
                     direction=definition.direction,
                     snapshot=definition.snapshot,
+                    mapping_version=max(stream.mapping_version, definition.mapping_version),
                 )
             change_authority = stream.authoritative != definition.authoritative
         return self.set_authoritative(stream, definition.authoritative) if change_authority else stream
@@ -4263,6 +4277,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         cursor: dict[str, Any] | None = None,
         direction: StreamDirection | None = None,
         snapshot: bool | None = None,
+        mapping_version: int | None = None,
     ) -> Any:
         """Create one new baseline while retaining identities and history.
 
@@ -4279,6 +4294,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 cursor={} if cursor is None else cursor,
                 direction=latest.direction if direction is None else direction,
                 snapshot=latest.snapshot if snapshot is None else snapshot,
+                mapping_version=latest.mapping_version if mapping_version is None else mapping_version,
             )
             successor = self.create(
                 integration_id=latest.integration_id,
@@ -4402,6 +4418,8 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     flip is a re-derivation, never a migration.
     """
     generation = models.PositiveIntegerField(default=1)
+    mapping_version = models.PositiveIntegerField(default=1)
+    """The declared mapping this generation applies, retained across cursor resets."""
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
     cursor = models.JSONField(default=dict, blank=True)

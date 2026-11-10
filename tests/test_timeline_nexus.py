@@ -17,6 +17,7 @@ from rebac import actor_context, system_context
 from angee.base.models.identity import public_id_of
 from angee.base.refs import generic_pointer_target
 from angee.base.signals import mute_changes, publish_change
+from angee.graphql.testing import capture_broadcasts
 from angee.nexus.timeline import CORRESPONDENCE_KIND, CorrespondenceKind
 from angee.timeline.kinds import timeline_kinds
 from tests.conftest import create_platform_admin
@@ -179,41 +180,40 @@ def test_nexus_ignores_unread_fields_before_target_discovery(correspondence) -> 
 
 
 @pytest.mark.parametrize("subtype", ["Person", "Organization"])
-def test_nexus_observes_party_descendants_and_merge_redirects(correspondence, subtype, monkeypatch) -> None:  # noqa: ANN001
+def test_nexus_observes_party_descendants_and_merge_redirects(correspondence, subtype) -> None:  # noqa: ANN001
     data = correspondence
     model = apps.get_model("parties", subtype)
     source = model._base_manager.create(display_name="Source", owner=data.parent.owner, created_by=data.parent.owner)
     survivor = model._base_manager.create(
         display_name="Survivor", owner=data.parent.owner, created_by=data.parent.owner,
     )
-    broadcasts = []
-    monkeypatch.setattr("angee.graphql.publishing._broadcast", lambda model, payload: broadcasts.append(payload))
-    data.handle.party = source
-    data.handle.save(update_fields=["party"])
-    assert timeline_entries(source, data.actor)
-    # Inherited record panes use their canonical Party feed; they gain no
-    # undeclared Person/Organization transport just by contributing a kind.
-    assert any(
-        payload["model"] == "parties.Party" and payload["id"] == public_id_of(source)
-        and {"model": "parties.Party", "id": public_id_of(source)} in payload.get("related_records", ())
-        for payload in broadcasts
-    ), broadcasts
-    assert all(payload["model"] != model._meta.label for payload in broadcasts)
-    source.is_trashed = True
-    source.save(update_fields=["is_trashed"])
-    assert timeline_entries(source, data.actor) == []
-    source.is_trashed = False
-    source.save(update_fields=["is_trashed"])
-    assert timeline_entries(source, data.actor)
-    # Exercise the actual merge owner, including its bulk handle moves.
-    party = apps.get_model("parties", "Party")
-    with actor_context(data.parent.owner):
-        party.objects.get(pk=survivor.pk).merge(records=[public_id_of(party.objects.get(pk=source.pk))])
-    assert timeline_entries(source, data.actor) == []
-    assert timeline_entries(survivor, data.actor)
+    with capture_broadcasts() as broadcasts:
+        data.handle.party = source
+        data.handle.save(update_fields=["party"])
+        assert timeline_entries(source, data.actor)
+        # Inherited record panes use their canonical Party feed; they gain no
+        # undeclared Person/Organization transport just by contributing a kind.
+        assert any(
+            payload["model"] == "parties.Party" and payload["id"] == public_id_of(source)
+            and {"model": "parties.Party", "id": public_id_of(source)} in payload.get("related_records", ())
+            for payload in broadcasts
+        ), broadcasts
+        assert all(payload["model"] != model._meta.label for payload in broadcasts)
+        source.is_trashed = True
+        source.save(update_fields=["is_trashed"])
+        assert timeline_entries(source, data.actor) == []
+        source.is_trashed = False
+        source.save(update_fields=["is_trashed"])
+        assert timeline_entries(source, data.actor)
+        # Exercise the actual merge owner, including its bulk handle moves.
+        party = apps.get_model("parties", "Party")
+        with actor_context(data.parent.owner):
+            party.objects.get(pk=survivor.pk).merge(records=[public_id_of(party.objects.get(pk=source.pk))])
+        assert timeline_entries(source, data.actor) == []
+        assert timeline_entries(survivor, data.actor)
 
 
-def test_reassignment_invalidates_old_and_new_records_after_commit(correspondence, monkeypatch):
+def test_reassignment_invalidates_old_and_new_records_after_commit(correspondence):
     data = correspondence
     observed = []
 
@@ -222,8 +222,7 @@ def test_reassignment_invalidates_old_and_new_records_after_commit(correspondenc
             assert not connection.in_atomic_block
             observed.append(payload["id"])
 
-    monkeypatch.setattr("angee.graphql.publishing._broadcast", broadcast)
-    with transaction.atomic():
+    with capture_broadcasts(observer=broadcast), transaction.atomic():
         data.handle.party = data.other
         data.handle.save(update_fields=["party"])
         assert observed == []

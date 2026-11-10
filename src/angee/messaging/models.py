@@ -118,10 +118,10 @@ from angee.messaging.mixins import (
     ThreadedModelMixin as ThreadedModelMixin,
 )
 from angee.messaging.mixins import (
-    _user_subject_ref,
+    chatter_record as chatter_record,
 )
 from angee.messaging.mixins import (
-    chatter_record as chatter_record,
+    user_subject_ref,
 )
 from angee.messaging.resources import MessageResource
 from angee.messaging.source_copies import SourceCopyMixin
@@ -765,7 +765,7 @@ class Thread(
         self._grant_declared_record_access(
             Thread.record_access_permission,
             "reader",
-            _user_subject_ref(user=user, user_id=user_id),
+            user_subject_ref(user=user, user_id=user_id),
         )
 
     def revoke_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
@@ -774,7 +774,7 @@ class Thread(
         self._revoke_declared_record_access(
             Thread.record_access_permission,
             "reader",
-            _user_subject_ref(user=user, user_id=user_id),
+            user_subject_ref(user=user, user_id=user_id),
         )
 
 
