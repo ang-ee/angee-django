@@ -66,8 +66,8 @@ export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   errorNotification?: false;
   /** Retain the last result while a new variable set loads, using native Query placeholders. */
   keepPreviousData?: boolean;
-  /** Exact rows whose live changes invalidate this read; omitted keeps model-wide semantics. */
-  records?: readonly { model: string; id: string }[];
+  /** Rows whose live changes invalidate this read; omit an id to match any row of that model. */
+  records?: readonly { model: string; id?: string }[];
   /** Models whose changes match only through their event's related records. */
   relatedModels?: readonly string[];
   /** Native TanStack Query polling policy for durable external operations. */

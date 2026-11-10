@@ -10,6 +10,11 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Native lists accept `relatedModels: readonly string[]` for columns and filter
+  membership derived from related rows. Declared model changes refresh flat,
+  client and grouped lists when `related_records` names any record of the list's
+  model, including records outside the page. They share authored reads' matcher
+  and the existing non-cancelling 300 ms / 2 s live coalescer.
 - Timeline invalidations use `timelineChanged(model: String!, id: ID!): Boolean!`
   on the console schema, with the timeline read's record authorization at
   admission and each delivery. Synthetic record-feed updates are removed.

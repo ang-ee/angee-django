@@ -2,8 +2,9 @@
 
 This directory holds pending version-bump instructions for the publishable
 JavaScript packages. Each note names the affected packages and the size of the
-change. `pnpm version-packages` consumes the notes and updates package versions;
-the configuration disables generated changelogs.
+change. `pnpm version-packages` consumes the notes, updates package versions and
+appends each note to the package's generated `CHANGELOG.md`. The repository's
+root `CHANGELOG.md` remains the framework's own narrative.
 
 Add a note for every consumer-visible change to a publishable package; tests,
 stories and internal refactors need none. The bump is what the change asks of

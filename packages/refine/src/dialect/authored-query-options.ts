@@ -75,7 +75,7 @@ export function authoredQueryOptions<TDocument extends AuthoredDocument>(
   document: TDocument,
   variables?: AuthoredVariables<TDocument>,
   models: readonly string[] = [],
-  records: readonly { model: string; id: string }[] = [],
+  records: readonly { model: string; id?: string }[] = [],
   relatedModels: readonly string[] = [],
   retainPreviousData = false,
 ): UnusedSkipTokenOptions<
@@ -110,7 +110,7 @@ export function sharedAuthoredMeta(
   client: QueryClient,
   queryKey: QueryKey,
   models: readonly string[],
-  records: readonly { model: string; id: string }[] = [],
+  records: readonly { model: string; id?: string }[] = [],
   relatedModels: readonly string[] = [],
   { gcTime }: Pick<QueryOptions, "gcTime"> = {},
 ) {
@@ -146,10 +146,11 @@ export function sharedAuthoredMeta(
   const exactRelatedModels = [...new Set([...previousRelated, ...relatedModels])]
     .filter((model) => !broadModels.includes(model))
     .sort();
+  // Broad direct interest must not discard the targets used by related events.
   const exactRecords = [...new Map([...previousRecords, ...records].map((record) => {
-      const value = record as { model: string; id: string };
+      const value = record as { model: string; id?: string };
       return [`${value.model}:${value.id}`, value];
-    })).values()].filter((record) => !broadModels.includes(record.model));
+    })).values()].filter((record) => exactRelatedModels.length > 0 || !broadModels.includes(record.model));
   if (broadModels.length > 0) meta.angeeBroadModels = broadModels;
   if (exactRelatedModels.length > 0) meta.angeeRelatedModels = exactRelatedModels;
   else delete meta.angeeRelatedModels;
