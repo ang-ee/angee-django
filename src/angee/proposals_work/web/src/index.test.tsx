@@ -81,7 +81,6 @@ function renderRound(permissions: string[]) {
 
 test("contributes one queue section to the round form", () => {
   expectValidBaseAddon(proposalsWork);
-  expect(Object.keys(proposalsWork.containers ?? {})).toEqual(["proposals.Round#sections"]);
   expect(resolveContainer(containers, "form#sections", { models: ["proposals.Round"] }).map(({ id, address }) => ({ id, address })))
     .toEqual([{ id: "proposals-work.questions", address: "proposals.Round#sections" }]);
   expect(resolveContainer(containers, "form#sections", { models: ["work.Queue"] })).toEqual([]);

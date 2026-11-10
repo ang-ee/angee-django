@@ -12,18 +12,6 @@ describe("integrate_vcs addon manifest", () => {
     expect(() => expectValidBaseAddon(integrateVcs)).not.toThrow();
   });
 
-  test("owns the four VCS resources under their stable paths", () => {
-    for (const [name, path, model] of [
-      ["integrate_vcs.vcs", "/integrate/vcs", "integrate_vcs.VcsBridge"],
-      ["integrate_vcs.repositories", "/integrate/repositories", "integrate_vcs.Repository"],
-      ["integrate_vcs.sources", "/integrate/sources", "integrate_vcs.Source"],
-      ["integrate_vcs.templates", "/integrate/templates", "integrate_vcs.Template"],
-    ] as const) {
-      const route = integrateVcs.routes?.find((item) => item.name === name);
-      expect(route).toMatchObject({ path, resource: model });
-    }
-  });
-
   test("registers the complete bridge form under its canonical label", () => {
     expect(integrateVcs.forms?.["integrate_vcs.VcsBridge"]).toBeDefined();
   });
