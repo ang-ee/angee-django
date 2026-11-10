@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 import { inboxMessages } from "./inbox/copy";
 
 export const enNexusMessages: Record<string, string> = {

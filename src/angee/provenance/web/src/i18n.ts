@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 // English fallback strings for the provenance addon's own copy, under the
 // `provenance` namespace. Enum tokens (`history.activity.*`, `history.action.*`,

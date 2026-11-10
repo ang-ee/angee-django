@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 // English fallback strings for the integrate addon's hard-coded UI copy. The host
 // runtime owns the active translations; these are the defaults used when a key is

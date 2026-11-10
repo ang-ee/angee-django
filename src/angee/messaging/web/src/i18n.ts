@@ -3,7 +3,7 @@
 // under `i18n.messaging`. Keys are dotted by surface. Metadata-driven field/column
 // labels live in the SDL, not here — only bespoke component copy is routed.
 
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enMessagingMessages: Record<string, string> = {
   "copies.showAll": "Show source copies",
