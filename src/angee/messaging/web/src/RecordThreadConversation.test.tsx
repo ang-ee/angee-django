@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, ModalsHost, ToastProvider } from "@angee/ui";
 
 import type { RecordMessageRow, RecordThreadPayload } from "./documents";
@@ -173,8 +173,6 @@ beforeEach(() => {
     throw new Error(`Unexpected authored query: ${op}`);
   });
 });
-
-afterEach(cleanup);
 
 describe("RecordThreadConversation", () => {
   test("stream shows You, a server-supplied withheld author, and the latest edit time", () => {

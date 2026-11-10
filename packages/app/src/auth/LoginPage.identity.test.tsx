@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, containersFromChildren, createAngeeI18nInstance, type AppRuntime } from "@angee/ui/runtime";
 
 import { LOGIN_CONTAINERS, LoginPage, type LoginPageProps } from "./LoginPage";
@@ -19,7 +19,6 @@ vi.mock("@angee/ui/theme", async (importOriginal) => ({
   ThemeLogo: () => <svg data-testid="theme-logo" />,
   useThemeLogoChoice: () => "theme",
 }));
-afterEach(cleanup);
 
 const branded: Partial<AppRuntime> = {
   brand: { name: "Notebook", mark: "notebook-mark" },

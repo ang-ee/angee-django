@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import type { AgentRosterItem } from "../documents";
 import { AgentChooser } from "./AgentChooser";
-
-afterEach(cleanup);
 
 function agent(id: string, name: string, model: string | null): AgentRosterItem {
   return {

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 type MockThreadRow = {
   id: string;
@@ -156,8 +156,6 @@ function renderRoster() {
 }
 
 describe("SpacesPage", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     pageMocks.resourceProps = null;
     pageMocks.resourceLists = [];

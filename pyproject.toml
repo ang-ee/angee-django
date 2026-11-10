@@ -91,6 +91,8 @@ dev = [
     "daphne>=4.0",
     "django-zed-rebac[caveats]>=0.32.2,<0.33",
     "faker>=30.0",
+    "hypothesis>=6.100",
+    "import-linter>=2.1",
     "psycopg[binary,pool]>=3.2",
     "angee-django-stubs[compatible-mypy]==6.1.2.post3",
     "angee-mypy==2.1.0",

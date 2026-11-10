@@ -3,7 +3,7 @@
 // is missing. Components resolve them through `useIamT()` (below), and the
 // manifest contributes this bundle as the `iam` namespace.
 
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enIamMessages: Record<string, string> = {
   // Shared action labels.

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useCallback } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { DisableAddon, EnableAddon, InstallAddon, UninstallAddon } from "../documents";
 import { AddonCard, AddonCardActions, type AddonResourceRow } from "./AddonCard";
@@ -127,7 +127,6 @@ beforeEach(() => {
   mocks.toast.danger.mockClear();
   CONTEXT.refresh.mockClear();
 });
-afterEach(cleanup);
 
 describe("AddonCard", () => {
   test("renders the package metadata and lifecycle badges", () => {

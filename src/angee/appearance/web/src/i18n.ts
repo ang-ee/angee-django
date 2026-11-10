@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 export const enAppearanceMessages: Record<string, string> = {
   "title": "Appearance", "description": "Choose how Angee looks for your account.",
   "theme.title": "Theme", "theme.description": "Installed theme addons available in this app.",

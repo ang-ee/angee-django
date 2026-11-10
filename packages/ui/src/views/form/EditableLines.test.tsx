@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type DataResourceLinesMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { afterEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { ModalsHost } from "../../feedback";
 import { testDndTransfer } from "../../lib/dnd-test-fixtures";
@@ -89,8 +89,6 @@ function Host({
     </AppRuntimeProvider>
   );
 }
-
-afterEach(cleanup);
 
 function rowPatchFixture() {
   let form!: UseFormReturn<Record<string, unknown>>;

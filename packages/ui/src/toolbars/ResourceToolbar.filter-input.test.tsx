@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 import { ResourceToolbar } from "./ResourceToolbar";
 import { searchFixture } from "../views/resource/search/search-fixture.test-support";
 import type { FilterClauseField } from "./FilterClauseEditor";
-
-afterEach(cleanup);
 
 async function editor(field: FilterClauseField) {
   const add = vi.fn();

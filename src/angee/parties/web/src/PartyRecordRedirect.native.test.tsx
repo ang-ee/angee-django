@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, type RouteComponent } from "@tanstack/react-router";
 import { AppRuntimeProvider, createRouteHref } from "@angee/ui";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 
 const query = vi.hoisted(() => ({ kind: "PERSON" }));
 vi.mock("@angee/refine", async (importOriginal) => ({
@@ -16,8 +16,6 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 import parties from "./index";
 import { PartyRecordRedirect } from "./PartyRecordRedirect";
 import { PartyStatementRedirect } from "./PartyStatementRedirect";
-
-afterEach(cleanup);
 
 const routeHref = createRouteHref(parties.routes ?? []);
 const trail = [{ label: "Messages", href: "/messages" }, { label: "Retained message", href: "/messages/msg-1" }];

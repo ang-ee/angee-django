@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
-import { afterEach, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { AppRuntimeProvider } from "../../../runtime";
 import { RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY } from "../resource-view-favorites";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue, type ResourceViewProviderScope } from "../resource-view-context";
@@ -10,7 +10,6 @@ import { searchFixture } from "./search-fixture.test-support";
 import type { ResourceSearch } from "./types";
 import { useResourceSearch } from "./use-resource-search";
 
-afterEach(cleanup);
 const favorite = { id: "by-company", label: "Bills by company", groupStack: [{ field: "company" }] };
 const baseFilter = { kind: { exact: "VENDOR_BILL" } };
 const defaults = { groupStack: [{ field: "status" }], filter: { title: { iContains: "baseline" } } };

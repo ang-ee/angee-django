@@ -3,7 +3,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { AppRuntimeProvider, baseIcons, createRouteHref } from "@angee/ui";
 import type { ReactElement, ReactNode } from "react";
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { OAuthConnectCallbackPage } from "./OAuthConnectCallbackPage";
 import { CONNECT_CALLBACK_LOOPBACK_PATH, CONNECT_CALLBACK_PATH } from "./redirects";
@@ -20,13 +20,6 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredMutation: () => [mocks.mutate, { fetching: false, error: null }],
 }));
-
-beforeAll(() => {
-  Object.defineProperty(Element.prototype, "getAnimations", {
-    configurable: true,
-    value: () => [],
-  });
-});
 
 beforeEach(() => {
   vi.spyOn(window.location, "assign").mockImplementation(() => {});

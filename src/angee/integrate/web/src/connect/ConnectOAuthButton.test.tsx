@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 
 import { ConnectOAuthButton, type OAuthConnectPayload } from "./ConnectOAuthButton";
 
@@ -29,7 +29,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   useToast: () => ({ success: mocks.success, danger: mocks.danger }),
 }));
 
-afterEach(cleanup);
 beforeEach(() => vi.clearAllMocks());
 
 test("reconnects the projected row by its public id and reports an attached result", async () => {

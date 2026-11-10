@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createRouteHref } from "@angee/ui/runtime";
 
 const mocks = vi.hoisted(() => ({
@@ -127,8 +127,6 @@ beforeEach(() => {
   mocks.routeHref.mockImplementation(routeHref);
   Object.assign(mocks.routeHref, { maybe: routeHref.maybe });
 });
-
-afterEach(cleanup);
 
 describe("platform route consumers", () => {
   test("FieldsPage offers its server group columns and groups by model by default", () => {

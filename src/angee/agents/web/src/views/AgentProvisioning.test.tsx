@@ -1,13 +1,11 @@
 // @vitest-environment happy-dom
 
 import {
-  cleanup,
   render,
   screen } from "@testing-library/react";
 import type { ReactElement,
   ReactNode } from "react";
-import { afterEach,
-  beforeEach,
+import { beforeEach,
   describe,
   expect,
   test,
@@ -124,8 +122,6 @@ beforeEach(() => {
   mocks.record.conflict_name = "";
   mocks.workspaceStatus = null;
 });
-
-afterEach(cleanup);
 
 describe("AgentProvisioning", () => {
   test("shows the saved provisioning error even without recorded runtime names", () => {

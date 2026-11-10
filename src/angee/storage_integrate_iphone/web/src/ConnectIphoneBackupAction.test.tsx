@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { render } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
@@ -22,8 +22,6 @@ vi.mock("@angee/storage-integrate", () => ({
 import { ConnectIphoneBackupAction } from "./ConnectIphoneBackupAction";
 
 describe("ConnectIphoneBackupAction", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     actionMocks.props = null;
   });

@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { composeAddons } from "@angee/app";
 import type { TypedDocumentNode } from "@angee/refine";
 import type { ComposedContainers, ContainerChild } from "@angee/ui";
 import * as React from "react";
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const pageMocks = vi.hoisted(() => ({
   resourceProps: null as Record<string, unknown> | null,
@@ -70,11 +70,7 @@ import { AppRuntimeProvider, createAngeeI18nInstance, defaultWidgets, ToastProvi
 import { ConnectChannelAction } from "./ConnectChannelAction";
 import { ChannelsPage } from "./ChannelsPage";
 
-beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
-
 describe("ChannelsPage", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     pageMocks.resourceProps = null;
     pageMocks.columnFields = [];

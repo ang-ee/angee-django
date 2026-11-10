@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 import { useEffect, useRef } from "react";
 
 import {
@@ -10,8 +10,6 @@ import {
   useChatterContent,
   type ChatterContent,
 } from "./chatter-context";
-
-afterEach(() => cleanup());
 
 describe("ChatterProvider", () => {
   test("rejects two publishers of the same tab id", () => {

@@ -1,15 +1,13 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeAll, expect, test, vi } from "vitest";
 import { decisionFixture } from "@angee/decisions/testing";
 import { TimelineStory, type TimelineRequest } from "./RecordTimeline.stories";
 import { timelineFixture } from "./timeline-testing";
 
 beforeAll(() => {
-  Element.prototype.getAnimations ??= () => [];
   Element.prototype.scrollIntoView ??= vi.fn();
 });
-afterEach(() => cleanup());
 
 test("a completed run shows its outcome, workflow name, local time and run link", async () => {
   render(<TimelineStory state="clean" />);

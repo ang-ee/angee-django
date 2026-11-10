@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render, screen, cleanup, within } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { many2manyWidget } from "./many2many";
-
-afterEach(cleanup);
 
 function choose(option: HTMLElement) {
   fireEvent.pointerDown(option, { pointerType: "mouse", button: 0 });

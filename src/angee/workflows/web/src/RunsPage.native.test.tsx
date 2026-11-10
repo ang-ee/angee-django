@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeAll, expect, test, vi } from "vitest";
 
 import { RunStory, type RunRequest } from "./RunsPage.stories";
 import { runFixture, stepRunFixture } from "./testing";
@@ -9,9 +9,7 @@ import { StepRuns } from "./StepRuns";
 beforeAll(() => {
   class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
-  Element.prototype.getAnimations ??= () => [];
 });
-afterEach(cleanup);
 
 test("the routed run defaults to its filling graph beneath its sheet", async () => {
   render(<RunStory />);

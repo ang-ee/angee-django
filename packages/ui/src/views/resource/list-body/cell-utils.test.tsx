@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { render, screen, cleanup } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { expect, test } from "vitest";
 import type { ModelMetadata } from "@angee/metadata";
 import type { UiTranslate } from "../../../i18n";
 import { cellContent, formatMeasure } from "./cell-utils";
-
-afterEach(cleanup);
 
 const metadata = {
   fields: { status: { kind: "enum", values: [{ value: "open", description: "In progress" }] } },

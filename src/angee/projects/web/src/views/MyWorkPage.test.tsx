@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { PrimaryPaneTestHost, ShellPageTestProviders } from "@angee/app/testing";
 import { parsePageColumns, type ListProps } from "@angee/ui";
@@ -58,8 +58,6 @@ beforeEach(() => {
   mocks.lists = [];
   mocks.user = { id: "usr_1" };
 });
-
-afterEach(cleanup);
 
 describe("MyWorkPage", () => {
   test("renders one route-owned task list of the actor's open tasks", () => {

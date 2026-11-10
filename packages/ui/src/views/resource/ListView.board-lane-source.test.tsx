@@ -10,7 +10,7 @@ import {
   type Row,
 } from "@angee/metadata";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { BoardViewProps } from "./BoardView";
 import type { ColumnDescriptor } from "../page";
@@ -127,8 +127,6 @@ beforeEach(() => {
   harness.refetch.mockReset();
   harness.toast.danger.mockReset();
 });
-
-afterEach(cleanup);
 
 describe("ListView board laneSource", () => {
   test("derives board lanes from the relation source in server order with empty lanes", async () => {

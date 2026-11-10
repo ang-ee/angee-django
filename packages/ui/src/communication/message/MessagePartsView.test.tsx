@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { MessagePartsView, type MessagePartFile } from "./index";
 
@@ -21,9 +21,6 @@ describe("MessagePartsView", () => {
     expect(preview).toHaveBeenCalledWith(expect.objectContaining({ id: "file", name: "original.pdf" }));
     fireEvent.click(screen.getByRole("button", { name: "Other uses" }));
     expect(preview).toHaveBeenCalledTimes(1);
-  });
-  afterEach(() => {
-    cleanup();
   });
 
   test("renders depth-first role parts while hiding retained transport headers", () => {

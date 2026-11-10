@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ButtonHTMLAttributes } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { WorkTaskRow } from "./task-work";
 
@@ -65,7 +65,6 @@ beforeEach(() => {
   state.start.mockReset();
   state.returnToTriage.mockReset();
 });
-afterEach(cleanup);
 
 describe("task record Start and Return to triage", () => {
   test.each(["BACKLOG", "UNSTARTED", "backlog", "unstarted"])("offers Start for %s and passes the record id", (category) => {

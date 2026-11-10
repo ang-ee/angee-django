@@ -1,17 +1,15 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { forwardRef } from "react";
 import { useAppRuntime, useRuntimeBrand, type RuntimeBrand } from "@angee/ui/runtime";
 import { MenuTree, type BaseMenuItem } from "@angee/ui/chrome/menu-tree";
 import { defineTheme, defineThemeContribution, useOptionalAppearance } from "@angee/ui/theme";
-import { afterEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { createApp, PassthroughChrome, type CreateAppInput } from "./create-app";
 import type { ShellSettings } from "./define-addon";
 import { captureChrome, TEST_SCHEMAS } from "./testing";
-
-afterEach(cleanup);
 
 function IdentityProbe() {
   const brand = useRuntimeBrand();

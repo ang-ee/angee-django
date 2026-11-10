@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { TypedDocumentNode } from "@angee/refine";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
   authoredConnect: vi.fn(async (values: unknown) => values),
@@ -76,8 +76,6 @@ const parseValues = (values: Readonly<Record<string, unknown>>): Variables => ({
 });
 
 describe("ConnectChannelAction", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     actionMocks.authoredConnect.mockClear();
     actionMocks.pairingConnect.mockClear();

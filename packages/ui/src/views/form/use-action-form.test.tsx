@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { ResolverResult } from "react-hook-form";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "../../feedback";
 import { useActionForm } from "./use-action-form";
@@ -11,8 +11,6 @@ import { useActionForm } from "./use-action-form";
 function wrapper({ children }: { children: ReactNode }): React.ReactElement {
   return <ToastProvider>{children}</ToastProvider>;
 }
-
-afterEach(cleanup);
 
 describe("useActionForm", () => {
   test("fires the submit, toasts the message, and hands off on ok", async () => {

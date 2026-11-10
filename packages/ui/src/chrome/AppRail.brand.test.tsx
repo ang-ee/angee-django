@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../runtime";
 import { AppRail } from "./AppRail";
@@ -14,7 +14,6 @@ vi.mock("../lib/use-media-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/use-media-query")>()),
   useMediaQuery: () => true,
 }));
-afterEach(cleanup);
 
 const menus: readonly ChromeMenuItem[] = [{
   id: "notes", label: "Notes root", to: "/notes",

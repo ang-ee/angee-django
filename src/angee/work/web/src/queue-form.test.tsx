@@ -2,7 +2,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   formProps: null as Record<string, unknown> | null,
@@ -57,8 +57,6 @@ function Declaration(props: Parameters<typeof useQueueFormDeclaration>[0]): Reac
 beforeEach(() => {
   mocks.formProps = null;
 });
-
-afterEach(cleanup);
 
 describe("queue settings sections", () => {
   const sections = QUEUE_FORM_SECTIONS as unknown as Readonly<Record<string, SectionChild>>;

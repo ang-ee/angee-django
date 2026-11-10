@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import { tagInputWidget } from "./tagInput";
-
-afterEach(cleanup);
 
 test("tag input removes a chip or the last tag, and adds typed tags once", () => {
   const Edit = tagInputWidget.edit;

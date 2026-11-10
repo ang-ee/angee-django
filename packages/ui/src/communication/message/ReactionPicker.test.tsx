@@ -1,15 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { ReactionPicker } from "./index";
 
 describe("ReactionPicker", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("renders one count-less pill per option using the shared accessible-name convention", () => {
     render(<ReactionPicker options={["👍", "🎉"]} onToggle={() => undefined} />);
 

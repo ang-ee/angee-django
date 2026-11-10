@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { RestartNotice } from "./RestartNotice";
 
@@ -54,8 +54,6 @@ vi.mock("@angee/ui/chrome/refine-menu", () => ({
 vi.mock("./i18n", () => ({
   usePlatformIntegrateOperatorT: () => (key: string) => key,
 }));
-
-afterEach(cleanup);
 
 beforeEach(() => {
   mocks.connection = null;

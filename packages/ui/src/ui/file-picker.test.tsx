@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { FilePickerButton } from "./file-picker";
 import { AppRuntimeProvider } from "../runtime";
-
-afterEach(cleanup);
 
 describe("FilePickerButton", () => {
   test("opens the hidden input and emits the chosen files once", () => {

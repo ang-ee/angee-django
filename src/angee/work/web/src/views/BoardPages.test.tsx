@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listProps: null as Record<string, unknown> | null,
@@ -88,8 +88,6 @@ beforeEach(() => {
   mocks.leafLabel = undefined;
   mocks.params = { queueId: "que_eng", id: "cyc_7" };
 });
-
-afterEach(cleanup);
 
 describe("work board stage lanes", () => {
   test("offers the queue's removed tasks beside its board", () => {

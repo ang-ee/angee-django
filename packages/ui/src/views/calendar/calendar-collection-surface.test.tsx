@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
 import * as React from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { CalendarViewProps, Occurrence } from "./CalendarView";
 import type { CalendarViewSpec } from "../resource/resource-view-types";
@@ -98,7 +98,6 @@ beforeEach(() => {
     refetch: vi.fn(),
   };
 });
-afterEach(cleanup);
 
 describe("CalendarCollectionSurface", () => {
   test("content occurrences use the inherited navigation owner", () => {

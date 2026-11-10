@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { formatDayLabel } from "@angee/ui";
 import { StrictMode } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ThreadTranscript } from "./ThreadTranscript";
 import type { ThreadTranscriptRow } from "./documents";
@@ -101,8 +101,6 @@ beforeEach(() => {
     };
   });
 });
-
-afterEach(cleanup);
 
 describe("ThreadTranscript", () => {
   test("shows the reply author and opens the quoted parent through the host", () => {

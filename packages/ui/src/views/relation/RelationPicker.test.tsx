@@ -4,7 +4,6 @@ import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
 import {
-  cleanup,
   fireEvent,
   render,
   screen,
@@ -31,7 +30,7 @@ import type {
 } from "@angee/metadata";
 import { useState, type ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { defaultWidgets } from "../../widgets";
@@ -118,7 +117,6 @@ const oauthResource = testDataResource("integrate.OAuthClient", {
 const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([oauthResource]);
 
 describe("RelationPicker edit affordance", () => {
-  afterEach(() => cleanup());
   beforeEach(() => {
     sdkMocks.record = { id: "client-1", displayName: "Acme OAuth" };
     sdkMocks.mutate.mockReset();

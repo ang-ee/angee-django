@@ -1,4 +1,4 @@
-import { createNamespaceT } from "@angee/ui";
+import { createNamespaceT } from "@angee/ui/i18n";
 import { enCatalogueMessages } from "./i18n-catalogue";
 
 export const enWorkflowsMessages = {

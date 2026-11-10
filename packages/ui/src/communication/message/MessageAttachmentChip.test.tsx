@@ -1,15 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { MessageAttachmentChip } from "./index";
 
 describe("MessageAttachmentChip", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("renders the label and the remove slot", () => {
     render(
       <MessageAttachmentChip remove={<button type="button">remove</button>}>photo.png</MessageAttachmentChip>,

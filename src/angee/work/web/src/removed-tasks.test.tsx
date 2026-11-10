@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   rows: [] as Record<string, unknown>[],
@@ -31,8 +31,6 @@ beforeEach(() => {
   mocks.restore.mockReset();
   mocks.restore.mockResolvedValue({ restore_task: { ok: true, message: "Task restored." } });
 });
-
-afterEach(cleanup);
 
 describe("RemovedTasks", () => {
   test("lists a parent's removed questions and restores one at its revision", async () => {

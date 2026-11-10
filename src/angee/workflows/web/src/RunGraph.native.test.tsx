@@ -12,7 +12,6 @@ import { mappedRunGraphFixture } from "./testing";
 beforeAll(() => {
   class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
-  Element.prototype.getAnimations ??= () => [];
 });
 const { createClient, clearClients } = createRefineTestProviders();
 afterEach(() => { cleanup(); clearClients(); });

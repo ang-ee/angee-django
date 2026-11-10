@@ -1,15 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
 
 import { ChatBar } from "./index";
 
 describe("ChatBar", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
   test("renders the start and end slots in one dense header row", () => {
     const { container } = render(
       <ChatBar

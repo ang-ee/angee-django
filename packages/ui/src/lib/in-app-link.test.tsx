@@ -1,17 +1,15 @@
 // @vitest-environment happy-dom
 // @vitest-environment-options {"settings":{"navigation":{"disableMainFrameNavigation":true,"disableChildPageNavigation":true}}}
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, lazyRouteComponent } from "@tanstack/react-router";
 import type { AnchorHTMLAttributes, ReactElement } from "react";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { SectionNav } from "../page/SectionNav";
 import { MetricTile } from "../fragments/MetricStrip";
 import { NavLink } from "../ui/nav-link";
 import { GalleryView } from "../views/GalleryView";
 import { InAppLinkProvider, routerNavigator, routerPreloader, useInAppLink } from "./in-app-link";
-
-afterEach(cleanup);
 
 function Anchor({ href = "/records/7?view=all#details", onClick, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>): ReactElement {
   const link = useInAppLink(href, { onClick });

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   pageProps: null as Record<string, unknown> | null,
@@ -41,8 +41,6 @@ beforeEach(() => {
   mocks.pageProps = null;
   mocks.declarationProps = null;
 });
-
-afterEach(cleanup);
 
 describe("queue page", () => {
   test("its routed record is the shared queue settings form: one stacked sheet, no record tabs", () => {

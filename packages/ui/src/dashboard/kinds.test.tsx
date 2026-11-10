@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { searchFixture } from "../views/resource/search/search-fixture.test-support";
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource, testQueryField } from "@angee/metadata/testing";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import * as v from "valibot";
 import { useEffect, type ReactElement } from "react";
 
@@ -60,8 +60,6 @@ const data: DashboardWidgetData = {
   updatedAt: null,
   refetch: () => {},
 };
-
-afterEach(() => cleanup());
 
 const renderWidget = (node: ReactElement) => render(node, {
   wrapper: ({ children }) => <AppRuntimeProvider runtime={{}}>{children}</AppRuntimeProvider>,

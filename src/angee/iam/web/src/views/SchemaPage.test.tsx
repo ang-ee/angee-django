@@ -57,10 +57,6 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 
 describe("IAM schema page", () => {
   beforeAll(() => {
-    Object.defineProperty(Element.prototype, "getAnimations", {
-      configurable: true,
-      value: () => [],
-    });
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
       value: class ResizeObserver {

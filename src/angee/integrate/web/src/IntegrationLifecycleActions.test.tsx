@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   chrome: {
@@ -32,7 +32,6 @@ vi.mock("@angee/ui", async () => {
 import { ResumeIntegrationAction, RetryDiscoveryAction, integrationHasCredential } from "./IntegrationLifecycleActions";
 
 describe("ResumeIntegrationAction", () => {
-  afterEach(cleanup);
   beforeEach(() => {
     mocks.chrome.record = null;
   });
