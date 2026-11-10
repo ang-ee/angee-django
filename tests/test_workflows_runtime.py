@@ -5,6 +5,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
 
+import hypothesis
 import psycopg.errors
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
@@ -13,7 +14,10 @@ from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.management import call_command
 from django.db import DataError, IntegrityError, OperationalError, transaction
+from django.db.models import F
 from django.db.models.functions import Now
+from hypothesis import HealthCheck, given
+from hypothesis import strategies as st
 from kombu.message import Message
 from pydantic import BaseModel, Field, field_serializer, field_validator
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
@@ -31,7 +35,7 @@ from angee.workflows.steps import Done, Fail, RetryPolicy, Step, StepMode, Super
 from angee.workflows.testing.drivers import capture_tasks, load_workflow, observe, register_steps, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun, WorkflowVersion
 from tests.conftest import create_user
-from tests.workflow_steps import Echo, document
+from tests.workflow_steps import Echo, Retry, document
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
 
@@ -373,11 +377,10 @@ def test_cancel_missing_run_returns_without_authorization_error(execution):
     assert not WorkflowRun.system_queryset().filter(pk=missing.pk).exists()
 
 
-@pytest.mark.parametrize("step_key", ["pause", "retry"])
-def test_wait_and_retry_in_place(execution, step_key):
-    """Time waits and retries reuse the same row with separately numbered attempts."""
+def test_time_wait_resumes_in_place(execution):
+    """A time wait reuses the same row with separately numbered attempts."""
     actor, _ = execution
-    workflow = load_workflow(document("entry", step=step_key), key=step_key, actor=actor)
+    workflow = load_workflow(document("entry", step="pause"), key="pause", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     row = StepRun.system_queryset().get(run=run)
     with observe(WorkflowRun) as publications:
@@ -389,6 +392,47 @@ def test_wait_and_retry_in_place(execution, step_key):
     row = StepRun.system_queryset().get(pk=row.pk)
     assert row.status == StepRunStatus.SUCCEEDED and row.attempt == 2 and row.retries == 0
     assert StepAttempt.system_queryset().filter(step_run=row).count() == 2
+
+
+@hypothesis.settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(max_attempts=st.integers(1, 4), minutes=st.integers(0, 90), failures=st.integers(0, 4))
+def test_retry_waits_its_doubling_backoff_and_closes_each_attempt_once(execution, max_attempts, minutes, failures):
+    """A retryable failure waits ``backoff * 2 ** (n - 1)`` on the database clock and never wakes early.
+
+    A step makes at most ``max_attempts`` attempts, each closed exactly once;
+    success resets its failure count, exhaustion fails the step and its run.
+    """
+    actor, _ = execution
+    policy = RetryPolicy(max_attempts=max_attempts, backoff=timedelta(minutes=minutes))
+    with patch.object(Retry, "retry", policy), transaction.atomic():
+        workflow = load_workflow(document("entry", step="retry"), key="retry_backoff", actor=actor)
+        run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": failures})
+        steps = StepRun.system_queryset()
+        row = steps.get(run=run)
+        while runner.execute(row.pk) and (row := steps.get(pk=row.pk)).status == StepRunStatus.WAITING:
+            delay = policy.backoff * 2 ** (row.retries - 1)
+            failed = StepAttempt.system_queryset().get(step_run=row, number=row.attempt)
+            assert abs(row.wake_at - failed.finished_at - delay) < timedelta(seconds=1)
+            assert runner.wake() == int(not delay)
+            if delay:
+                # The database clock cannot be moved, so the wake time moves back to it.
+                steps.filter(pk=row.pk).update(wake_at=F("wake_at") - delay)
+                assert runner.wake() == 1
+        attempts = min(failures + 1, max_attempts)
+        succeeded = failures < max_attempts
+        closed = list(StepAttempt.system_queryset().filter(step_run=row).order_by("number").values_list(
+            "result", "finished_at",
+        ))
+        assert all(finished for _, finished in closed)
+        last = "succeeded" if succeeded else "failed"
+        assert [result for result, _ in closed] == ["failed"] * (attempts - 1) + [last]
+        assert (row.status, row.attempt, row.retries) == (
+            (StepRunStatus.SUCCEEDED, attempts, 0) if succeeded else (StepRunStatus.FAILED, attempts, attempts)
+        )
+        assert WorkflowRun.system_queryset().get(pk=run.pk).status == (
+            RunStatus.SUCCEEDED if succeeded else RunStatus.FAILED
+        )
+        transaction.set_rollback(True)
 
 
 def test_error_edge_recovers(execution):
