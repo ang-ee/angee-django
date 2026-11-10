@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from enum import Enum
 from typing import Any, cast, get_args
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
@@ -89,6 +90,7 @@ def resource_field_kind(
         return "relation"
     if field is not None and field.is_relation:
         return "relation"
+    # Django concrete fields have choices; reverse relation metadata need not.
     if is_enum or (field is not None and getattr(field, "choices", None)):
         return "enum"
     return "scalar"
@@ -249,6 +251,7 @@ def resource_type_name(surface: type | None) -> str | None:
     definition = get_object_definition(surface)
     if definition is not None:
         return str(definition.name)
+    # Strawberry attaches definitions to decorated object/enum types only.
     definition = getattr(surface, "__strawberry_definition__", None)
     if definition is not None:
         return str(definition.name)
@@ -286,8 +289,9 @@ def resource_string_field_names(surface: type | None) -> tuple[str, ...]:
             continue
         if isinstance(value, LazyType):
             value = value.resolve_type()
+        # Strawberry scalar wrappers carry definitions; ordinary Python types do not.
         scalar_definition = getattr(value, "_scalar_definition", None)
-        scalar_name = getattr(scalar_definition, "name", None)
+        scalar_name = scalar_definition.name if scalar_definition is not None else None
         if value is str or scalar_name == "String":
             names.append(str(field.python_name))
     return tuple(names)
@@ -320,7 +324,9 @@ def final_resource_fields(
     projected: list[data_contract.DataResourceFieldMetadata] = []
     for name, graphql_field in node.fields.items():
         source = (graphql_field.extensions or {}).get("strawberry-definition")
+        # Strawberry source extensions are optional on graphql-core fields.
         python_name = str(getattr(source, "python_name", None) or name)
+        # strawberry-django fields add django_name to the base Strawberry field contract.
         model_field_name = str(getattr(source, "django_name", None) or python_name)
         model_field = _model_field_or_none(model, model_field_name)
         source_metadata = getattr(source, "metadata", None)
@@ -393,6 +399,7 @@ def final_input_only_resource_fields(
         (update_input_name, update),
     ):
         input_type = schema.get_type(type_name) if type_name else None
+        # graphql-core exposes fields only on object, interface, and input-object types.
         fields = getattr(input_type, "fields", None)
         if not isinstance(fields, dict):
             continue
@@ -400,7 +407,9 @@ def final_input_only_resource_fields(
             if wire_name not in accepted:
                 continue
             source = (graphql_field.extensions or {}).get("strawberry-definition")
+            # Strawberry source extensions are optional on graphql-core fields.
             python_name = str(getattr(source, "python_name", None) or wire_name)
+            # strawberry-django fields add django_name to the base Strawberry field contract.
             model_field_name = str(getattr(source, "django_name", None) or python_name)
             candidates.setdefault(wire_name, (model_field_name, graphql_field))
     projected: list[data_contract.DataResourceFieldMetadata] = []
@@ -409,6 +418,7 @@ def final_input_only_resource_fields(
             continue
         model_field = _model_field_or_none(model, python_name)
         source = (graphql_field.extensions or {}).get("strawberry-definition")
+        # Strawberry source extensions are optional on graphql-core fields.
         source_metadata = getattr(source, "metadata", None)
         named = get_named_type(graphql_field.type)
         is_list = _graphql_type_is_list(graphql_field.type)
@@ -453,6 +463,7 @@ def final_wire_field_names(
     """Map direct authored Python field names through final Strawberry aliases."""
 
     node = schema.get_type(node_name)
+    # graphql-core exposes fields only on object, interface, and input-object types.
     fields = getattr(node, "fields", None)
     if not isinstance(fields, dict):
         return names
@@ -479,6 +490,7 @@ def final_input_policy_fields(
     if input_name is None:
         return ()
     input_type = schema.get_type(input_name)
+    # graphql-core exposes fields only on object, interface, and input-object types.
     fields = getattr(input_type, "fields", None)
     if not isinstance(fields, dict):
         return ()
@@ -509,6 +521,7 @@ def final_aggregate_wire_fields(
     """Map authored aggregate columns through the final native aggregate types."""
 
     container = schema.get_type(aggregate_container_name) if aggregate_container_name else None
+    # graphql-core exposes fields only on object, interface, and input-object types.
     container_fields = getattr(container, "fields", None)
     aggregate_field = container_fields.get("aggregate") if isinstance(container_fields, dict) else None
     aggregate = get_named_type(aggregate_field.type) if aggregate_field is not None else None
@@ -541,6 +554,7 @@ def final_input_wire_fields(
     if input_name is None:
         return ()
     input_type = schema.get_type(input_name)
+    # graphql-core exposes fields only on object, interface, and input-object types.
     fields = getattr(input_type, "fields", None)
     if not isinstance(fields, dict):
         raise ImproperlyConfigured(f"resource metadata input type {input_name!r} is absent from the composed schema.")
@@ -563,6 +577,7 @@ def final_input_extension_fields(schema: GraphQLSchema, surface: type | None) ->
 
     if surface is None:
         return ()
+    # graphql-core exposes fields only on object, interface, and input-object types.
     fields = getattr(schema.get_type(str(resource_type_name(surface))), "fields", None)
     if not isinstance(fields, dict):
         return ()
@@ -583,6 +598,7 @@ def final_required_input_wire_fields(
     if input_name is None:
         return ()
     input_type = schema.get_type(input_name)
+    # graphql-core exposes fields only on object, interface, and input-object types.
     fields = getattr(input_type, "fields", None)
     if not isinstance(fields, dict):
         return ()
@@ -606,6 +622,7 @@ def require_final_selection_path(
     current = schema.get_type(node_name)
     parts = path.split(".")
     for index, part in enumerate(parts):
+        # graphql-core exposes fields only on object, interface, and input-object types.
         fields = getattr(current, "fields", None)
         field = fields.get(part) if isinstance(fields, dict) else None
         if field is None:
@@ -663,7 +680,7 @@ def _field_enum_values(
     if isinstance(value, GraphQLEnumType):
         result: list[data_contract.DataResourceEnumValueMetadata] = []
         for name, enum_value in value.values.items():
-            raw = getattr(enum_value.value, "value", enum_value.value)
+            raw = enum_value.value.value if isinstance(enum_value.value, Enum) else enum_value.value
             if isinstance(field, ImplClassField) and str(raw) not in labels:
                 continue
             description = labels.get(str(raw)) or enum_value.description
@@ -695,6 +712,7 @@ def _graphql_relation_model_label(value: object) -> str | None:
     if not isinstance(value, GraphQLObjectType):
         return None
     definition = (value.extensions or {}).get("strawberry-definition")
+    # Strawberry source definitions are optional on graphql-core object types.
     origin = getattr(definition, "origin", None)
     django_definition = get_django_definition(origin) if isinstance(origin, type) else None
     return django_definition.model._meta.label if django_definition is not None else None
@@ -762,10 +780,11 @@ def _relation_model_label(
 ) -> str | None:
     if field is None or not field.is_relation:
         return None
-    remote_field = getattr(field, "remote_field", None)
-    remote_model = getattr(remote_field, "model", None)
-    meta = getattr(remote_model, "_meta", None)
-    return str(meta.label) if meta is not None else None
+    remote_field = field.remote_field
+    remote_model = remote_field.model if remote_field is not None else None
+    if isinstance(remote_model, type) and issubclass(remote_model, models.Model):
+        return remote_model._meta.label
+    return None
 
 
 def _wire_field_name(field: Any) -> str:
@@ -778,6 +797,7 @@ def _wire_names_by_source(fields: dict[str, Any]) -> dict[str, str]:
     """Map each final graphql-core field's authored Python name to its wire name."""
 
     return {
+        # Strawberry source extensions are optional on graphql-core fields.
         str(getattr((field.extensions or {}).get("strawberry-definition"), "python_name", None) or wire_name): wire_name
         for wire_name, field in fields.items()
     }
@@ -827,6 +847,7 @@ def _field_choice_labels(field: models.Field[Any, Any] | ForeignObjectRel | None
 
     if isinstance(field, ImplClassField):
         return {str(choice.key): str(choice.label) for choice in model_impl_choices(field.model, field.name)}
+    # django-choices-field declares choices_enum only on its enum-backed fields.
     choices_enum = getattr(field, "choices_enum", None)
     if choices_enum is None:
         return {}

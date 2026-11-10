@@ -18,6 +18,7 @@ RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
 
 def sqlstate(error: Exception) -> str | None:
     """Read the native database driver's SQLSTATE at one boundary."""
+    # psycopg database errors carry SQLSTATE; other Django DB causes need not.
     return getattr(error.__cause__, "sqlstate", None)
 
 

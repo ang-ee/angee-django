@@ -305,13 +305,13 @@ def validate_local_folder_root(path: str) -> Path:
     if not os.access(root, os.R_OK | os.X_OK):
         raise ValidationError(f"Local folder is not readable: {root}")
 
-    media_value = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
+    media_value = str(settings.MEDIA_ROOT or "").strip()
     if media_value:
         media_root = Path(media_value).resolve()
         if root == media_root or media_root in root.parents:
             raise ValidationError("Local folder must be outside MEDIA_ROOT.")
 
-    data_value = str(getattr(settings, "ANGEE_DATA_DIR", "") or "").strip()
+    data_value = str(settings.ANGEE_DATA_DIR or "").strip()
     if data_value:
         data_root = Path(data_value).resolve()
         if root == data_root or data_root in root.parents:

@@ -92,7 +92,7 @@ def _select_rows(model: type[models.Model], view: dict[str, Any]) -> list[models
 def _preview(row: models.Model) -> str:
     """Return a one-line preview of ``row``: its public id, label, and a few fields."""
 
-    identifier = getattr(row, "public_id", None) or row.pk
+    identifier = public_id_of(row) or row.pk
     parts = [f"{identifier}: {row}"]
     for name in _preview_field_names(type(row)):
         value = _field_value(row, name)

@@ -70,7 +70,7 @@ def is_gated_read_axis(
             field = leaf_model._meta.get_field(field_name)
         except FieldDoesNotExist:
             return False
-        related = getattr(field, "related_model", None)
+        related = field.related_model
         if related is None:
             return False
         leaf_model = related
@@ -109,11 +109,11 @@ def _model_field_name(model: type[models.Model], name: str) -> str | None:
             (
                 candidate.name
                 for candidate in model._meta.concrete_fields
-                if getattr(candidate, "attname", None) == name
+                if candidate.attname == name
             ),
             None,
         )
-    return field.name if getattr(field, "concrete", False) else None
+    return field.name if field is not None and field.concrete else None
 
 
 class ChangeReadGate:

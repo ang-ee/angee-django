@@ -25,6 +25,7 @@ _NOISE_SUBTYPES = frozenset(
 def response_data(response: Any) -> Mapping[str, Any]:
     """Return the JSON mapping from a SlackResponse or a test mapping."""
 
+    # Slack SDK callers supply either SlackResponse or an already-decoded response mapping.
     data = getattr(response, "data", response)
     return data if isinstance(data, Mapping) else {}
 

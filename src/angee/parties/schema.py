@@ -36,6 +36,7 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.managers import DisplayAvatarPrefetches
+from angee.parties.models import Circle as CircleModel
 from angee.parties.models import Party as PartyModel
 from angee.parties.models import RelationshipKind as RelationshipKindModel
 from angee.storage.schema import FileType
@@ -342,7 +343,7 @@ class CircleType(AngeeNode):
     def member_count(self) -> int:
         """Return the manager-annotated distinct subtree member count."""
 
-        return int(getattr(self, "_member_count", 0))
+        return cast(CircleModel, self).member_count()
 
 
 @strawberry_django.type(CircleMember)

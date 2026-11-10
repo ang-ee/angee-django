@@ -324,7 +324,7 @@ class WorkRemovedTaskQuery:
         """Return trash the reader may restore, scoped to a readable queue or parent."""
 
         user = get_current_user(info)
-        if user is None or not getattr(user, "is_authenticated", False):
+        if user is None or not user.is_authenticated:
             return []
         scope: dict[str, Any] = {}
         for name, model, value in (("queue", Queue, queue), ("parent", Task, parent)):

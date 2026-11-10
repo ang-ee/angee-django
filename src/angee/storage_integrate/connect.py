@@ -17,6 +17,7 @@ def create_local_folder_mount(user: Any, *, name: str, path: str, mode: MountMod
     try:
         root = validate_local_folder_root(path)
     except ValidationError as error:
+        # Django ValidationError has error_dict only for field-keyed errors.
         if hasattr(error, "error_dict"):
             raise
         raise ValidationError({"path": error.messages}) from error

@@ -81,6 +81,7 @@ def is_angee_addon(app_config: AppConfig, *, index: InstalledComponents | None =
     """
 
     if index is None:
+        # django-compose publishes closure settings only in composed hosts.
         closure = getattr(settings, "COMPOSE_CLOSURE", None) if settings.configured else None
         if closure is not None and app_config.name in closure.dependencies:
             return app_config.name in closure.components.values()

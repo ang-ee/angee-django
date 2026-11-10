@@ -635,7 +635,7 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=Tru
         Denial raises ``PermissionDenied``; malformed policy raises ``ValueError``.
         """
 
-        policy = getattr(settings, "ANGEE_INFERENCE_APPROVED_DEPLOYMENTS", None)
+        policy = settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS
         if policy is None:
             return
         if not isinstance(policy, Mapping):
@@ -934,7 +934,7 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
         if self.url:
             return str(self.url)
         if self.builtin == BUILTIN_MCP_ANGEE:
-            return str(getattr(settings, "ANGEE_BUILTIN_MCP_URL", "") or "").strip()
+            return str(settings.ANGEE_BUILTIN_MCP_URL or "").strip()
         return ""
 
     @property
@@ -1077,7 +1077,6 @@ class MCPToolManager[ToolT: MCPTool](AngeeHistoryManager[ToolT]):
 
 class MCPTool(AuditMixin, AngeeDataModel, concrete=True):
     """One tool an MCP server exposes; agents select the tools they may call."""
-
 
     sqid_prefix = "mct_"
     server = models.ForeignKey("agents.MCPServer", on_delete=models.CASCADE, related_name="tools")
@@ -1441,7 +1440,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
 
         if self.deprovision_blocker() is None:
             return "Deprovision this agent before deleting it."
-        active = getattr(self, "_has_active_turns", None)
+        active = self.__dict__.get("_has_active_turns", None)
         if active is None:
             active = type(self).system_queryset().filter(self.has_active_turns_expression(), pk=self.pk).exists()
         if active:
@@ -2157,7 +2156,6 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
     Delete authority derives from the agent, independently of the session's user.
     """
 
-
     sqid_prefix = "ase_"
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
     # A session is its user's own conversation, not a transferable grant root: deleting
@@ -2480,7 +2478,6 @@ _AgentTurnManager = AngeeHistoryManager.from_queryset(AgentTurnQuerySet)
 
 class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
     """One prompt-to-response cycle with append-only ACP updates."""
-
 
     sqid_prefix = "atn_"
     session = models.ForeignKey("agents.AgentSession", on_delete=models.CASCADE, related_name="turns")

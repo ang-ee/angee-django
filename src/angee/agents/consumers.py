@@ -9,7 +9,7 @@ from importlib import import_module
 from typing import Any
 
 from acp.connection import StreamEvent
-from acp.experimental import AgentProtocolRouter
+from acp.experimental import AgentProtocolConnection, AgentProtocolRouter
 from channels.auth import get_user
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -65,6 +65,8 @@ class WebsocketTransport:
 class _AgentACPConsumer(AsyncWebsocketConsumer):
     """Host one SDK connection; disconnect never stops the worker's turn."""
 
+    connection: AgentProtocolConnection | None = None
+
     @database_sync_to_async
     def callable_agent(self) -> Any:
         with evaluator_scope():
@@ -117,7 +119,7 @@ class _AgentACPConsumer(AsyncWebsocketConsumer):
         self.transport.feed(text_data.encode("utf-8") if text_data is not None else bytes_data or b"")
 
     async def disconnect(self, code: int) -> None:
-        if not hasattr(self, "connection"):
+        if self.connection is None:
             return
         await self.connection.close()
         if self.adapter is not None:

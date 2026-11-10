@@ -38,7 +38,7 @@ class DatabaseScheduler(NativeDatabaseScheduler):
     instead of ending beat.
     """
 
-    _declared: set[str]
+    _declared: set[str] | None = None
 
     def setup_schedule(self) -> None:
         """Install declared entries, then prune rows code no longer declares."""
@@ -54,7 +54,7 @@ class DatabaseScheduler(NativeDatabaseScheduler):
     def update_from_dict(self, mapping: Mapping[str, Any]) -> None:
         """Record every entry name setup declares (code entries and library defaults)."""
 
-        if hasattr(self, "_declared"):
+        if self._declared is not None:
             self._declared.update(mapping)
         super().update_from_dict(mapping)
 
@@ -66,4 +66,4 @@ class DatabaseScheduler(NativeDatabaseScheduler):
         except (DatabaseError, InterfaceError):
             logger.warning("Beat could not re-read its schedule; keeping the last one.", exc_info=True)
             close_old_connections()
-            return dict(getattr(self, "_schedule", None) or {})
+            return dict(self._schedule or {})

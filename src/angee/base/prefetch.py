@@ -83,6 +83,7 @@ def prefetched_objects(row: models.Model, relation: str) -> list[Any] | None:
     rows, which may reject them and fall back to its own queryset.
     """
 
+    # Django creates this native cache only when relations are prefetched.
     queryset = getattr(row, "_prefetched_objects_cache", {}).get(relation)
     return queryset._result_cache if queryset is not None else None
 

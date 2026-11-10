@@ -29,7 +29,9 @@ def check_resource_load_mixins(
             id="resources.E001",
         )
         for config in configs for model in config.get_models()
-        if hasattr(model, "after_resource_load") and not issubclass(model, ResourceLoadMixin)
+        # Validate inherited declarations without dispatching an undeclared model hook.
+        if not issubclass(model, ResourceLoadMixin)
+        and any("after_resource_load" in owner.__dict__ for owner in model.__mro__)
     ]
 
 

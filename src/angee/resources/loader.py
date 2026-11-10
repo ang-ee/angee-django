@@ -372,7 +372,7 @@ class AngeeResource(resources.ModelResource):
             return
         ledgers = self.ledger_model._default_manager.filter(source_addon=self.entry.addon.name, xref__in=xrefs)
         for ledger in ledgers:
-            self._existing_ledgers[str(getattr(ledger, "xref"))] = cast(
+            self._existing_ledgers[str(ledger.xref)] = cast(
                 "Resource",
                 ledger,
             )
@@ -682,7 +682,7 @@ class AngeeResource(resources.ModelResource):
     def _is_adoptable_field(self, field: models.Field[Any, Any]) -> bool:
         """Return whether ``field`` can identify an adopted target."""
 
-        return not field.primary_key and bool(getattr(field, "unique", False))
+        return not field.primary_key and bool(field.unique)
 
     def _validate_headers(self, headers: Sequence[str]) -> None:
         """Reject primary-key and unknown field headers."""
@@ -730,6 +730,7 @@ class AngeeResource(resources.ModelResource):
         for field in self._meta.model._meta.fields:
             if field.name not in row:
                 continue
+            # Django temporal fields declare auto_now/auto_now_add; other Field subclasses do not.
             if not getattr(field, "auto_now", False) and not getattr(
                 field,
                 "auto_now_add",

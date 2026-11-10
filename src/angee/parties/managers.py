@@ -450,7 +450,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         handles = self.filter(platform=platform)
         handle = handles.filter(external_id=external_id).first() if external_id else None
         if handle is None or handle.value != value:
-            owner = handles.filter(value=value).exclude(pk=getattr(handle, "pk", None)).first()
+            owner = handles.filter(value=value).exclude(pk=(handle.pk if handle is not None else None)).first()
             handle = owner or handle
         return handle.canonical() if handle is not None else None
 

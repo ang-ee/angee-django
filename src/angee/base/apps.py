@@ -44,6 +44,7 @@ class BaseConfig(AppConfig):
         """Validate runtime safety and persistence independently of API addons."""
 
         super().ready()
+        # django-compose publishes snapshot settings only in composed hosts.
         if getattr(conf.settings, "COMPOSE_SNAPSHOT", None) is not None:
             from django_compose.serving import artifact_path
 

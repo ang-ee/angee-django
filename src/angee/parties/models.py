@@ -55,7 +55,7 @@ from angee.base.models.identity import public_id_of
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
-from angee.base.permissions import instance_actor
+from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.prefetch import prefetched
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
@@ -527,7 +527,6 @@ class Party(
 class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """A human party — carries name parts and an optional platform-user link."""
 
-
     statements = StatementRecords(
         link="integrate.RecordLink",
         aspects={
@@ -575,7 +574,6 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
 
 class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """An organisation party — carries its legal name and primary domain."""
-
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -1011,7 +1009,7 @@ class AddressManager[AddressT: Address](StatementSubjectManager[AddressT]):
                 party=party,
                 label=" ".join(label.split()).strip()[:64],
                 is_primary=is_primary,
-                created_by_id=getattr(actor, "pk", None),
+                created_by_id=actor_user_id(actor),
                 **normalized,
             )
             row = self.with_actor(actor).insert(row)
@@ -1078,7 +1076,6 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
     two same-labelled addresses — so a CardDAV mapper keys idempotency on the
     address content, not the label.
     """
-
 
     sqid_prefix = "adr_"
     statements = StatementRecords(
@@ -1165,7 +1162,6 @@ class Folder(OwnerMixin, AngeeDataModel, concrete=True):
     tree (``parent``) are deferred until a create path lands to exercise them.
     """
 
-
     sqid_prefix = "fol_"
     name = models.CharField(max_length=200)
     directory = models.ForeignKey(
@@ -1216,6 +1212,11 @@ class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
     Circles are an organising surface only — they never gate visibility or
     sharing; REBAC stays the one authorization owner.
     """
+
+    def member_count(self) -> int:
+        """Return the count selected by CircleQuerySet.with_member_counts, or zero."""
+
+        return int(self.__dict__.get("_member_count", 0))
 
     sqid_prefix = "cir_"
     hierarchy_scope_fields = ("owner",)

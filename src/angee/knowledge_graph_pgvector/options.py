@@ -22,7 +22,7 @@ class GraphOptions(BaseModel):
 
     @classmethod
     def from_settings(cls) -> Self:
-        return cls.model_validate(getattr(settings, "ANGEE_KNOWLEDGE_GRAPH", {}))
+        return cls.model_validate(settings.ANGEE_KNOWLEDGE_GRAPH)
 
 
 def default_entity_kinds() -> list[str]:

@@ -45,6 +45,7 @@ class GraphQLConfig(AppConfig):
         checks.register(check_related_counts, checks.Tags.models)
         checks.register(check_graphql_schemas)
         checks.register(check_graphql_channel_layer, SERVING_TAG, deploy=True)
+        # django-compose publishes snapshot settings only in composed hosts.
         if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None and mode() is None:
             connect_change_publishers()
         # Compose connects in SchemaIntegration after all ready callbacks. Bare

@@ -56,6 +56,7 @@ from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.related_counts import RelatedCount
+from angee.graphql.schema import AngeeSchema
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
@@ -544,7 +545,9 @@ def _console_credentials(info: strawberry.Info) -> Any:
 def _exposed_model_labels(info: strawberry.Info) -> set[str]:
     """Return model resources carried by this exact composed GraphQL schema."""
 
-    return {resource.model_label for resource in getattr(info.schema, "angee_resources", ())}
+    if not isinstance(info.schema, AngeeSchema):
+        return set()
+    return {resource.model_label for resource in info.schema.angee_resources}
 
 
 _OAUTH_CLIENT_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(

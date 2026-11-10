@@ -294,3 +294,23 @@ except ImproperlyConfigured as error:
 else:
     raise AssertionError("noncanonical mount accepted")
 """)
+
+
+def test_asgi_protocol_declaration_is_optional_but_noncallables_are_invalid():
+    run(SETUP + """
+from angee.server.asgi import _Application
+from django.core.exceptions import ImproperlyConfigured
+config = contributor("optional")
+module = config.modules["asgi"]
+del module.protocols
+apps.get_app_configs = lambda: [config]
+assert _Application().protocols == {}
+for invalid in (None, {}, "websocket"):
+    module.protocols = invalid
+    try:
+        _Application()
+    except ImproperlyConfigured as error:
+        assert "protocols must be callable" in str(error)
+    else:
+        raise AssertionError("invalid protocol declaration accepted")
+""")

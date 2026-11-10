@@ -100,16 +100,9 @@ class SchemaExtensionError(RuntimeError):
 
 
 def _schema_path(app_config: AppConfig, filename: str) -> Path | None:
-    """Return an app's schema file path if it exists, matching ``rebac sync``.
+    """Return an app's schema file path if it exists, matching ``rebac sync``."""
 
-    An app with no filesystem ``path`` (a build-time model stand-in) carries no
-    zed and is skipped.
-    """
-
-    root = getattr(app_config, "path", None)
-    if root is None:
-        return None
-    path = Path(root) / filename
+    path = Path(app_config.path) / filename
     return path if path.exists() else None
 
 

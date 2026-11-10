@@ -130,8 +130,8 @@ class LiveChannelSession(LiveSession):
         media_item_class = self.live_impl.media_item_class
         media = tuple(
             media_item_class(
-                mime=getattr(fact, "mime", "application/octet-stream"),
-                name=getattr(fact, "name", ""),
+                mime=fact.mime,
+                name=fact.name,
                 content=self._download(payload, fact),
             )
             for fact in facts

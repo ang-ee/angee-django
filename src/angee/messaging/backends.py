@@ -281,16 +281,16 @@ class ParsedMessage:
         return canonical_json_sha256(chunks=(canonical,))
 
 
-def media_part(item: Any) -> ParsedPart:
+def media_part(item: MediaItem) -> ParsedPart:
     """Return one media part, preserving failed downloads as visible marker text.
 
     A media item with ``content=None`` is never dropped: it becomes a
     ``[media unavailable: ...]`` body marker so the message remains loss-aware.
     """
 
-    mime = str(getattr(item, "mime", "") or "application/octet-stream")
-    name = str(getattr(item, "name", "") or "")
-    content = getattr(item, "content", None)
+    mime = str(item.mime or "application/octet-stream")
+    name = str(item.name or "")
+    content = item.content
     if content is None:
         label = name or mime
         return ParsedPart(type="text/plain", role="body", text=f"[media unavailable: {label}]")
@@ -436,7 +436,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         logger.warning(
             "Channel backend %s does not support outbound delivery for message %s.",
             type(self).__name__,
-            getattr(message, "pk", None),
+            message.pk,
         )
         return DeliveryOutcome(accepted=False)
 

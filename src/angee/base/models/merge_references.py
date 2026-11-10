@@ -442,7 +442,9 @@ def _state(row: models.Model, identity: tuple[str, ...]) -> dict[str, Any]:
         if not field.primary_key
         and field.name not in identity
         and field.name not in _AUDIT_FIELDS
+        # Django temporal fields declare auto_now; other Field subclasses do not.
         and not getattr(field, "auto_now", False)
+        # Django temporal fields declare auto_now_add; other Field subclasses do not.
         and not getattr(field, "auto_now_add", False)
     }
 

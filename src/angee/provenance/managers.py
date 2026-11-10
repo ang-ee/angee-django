@@ -19,6 +19,7 @@ from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.provenance.querysets import model_history
+from angee.provenance.statements import StatementsMixin
 
 if TYPE_CHECKING:
     from angee.provenance.models import Changeset
@@ -109,7 +110,7 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
                 if table._meta.label_lower in touched:
                     for column in columns:
                         ids.update(touched_ids(table, column))
-                for statement in getattr(table, "statement_models", lambda: ())():
+                for statement in table.statement_models() if issubclass(table, StatementsMixin) else ():
                     if statement._meta.label_lower not in touched:
                         continue
                     subjects = touched_ids(statement, "subject_id")

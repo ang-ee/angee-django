@@ -590,6 +590,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     def _excluded_entry_keys(self) -> frozenset[EntryKey]:
         """Return project-excluded resource entry keys from settings."""
 
+        # Native Django hosts can load resources without composed project exclusions.
         raw = getattr(settings, "ANGEE_RESOURCE_EXCLUDED_ENTRIES", ())
         if raw is None:
             return frozenset()

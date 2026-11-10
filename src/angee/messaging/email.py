@@ -53,7 +53,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
     def outbound_email_configured(cls) -> bool:
         """Read the deployment's native email transport configuration decision."""
 
-        return bool(getattr(settings, "ANGEE_EMAIL_DELIVERY_CONFIGURED", False))
+        return bool(settings.ANGEE_EMAIL_DELIVERY_CONFIGURED)
 
     def outbound_sender(self) -> tuple[str, str]:
         """Resolve and validate this channel's configured default envelope sender.
@@ -79,7 +79,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         if not self.outbound_email_configured():
             logger.warning(
                 "Outbound email delivery is not configured; message %s was not sent.",
-                getattr(message, "pk", None),
+                message.pk,
             )
             raise IntegrationError("Outbound email delivery is not configured.")
         try:
@@ -90,7 +90,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         if not email.from_email or not (email.to or email.cc or email.bcc):
             logger.warning(
                 "Outbound email message %s has no complete from/to envelope; it was not sent.",
-                getattr(message, "pk", None),
+                message.pk,
             )
             raise IntegrationError("The email envelope is incomplete.")
         connection = mailers.default
@@ -267,10 +267,10 @@ class AnymailEmailChannelBackend(ChannelBackend):
 
 
 def _address(handle: Any) -> str:
-    value = str(getattr(handle, "value", "") or "").strip()
+    value = str(handle.value or "").strip()
     if "@" not in value:
         return ""
-    return formataddr((str(getattr(handle, "display_name", "") or "").strip(), value))
+    return formataddr((str(handle.display_name or "").strip(), value))
 
 
 def _source_addresses(message: Any, header: str) -> list[str]:

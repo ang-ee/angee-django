@@ -1510,11 +1510,8 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         reaches into the storage shape from outside.
         """
 
-        path_fn = getattr(self.storage, "path", None)
-        if path_fn is None:
-            return None
         try:
-            return Path(path_fn(self.storage_path))
+            return Path(self.storage.path(self.storage_path))
         except NotImplementedError, ValueError:
             return None
 
@@ -1763,7 +1760,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         relies on its single-writer serialization instead.
         """
 
-        nonce = getattr(self, "_upload_nonce", None)
+        nonce = self._upload_nonce
         with system_context(reason="storage.upload.consume_token"), transaction.atomic():
             locked = type(self)._base_manager.select_for_update().filter(pk=self.pk).first()
             if locked is None:

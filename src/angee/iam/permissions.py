@@ -22,7 +22,7 @@ from angee.iam.roles import platform_admin_role, subject_has_role
 def is_authenticated(user: Any) -> bool:
     """Return whether ``user`` is a real authenticated session user."""
 
-    return not isinstance(user, AnonymousUser) and bool(getattr(user, "is_authenticated", False))
+    return user is not None and not isinstance(user, AnonymousUser) and bool(user.is_authenticated)
 
 
 def is_platform_admin(user: Any) -> bool:

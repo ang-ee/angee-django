@@ -38,11 +38,11 @@ class IosBackup:
         if not manifest_db.is_file():
             raise BackupError(f"{self.path} is not an iPhone backup (no Manifest.db).")
         self._reject_encrypted()
+        connection: sqlite3.Connection | None = None
         try:
-            self._manifest = sqlite3.connect(f"file:{manifest_db}?mode=ro", uri=True)
+            connection = self._manifest = sqlite3.connect(f"file:{manifest_db}?mode=ro", uri=True)
             self._manifest.execute("SELECT fileID, domain, relativePath FROM Files LIMIT 0")
         except sqlite3.DatabaseError as error:
-            connection = getattr(self, "_manifest", None)
             if connection is not None:
                 connection.close()
             raise BackupError(f"{manifest_db} is not a readable iPhone backup manifest.") from error

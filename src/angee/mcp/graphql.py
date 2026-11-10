@@ -442,6 +442,7 @@ def _return_node(rtype: Any) -> tuple[Any, bool, str | None]:
     if isinstance(node, GraphQLList):
         element = get_named_type(node.of_type)
         return element, True, None
+    # graphql-core exposes fields only on object, interface, and input-object types.
     fields = getattr(node, "fields", {})
     if "results" in fields:
         element = get_named_type(fields["results"].type)

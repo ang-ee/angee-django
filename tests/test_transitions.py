@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from copy import copy
+from functools import wraps
+from inspect import signature
 from typing import Any
 
 import pytest
@@ -264,7 +266,7 @@ def test_transition_body_and_hook_share_one_commit(transition_task_table: None, 
     assert get_transition_save_field(task) is None
     assert task.body_save_field is None
     assert task.save_contexts == [None, "state"]
-    assert not hasattr(task, "_transition_fields")
+    assert not task._transition_fields
     assert task.commit_states == ([] if fail_hook else [TransitionTask.State.DONE])
     stored = TransitionTask.objects.get(pk=task.pk)
     assert stored.ready is fail_hook
@@ -320,7 +322,7 @@ def test_caught_hook_failure_leaves_outer_atomic_usable(transition_task_table: N
 
     assert task.commit_states == []
     assert get_transition_save_field(task) is None
-    assert not hasattr(task, "_transition_fields")
+    assert not task._transition_fields
     assert TransitionTask.objects.get(pk=task.pk).note == "outer survived"
 
 
@@ -333,7 +335,7 @@ def test_transition_body_rolls_back_after_concurrent_state_change(transition_tas
     with pytest.raises(TransitionNotAllowed, match="concurrent transition"):
         task.persist_with_body_write()
     assert get_transition_save_field(task) is None
-    assert not hasattr(task, "_transition_fields")
+    assert not task._transition_fields
     assert task.commit_states == []
     stored = TransitionTask.objects.get(pk=task.pk)
     assert stored.ready is True
@@ -650,7 +652,7 @@ def test_copy_persisted_state_copies_loaded_values_and_invalidates_relation_cach
         assert instance.lifecycle == IntegrationLifecycle.PAUSED
         assert instance.vendor_id == source.vendor_id
         assert not Integration._meta.get_field("vendor").is_cached(instance)
-        assert not hasattr(instance, "_angee_transition_write_fields")
+        assert instance._angee_transition_write_fields is None
         with pytest.raises(TransitionNotAllowed, match="direct assignment is not allowed"):
             instance.lifecycle = IntegrationLifecycle.DISCONNECTED
 
@@ -671,7 +673,7 @@ def test_copy_persisted_state_rejects_a_different_or_unsaved_row(invalid_source:
         StateTransitions.copy_persisted_state(instance, source, ("state",))
 
     assert instance.state == TransitionTask.State.DRAFT
-    assert not hasattr(instance, "_angee_transition_write_fields")
+    assert instance._angee_transition_write_fields is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -689,7 +691,7 @@ def test_copy_persisted_state_rejects_deferred_values_before_copying(
     assert instance.note == ""
     assert instance.state == TransitionTask.State.DRAFT
     assert "state" in source.get_deferred_fields()
-    assert not hasattr(instance, "_angee_transition_write_fields")
+    assert instance._angee_transition_write_fields is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -986,3 +988,33 @@ def test_donor_guards_refuse_competing_declarations() -> None:
         class Conflicting(First, Second, Source):
             class Meta:
                 app_label = "tests"
+
+
+@pytest.mark.django_db
+@isolate_apps()
+def test_wrapped_transition_keeps_declaration_and_bound_signature() -> None:
+    def outer(method):
+        @wraps(method)
+        def wrapped(*args, **kwargs):
+            return method(*args, **kwargs)
+        return wrapped
+
+    class WrappedTask(AngeeModel):
+        state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
+        transitions = StateTransitions(state, {TransitionTask.State.DRAFT: [TransitionTask.State.RUNNING]})
+
+        class Meta:
+            app_label = "tests"
+
+        @outer
+        @transition(state, source=TransitionTask.State.DRAFT, target=TransitionTask.State.RUNNING)
+        def start(self, note: str = "ready") -> str:
+            """Return the caller's note."""
+            return note
+
+    row = WrappedTask()
+    assert tuple(signature(row.start).parameters) == ("note",)
+    assert row.start.__doc__ == "Return the caller's note."
+    assert row.start("wrapped") == "wrapped"
+    assert row.state == TransitionTask.State.RUNNING
+    assert row._angee_transition_write_fields is None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from enum import Enum
 from typing import Any, Literal, Protocol, cast, overload
 
 from django.core import checks
@@ -145,6 +146,7 @@ class StateField[C: models.TextChoices | None](TextChoicesField[C]):
                     id="angee.E028",
                 )
             )
+        # Django fields acquire model only when contribute_to_class binds them.
         model = getattr(self, "model", None)
         if self.blank and not self.null and model is not None and not model._meta.abstract:
             errors.append(
@@ -164,7 +166,7 @@ class StateField[C: models.TextChoices | None](TextChoicesField[C]):
         member = enum_member_for(choices_enum, value)
         if member is not None:
             return member
-        raw = getattr(value, "value", value)
+        raw = value.value if isinstance(value, Enum) else value
         return super().to_python(raw)
 
     def pre_save(self, model_instance: models.Model, add: bool) -> Any:
@@ -189,11 +191,11 @@ def enum_member_for(choices_enum: Any, value: Any) -> Any | None:
 
     if isinstance(value, choices_enum):
         return value
-    raw = getattr(value, "value", value)
+    raw = value.value if isinstance(value, Enum) else value
     text = str(raw).strip()
     if not text:
         return None
-    member = getattr(choices_enum, "__members__", {}).get(text)
+    member = choices_enum.__members__.get(text)
     if member is not None:
         return member
     try:

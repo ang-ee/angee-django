@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
+from django.contrib.auth.models import User as DjangoUser
 from django.test import override_settings
 from rebac import system_context
 
@@ -24,10 +26,11 @@ def test_login_requires_an_active_person(kind: str, is_active: bool, allowed: bo
     assert can_authenticate_user(user) is allowed
 
 
-def test_login_rejects_anonymous_user_shapes() -> None:
-    """Missing IAM user attributes deny login instead of raising."""
+@pytest.mark.parametrize("user", [object(), AnonymousUser(), DjangoUser()])
+def test_login_rejects_non_iam_principals(user: object) -> None:
+    """Only the declared IAM owner can supply a login-capable principal."""
 
-    assert can_authenticate_user(object()) is False
+    assert can_authenticate_user(user) is False
 
 
 @override_settings(AUTHENTICATION_BACKENDS=["angee.iam.auth.ModelBackend"])

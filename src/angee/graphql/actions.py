@@ -72,6 +72,7 @@ class ActionResult:
     ) -> JSON | None:
         """Project field-keyed validation messages with caller-selected key casing."""
 
+        # Django ValidationError has error_dict only for field-keyed errors.
         if error is None or not hasattr(error, "error_dict"):
             return None
         field_errors: dict[str, list[str]] = {}
@@ -107,7 +108,9 @@ class ActionResult:
         return cls(
             ok=False,
             message=message,
-            code=getattr(error, "code", None) if isinstance(error, (DomainError, ValidationError)) else None,
+            code=(error.code if isinstance(error, DomainError)
+                  # Django ValidationError omits code on aggregate errors.
+                  else getattr(error, "code", None) if isinstance(error, ValidationError) else None),
             validation_errors=validation_errors,
         )
 
@@ -251,7 +254,7 @@ def session_user(info: strawberry.Info) -> Any:
         user = get_current_user(info)
     except (AttributeError, KeyError, ValueError) as error:
         raise PermissionDenied("Authentication required.") from error
-    if not getattr(user, "is_authenticated", False):
+    if not (user is not None and user.is_authenticated):
         raise PermissionDenied("Authentication required.")
     return user
 

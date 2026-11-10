@@ -88,10 +88,10 @@ class AuditMixin(models.Model):
         touched: set[str] = set()
         if user_id is not None:
             if self._state.adding:
-                if getattr(self, "created_by_id", None) is None:
+                if self.created_by_id is None:
                     self.created_by_id = user_id
                     touched.add("created_by")
-                if getattr(self, "updated_by_id", None) is None:
+                if self.updated_by_id is None:
                     self.updated_by_id = user_id
                     touched.add("updated_by")
             else:

@@ -241,7 +241,8 @@ class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHis
         rate = rates.order_by(*ordering).values_list("rate", flat=True).first()
         if rate is None:
             raise self.model.DoesNotExist(
-                f"No {code}-relative rate for {getattr(currency, 'code', currency)} on or before {draw_date}."
+                f"No {code}-relative rate for {currency.code if isinstance(currency, Currency) else currency} "
+                f"on or before {draw_date}."
             )
         return rate
 

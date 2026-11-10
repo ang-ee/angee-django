@@ -26,6 +26,7 @@ def create_iphone_backup_mount(
         root = validate_local_folder_root(path)
         backup = IosBackup(root)
     except (BackupError, ValidationError) as error:
+        # Django ValidationError has error_dict only for field-keyed errors.
         if isinstance(error, ValidationError) and hasattr(error, "error_dict"):
             raise
         messages = error.messages if isinstance(error, ValidationError) else [str(error)]

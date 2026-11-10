@@ -10,19 +10,17 @@ import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache, partial, reduce
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import strawberry
 import strawberry_django
 from asgiref.sync import sync_to_async
-from django.conf import settings
 from django.core.exceptions import BadRequest, FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.expressions import BaseExpression, Combinable, CombinedExpression
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
-from django.utils.module_loading import import_string
 from rebac import PermissionDenied, RebacMixin
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
@@ -55,7 +53,7 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
-from angee.base.hooks import resolve_hooks
+from angee.base.hooks import resolve_hook, resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
@@ -198,6 +196,16 @@ class _MutationResultExtension(FieldExtension):
     ) -> Any:
         row = await next_(source, info, **kwargs)
         return await sync_to_async(self.refetch)(row, info)
+
+
+@runtime_checkable
+class LinesWriteBackend(Protocol):
+    """The write extension consumed by the document-save mutation."""
+
+    def save(
+        self, info: strawberry.Info, pk: str, patch: dict[str, Any],
+        line_rows: list[dict[str, Any]] | None, *, expected_revision: int | None = None,
+    ) -> Any: ...
 
 
 class AngeeHasuraWriteBackend:
@@ -477,7 +485,7 @@ class AngeeHasuraWriteBackend:
             except FieldDoesNotExist:
                 field = None
             try:
-                if getattr(field, "many_to_many", False):
+                if field is not None and field.many_to_many:
                     out[key] = (
                         [_write_public_instance(related_model, item) for item in value] if value is not None else None
                     )
@@ -507,6 +515,7 @@ def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) 
         field = owner_model._meta.get_field(name)
     except FieldDoesNotExist:
         return value
+    # django-choices-field declares choices_enum only on its enum-backed fields.
     enum = getattr(field, "choices_enum", None)
     if enum is None:
         return value
@@ -762,6 +771,7 @@ def _relation_filter_decoders(
         related = field.related_model
         if public_data_id_field(related) is None:
             continue
+        # Django to-one fields expose target_field; to-many relations do not.
         target = getattr(field, "target_field", None)
         if target is not None and not target.primary_key and name not in decoders:
             raise ImproperlyConfigured(
@@ -785,7 +795,7 @@ def _public_id_field_models(
             field = model._meta.get_field(name)
         except FieldDoesNotExist as error:
             raise ImproperlyConfigured(f"{model._meta.label} public id field {name!r} does not exist.") from error
-        related_model = getattr(field, "related_model", None)
+        related_model = field.related_model
         if not isinstance(related_model, type) or not issubclass(related_model, models.Model):
             raise ImproperlyConfigured(f"{model._meta.label} public id field {name!r} must be a relation.")
         related[name] = related_model
@@ -1123,6 +1133,7 @@ def _relation_group_key_encoders(
 
     encoders: dict[str, Callable[[Any], Any]] = {}
     for path, field in _relation_axis_fields(model, paths).items():
+        # Django to-one fields expose target_field; to-many relations do not.
         target = getattr(field, "target_field", None)
         if target is not None and not target.primary_key:
             raise ImproperlyConfigured(
@@ -1304,7 +1315,7 @@ def _group_bucket_drills(
         if axis is None:
             raise ValueError(f"{model._meta.label} has no group axis {path!r}.")
         if axis.kind != "relation" and any(
-            other != path and path.startswith(f"{other}__") and getattr(axes.get(other), "kind", None) == "relation"
+            other != path and path.startswith(f"{other}__") and other in axes and axes[other].kind == "relation"
             for other in selected
         ):
             continue
@@ -1727,15 +1738,15 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         }
     resource_write_backend = active_write_backend
     insert_arguments = None
-    adapter_path = getattr(settings, "ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER", "")
-    if insert and adapter_path:
-        resource_write_backend, insert_arguments = import_string(adapter_path)(model, active_write_backend)
+    write_adapter = resolve_hook("ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER") if insert else None
+    if write_adapter is not None:
+        resource_write_backend, insert_arguments = write_adapter(model, active_write_backend)
     declared_writable = [seq for seq in (writable, insertable, updatable) if seq is not None]
     _check_writable_relations_decoded(
         model,
         writable=[name for seq in declared_writable for name in seq] if declared_writable else None,
         id_column=id_column,
-        declared={*(field_id_decode or {}), *getattr(active_write_backend, "public_id_fields", {})},
+        declared=field_id_decode or {},
         surface=f"resource {resource_name!r}",
     )
     if lines is not None:
@@ -1953,9 +1964,9 @@ def _is_writable_relation(field: Any) -> bool:
 
     if not isinstance(field, models.Field):
         return False  # a reverse accessor is never a client-settable column
-    if not (is_to_one_relation(field) or getattr(field, "many_to_many", False)):
+    if not (is_to_one_relation(field) or field.many_to_many):
         return False
-    return bool(getattr(field, "many_to_many", False) or getattr(field, "editable", False))
+    return bool(field.many_to_many or field.editable)
 
 
 def _check_writable_relations_decoded(
@@ -2047,7 +2058,7 @@ def _attach_lines_save(
     line_input = resource.nested_input_types.get(lines.field)
     if line_input is None:
         raise ImproperlyConfigured(f"{res} declares lines but built no nested line input.")
-    if not callable(getattr(write_backend, "save", None)):
+    if not isinstance(write_backend, LinesWriteBackend) or not callable(write_backend.save):
         raise ImproperlyConfigured(
             f"{res} declares lines but its write_backend {type(write_backend).__name__} is not "
             "lines-aware (it must expose save(info, pk, patch, lines))."
@@ -2201,6 +2212,7 @@ def _line_lock_field(lines: HasuraLines, schema: Any) -> str | None:
     wire_name = resource_wire_field_name(lines.node, "locked_fields")
     node_name = resource_type_name(lines.node)
     node_type = schema.get_type(node_name) if node_name is not None else None
+    # graphql-core exposes fields only on object, interface, and input-object types.
     if wire_name is None or node_type is None or wire_name not in getattr(node_type, "fields", {}):
         raise ImproperlyConfigured(
             f"editable lines {lines.model._meta.label}.{lines.field} lock rows; "
@@ -2468,7 +2480,7 @@ def _hasura_aggregate_measures(
     measures: list[DataAggregateMeasureMetadata] = []
     for path in aggregatable:
         field = _require_group_field(model, path)
-        if getattr(field, "primary_key", False):
+        if isinstance(field, models.Field) and field.primary_key:
             continue
         for op in _measure_ops_for_field(field):
             measures.append(DataAggregateMeasureMetadata(op=op, field=path, input=path))

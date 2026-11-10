@@ -34,6 +34,8 @@ class ImplDefaultsMixin(models.Model):
 
         abstract = True
 
+    _loaded_impl_keys: dict[str, Any]
+
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
         """Require one concrete JSON config owner for typed row implementations.
@@ -103,7 +105,7 @@ class ImplDefaultsMixin(models.Model):
 
         refreshed = None if fields is None else set(fields)
         super().refresh_from_db(using=using, fields=refreshed, from_queryset=from_queryset)
-        loaded = dict(getattr(self, "_loaded_impl_keys", {}))
+        loaded = dict(self._loaded_impl_keys)
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField) or not field.create_only:
                 continue
@@ -116,13 +118,14 @@ class ImplDefaultsMixin(models.Model):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Record the caller-supplied field names so create-time seeding skips them."""
 
+        self._loaded_impl_keys = {}
         self._impl_provided_fields = frozenset(kwargs)
         super().__init__(*args, **kwargs)
 
     def mark_impl_provided_fields(self, field_names: Iterable[str]) -> None:
         """Record fields assigned after construction by a structured write ingress."""
 
-        provided: frozenset[str] = getattr(self, "_impl_provided_fields", frozenset())
+        provided: frozenset[str] = self._impl_provided_fields
         self._impl_provided_fields = provided | frozenset(field_names)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
@@ -135,7 +138,7 @@ class ImplDefaultsMixin(models.Model):
         self.validate_impl_keys(update_fields=update_fields)
         self.validate_impl_configs(update_fields=update_fields)
         super().save(*args, **kwargs)
-        loaded = dict(getattr(self, "_loaded_impl_keys", {}))
+        loaded = dict(self._loaded_impl_keys)
         updated = None if update_fields is None else set(update_fields)
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField) or field.attname not in self.__dict__:
@@ -149,7 +152,7 @@ class ImplDefaultsMixin(models.Model):
 
         if not self._state.adding:
             return
-        provided: frozenset[str] = getattr(self, "_impl_provided_fields", frozenset())
+        provided: frozenset[str] = self._impl_provided_fields
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField):
                 continue
@@ -171,7 +174,7 @@ class ImplDefaultsMixin(models.Model):
         if self._state.adding and self.pk is None:
             return
         updated = None if update_fields is None else set(update_fields)
-        loaded = getattr(self, "_loaded_impl_keys", {})
+        loaded = self._loaded_impl_keys
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField) or not field.create_only:
                 continue
@@ -271,9 +274,9 @@ class ImplDefaultsMixin(models.Model):
                 field = self._meta.get_field(field_name)
             except FieldDoesNotExist:
                 continue
-            if field_name in provided or getattr(field, "attname", field_name) in provided:
+            attname = field.attname if isinstance(field, models.Field) else field_name
+            if field_name in provided or attname in provided:
                 continue
-            attname = getattr(field, "attname", field_name)
             before = getattr(self, attname)
             targets = _relation_default_queryset(field, value, querysets=lambda related: related._base_manager.all())
             if targets is not None:

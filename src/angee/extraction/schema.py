@@ -47,6 +47,7 @@ class ExtractionType(AngeeNode):
     def display_name(self) -> str:
         """Use the target's label only while the viewer can read that record."""
         row = cast(Any, self)
+        # Django Prefetch stores the reader-scoped targets at _readable_target's to_attr names.
         target = getattr(row, "_readable_file" if row.file_id is not None else "_readable_message", None)
         return str(target) if target is not None else str(row._meta.verbose_name)
 

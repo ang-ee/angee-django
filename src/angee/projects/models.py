@@ -451,7 +451,8 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         title = strip_null_bytes(title or "").strip()
         if not title:
             raise ValidationError({"title": "A record task needs a title."})
-        assignee_id = getattr(assignee, "pk", assignee) or actor_user_id(current_actor())
+        assignee_id = assignee.pk if isinstance(assignee, models.Model) else assignee
+        assignee_id = assignee_id or actor_user_id(current_actor())
         if assignee_id is None:
             raise ValidationError({"assignee": "A record task needs an assignee."})
         kinds = self.model.activity_type.field.related_model
@@ -1437,15 +1438,16 @@ class Task(
     def priority_rank(self) -> int:
         """Use the SQL annotation or the priority field's declared enum order."""
 
-        if hasattr(self, "_priority_rank"):
-            return self._priority_rank
+        if (rank := self.__dict__.get("_priority_rank")) is not None:
+            return rank
         return list(type(self).priority.field.choices_enum).index(self.priority)
 
     def promoted_phase(self) -> str | None:
         """Use the annotation or fetch the phase through the same scoped expression."""
 
-        if hasattr(self, "_promoted_phase"):
-            return self._promoted_phase
+        phase = self.__dict__.get("_promoted_phase", models.DEFERRED)
+        if phase is not models.DEFERRED:
+            return phase
         actor = self.actor() or current_actor()
         if self.pk is None or actor is None:
             return None
@@ -1644,7 +1646,7 @@ class Task(
         """Drop this task for ``reason``, idempotently preserving the drop time."""
 
         try:
-            reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
+            reason_member = self.TaskDroppedReason(reason)
         except ValueError as error:
             raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
         with transaction.atomic():
@@ -2070,14 +2072,12 @@ class ProjectBindingsMixin(models.Model):
 class FolderProjects(ProjectBindingsMixin, Composable, extends="storage.Folder"):
     """Compose project binding collection onto storage folders."""
 
-
     class Meta:
         abstract = True
 
 
 class DriveProjects(ProjectBindingsMixin, Composable, extends="storage.Drive"):
     """Projects-owned reverse collection for storage-drive bindings."""
-
 
     class Meta:
         abstract = True
@@ -2086,7 +2086,6 @@ class DriveProjects(ProjectBindingsMixin, Composable, extends="storage.Drive"):
 class IntegrationProjects(ProjectBindingsMixin, Composable, extends="integrate.Integration"):
     """Projects-owned reverse collection for canonical messaging-channel bindings."""
 
-
     class Meta:
         abstract = True
 
@@ -2094,14 +2093,12 @@ class IntegrationProjects(ProjectBindingsMixin, Composable, extends="integrate.I
 class ThreadProjects(ProjectBindingsMixin, Composable, extends="messaging.Thread"):
     """Projects-owned reverse collection for messaging-thread bindings."""
 
-
     class Meta:
         abstract = True
 
 
 class VaultProjects(ProjectBindingsMixin, Composable, extends="knowledge.Vault"):
     """Projects-owned reverse collection for knowledge-vault bindings."""
-
 
     class Meta:
         abstract = True

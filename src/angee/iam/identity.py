@@ -74,11 +74,7 @@ def _label_memo(request: HttpRequest | None) -> dict[Any, str | None] | None:
 
     if not isinstance(request, HttpRequest):
         return None
-    memo: dict[Any, str | None] | None = getattr(request, "_iam_user_label_memo", None)
-    if memo is None:
-        memo = {}
-        setattr(request, "_iam_user_label_memo", memo)
-    return memo
+    return request.__dict__.setdefault("_iam_user_label_memo", {})
 
 
 def user_display_labels(
