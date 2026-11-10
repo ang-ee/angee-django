@@ -63,6 +63,17 @@ def require_rebac_queryset[M: models.Model](model: type[M], *, actor: Any = _AMB
     return queryset.with_actor(actor) if actor is not None else queryset.none()
 
 
+def reader_queryset[M: models.Model](model: type[M], actor: Any) -> RebacQuerySet[M]:
+    """Read as a pinned actor when given, otherwise through REBAC's ambient scope.
+
+    Unlike ``require_rebac_queryset(..., actor=None)``, an absent reader permits
+    ambient system work; without an ambient actor or system scope, reads fail closed.
+    """
+
+    rows = require_rebac_queryset(model) if actor is None else require_rebac_queryset(model, actor=actor)
+    return rows.with_action("read")
+
+
 def relation_read_queryset[M: models.Model](model: type[M], source: models.QuerySet[Any]) -> RebacQuerySet[M]:
     """``model``'s ``read`` queryset for the rows ``source`` relates to, read as ``source`` reads.
 
@@ -78,9 +89,7 @@ def relation_read_queryset[M: models.Model](model: type[M], source: models.Query
 
     if isinstance(source, EmptyQuerySet):
         return require_rebac_queryset(model, actor=None).with_action("read").none()
-    actor = relation_actor(source)
-    related = require_rebac_queryset(model) if actor is None else require_rebac_queryset(model, actor=actor)
-    return related.with_action("read")
+    return reader_queryset(model, relation_actor(source))
 
 
 def scoped_relation_read[M: models.Model](model: type[M], source: models.QuerySet[Any]) -> RebacQuerySet[M]:

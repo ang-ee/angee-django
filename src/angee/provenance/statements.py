@@ -46,7 +46,7 @@ from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import TimestampMixin, update_fields_with_auto_now
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import instance_actor, relation_read_queryset, require_rebac_queryset
+from angee.base.permissions import instance_actor, reader_queryset, require_rebac_queryset
 from angee.base.prefetch import ReaderMemo
 from angee.base.querysets import by_key, query_batch_size
 from angee.base.validators import validate_value
@@ -125,10 +125,7 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
         absent actor outside that scope fails closed.
         """
 
-        source = require_rebac_queryset(self.model.statement_subject_model)
-        if actor is not None:
-            source = source.with_actor(actor)
-        subjects = relation_read_queryset(self.model.statement_subject_model, source)
+        subjects = reader_queryset(self.model.statement_subject_model, actor)
         rows = self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
         member_names = sorted({name for aspect in self.model.statement_aspects.values() for name in aspect.members})
         for name in member_names:
@@ -138,7 +135,7 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
             related = field.remote_field.model
             if model_resource_type(related) is None:
                 continue
-            members = relation_read_queryset(related, source).scoped()
+            members = reader_queryset(related, actor).scoped()
             rows = rows.filter(
                 Q(**{f"{field.attname}__isnull": True})
                 | Q(**{f"{field.attname}__in": models.Subquery(members.values(field.target_field.name))})
@@ -255,10 +252,7 @@ def _readable_statement_reads(
     }
     readable_sources: dict[tuple[type[models.Model], str, str], models.Model] = {}
     for (model, id_attr), sources in sources_by_model.items():
-        reader_source = require_rebac_queryset(model)
-        if actor is not None:
-            reader_source = reader_source.with_actor(actor)
-        visible = relation_read_queryset(model, reader_source).filter(**{f"{id_attr}__in": sources})
+        visible = reader_queryset(model, actor).filter(**{f"{id_attr}__in": sources})
         readable_sources.update({
             (model, id_attr, str(getattr(row, id_attr))): row for row in visible
         })

@@ -12,9 +12,11 @@ from datetime import UTC, date, datetime, timedelta
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.db import connection
 from django.test import TransactionTestCase
 from rebac import actor_context, system_context
 
+from angee.base.testing.queries import capture_planner_memory, statement_startswith
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import measure_graphql_document
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
@@ -225,19 +227,25 @@ BUDGETS = {
     # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
     ("member", "transcript"): (3, 32, 2600),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2593 KB;
     # identity_reader: 2593 -> 2600 KB
-    # REBAC 0.32's content-hash id-set names lengthen SQL while sharing reduces
-    # PostgreSQL planning memory; the PostgreSQL planner gate is the binding budget.
-    # SQLite measurements rounded up to KiB: person 847,914 -> 829; projects 264,912 -> 259.
+    # These documents span multiple planned statements, so statement counts bind
+    # the read. REBAC 0.32's content-hash CTE names alone grow SQLite text from the
+    # 805/251 KiB ceilings to measured 847,914/264,912 bytes, rounded to 829/259 KiB.
+    # The PostgreSQL gate below additionally budgets the sum of SELECT allocations.
     ("member", "person"): (2, 20, 829),
     ("member", "projects"): (3, 10, 259),
     ("member", "identity"): (1, 1, 2),
 }
 
 
+# SELECT count and total planner allocation rounded up to MiB, PostgreSQL 17.
+# Person: 449,416 KiB used / 476,477 KiB allocated across 18 SELECTs; two audit
+# INSERTs also count against the unchanged 20-statement document ceiling.
+# Projects: 117,929 KiB used / 142,513 KiB allocated across all 10 statements.
+PLANNER_BUDGETS = {"person": (18, 466), "projects": (10, 140)}
+
+
 class ConsoleDocumentBudgetTests(TransactionTestCase):
     """Each console read stays within its fixed statement and SQL-size ceiling."""
-
-    reset_sequences = True
 
     def setUp(self):
         call_command("rebac", "sync", verbosity=0)
@@ -344,3 +352,31 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
                     read = measure_graphql_document(schema, document, variables, actor=actor)
                     self.assertEqual(ROWS[name](read.data), rows)
                     read.assert_ceiling(statements=statements, sql_kb=sql_kb)
+
+    def test_member_reads_planner_memory(self):
+        """Budget every SELECT planned by the member's person and projects documents."""
+
+        if connection.vendor != "postgresql" or connection.pg_version < 170000:
+            self.skipTest("EXPLAIN MEMORY requires PostgreSQL 17 or later")
+        self.seed(self.admin, "admin")
+        documents = self.documents(self.seed(self.member, "member"))
+        schema = GraphQLSchemas.from_discovery().build("console")
+        for name in ("person", "projects"):
+            with self.subTest(document=name):
+                document, variables = documents[name]
+                measure_graphql_document(schema, document, variables, actor=self.member)
+                with capture_planner_memory(lambda sql: statement_startswith(sql, "SELECT")) as plans:
+                    read = measure_graphql_document(schema, document, variables, actor=self.member)
+                rows, statements, _sql_kb = BUDGETS["member", name]
+                self.assertEqual(ROWS[name](read.data), rows)
+                self.assertLessEqual(read.statements, statements)
+                selects, memory_mib = PLANNER_BUDGETS[name]
+                self.assertEqual(len(plans), selects)
+                self.assertTrue(all(plan.allocated_kib > 0 for plan in plans))
+                allocated_kib = sum(plan.allocated_kib for plan in plans)
+                self.assertLessEqual(
+                    allocated_kib,
+                    memory_mib * 1024,
+                    f"{name}: PostgreSQL allocated {allocated_kib} KiB across {selects} SELECTs; "
+                    f"ceiling {memory_mib} MiB. Ratchet downward when cost falls; never raise for a regression.",
+                )

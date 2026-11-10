@@ -27,7 +27,7 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from openai import DefaultHttpxClient, OpenAI
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.base.models.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -105,6 +105,49 @@ def test_integration_node_resolves_nested_relations(
         "owner": {"username": "conn-node-owner"},
         "account": None,
     }
+
+
+@pytest.mark.parametrize(
+    "vendor_name,operator_name,label",
+    [
+        ("Friendly Vendor", "", "Friendly Vendor (connected)"),
+        ("", "", "public-branding (connected)"),
+        ("Friendly Vendor", "My connection", "My connection"),
+    ],
+)
+def test_integration_branding_does_not_grant_vendor_read(
+    composed_tables: None,
+    vendor_name: str,
+    operator_name: str,
+    label: str,
+) -> None:
+    """An ordinary owner reads public labels while the Vendor catalogue stays refused."""
+
+    integration = make_integration("public-branding", display_name=operator_name)
+    owner = integration.owner
+    with system_context(reason="test public vendor branding"):
+        Vendor.objects.filter(pk=integration.vendor_id).update(display_name=vendor_name)
+    with actor_context(owner):
+        assert not Vendor.objects.filter(pk=integration.vendor_id).exists()
+        with pytest.raises(Vendor.DoesNotExist):
+            Vendor.objects.get(pk=integration.vendor_id)
+        ordinary = Integration.objects.get(pk=integration.pk)
+        assert ordinary.display_label == label
+        assert str(ordinary) == f"public-branding:{ordinary.public_id}"
+        projected = Integration.objects.annotate(**Integration.oauth_projection_expressions()).get(pk=integration.pk)
+        with CaptureQueriesContext(connection) as captured:
+            assert projected.display_label == label
+            assert str(projected) == f"public-branding:{ordinary.public_id}"
+        assert len(captured) == 0
+    result = _data(
+        execute_schema(
+            _schema(),
+            "query($id: String!) { integrations_by_pk(id: $id) { display_name } }",
+            {"id": _public_id(integration)},
+            user=owner,
+        )
+    )
+    assert result["integrations_by_pk"] == {"display_name": label}
 
 
 def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables: None) -> None:
@@ -2114,7 +2157,7 @@ def test_connection_admission_query_count_does_not_grow_with_rows(composed_table
     first = make_integration("batched-admission-0", model=VcsBridge, backend_class="stub", lifecycle="paused")
     actor = first.owner if actor_kind == "owner" else _platform_admin("batched-admission-admin")
     schema = _schema()
-    query = "{ integrations { can_connect can_resume can_retry_discovery } }"
+    query = "{ integrations { display_name can_connect can_resume can_retry_discovery } }"
     _data(execute_schema(schema, query, user=actor))  # Warm Django's model/content-type metadata.
     with CaptureQueriesContext(connection) as single_queries:
         rows = _data(execute_schema(schema, query, user=actor))["integrations"]
@@ -2130,6 +2173,7 @@ def test_connection_admission_query_count_does_not_grow_with_rows(composed_table
     with CaptureQueriesContext(connection) as many_queries:
         rows = _data(execute_schema(schema, query, user=actor))["integrations"]
     assert len(rows) == 6 and all(row["can_resume"] == (actor_kind == "admin") for row in rows)
+    assert {row["display_name"] for row in rows} == {f"Batched-Admission-{index} (paused)" for index in range(6)}
     assert len(many_queries) <= len(single_queries) + 1
 
 

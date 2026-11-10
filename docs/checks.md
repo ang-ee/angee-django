@@ -89,6 +89,7 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
 [comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
+[OIDC disconnect admission under the user lock](../tests/test_oidc.py),
 knowledge, [pgvector test-database readiness](../tests/test_postgresql_extensions.py),
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py)
 and [webform submission](../tests/test_messaging_webform_submission.py) races,
@@ -98,7 +99,8 @@ integrate streams and workflow integrate steps, the
 [grouped rows](../tests/test_group_rows.py) partitions, the
 messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 [thread and message reads](../tests/test_messaging_inbox_read.py) and
-[part reads](../tests/test_inbox_part_reads.py), and the composed
+[part reads](../tests/test_inbox_part_reads.py), the composed member
+[person/projects planner budgets](../tests/test_composed_query_budgets.py), and the composed
 [intake access decision](../tests/test_intake_access_decision.py). It also runs
 [task ordering](../tests/test_task_rank_allocation.py),
 [record tasks](../tests/test_projects_record_tasks.py), and
@@ -234,6 +236,14 @@ read returns beside its ceiling, so a read that loses rows cannot pass. The
 console app's inbox, transcript, person, projects and current-user reads for a
 platform admin and a member, each after one warm execution, in the
 [composed query-budget host](../tests/test_composed_query_budgets.py) on SQLite.
+
+PostgreSQL 17 planner gates use the same shared query-support owner's
+`capture_planner_memory`, preserving SQL parameters for `EXPLAIN (MEMORY)` without
+`ANALYZE`. Timeline and inbox parts each budget a single planned statement. The
+member person/projects documents budget the sum of every SELECT's allocation,
+not peak resident memory; their total statement ceilings also count audit writes.
+The PostgreSQL CI selection runs the composed budget's `[postgresql]` node; its
+`[sqlite]` node retains the complete console document text/statement budgets.
 
 ### Owner Search
 

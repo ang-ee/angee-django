@@ -1060,7 +1060,7 @@ class IntegrationConnectionMixin:
         extensions=[PermissionsExtension(("write",))],
         prefetch_related=[_connection_credential],
         annotate={
-            **{name: partial(_oauth_projection, name) for name in ("_connection_vendor_slug", "_connection_impl_key")},
+            name: partial(_oauth_projection, name) for name in ("_connection_vendor_branding", "_connection_impl_key")
         },
     )
     def can_connect(self) -> bool:
@@ -1150,7 +1150,7 @@ class IntegrationOAuthMixin:
     @strawberry_django.field(
         only=["vendor_id", "concrete_type_id"],
         annotate={
-            name: partial(_oauth_projection, name) for name in ("_connection_vendor_slug", "_connection_impl_key")
+            name: partial(_oauth_projection, name) for name in ("_connection_vendor_branding", "_connection_impl_key")
         },
     )
     def is_oauth_connectable(self) -> bool:
@@ -1170,7 +1170,10 @@ class IntegrationLabelMixin(IntegrationConnectionMixin):
     type without adding a GraphQL interface to the SDL.
     """
 
-    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"], prefetch_related=["vendor"])
+    @strawberry_django.field(
+        only=["display_name", "vendor_id", "lifecycle"],
+        annotate={"_connection_vendor_branding": partial(_oauth_projection, "_connection_vendor_branding")},
+    )
     def display_name(self) -> str:
         """Return the operator label, falling back to the vendor-derived one."""
 

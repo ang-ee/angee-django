@@ -22,6 +22,7 @@ from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- 
 from tests.tables import model_tables
 
 from angee.base.models.base import AngeeModel
+from angee.base.testing.queries import statement_startswith
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
@@ -2535,7 +2536,7 @@ def test_content_type_label_rows_hash_labels_not_ids(tmp_path: Path) -> None:
             assert not [
                 query["sql"]
                 for query in queries
-                if query["sql"].startswith(("INSERT", "UPDATE", "DELETE"))
+                if statement_startswith(query["sql"], ("INSERT", "UPDATE", "DELETE"))
                 and any(table in query["sql"] for table in tables)
             ]
 

@@ -54,7 +54,7 @@ from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
 from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
+from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user, user_subject_ref
 from angee.base.prefetch import prefetched
 from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, ClosedUpdateQuerySet
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
@@ -957,7 +957,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 clarification_by_manager=manager,
                 clarification_default_visibility=default,
                 clarification_surrendered=audience == "managers",
-                visibility="restricted" if audience == "managers" else default,
+                visibility=task_model.TaskVisibility.RESTRICTED if audience == "managers" else default,
                 assignee_id=locked.facilitator_id,
             )
             with actor_context(_CLARIFICATION_SYSTEM_ACTOR):
@@ -1959,7 +1959,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 raise ValidationError({"round": "This round is not accepting proposal shells."})
             self.round = locked_round
             if self.responder_id is not None:
-                subject = SubjectRef.of(user_subject_type(), str(self.responder_id))
+                subject = user_subject_ref(user_id=self.responder_id)
                 if (
                     backend()
                     .check_access(subject=subject, action="manage", resource=to_object_ref(locked_round))

@@ -10,6 +10,36 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Integration branding: the existing public vendor projection carries slug and
+  display name together. Unnamed integration and inbox channel labels fall back
+  to that branding; stable labels and connection selection compose the same
+  owner. GraphQL annotates the branding instead of prefetching a protected Vendor.
+  The Vendor catalogue remains admin-only. Record-reference guards explicitly
+  allow one bounded represented-content-type read per compile, included in
+  statement budgets; declaration and optimizer probes remain query-free.
+- Reader scopes: `base.permissions.reader_queryset(model, actor)` pins a given
+  actor and otherwise follows ambient scope. Relation reads, record-target
+  prefetches, sender-name projections, party/circle reads, history, statement
+  endpoints and evidence display compose it; same-model source querysets used
+  only for reader selection are removed. Evidence admission still requires an
+  explicit actor.
+- Query checks: `angee.base.testing.queries` classifies captured SQL by its outer
+  statement, including CTE-prefixed reads and writes; `angee-base[testing]`
+  declares `sqlparse>=0.6,<0.7`. Its shared `capture_planner_memory` measures
+  parameterized statements with PostgreSQL 17's `EXPLAIN (MEMORY)`. Timeline,
+  inbox parts, and composed member person/projects reads now gate planner
+  allocation; document gates sum the separately planned SELECT allocations.
+  SQLite statement/text ceilings remain. Inbox SQL also bounds every message-table
+  permission CTE body: one on PostgreSQL, five distinct permission stages on SQLite.
+- OIDC: JWKS fetches compose `integrate.oauth.client.oauth_get_json`, sharing
+  discovery/userinfo headers and private-provider policy. Transport, status and
+  JSON failures map to `PyJWKClientConnectionError`; PyJWT retains key parsing
+  and JWK-set caching.
+  Direct disconnect-guard tests now hold the caller-owned transaction through
+  admission, matching production, and run in PostgreSQL CI so user locks are exercised.
+- Statements: `StatementsMixin.statements` declares the subject-bound statement
+  descriptor contract for donors; `StatementRecords` installs the concrete accessor.
+
 - Base: `AngeeModel` declares `change_read_resource`, `change_related_records`
   and `change_batch_targets`; adapters dispatch through these contracts.
   `AngeeQuerySetMixin` and `SCHEMA_BINDING` replace their underscored names.
@@ -20,9 +50,10 @@ live in code docstrings.
   reads are unscoped. `prefetched_objects` reads Django's materialized ordinary
   relation cache without evaluation (`None` is a miss, `[]` an empty hit).
   `base.permissions.user_subject_ref` is the canonical inverse of `actor_user_id`;
-  bare user keys no longer trigger a database read. Messaging's historical import
-  remains an alias; thread reader grants and revocations still require an existing
-  user explicitly. `retained_reference_exists(cls, lookup)` drops the unused
+  bare user keys no longer trigger a database read. Thread reader grants and
+  revocations share one existing-user lookup; the unused messaging alias is removed.
+  Proposal responders and storage's wildcard share compose the canonical owner.
+  `retained_reference_exists(cls, lookup)` drops the unused
   `record` argument; overrides and callers must use the lookup-only signature.
 - Base writes: immutable changed values retain their identity; mutable values
   are copied before observers run. `bulk_updated` carries only `instances` and
@@ -117,9 +148,11 @@ live in code docstrings.
   mapping revision; a real increase opens one baseline generation, preserving
   links and resetting the cursor. `SyncStream.mapping_version` is nullable with
   no default: an unknown version is initialized under the integration lock from
-  the minimum `RecordLink.mapping_version`, or the declared version when there
-  are no links. Deploying streams whose links are already current preserves
-  progress and closed snapshots; an older link triggers exactly one replay.
+  the minimum applied `RecordLink.mapping_version` (`applied_at IS NOT NULL`), or
+  the declared version when there are no applied links. Never-applied observations,
+  quarantines and pinned links do not lower the seed. Deploying streams whose
+  applied links are already current preserves progress and closed snapshots; an
+  older applied link triggers exactly one replay.
   Projects adding this column must generate a nullable `AddField` with no default
   so existing streams start unknown. Hosts retaining the earlier column addition
   need `AlterField` to `PositiveIntegerField(null=True, blank=True)`, removing
@@ -388,7 +421,12 @@ live in code docstrings.
 
 ## Unreleased — django-zed-rebac 0.32
 
-- The base addon requires `django-zed-rebac>=0.32.0,<0.33` (GraphQL its
+- In 0.32.1, cross-row validation retains queryset-level bypass authority instead
+  of losing it during save admission. Instance sudo audit deduplication follows
+  transaction/savepoint rollback, so a rolled-back audit cannot suppress the next
+  committed bypass entry.
+
+- The base addon requires `django-zed-rebac>=0.32.1,<0.33` (GraphQL its
   `strawberry-django` extra, the dev group its `caveats` extra); the engine now
   requires `django-cte>=5.0.1,<5.1` (locked at the tested 5.0.1).
 - Equal permission id sets across embedded SELECT scopes share one outer

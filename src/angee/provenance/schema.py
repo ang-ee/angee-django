@@ -31,7 +31,7 @@ from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
 from angee.base.pagination import valid_page_size
-from angee.base.permissions import relation_read_queryset, require_rebac_queryset
+from angee.base.permissions import reader_queryset, relation_read_queryset, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
@@ -321,9 +321,7 @@ class RecordHistory:
         self.record = record
         self.actor = actor
         self.model = type(record)
-        self.source = require_rebac_queryset(self.model)
-        if actor is not None:
-            self.source = self.source.with_actor(actor)
+        self.source = reader_queryset(self.model, actor)
         self.scopes = record.history_scope()
         self.statement_scopes: dict[type[Statement], models.Q] = {}
         for model, scope in record.history_scopes().items():

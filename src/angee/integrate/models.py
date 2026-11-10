@@ -39,6 +39,7 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
+from django.db.models.functions import JSONObject
 from django.utils import timezone
 from django_compose.models import Composable
 from rebac import (
@@ -958,7 +959,11 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         return deleted > 0
 
     def prepare_disconnect(self, credential: Any) -> None:
-        """Validate a disconnect and schedule remote revocation after commit."""
+        """Validate a disconnect and schedule remote revocation after commit.
+
+        The caller holds one transaction through this preparation and deletion,
+        preserving any locks taken by the credential's disconnect guard.
+        """
 
         credential.check_disconnect()
         # Revoking the source grant also releases the resource-specific material
@@ -1207,7 +1212,10 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
 
     def check_disconnect(self) -> None:
-        """Validate explicit disconnect; contributions raise a coded ``ValidationError``."""
+        """Validate inside the caller's disconnect transaction, held through deletion.
+
+        Contributions may lock admission facts and raise a coded ``ValidationError``.
+        """
 
     def revoke_remote(self) -> None:
         """Revoke this credential's OAuth token when its provider supports it."""
@@ -2026,7 +2034,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
     @classmethod
     def oauth_projection_expressions(cls) -> dict[str, Any]:
-        """Read the vendor hint and nearest concrete selector as elevated scalars."""
+        """Project public vendor branding and the nearest concrete selector.
+
+        Branding carries only the slug and display name; it grants no access to
+        the admin-only Vendor catalogue. One subquery carries both brand fields.
+        """
 
         vendor = (
             apps.get_model("integrate", "Vendor")
@@ -2051,24 +2063,33 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 )
             )
         return {
-            "_connection_vendor_slug": Subquery(vendor.values("slug")[:1]),
+            "_connection_vendor_branding": Subquery(
+                vendor.values(branding=JSONObject(slug="slug", display_name="display_name"))[:1],
+            ),
             "_connection_impl_key": models.Case(*selectors, default=models.Value(""), output_field=models.CharField()),
         }
 
-    def connection_vendor_slug(self) -> str:
-        """Read branding used by connection selection without requiring Vendor read."""
+    def connection_vendor_branding(self) -> dict[str, str]:
+        """Read public connection branding without requiring Vendor read.
 
-        if "_connection_vendor_slug" in self.__dict__:
-            return str(self.__dict__["_connection_vendor_slug"] or "")
+        GraphQL supplies the projection; other callers fetch both fields in one
+        elevated read without loading the protected related object.
+        """
+
+        if "_connection_vendor_branding" in self.__dict__:
+            return cast(dict[str, str], self.__dict__["_connection_vendor_branding"])
         vendor = apps.get_model("integrate", "Vendor")
-        return str(
-            vendor.objects.sudo(reason="integrate.connection.vendor")
-            .values_list(
-                "slug",
-                flat=True,
-            )
-            .get(pk=self.vendor_id)
+        return cast(
+            dict[str, str],
+            vendor.objects.sudo(reason="integrate.connection.public_vendor")
+            .values("slug", "display_name")
+            .get(pk=self.vendor_id),
         )
+
+    def connection_vendor_slug(self) -> str:
+        """Read the public branding slug used by connection selection."""
+
+        return self.connection_vendor_branding()["slug"]
 
     def is_oauth_connectable(self, *, ready_slugs: Collection[str] | None = None) -> bool:
         """Use registration readiness without constructing a runtime or loading secrets.
@@ -2441,7 +2462,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def __str__(self) -> str:
         """Return a stable vendor-qualified integration label."""
 
-        return f"{self.vendor.slug}:{self.public_id}"
+        return f"{self.connection_vendor_slug()}:{self.public_id}"
 
     def prepare_patch(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         """Apply connection/state/ownership verbs before ordinary native field updates.
@@ -2501,7 +2522,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         if self.display_name:
             return str(self.display_name)
-        return f"{self.vendor} ({self.lifecycle})"
+        branding = self.connection_vendor_branding()
+        return f"{branding['display_name'] or branding['slug']} ({self.lifecycle})"
 
     @property
     def record_display_label(self) -> str:
@@ -4231,7 +4253,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         A newer mapping version also starts one baseline: its persisted version
         makes repeated opens idempotent and revisits already-applied identities.
         An unknown version is seeded from the oldest applied link mapping, or
-        the declaration when no links exist, so deployment alone never replays
+        the declaration when no applied links exist, so deployment alone never replays
         records already applied at the declared version.
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
@@ -4258,7 +4280,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
             if stream.mapping_version is None:
-                applied_version = stream.links.aggregate(version=models.Min("mapping_version"))["version"]
+                applied_version = stream.links.filter(applied_at__isnull=False).aggregate(
+                    version=models.Min("mapping_version"),
+                )["version"]
                 stream.mapping_version = applied_version if applied_version is not None else definition.mapping_version
                 stream.save(update_fields=["mapping_version", "updated_at"])
             if (

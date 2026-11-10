@@ -32,7 +32,7 @@ from angee.base.identity import public_data_id_field
 from angee.base.models.identity import public_id_for
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy, RecordRefMergeContract
-from angee.base.permissions import effective_rebac_definition, relation_read_queryset, require_rebac_queryset
+from angee.base.permissions import effective_rebac_definition, reader_queryset, relation_read_queryset
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target
@@ -119,11 +119,11 @@ class RecordRefMixin(RecordRefMergeContract):
         """Batch the targets ``actor`` reads into ``to_attr``, one read per referenced type.
 
         Each type is read through ``actor``'s own read scope; without an actor,
-        REBAC's ambient scope answers (``relation_read_queryset``). A hidden,
+        REBAC's ambient scope answers (``reader_queryset``). A hidden,
         missing or stale-typed target lands as ``None``.
         """
 
-        rows = require_rebac_queryset(cls) if actor is None else require_rebac_queryset(cls, actor=actor)
+        rows = reader_queryset(cls, actor)
         return models.Prefetch("_record_targets", queryset=rows, to_attr=to_attr)
 
     @classmethod

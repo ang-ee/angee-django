@@ -73,7 +73,8 @@ the same declaration preserves progress; an older declaration cannot lower it.
 Adapters declare the version in `StreamDefinition` and use the declared version
 in their record and applied evidence, including after a rollback. An unknown
 stored version is seeded from the minimum applied link version, or the declared
-version for a stream without links; only a newer declaration starts a baseline.
+version for a stream without applied links; never-applied observations and
+quarantines do not lower it. Only a newer declaration starts a baseline.
 `cursor`, `reconcile_interval`, `absence_threshold`,
 `tombstone_retention` and `config` seed the first generation only; changing them in
 a declaration never changes an existing stream.

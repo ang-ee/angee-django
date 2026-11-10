@@ -219,6 +219,10 @@ jobs:
             tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \
             tests/test_hierarchy.py tests/test_iam_concurrency_campaign.py \
             tests/test_iam_graphql.py tests/test_intake_access_decision.py \
+            tests/test_oidc.py::test_credential_disconnect_guard_blocks_last_oidc_sign_in \
+            tests/test_oidc.py::test_credential_disconnect_preserves_other_sign_in_methods \
+            tests/test_oidc.py::test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relations \
+            tests/test_oidc.py::test_disconnect_does_not_count_unusable_oidc_alternatives \
             tests/test_integrate_streams.py \
             tests/test_knowledge_clone_concurrency_campaign.py tests/test_knowledge_search.py \
             tests/test_postgresql_extensions.py \
@@ -231,6 +235,7 @@ jobs:
             tests/test_messaging_channel_concurrency.py tests/test_messaging_webform_submission.py \
             tests/test_messaging_inbox_read.py tests/test_inbox_explorer.py tests/test_inbox_part_reads.py \
             tests/test_group_rows.py \
+            'tests/test_composed_query_budgets.py::test_composed_addon_query_budgets[postgresql]' \
             tests/test_optimistic_lock.py \
             tests/test_ownership_seams.py tests/test_portfolio_concurrency.py \
             tests/test_proposals_campaign_queries.py tests/test_proposals_concurrency.py \

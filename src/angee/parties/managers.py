@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from itertools import chain, combinations, groupby, islice
-from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
+from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -44,7 +44,7 @@ from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, reader_queryset
 from angee.base.querysets import MergeableQuerySet, by_key
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedAddressbook, ParsedContact, ParsedPhoto
@@ -134,9 +134,7 @@ class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQu
         """Readable memberships in these readable circles, optionally confirmed only."""
 
         member_model = apps.get_model("parties", "CircleMember")
-        members = member_model.objects.all()
-        if actor := self.actor():
-            members = members.with_actor(actor)
+        members = reader_queryset(member_model, self.actor())
         return members.scoped_for_aggregate().filter(self.memberships_filter(
             self.scoped_for_aggregate(), confirmed_only=confirmed_only,
         ))
@@ -158,10 +156,8 @@ class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQu
     def with_member_counts(self) -> Self:
         """Annotate each circle with its distinct readable-person count across its readable subtree."""
 
-        circles = apps.get_model("parties", "Circle").objects.all()
-        people = apps.get_model("parties", "Person").objects.all()
-        if actor := self.actor():
-            circles, people = circles.with_actor(actor), people.with_actor(actor)
+        circles = cast(Any, reader_queryset(apps.get_model("parties", "Circle"), self.actor()))
+        people = cast(Any, reader_queryset(apps.get_model("parties", "Person"), self.actor()))
         visible_person_ids = people.scoped_for_aggregate().canonical().values("pk")
         subtree = circles.filter(owner_id=OuterRef(OuterRef("owner_id")), path__startswith=OuterRef(OuterRef("path")))
         subtree_count = (
@@ -670,10 +666,10 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         candidates = self.canonical()
         if isinstance(candidates, ArchiveQuerySet):
             candidates = candidates.unarchived()
-        organizations = apps.get_model("parties", "Organization").objects.filter(legal_name__iregex=pattern)
         actor = self.actor() or current_actor()
-        if actor is not None:
-            organizations = organizations.with_actor(actor)
+        organizations = reader_queryset(apps.get_model("parties", "Organization"), actor).filter(
+            legal_name__iregex=pattern,
+        )
         legal_name_ids = organizations.scoped_for_aggregate().values("pk")
         return candidates.filter(
             Q(display_name__iregex=pattern) | Q(pk__in=Subquery(legal_name_ids)),
@@ -682,8 +678,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
     def _readable_circles(self) -> Any:
         """Circles read as this queryset's actor, else the ambient one."""
 
-        circles = apps.get_model("parties", "Circle").objects.all()
-        return circles.with_actor(actor) if (actor := self.actor()) else circles
+        return reader_queryset(apps.get_model("parties", "Circle"), self.actor())
 
     def circle_members_prefetch(self) -> Prefetch:
         """Hint the circle memberships this read's actor may see, by circle name.
@@ -753,11 +748,8 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         """Readable current organisation relationships anchored at these parties."""
 
         actor = self.actor() or current_actor()
-        organizations = apps.get_model("parties", "Organization").objects.all()
-        relationships = apps.get_model("parties", "Relationship").objects.canonical()
-        if actor is not None:
-            organizations = organizations.with_actor(actor)
-            relationships = relationships.with_actor(actor)
+        organizations = reader_queryset(apps.get_model("parties", "Organization"), actor)
+        relationships = cast(Any, reader_queryset(apps.get_model("parties", "Relationship"), actor)).canonical()
         organizations = organizations.scoped_for_aggregate()
         relationships = relationships.scoped_for_aggregate()
         return relationships.filter(

@@ -12,7 +12,7 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated, change_published
-from angee.base.testing.queries import statement_startswith
+from angee.base.testing.queries import capture_planner_memory, statement_startswith
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql import publishing
@@ -72,22 +72,12 @@ def test_timeline_read_planner_memory(review, settings, viewer, record_property)
         return rows
 
     read()  # Warm the same read, as in the console document budgets.
-    statements = []
-
-    def capture(execute, sql, params, many, context):
-        if '"timeline_source"' in sql:
-            statements.append((sql, params))
-        return execute(sql, params, many, context)
-
-    with connection.execute_wrapper(capture):
+    with capture_planner_memory(lambda sql: '"timeline_source"' in sql) as plans:
         read()
-    (sql, params), = statements
-    with connection.cursor() as cursor:
-        cursor.execute("EXPLAIN (MEMORY, SUMMARY, FORMAT JSON) " + sql, params)
-        plan = cursor.fetchone()[0][0]
-    memory = plan["Planning"]["Memory Allocated"]
-    record_property("sql_bytes", len(sql.encode()))
-    record_property("planner_memory_used_kib", plan["Planning"]["Memory Used"])
+    [plan] = plans
+    memory = plan.allocated_kib
+    record_property("sql_bytes", plan.sql_bytes)
+    record_property("planner_memory_used_kib", plan.used_kib)
     record_property("planner_memory_allocated_kib", memory)
     # pgvector/pgvector:pg17 with shared id sets: 34,681 SQL bytes,
     # 10,653 KiB used / 16,384 KiB allocated for either actor.

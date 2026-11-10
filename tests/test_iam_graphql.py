@@ -19,7 +19,6 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -2071,9 +2070,12 @@ def test_discover_oauth_endpoints_persists_the_filled_endpoints(
         "authorization_endpoint": "https://persisted.example/authorize",
         "token_endpoint": "https://persisted.example/token",
     }
-    monkeypatch.setattr(
-        oauth_discovery, "HttpClient", lambda: SimpleNamespace(get_json=lambda url, **kwargs: document),
-    )
+
+    def fetch_document(url: str) -> dict[str, str]:
+        assert url == client.discovery_url
+        return document
+
+    monkeypatch.setattr(oauth_discovery, "oauth_get_json", fetch_document)
     discover = "mutation($id: ID!){ discover_oauth_endpoints(id: $id){ ok message } }"
 
     result = _data(_execute(_schema("console"), discover, {"id": str(client.sqid)}, user=admin))

@@ -1764,6 +1764,11 @@ reader's scope. A hidden target yields null identity fields; its model and ID
 must also stay unavailable through resource filters and aggregate counts. Addon
 resources declare their record-reference filter axes through the shared Hasura
 resource owner instead of reimplementing this projection.
+The [record-reference guard owner](../../src/angee/graphql/relations.py) keeps
+declarations and optimizer probes query-free. A used guard may read its represented
+content types in one bounded statement per compile, counted by statement budgets,
+as Django's `GenericRelation` resolves content types while compiling. Compile-time
+reads and permission answers are not cached across compilations.
 
 **Polymorphic edges authorize their target in the schema.** Back one relation
 per target type with the edge's `GenericForeignKey`, contributed by the app

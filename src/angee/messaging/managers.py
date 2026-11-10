@@ -71,7 +71,7 @@ from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.permissions import actor_user_id, purpose_read_holds, require_rebac_queryset
+from angee.base.permissions import actor_user_id, purpose_read_holds, reader_queryset, require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch, ReaderMemo, prefetched_objects
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
@@ -2621,7 +2621,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
 
         handle_model = apps.get_model("parties", "Handle")
         actor = self.actor() or current_actor()
-        handles = handle_model.objects.with_actor(actor) if actor is not None else handle_model.objects.all()
+        handles = cast(Any, reader_queryset(handle_model, actor))
         return (
             handles.with_sender_name()
             .filter(pk=models.OuterRef("sender_id"))

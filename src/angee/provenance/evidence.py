@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
 from angee.base.models.identity import instances_from_public_ids, public_id_for
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import reader_queryset, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 
 
@@ -77,10 +77,7 @@ def _readable(
                 raise PermissionDenied("Referenced records require a standing permission.")
             continue
         ids = sorted({ref.id for ref in labelled})
-        queryset = (
-            require_rebac_queryset(model, actor=actor)
-            if standing or actor is not None else require_rebac_queryset(model)
-        )
+        queryset = require_rebac_queryset(model, actor=actor) if standing else reader_queryset(model, actor)
         found = instances_from_public_ids(
             model,
             ids,

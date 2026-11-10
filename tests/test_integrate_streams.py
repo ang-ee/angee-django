@@ -570,9 +570,13 @@ def test_new_mapping_declaration_replays_applied_rows_once(stream_bridge: Channe
 
 
 @pytest.mark.parametrize("snapshot", [False, True])
+@pytest.mark.parametrize("quarantined", [False, True])
 @pytest.mark.parametrize("applied_versions", [(), (4, 4), (4, 3), (5, 5)])
 def test_deploy_seeds_unknown_stream_mapping_before_deciding_to_replay(
-    stream_bridge: Channel, snapshot: bool, applied_versions: tuple[int, ...],
+    stream_bridge: Channel,
+    snapshot: bool,
+    applied_versions: tuple[int, ...],
+    quarantined: bool,
 ) -> None:
     """Existing progress survives deployment unless at least one applied link is older."""
 
@@ -585,7 +589,13 @@ def test_deploy_seeds_unknown_stream_mapping_before_deciding_to_replay(
         f"person:{index}", {"name": f"Person {index}"}, "unchanged-source", mapping_version=version,
         mapped_payload={"name": f"Person {index}"},
     ) for index, version in enumerate(applied_versions))
-    advance_stream(initial, MemoryAdapter(pages=[StreamPage(records, {"done": True})]))
+    if quarantined:
+        records += (RecordChange("poison", {"name": "Invalid"}, "refused-source", mapped_payload={"name": "Invalid"}),)
+    advance_stream(initial, MemoryAdapter(pages=[StreamPage(records, {"done": True})], semantic_key="poison"))
+    if quarantined:
+        refused = RecordLink.objects.get(stream=initial, external_key="poison")
+        assert refused.applied_at is None and refused.mapping_version == 1
+        assert refused.status == LinkStatus.FAILED
     initial.refresh_from_db()
     assert initial.mapping_version is None and initial.phase == StreamPhase.DELTA
     if snapshot:
