@@ -8,7 +8,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { authoredQueryKey, authoredQueryOptions, useAuthoredMutation, useAuthoredQuery, useAuthoredQueryBatch, useSetAuthoredQueryData } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
-import { invalidateAuthoredQueries } from "../query-invalidation";
+import { invalidateAuthoredQueries, queryReadsLiveChange } from "../query-invalidation";
 import { createRefineTestProviders } from "../testing";
 import { keysetFeedRows, useAuthoredKeysetFeed, type KeysetFeedWindow } from "./keyset-feed";
 
@@ -483,6 +483,20 @@ test("a related-only model with no direct rows does not become model-wide", () =
   expect(meta?.angeeRelatedModels).toEqual(["workflows.StepRun"]);
   expect(meta?.angeeBroadModels).toBeUndefined();
   expect(meta?.angeeRecords).toBeUndefined();
+});
+
+test.each([true, false])("a broad observer preserves shared related-model record targets (broad first=%s)", (broadFirst) => {
+  const client = createClient();
+  const broad = () => authoredQueryOptions(client, () => dataProvider, "default", DOCUMENT, { id: "a" }, ["notes.Note"]);
+  const related = () => authoredQueryOptions(client, () => dataProvider, "default", DOCUMENT, { id: "a" },
+    ["notes.Note", "notes.Attachment"], [{ model: "notes.Note" }], ["notes.Attachment"]);
+  const first = broadFirst ? broad() : related();
+  if (broadFirst) related(); else broad();
+  const meta = client.getQueryCache().find({ queryKey: first.queryKey, exact: true })?.meta;
+  expect(queryReadsLiveChange(meta, { model: "notes.Attachment", id: "attachment-1",
+    relatedRecords: [{ model: "notes.Note", id: "off-page" }] })).toBe(true);
+  expect(queryReadsLiveChange(meta, { model: "notes.Attachment", id: "attachment-1",
+    relatedRecords: [{ model: "notes.Folder", id: "off-page" }] })).toBe(false);
 });
 
 test("native custom hashing keeps one query and still reports data-only consumer failures", async () => {

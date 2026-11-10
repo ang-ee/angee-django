@@ -50,6 +50,7 @@ export interface ListViewNavigationScope {
 
 export interface UseResourceViewSurfaceProps<TRow extends Row = Row> {
   resource: string;
+  relatedModels?: readonly string[];
   source?: CollectionSource<TRow>;
   columns: readonly ColumnDescriptor<TRow>[];
   fields?: readonly string[];

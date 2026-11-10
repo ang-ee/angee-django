@@ -44,6 +44,7 @@ import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSur
  */
 export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   resource,
+  relatedModels,
   source,
   columns,
   fields,
@@ -117,6 +118,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     [source, query, mergedFilter],
   );
   const grandTotal = useAngeeAggregate(aggregateOperation.target, {
+    relatedModels,
     document: aggregateOperation.document,
     where,
     measures: queryMeasures,
@@ -228,6 +230,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     source ? EMPTY_ARRAY : groupScopes,
     {
       document: groupDocument,
+      relatedModels,
       enabled: !source && rowGroupStack.length > 0,
     },
   );
@@ -313,6 +316,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     }));
   }, [source, query, leafScopes]);
   const nativeLeafResults = useAngeeListBatch(listTarget, leafRequests, {
+    relatedModels,
     fields: requestedFields,
     enabled: !source && leafScopes.length > 0,
   });
