@@ -99,3 +99,46 @@ describe("PreviewPane", () => {
     expect(rendered.container.querySelector("pre")?.className).toContain("break-words");
   });
 });
+
+test("preview identity preserves a renderer and its loaded URL across token rotation", () => {
+  const renderedUrls: string[] = [];
+  const provider: PreviewProvider = {
+    id: "document", mime: "application/pdf",
+    component: ({ file, page }) => {
+      renderedUrls.push(file.url);
+      return <input aria-label="Document state" defaultValue={`${file.name}:${page}`} />;
+    },
+  };
+  const file = { identity: { id: "file-1", version: "sha256-a" }, url: "/file?token=first", name: "one.pdf", mime: "application/pdf" };
+  const pane = (value: typeof file, page = 1) => <AppRuntimeProvider runtime={{ previews: [provider] }}>
+    <PreviewPane file={value} page={page} />
+  </AppRuntimeProvider>;
+  const view = render(pane(file));
+  const input = screen.getByRole("textbox") as HTMLInputElement;
+  input.value = "retained page/canvas state";
+  view.rerender(pane({ ...file, url: "/file?token=second" }, 3));
+  expect(screen.getByRole("textbox")).toBe(input);
+  expect(input.value).toBe("retained page/canvas state");
+  expect(renderedUrls.at(-1)).toBe("/file?token=first");
+  view.rerender(pane({ ...file, identity: { ...file.identity, version: "sha256-b" }, url: "/file?token=new-content" }));
+  expect(screen.getByRole("textbox")).not.toBe(input);
+  expect(renderedUrls.at(-1)).toBe("/file?token=new-content");
+  const second = screen.getByRole("textbox");
+  view.rerender(pane({ ...file, identity: { id: "file-2", version: "sha256-b" }, url: "/other" }));
+  expect(screen.getByRole("textbox")).not.toBe(second);
+  expect(renderedUrls.at(-1)).toBe("/other");
+});
+
+test.each(["image/png", "text/plain"])("%s keeps loaded bytes when only credentials change", async (mime) => {
+  const fetch = vi.fn(async () => new Response("document"));
+  vi.stubGlobal("fetch", fetch);
+  const file = { identity: { id: "file-1", version: "digest" }, url: "/first", name: "one", mime };
+  const view = render(<PreviewPane file={file} />);
+  if (mime === "text/plain") await waitFor(() => expect(view.container.querySelector("pre")?.textContent).toBe("document"));
+  const image = view.container.querySelector("img");
+  view.rerender(<PreviewPane file={{ ...file, url: "/second" }} />);
+  if (mime === "image/png") {
+    expect(view.container.querySelector("img")).toBe(image);
+    expect(image?.getAttribute("src")).toBe("/first");
+  } else expect(fetch).toHaveBeenCalledTimes(1);
+});

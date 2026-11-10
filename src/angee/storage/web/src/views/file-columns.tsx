@@ -1,4 +1,6 @@
-import { Glyph, formatSize, isHeicMime, isImageMime, textRoleVariants, useEnumOptions, useResolvedWidget } from "@angee/ui";
+import {
+  Glyph, formatSize, isHeicMime, isImageMime, textRoleVariants, useEnumOptions, usePreviewUrl, useResolvedWidget,
+} from "@angee/ui";
 import type { ReactElement } from "react";
 
 import type { StorageFileRow } from "../data/file-rows";
@@ -12,6 +14,7 @@ export function fileGalleryCard(row: StorageFileRow): ReactElement {
 }
 
 function FileGalleryCard({ row }: { row: StorageFileRow }): ReactElement {
+  const url = usePreviewUrl({ url: row.url, identity: { id: row.id, version: row.content_hash } });
   const Audience = useResolvedWidget("statusBadge")?.read;
   const audienceOptions = useEnumOptions("storage.File", "visibility");
   const mime = row.mime_type?.mime_type ?? "";
@@ -23,7 +26,7 @@ function FileGalleryCard({ row }: { row: StorageFileRow }): ReactElement {
       <div className="grid aspect-square place-content-center overflow-hidden bg-inset">
         {isImageMime(mime) && !isHeicMime(mime) && row.url ? (
           <img
-            src={row.url}
+            src={url}
             alt={name}
             loading="lazy"
             className="size-full object-cover"

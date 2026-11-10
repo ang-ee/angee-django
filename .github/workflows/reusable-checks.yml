@@ -192,7 +192,7 @@ jobs:
             tests/test_workflows_cancel.py tests/test_workflows_cancel_concurrency.py \
             tests/test_workflows_review.py tests/test_workflows_review_concurrency.py \
             tests/test_workflows_review_graphql.py tests/test_decisions_inbox.py \
-            tests/test_timeline_workflows.py \
+            tests/test_timeline_workflows.py tests/test_timeline_subscriptions.py \
             tests/test_decision_display_nested.py \
             tests/test_workflows_map_definition.py tests/test_workflows_map.py \
             tests/test_workflows_map_concurrency.py tests/test_workflows_map_surface.py \
@@ -243,6 +243,8 @@ jobs:
             tests/test_sequence.py \
             tests/test_spaces_concurrency_campaign.py tests/test_stage_fractional_transition.py \
             tests/test_storage.py tests/test_storage_upload_campaign.py \
+            tests/test_storage_access_campaign.py::test_download_urls_are_window_aligned_and_expire_from_the_window_start \
+            tests/test_storage_access_campaign.py::test_download_url_changes_for_new_content_inside_one_window \
             tests/test_system_queryset.py::test_system_queryset_emits_for_update_on_postgresql \
             tests/test_task_locks.py tests/test_task_project_ordering.py \
             tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \

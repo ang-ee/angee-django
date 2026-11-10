@@ -9,7 +9,7 @@ local observers queued theirs.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -20,9 +20,8 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 
-from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import ModelChange, change_observed, connect_observers, disconnect_observers
-from angee.graphql.events import ChangePayload, ChangeRelatedRecord, ReadableFields
+from angee.graphql.events import ChangePayload, ReadableFields
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.sdl import PUBLISHERS_ARTIFACT
 
@@ -154,27 +153,6 @@ def _on_change_observed(sender: type[models.Model], *, payload: ModelChange, **k
     _queue_transport(sender, replace(projected, id=payload.id, occurrence_id=payload.occurrence_id))
 
 
-def broadcast_related_records(records: Iterable[models.Model]) -> None:
-    """Refresh derived record reads after a source change, without observing another write.
-
-    Only declared record feeds transport these identity-only invalidations,
-    including inherited views when the canonical model has no feed. Their normal
-    subscriber read policy applies; private source models gain no feed.
-    """
-
-    for reference in record_view_refs(*(RecordRef.from_instance(record) for record in records)):
-        model = apps.get_model(reference.model_label)
-        if model not in _publisher_fields:
-            continue
-        payload = ChangePayload.from_instance(
-            model(pk=reference.object_id), action="update", update_fields=None, broadcasts=False,
-        )
-        _queue_transport(model, replace(
-            payload, id=reference.public_id, broadcasts=True,
-            related_records=(ChangeRelatedRecord(reference.model_label, reference.public_id),),
-        ))
-
-
 def _queue_transport(model: type[models.Model], payload: ChangePayload) -> None:
     if payload.broadcasts:
         message = payload.as_message()
@@ -188,10 +166,16 @@ def _queue_transport(model: type[models.Model], payload: ChangePayload) -> None:
 def _broadcast(model: type[models.Model], payload: dict[str, Any]) -> None:
     """Send ``payload`` to the model's channel-layer change group."""
 
+    broadcast_group(change_group(model), payload)
+
+
+def broadcast_group(group: str, payload: dict[str, Any]) -> None:
+    """Send one change notification through the shared channel-layer transport."""
+
     layer = change_channel_layer()
     if layer is None:
         return
     async_to_sync(layer.group_send)(
-        change_group(model),
+        group,
         {"type": "angee.change", "payload": payload},
     )

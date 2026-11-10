@@ -1,4 +1,4 @@
-import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
+import { matchQuery, type Query, type QueryClient, type QueryKey } from "@tanstack/react-query";
 
 import { recordValue } from "./dialect/wire";
 
@@ -116,6 +116,8 @@ export interface LiveDelivery<Change extends LiveChange> {
 
 export interface LiveInvalidation<Change extends LiveChange> {
   push: (change: Change, deliveries?: readonly LiveDelivery<Change>[]) => void;
+  /** An authored subscription invalidates only the read that registered it. */
+  pushQuery: (queryKey: QueryKey) => void;
   remove: (delivery: LiveDelivery<Change>) => void;
   clear: () => void;
 }
@@ -135,6 +137,7 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
   queryClient?: Pick<QueryClient, "invalidateQueries" | "getQueryCache">,
 ): LiveInvalidation<Change> {
   let changes: Change[] = [];
+  let queryKeys: QueryKey[] = [];
   const deliveries = new Map<LiveDelivery<Change>, Change[]>();
   const awaited = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -154,12 +157,15 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
 
   function flush(): void {
     const batch = changes;
+    const keys = queryKeys;
     const notifications = [...deliveries];
     changes = [];
+    queryKeys = [];
     deliveries.clear();
     timer = undefined;
     firstAt = undefined;
-    const reads = (query: Query) => batch.some((change) => authoredQueryReadsLiveChange(query.meta, change));
+    const reads = (query: Query) => keys.some((queryKey) => matchQuery({ queryKey, exact: true }, query))
+      || batch.some((change) => authoredQueryReadsLiveChange(query.meta, change));
     // Snapshot running reads before any callback starts a fresh read. Refine
     // invalidates resourceAll; its public key builder supplies that exact scope.
     const cache = queryClient?.getQueryCache();
@@ -187,6 +193,13 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
     for (const [delivery, events] of notifications) delivery.callback(events);
   }
 
+  function schedule(): void {
+    const now = performance.now();
+    firstAt ??= now;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(flush, Math.max(0, Math.min(LIVE_WINDOW_MS, firstAt + LIVE_MAX_WAIT_MS - now)));
+  }
+
   return {
     remove(delivery) {
       deliveries.delete(delivery);
@@ -194,11 +207,16 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
     clear() {
       if (timer !== undefined) clearTimeout(timer);
       changes = [];
+      queryKeys = [];
       deliveries.clear();
       awaited.clear();
       timer = undefined;
       firstAt = undefined;
       stopUnusedListener();
+    },
+    pushQuery(queryKey) {
+      queryKeys.push(queryKey);
+      schedule();
     },
     push(change, consumers = []) {
       changes.push(change);
@@ -207,10 +225,7 @@ export function createLiveInvalidation<Change extends LiveChange = LiveChange>(
         pending.push(change);
         deliveries.set(consumer, pending);
       }
-      const now = performance.now();
-      firstAt ??= now;
-      if (timer !== undefined) clearTimeout(timer);
-      timer = setTimeout(flush, Math.max(0, Math.min(LIVE_WINDOW_MS, firstAt + LIVE_MAX_WAIT_MS - now)));
+      schedule();
     },
   };
 }

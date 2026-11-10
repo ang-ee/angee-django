@@ -1100,6 +1100,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   receive the burst's union of changed ids and related records; a model-wide
   change keeps the whole burst model-wide. Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`) over its own subscriptions.
+  Timeline's data owner registers its dedicated subscription with the authored
+  keyset feed; the same coalescer refreshes only that feed's native query key.
   A dashboard widget may explicitly declare interval refresh through its
   [refresh contract](../../packages/ui/src/dashboard/headless.ts). Its data
   adapter forwards that interval to native Query `refetchInterval`; Query owns
@@ -1801,7 +1803,7 @@ implements; [the kind contract](../../src/angee/timeline/kinds.py) owns its
 source models, source query, presentation and live attention predicate. The read
 combines owner querysets with SQL `UNION ALL`, applying the record's and each
 target owner's read policies before pagination. Published owner changes
-invalidate open record reads after commit:
+invalidate open timeline reads after commit through `timelineChanged(model, id)`:
 
 ```ts
 interface TimelineKindContent {
