@@ -90,10 +90,9 @@ builds its schemas lazily on its first observable write.
 Before adding a backend abstraction, run the
 [owner search](../../../../docs/checks.md#owner-search) scans for the native
 owner. If the change introduces or extends a seam, add a focused guard in the owning
-test area: layering in
-[`tests/test_base_layering.py`](../../../../tests/test_base_layering.py) (dependency
-direction) and [`tests/test_layering.py`](../../../../tests/test_layering.py) (import
-closures), addon/manifest binding in app tests, settings/autoconfig/app graph
+test area: import boundaries as `[tool.importlinter]` contracts in
+[`pyproject.toml`](../../../../pyproject.toml) (`lint-imports`), runtime import
+closures in [`tests/test_layering.py`](../../../../tests/test_layering.py), addon/manifest binding in app tests, settings/autoconfig/app graph
 behavior in [`tests/test_settings.py`](../../../../tests/test_settings.py), runtime
 emission in [`tests/test_compose.py`](../../../../tests/test_compose.py), migration
 history in [`tests/test_runtime_migrations.py`](../../../../tests/test_runtime_migrations.py),

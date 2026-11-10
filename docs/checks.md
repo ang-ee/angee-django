@@ -45,6 +45,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
+| Python import boundaries | `uv run --locked lint-imports` |
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
@@ -64,8 +65,10 @@ retirement policy and the native drop guard. Previously shipped transition sourc
 are historical upgrade assets only; retire them after the supported upgrade cutoff
 and preserve Python imports still required by retained migration history.
 
-[`tests/test_layering.py`](../tests/test_layering.py) guards framework import
-boundaries and optional state-field declarations. The
+Framework import boundaries are `[tool.importlinter]` contracts in
+[`pyproject.toml`](../pyproject.toml), checked by `lint-imports`.
+[`tests/test_layering.py`](../tests/test_layering.py) guards the runtime import
+closures a static graph cannot see and optional state-field declarations. The
 [Database routing rule](backend/guidelines.md#rules) is a system check: base's
 `angee.E050` refuses any `DATABASE_ROUTERS`
 ([`tests/test_base_checks.py`](../tests/test_base_checks.py)).
