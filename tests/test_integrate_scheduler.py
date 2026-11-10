@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -12,6 +12,16 @@ import pytest
 from django.db import close_old_connections, connection, connections, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from hypothesis import settings
+from hypothesis import strategies as st
+from hypothesis.stateful import (
+    RuleBasedStateMachine,
+    initialize,
+    invariant,
+    precondition,
+    rule,
+    run_state_machine_as_test,
+)
 from rebac import system_context
 
 from angee.integrate import scheduler as integrate_scheduler
@@ -274,31 +284,6 @@ def test_integration_error_reaches_sync_telemetry_verbatim(transactional_db: Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_recovered_sync_drops_the_previous_runs_error_marker(transactional_db: None) -> None:
-    """A failed run's ``error`` never rides into the next run's completed marker."""
-
-    del transactional_db
-    first = timezone.now()
-    with system_context(reason="test integrate scheduler setup"):
-        bridge = make_integration("recovered", model=SchedulerBridge, config={"mode": "refused"}, next_sync_at=first)
-    assert _enqueue_and_run_due(now=first) == {"ran": 1, "errors": 1}
-    bridge.refresh_from_db()
-    assert bridge.sync_progress["error"]
-
-    second = bridge.next_sync_at
-    assert second is not None
-    with system_context(reason="test integrate scheduler recover"):
-        bridge.config = {"items": 2}
-        bridge.save(update_fields=["config"])
-    assert _enqueue_and_run_due(now=second) == {"ran": 1, "errors": 0}
-    bridge.refresh_from_db()
-    assert bridge.sync_stage == Bridge.SyncStage.COMPLETED
-    assert bridge.sync_error == ""
-    assert "error" not in bridge.sync_progress
-    assert bridge.sync_progress["items"] == 2
-
-
-@pytest.mark.django_db(transaction=True)
 def test_enqueued_due_bridge_records_errors_on_integration_runtime_status(transactional_db: None) -> None:
     """Failing syncs record bridge errors, reschedule, and push integration runtime status."""
 
@@ -405,42 +390,6 @@ def test_bridge_sync_persists_its_progress_report(transactional_db: None) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_sync_completion_uses_finish_time_and_keeps_detached_progress(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A terminal marker keeps partition progress and records the actual finish."""
-
-    del transactional_db
-    queued_at = timezone.now()
-    finished_at = queued_at + timedelta(seconds=17)
-    monkeypatch.setattr("angee.integrate.models.timezone.now", lambda: finished_at)
-    with system_context(reason="test integrate scheduler setup"):
-        bridge = make_integration(
-            "detached-progress",
-            model=SchedulerBridge,
-            config={"items": 600, "detached_progress": True},
-            next_sync_at=queued_at,
-        )
-
-    result = _enqueue_and_run_due(now=queued_at)
-
-    assert result == {"ran": 1, "errors": 0}
-    bridge.refresh_from_db()
-    assert bridge.last_sync_started_at == queued_at
-    assert bridge.last_sync_completed_at == finished_at
-    assert bridge.sync_progress == {
-        "stage": Bridge.SyncStage.COMPLETED,
-        "queued_at": queued_at.isoformat(),
-        "started_at": queued_at.isoformat(),
-        "message": "Reached the sync budget",
-        "details": {"items": 600, "budget_exhausted": True, "cursor": {"seen": 600}},
-        "items": 600,
-        "completed_at": finished_at.isoformat(),
-    }
-
-
-@pytest.mark.django_db(transaction=True)
 def test_declined_sync_run_releases_its_queue_claim(transactional_db: None) -> None:
     """A run that cannot take the lock clears its own claim, so recovery stops.
 
@@ -465,88 +414,205 @@ def test_declined_sync_run_releases_its_queue_claim(transactional_db: None) -> N
     assert bridge.sync_stage == Bridge.SyncStage.IDLE
 
 
-@pytest.mark.django_db(transaction=True)
-def test_declined_sync_run_never_clears_the_holder_stage(transactional_db: None) -> None:
-    """The decliner releases only its own token — never a holder's live stage."""
+class SyncStageMachine(RuleBasedStateMachine):
+    """Requests, scheduler scans, task deliveries, workers and dispatched runs against a small oracle.
 
-    del transactional_db
-    now = timezone.now()
-    with system_context(reason="test integrate scheduler setup"):
-        bridge = make_integration("declined-stale", model=SchedulerBridge)
-        bridge.mark_sync_queued(now=now)
-        # The holder moved the row on; this run's token is no longer current.
-        bridge.mark_sync_started(now=now + timedelta(seconds=1))
-
-    assert bridge.release_sync_queue(now=now) is False
-
-    with system_context(reason="test integrate scheduler verify"):
-        bridge.refresh_from_db()
-    assert bridge.sync_stage == Bridge.SyncStage.SYNCING
-
-
-@pytest.mark.django_db(transaction=True)
-def test_sync_markers_keep_reported_progress_details(transactional_db: None) -> None:
-    """Queueing a sync must not drop a live session's pairing report.
-
-    ``sync_progress`` has disjoint owners: the scheduler owns the lifecycle marker,
-    a progress report owns ``details``. Replacing the dict dropped the QR the operator was
-    looking at when Sync was pressed mid-pairing.
+    The oracle holds what the verbs must leave on the row: the stage, the retained
+    run, the queue token, the reported message and details, and the last run's
+    outcome. A worker keeps the instance it started with, as the sync runner does,
+    while progress arrives through other instances. Each example rolls back; its
+    clock runs a minute per step a day in the past, so completion follows every start.
     """
 
-    del transactional_db
-    now = timezone.now()
-    with system_context(reason="test integrate scheduler setup"):
-        bridge = make_integration("marker-merge", model=SchedulerBridge)
-        bridge.report_progress(
-            Bridge.SyncStage.SYNCING, details={"pairing": {"state": "awaiting_scan", "qr": "data:png"}}
+    def __init__(self) -> None:
+        super().__init__()
+        self.scope = ExitStack()
+        self.scope.enter_context(system_context(reason="test sync stage machine"))
+        self.scope.enter_context(transaction.atomic())
+        self.pk = make_integration("sync-machine", model=SchedulerBridge, poll_interval=60).pk
+        self.clock = timezone.now() - timedelta(days=1)
+        self.lock: ExitStack | None = None
+        self.worker: SchedulerBridge | None = None
+        self.started = self.clock
+        self.stage, self.run_id, self.token, self.runs = Bridge.SyncStage.IDLE, None, self.clock, 0
+        self.error, self.items, self.last_items, self.completed = "", None, 0, False
+        self.progress: dict[str, Any] = {}
+
+    def teardown(self) -> None:
+        if self.lock is not None:
+            self.lock.close()
+        transaction.set_rollback(True)
+        self.scope.close()
+
+    def tick(self) -> datetime:
+        self.clock += timedelta(minutes=1)
+        return self.clock
+
+    def fetch(self) -> SchedulerBridge:
+        return SchedulerBridge.objects.get(pk=self.pk)
+
+    def mark(self, stage: str, *, error: str = "", items: int | None = None) -> None:
+        """Every lifecycle marker replaces the previous run's outcome."""
+        self.stage, self.error, self.items = stage, error, items
+        if items is not None:
+            self.last_items, self.completed = items, True
+
+    def admit(self, admitted: bool, now: datetime, before: Any) -> None:
+        """Only an unowned sync is admitted; a declined admission leaves the progress untouched."""
+        owned = self.worker is not None or self.run_id is not None and self.stage in Bridge.LIVE_SYNC_STAGES
+        assert admitted is not owned
+        if admitted:
+            self.mark(Bridge.SyncStage.QUEUED)
+            self.token, self.run_id = now, None
+        else:
+            assert self.fetch().sync_progress == before
+
+    def release(self) -> None:
+        assert self.lock is not None
+        self.lock.close()
+        self.lock = self.worker = None
+
+    @initialize(history=st.lists(
+        st.tuples(st.sampled_from(("finish", "dispatch", "abandon")), st.booleans()), min_size=1, max_size=3,
+    ))
+    def play(self, history: list[tuple[str, bool]]) -> None:
+        """Earlier runs, each requested, delivered and ended as drawn, leave their markers behind."""
+        for ending, failed in history:
+            self.request()
+            self.deliver("current")
+            if ending == "finish":
+                self.finish(items=1, refused=failed)
+            elif ending == "dispatch":
+                self.dispatch()
+                self.settle(items=2, failed=failed)
+            else:
+                self.abandon()
+            self.row_matches_the_oracle()
+
+    @rule()
+    def request(self) -> None:
+        now, before = self.tick(), self.fetch()
+        progress = before.sync_progress
+        self.admit(before.request_sync(now=now), now, progress)
+
+    @rule()
+    def scan(self) -> None:
+        """A fresh or declined scheduled admission claims the next interval; recovering a queue keeps its claim."""
+        now = self.tick()
+        with transaction.atomic():
+            row = SchedulerBridge.objects.lock_if_supported().get(pk=self.pk)
+            claim, progress = row.next_sync_at, row.sync_progress
+            admitted = row.admit_due_sync(now=now)
+        recovering = admitted and self.stage == Bridge.SyncStage.QUEUED
+        assert self.fetch().next_sync_at == (claim if recovering else now + timedelta(seconds=60))
+        self.admit(admitted, now, progress)
+
+    @rule(kind=st.sampled_from(("current", "superseded", "contended")))
+    def deliver(self, kind: str) -> None:
+        """A task carries the last queued token or a superseded one. Behind a held lock (a worker's or a
+        live session's) it releases its claim only while that is current; otherwise a current token starts."""
+        token = self.token - timedelta(seconds=1) if kind == "superseded" else self.token
+        current = self.stage == Bridge.SyncStage.QUEUED and self.token == token
+        if self.worker is not None or kind == "contended":
+            assert self.fetch().release_sync_queue(now=token) is current
+            if current:
+                self.stage = Bridge.SyncStage.IDLE
+        elif current:
+            self.lock, self.worker, self.started = ExitStack(), self.fetch(), token
+            assert self.lock.enter_context(self.worker.sync_lock())
+            assert self.worker.mark_sync_started(now=token)
+            self.mark(Bridge.SyncStage.SYNCING)
+
+    @precondition(lambda self: self.stage in (Bridge.SyncStage.QUEUED, *Bridge.LIVE_SYNC_STAGES))
+    @rule(
+        stage=st.sampled_from(Bridge.LIVE_SYNC_STAGES),
+        message=st.sampled_from(("", "Fetching")),
+        seen=st.integers(0, 3),
+    )
+    def report(self, stage: str, message: str, seen: int) -> None:
+        """Progress replaces the message and details, and keeps a queued stage until work starts."""
+        self.fetch().report_progress(stage, message=message, details={"seen": seen})
+        self.stage = self.stage if self.stage == Bridge.SyncStage.QUEUED else stage
+        self.progress = {"details": {"seen": seen}} | ({"message": message} if message else {})
+
+    @precondition(lambda self: self.worker is not None)
+    @rule(items=st.integers(0, 5), refused=st.booleans())
+    def finish(self, items: int, refused: bool) -> None:
+        """The worker settles through its start-time instance while its partitions report through others;
+        the terminal marker keeps their progress."""
+        assert self.worker is not None
+        self.worker.config = {"mode": "refused"} if refused else {"items": items, "detached_progress": True}
+        if refused:
+            with pytest.raises(IntegrationError):
+                self.worker.run_sync(now=self.started)
+            self.mark(Bridge.SyncStage.FAILED, error="Vendor refused the login for ada@example.com.")
+        else:
+            assert self.worker.run_sync(now=self.started) == items
+            row = self.fetch()  # The queue token names the attempt; completion is when the work finished.
+            assert row.last_sync_started_at == self.started and row.last_sync_completed_at > self.clock
+            details = {"items": items, "budget_exhausted": True, "cursor": {"seen": items}}
+            self.progress = {"message": "Reached the sync budget", "details": details}
+            self.mark(Bridge.SyncStage.COMPLETED, items=items)
+        self.release()
+
+    @precondition(lambda self: self.worker is not None)
+    @rule()
+    def dispatch(self) -> None:
+        """The worker's sync hands the occurrence to a workflow run, which owns its terminal report."""
+        assert self.worker is not None
+        self.runs += 1
+        assert self.worker.claim_dispatch(self.runs, now=self.tick())
+        self.run_id = self.runs
+        self.mark(Bridge.SyncStage.SYNCING)
+        self.release()
+
+    @precondition(lambda self: self.worker is not None)
+    @rule()
+    def abandon(self) -> None:
+        """A worker dies without reporting; its stale stage stays behind and owns nothing."""
+        self.release()
+
+    @precondition(lambda self: self.run_id is not None)
+    @rule(items=st.integers(0, 5), failed=st.booleans())
+    def settle(self, items: int, failed: bool) -> None:
+        """A retained run settles once and stays for inspection."""
+        active = self.stage in Bridge.LIVE_SYNC_STAGES
+        outcome = {"error": IntegrationError("Sync workflow failed.")} if failed else {"result": items}
+        assert self.fetch().settle_dispatch(self.run_id, **outcome) is active
+        if active and failed:
+            self.mark(Bridge.SyncStage.FAILED, error="Sync workflow failed.")
+        elif active:
+            self.mark(Bridge.SyncStage.COMPLETED, items=items)
+
+    @rule()
+    def pair(self) -> None:
+        """A session that pairs clears a failure, back to the last completion when there was one."""
+        self.fetch().clear_sync_error()
+        if self.stage == Bridge.SyncStage.FAILED:
+            self.mark(Bridge.SyncStage.COMPLETED if self.completed else Bridge.SyncStage.IDLE)
+
+    @invariant()
+    def row_matches_the_oracle(self) -> None:
+        """Failure markers live only on a failed row, outcomes only on their terminal marker, and every
+        marker keeps the reported progress and a queued row's token."""
+        row = self.fetch()
+        progress = row.sync_progress
+        assert (row.sync_stage, row.sync_run_id, row.sync_error) == (self.stage, self.run_id, self.error)
+        assert (progress.get("error"), progress.get("items"), row.last_sync_items) == (
+            self.error or None, self.items, self.last_items,
         )
-
-        bridge.mark_sync_queued(now=now)
-        assert bridge.sync_progress["details"]["pairing"]["qr"] == "data:png"
-        assert bridge.sync_progress["stage"] == Bridge.SyncStage.QUEUED
-        assert bridge.sync_progress["queued_at"] == now.isoformat()
-
-        bridge.mark_sync_started(now=now)
-        assert bridge.sync_progress["details"]["pairing"]["qr"] == "data:png"
-        assert bridge.sync_progress["stage"] == Bridge.SyncStage.SYNCING
+        assert {key: progress[key] for key in ("message", "details") if key in progress} == self.progress
+        if self.stage == Bridge.SyncStage.QUEUED:
+            assert progress["queued_at"] == self.token.isoformat()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_progress_report_during_queued_stage_keeps_the_queue_marker(transactional_db: None) -> None:
-    """A report firing while the row is QUEUED must not clobber the queue claim.
-
-    The scheduler owns the ``QUEUED`` stage/marker; a progress report owns ``details``.
-    A progress report arriving mid-queue (a live session publishing a pairing QR
-    after Sync was pressed) merges its details without demoting the stage or
-    dropping ``queued_at`` — otherwise the stale-queue recovery cannot tell a
-    genuine queue claim from a run that has already advanced, and re-queues it
-    forever. This pins the locked-merge guard in ``Bridge.report_progress``.
-    """
+def test_sync_stage_follows_its_oracle_in_any_interleaving(transactional_db: None) -> None:
+    """Admission, delivery, progress, settlement and pairing keep the sync stage's contract."""
 
     del transactional_db
-    now = timezone.now()
-    with system_context(reason="test integrate scheduler setup"):
-        bridge = make_integration("queued-report", model=SchedulerBridge)
-        bridge.mark_sync_queued(now=now)
-
-        payload = bridge.report_progress(
-            Bridge.SyncStage.SYNCING,
-            message="Scanning vendor rows",
-            details={"items": 3},
-        )
-
-    assert payload["stage"] == Bridge.SyncStage.QUEUED
-    assert payload["queued_at"] == now.isoformat()
-    assert payload["details"] == {"items": 3}
-    assert bridge.sync_stage == Bridge.SyncStage.QUEUED
-
-    with system_context(reason="test integrate scheduler verify"):
-        bridge.refresh_from_db()
-    assert bridge.sync_stage == Bridge.SyncStage.QUEUED
-    assert bridge.sync_progress["stage"] == Bridge.SyncStage.QUEUED
-    assert bridge.sync_progress["queued_at"] == now.isoformat()
-    assert bridge.sync_progress["details"] == {"items": 3}
-    assert bridge.sync_progress["message"] == "Scanning vendor rows"
+    examples = settings(max_examples=25, stateful_step_count=20, deadline=None)
+    run_state_machine_as_test(SyncStageMachine, settings=examples)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -682,41 +748,6 @@ def test_request_sync_marks_queued_and_defers_task(
     assert bridge.sync_stage == Bridge.SyncStage.QUEUED
     assert bridge.sync_error == ""
     assert bridge.sync_progress == {"stage": Bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
-
-
-@pytest.mark.django_db(transaction=True)
-def test_active_sync_keeps_its_progress_when_another_sync_is_requested(
-    transactional_db: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Manual requests and periodic scans cannot overwrite a long-running worker."""
-
-    del transactional_db
-    now = timezone.now()
-    sent: list[dict[str, Any]] = []
-    monkeypatch.setattr("angee.integrate.models.enqueue_task", lambda _name, **kwargs: sent.append(kwargs))
-    with system_context(reason="test active sync setup"):
-        bridge = make_integration("active-sync", model=SchedulerBridge, next_sync_at=now - timedelta(minutes=10))
-        bridge.mark_sync_started(now=now - timedelta(minutes=10))
-        bridge.report_progress("syncing", message="Fetching the next batch", details={"cursor": 100})
-        bridge.refresh_from_db()
-        progress = bridge.sync_progress
-
-    with bridge.sync_lock() as acquired:
-        assert acquired
-        assert bridge.request_sync(now=now) is False
-        assert enqueue_due_bridges(now=now) == {"enqueued": 0, "skipped": 1}
-        bridge.refresh_from_db()
-        assert bridge.sync_stage == Bridge.SyncStage.SYNCING
-        assert bridge.sync_progress == progress
-        assert bridge.next_sync_at == now + timedelta(seconds=bridge.poll_interval)
-        assert sent == []
-
-    # A dead worker's stale syncing marker does not strand the connection.
-    assert bridge.request_sync(now=now) is True
-    bridge.refresh_from_db()
-    assert bridge.sync_stage == Bridge.SyncStage.QUEUED
-    assert len(sent) == 1
 
 
 @pytest.mark.django_db(transaction=True)
