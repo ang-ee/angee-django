@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
 import { isStatusUpdate, MessageReader } from "@angee/messaging";
-import { senderDisplayName } from "@angee/parties";
+import { resolvedSender, senderDisplayName } from "@angee/parties";
 import {
   ActionMenu,
   ActionTrigger,
@@ -48,6 +48,8 @@ export function InboxMessageReader({
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const message = query.data?.inbox_message.message;
+  // A merged sender handle keeps the message; its survivor carries the party identity.
+  const identity = resolvedSender(message?.sender);
   const statusUpdate = message ? isStatusUpdate(message) : false;
   useInboxBreadcrumbs(navigation, {
     message: statusUpdate ? t("inbox.statusUpdate") : message?.title || t("inbox.message"),
@@ -102,12 +104,12 @@ export function InboxMessageReader({
             <ActionTrigger glyph="link" onClick={() => void copyLink()}>{t(copied ? "inbox.copied" : "inbox.copyLink")}</ActionTrigger>
             <ActionTrigger glyph="users" onClick={() => navigation.connect(`participants:${message.id}`, message.id)}>{t("inbox.participants")}</ActionTrigger>
             <ActionTrigger glyph="link" onClick={() => navigation.connect(`relations:${message.id}`, message.id)}>{t("inbox.relations")}</ActionTrigger>
-            {message.sender?.party_link_confirmed && message.sender.party ? (
-              <ActionTrigger onClick={() => navigation.connect(`handles:${message.sender!.party!.id}`, message.id)}>{t("inbox.handles")}</ActionTrigger>
+            {identity?.party_link_confirmed && identity.party ? (
+              <ActionTrigger onClick={() => navigation.connect(`handles:${identity.party!.id}`, message.id)}>{t("inbox.handles")}</ActionTrigger>
             ) : null}
-            {message.sender ? (
+            {identity ? (
               <ActionTrigger onClick={() => navigation.select(
-                message.sender!.party_link_confirmed && message.sender!.party ? `party:${message.sender!.party.id}` : `handle:${message.sender!.id}`,
+                identity.party_link_confirmed && identity.party ? `party:${identity.party.id}` : `handle:${identity.id}`,
               )}>{t("inbox.exploreSender")}</ActionTrigger>
             ) : null}
           </ActionMenu>
@@ -151,9 +153,9 @@ export function InboxMessageReader({
               </Alert>
             ) : null}
             <ErrorBanner description={actionError ?? null} />
-            {message.sender?.party && !message.sender.party_link_confirmed ? (
+            {identity?.party && !identity.party_link_confirmed ? (
               <Alert tone="info">
-                {t("inbox.suggested")}: {message.sender.party.display_name}
+                {t("inbox.suggested")}: {identity.party.display_name}
               </Alert>
             ) : null}
             <Collapsible.Root>

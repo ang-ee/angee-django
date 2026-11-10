@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { senderAvatarUrl, senderDisplayName } from "./identity";
+import { resolvedSender, senderAvatarUrl, senderDisplayName } from "./identity";
 
 describe("senderDisplayName", () => {
   test("prefers the curated party name once the handle statement is confirmed", () => {
@@ -52,6 +52,28 @@ describe("senderDisplayName", () => {
     expect(senderDisplayName({})).toBe("");
     expect(senderDisplayName(null, "Unknown")).toBe("Unknown");
     expect(senderDisplayName({ display_name: "", value: "" }, "—")).toBe("—");
+  });
+});
+
+describe("resolvedSender", () => {
+  const survivor = {
+    party_link_confirmed: true,
+    party: { display_name: "Jane Doe", display_avatar: { url: "/files/party.png?token=a" } },
+  };
+  const merged = { display_name: "jane@old.acme.com", party_link_confirmed: false, party: null, merged_into: survivor };
+
+  test("reads a merged handle's party identity on its survivor and keeps its own envelope", () => {
+    expect(resolvedSender(merged)).toBe(survivor);
+    expect(senderDisplayName(merged)).toBe("Jane Doe");
+    expect(senderAvatarUrl(merged)).toBe("/files/party.png?token=a");
+    expect(senderDisplayName({ ...merged, merged_into: { ...survivor, party_link_confirmed: false } })).toBe(
+      "jane@old.acme.com",
+    );
+  });
+
+  test("returns a canonical handle itself", () => {
+    expect(resolvedSender(survivor)).toBe(survivor);
+    expect(resolvedSender(null)).toBeNull();
   });
 });
 
