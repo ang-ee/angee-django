@@ -3,14 +3,13 @@
 import type { TypedDocumentNode } from "@angee/refine";
 import {
   act,
-  cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const hookMocks = vi.hoisted(() => ({
   mutate: vi.fn(async () => ({ connect_example_channel: { id: "chn_1" } })),
@@ -77,8 +76,6 @@ function Harness(): React.ReactElement {
 }
 
 describe("usePairingConnect", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     hookMocks.mutate.mockClear();
     hookMocks.mutationOptions = null;

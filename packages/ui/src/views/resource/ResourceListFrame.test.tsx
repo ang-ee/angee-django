@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 import { searchFixture } from "./search/search-fixture.test-support";
 import { ResourceListFrame } from "./ResourceListFrame";
 import { listChromeState } from "./resource-view-types";
-
-afterEach(cleanup);
 
 test("list chrome composes heading copy with the live count", () => {
   render(<ResourceListFrame toolbar={{ search: searchFixture(), pager: { total: 7, page: 1, pageSize: 20 } }}

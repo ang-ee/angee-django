@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const actionMocks = vi.hoisted(() => ({
   connect: vi.fn(async () => ({ connect_local_folder: { id: "int_1" } })),
@@ -61,8 +61,6 @@ vi.mock("./i18n", () => ({
 import { ConnectLocalFolderAction } from "./ConnectLocalFolderAction";
 
 describe("ConnectLocalFolderAction", () => {
-  afterEach(cleanup);
-
   beforeEach(() => {
     actionMocks.connect.mockClear();
     actionMocks.dialogProps = null;

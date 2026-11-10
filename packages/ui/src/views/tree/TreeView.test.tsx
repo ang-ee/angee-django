@@ -1,13 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider } from "../../runtime";
 
 import { baseIcons } from "../../chrome/icon-registry";
 import { TreeView } from "./TreeView";
-
-afterEach(() => cleanup());
 
 interface Row extends Record<string, unknown> {
   id: string;

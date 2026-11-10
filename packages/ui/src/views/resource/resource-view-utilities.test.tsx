@@ -3,12 +3,10 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { AppRuntimeProvider, containersFromChildren } from "../../runtime";
 import { RESOURCE_CONTAINERS } from "./resource-view-kinds";
 import { ResourceViewUtilities } from "./resource-view-utilities";
-
-afterEach(cleanup);
 
 const containers = containersFromChildren(RESOURCE_CONTAINERS, {
   "notes.Note#utilities": { "notes.capture": { content: <button type="button">Capture</button> } },

@@ -1,13 +1,12 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { expect, test } from "vitest";
 import type { GroupSpec } from "@angee/metadata";
 import { ResourceViewProvider, useResourceView } from "../resource-view-context";
 import { GroupStackPanel } from "./GroupStackPanel";
 import { searchFixture } from "./search-fixture.test-support";
 import { useResourceSearch } from "./use-resource-search";
 
-afterEach(cleanup);
 const project = { id: "project", label: "Project", group: { field: "project" } };
 const status = { id: "status", label: "Status", group: { field: "status" } };
 const created = { id: "created", label: "Created", group: { field: "created", granularity: "day" },

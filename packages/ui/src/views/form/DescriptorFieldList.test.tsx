@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 
 import { useState, type ReactElement, type ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { FormProvider, useForm, type DefaultValues, type UseFormReturn } from "react-hook-form";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
 import { ToastProvider } from "../../feedback";
@@ -41,8 +41,6 @@ function FormHarness<TValues extends Values = Values>({
     </FormProvider>
   </AppRuntimeProvider>;
 }
-
-afterEach(cleanup);
 
 describe("DescriptorFieldList", () => {
   test("relation metadata preserves an explicitly declared registry widget", () => {

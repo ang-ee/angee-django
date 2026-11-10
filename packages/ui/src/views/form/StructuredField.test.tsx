@@ -3,7 +3,7 @@
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
@@ -17,8 +17,6 @@ import { RowsField, type RowsValue } from "./RowsField";
 const metadata = schemaFieldMetadataFromDataResources([]);
 
 describe("structured FormSpec widgets", () => {
-  afterEach(cleanup);
-
   test("edits titled fixed rows and nested lists without losing hidden retained values", async () => {
     const [field] = sectionedFields();
     const changes = vi.fn();

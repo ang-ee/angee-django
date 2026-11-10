@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { expect, test } from "vitest";
 
 import { NavLink } from "@angee/ui/ui/nav-link";
 import { ContainerOutlet } from "@angee/ui/lib/container-outlet";
@@ -9,8 +9,6 @@ import { RecordChrome } from "@angee/ui/views/index";
 
 import { createApp } from "./create-app";
 import { TEST_SCHEMAS } from "./testing";
-
-afterEach(() => cleanup());
 
 const record = {
   resource: "notes.Note",

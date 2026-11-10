@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type * as React from "react";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 
 vi.mock("../../fragments/DialogForm", () => ({
   DialogForm: ({ children, title, trigger }: {
@@ -27,8 +27,6 @@ vi.mock("../resource/RowsListView", () => ({
 }));
 
 import { ManageAccessDialog } from "./ManageAccessDialog";
-
-afterEach(cleanup);
 
 test("provides the canonical Share trigger and selection label", () => {
   render(<ManageAccessDialog

@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { createLayoutBand } from "./layout-band";
-
-afterEach(() => cleanup());
 
 const band = createLayoutBand("div", "test-band");
 

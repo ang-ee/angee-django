@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../testing";
 import { Input } from "../ui/input";
 import { GraphEditor, type GraphEditorLayout, type GraphEditorSelection } from "./GraphEditor";
@@ -15,7 +15,6 @@ beforeAll(() => {
   }
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 });
-afterEach(cleanup);
 
 test("controlled selection returns to a canvas node after an external selection", async () => {
   const changed = vi.fn();

@@ -57,6 +57,8 @@ const testDefaults = defineConfig({
     // Pure modules run under node; hook/component suites opt into a DOM
     // environment per-file with a `// @vitest-environment happy-dom` pragma.
     environment: "node",
+    // Worker threads start faster than forked processes; each file stays isolated.
+    pool: "threads",
     setupFiles: [fileURLToPath(new URL("./vitest-setup.js", import.meta.url))],
     include: srcTestIncludes,
     server: {

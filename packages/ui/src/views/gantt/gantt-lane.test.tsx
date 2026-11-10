@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, test, vi } from "vitest";
 
 import { InAppLinkProvider } from "../../lib/in-app-link";
 import { GanttLane, withGanttLaneNotes } from "./gantt-lane";
-
-afterEach(cleanup);
 
 describe("declared Gantt lanes", () => {
   test("renders a linked title and named avatars, omitting empty secondary parts", () => {

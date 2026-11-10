@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AppRuntimeProvider, ToastProvider, createRouteHref, defaultWidgets } from "@angee/ui";
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { WorkspaceCreateDialog } from "./WorkspaceCreateDialog";
 
@@ -90,7 +90,6 @@ vi.mock("../../data/transport", () => ({
 
 describe("WorkspaceCreateDialog", () => {
   beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
       value: class ResizeObserver {
@@ -106,8 +105,6 @@ describe("WorkspaceCreateDialog", () => {
     mocks.preflight.mockReset();
     mocks.create.mockReset();
   });
-
-  afterEach(cleanup);
 
   test("lists workspace templates and surfaces preflight failures on template inputs", async () => {
     mocks.preflight.mockResolvedValue({

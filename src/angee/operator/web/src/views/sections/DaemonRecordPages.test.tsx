@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 
@@ -86,8 +86,6 @@ beforeEach(() => {
   operatorMocks.workspaceAction.mockClear();
   operatorMocks.useOperatorSnapshot.mockReset();
 });
-
-afterEach(() => cleanup());
 
 describe("operator daemon record pages", () => {
   test("SourceDetail preserves loading and not-found states", () => {

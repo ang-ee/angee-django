@@ -71,7 +71,6 @@ const VCS_ID = "VkNTSW50ZWdyYXRpb25UeXBlOjE=";
 
 describe("AddRepositoryControl typeahead", () => {
   beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
       value: class ResizeObserver {

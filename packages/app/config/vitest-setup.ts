@@ -1,3 +1,5 @@
+import { afterEach } from "vitest";
+
 // happy-dom omits the Web Animations enumeration used by native UI primitives.
 // Keep this in the published Vitest defaults so package and addon tests agree.
 if (typeof Element !== "undefined") {
@@ -12,6 +14,8 @@ if (typeof Element !== "undefined") {
   // a suite without it has no waiting queries.
   const testingLibrary = await import("@testing-library/react").catch(() => null);
   testingLibrary?.configure({ asyncUtilTimeout: 4_000 });
+  // Testing Library unmounts on its own only under Vitest globals, which these
+  // defaults leave off, so every DOM test unmounts here. A file's own `afterEach`
+  // hooks run first; one that must tear down after the unmount calls `cleanup()`.
+  if (testingLibrary) afterEach(testingLibrary.cleanup);
 }
-
-export {};

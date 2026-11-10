@@ -20,7 +20,7 @@ import { lazyRouteComponent, useParams } from "@tanstack/react-router";
 import { ControlBand, ControlBandProvider } from "@angee/ui/layouts/ControlBand";
 import { resourcePageRoutes } from "./define-base-addon";
 import type { ShellSettings } from "./define-addon";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import {
   createApp,
@@ -49,8 +49,6 @@ import { ResourceQuery, useModelMetadata, type DataResourceMetadata } from "@ang
 import type { ContainersDeclaration } from "@angee/ui/runtime";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { statusBadgeWidget } from "@angee/ui/widgets/statusBadge";
-
-afterEach(() => cleanup());
 
 test("search contributions validate shapes and model field capabilities at createApp", () => {
   const contract = ResourceQuery.forRows({ fields: { title: { scalar: "String" }, amount: { scalar: "Float" }, hidden: { scalar: "String" } } }).contract;

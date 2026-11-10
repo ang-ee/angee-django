@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
 
 import type { TypedDocumentNode } from "@angee/refine";
@@ -84,7 +84,6 @@ beforeEach(() => {
   authored.calls = [];
   authored.data = undefined;
 });
-afterEach(cleanup);
 
 describe("useCalendarWindow", () => {
   test("maps the occurrence rows out of the authored result", () => {
