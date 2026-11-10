@@ -21,7 +21,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 | `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py`, `INSTALLED_APPS` in `tests/settings.py` |
 | `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup`, `composed_tables`; `composed_permissions` (`permissions.py`) | module docstrings |
 | `tests/conftest.py` | actors and schema drivers: `create_user`, `create_platform_admin`, `vault_for`, `addon_schema` | `tests/test_tags.py` |
-| `src/angee/graphql/testing/documents.py` | document execution as an actor and SQL ceilings: `execute_schema`, `result_data`, `measure_graphql_document` | [GraphQL document budgets](../../../docs/checks.md#graphql-document-budgets) |
+| `src/angee/graphql/testing/documents.py` | document execution as an actor and statement ceilings: `execute_schema`, `result_data`, `measure_graphql_document` | [GraphQL document budgets](../../../docs/checks.md#graphql-document-budgets) |
 | `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_work_cycles.py`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | the composed-host subprocess that runs consumer `TransactionTestCase` modules in the framework suite | `test_composed_note_workflow` in `tests/test_composed_note_workflow.py` |
 | `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon`, `chromeSnapshotForRoute`, `TEST_SCHEMAS`; `createUiTestProviders` (`ui`) | `src/angee/tags/web/src/index.test.ts` |
@@ -37,7 +37,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 - Stand-in records from owning test apps: `angee.messaging.testing.models` (`Party`, `Handle`), `angee.projects.testing.models` (`Task`, `Queue`, `Cycle`), `tests.conftest` (`Page`, `File`, `Need`, `vault_for`); `tests/mtidemo`, `hierdemo`, `recordrefdemo` for structural probes.
 - Workflow and decision states: `angee.workflows.testing.drivers` (`load_workflow`, `start_run`, `run_until`, `decide`), never fabricated step runs ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
 - PostgreSQL lock races: `submit` and `wait_for_lock` (`tests/lock_waits.py`), never a private polling loop.
-- Query budgets: Django `CaptureQueriesContext` at 1 and 25 rows; a document's statement and SQL ceilings through `measure_graphql_document`.
+- Query budgets: Django `CaptureQueriesContext` at 1 and 25 rows; a document's statement ceiling through `measure_graphql_document`.
 - Frontend: `@angee/app/testing`, `@angee/ui/testing`, `@angee/refine/testing`, `@angee/metadata/testing`, `@angee/storybook/testing`, Testing Library. Browser: `@angee/e2e` only, Page Objects under `pages/`.
 
 ## Steps
