@@ -21,6 +21,7 @@ from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
 from angee.base.models import merge as merge_module
+from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import public_id_of
 from angee.base.models.merge_references import (
     EdgeReference,
@@ -32,7 +33,7 @@ from angee.base.models.merge_references import (
 from angee.base.models.refs import RecordRefMixin
 from angee.graphql import records
 from angee.graphql.testing.documents import execute_schema, result_data
-from angee.messaging.testing.models import Directory, Participant, Party, Reaction
+from angee.messaging.testing.models import Directory, Handle, Message, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance import checks as provenance_checks
 from angee.provenance.context import changeset
@@ -515,17 +516,28 @@ def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.Monk
 
 
 def test_a_model_a_revertible_merge_moves_must_keep_history(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Revert replays history only, so ``angee.E051`` names a moved model without it.
+    """Revert replays history only, so ``angee.E051`` names a moved model without it, or without the moved column.
 
     A merge of a model without history (``MergeReferenceNode``) is never revertible and is exempt.
     """
 
     assert provenance_checks.check_merge_history() == []
     tracked = provenance_checks.model_history
-    monkeypatch.setattr(provenance_checks, "model_history", lambda model: None if model is TagSlot else tracked(model))
+    monkeypatch.setattr(tracked(TagSlot), "excluded_fields", ["tag"])
     [error] = provenance_checks.check_merge_history()
     assert (error.id, error.obj) == ("angee.E051", TagSlot)
-    assert error.msg.startswith("recordrefdemo.TagSlot.tag moves in tags.Tag merges")
+    assert "excludes tag from history" in error.msg
+    monkeypatch.setattr(provenance_checks, "model_history", lambda model: None if model is TagSlot else tracked(model))
+    [error] = provenance_checks.check_merge_history()
+    assert error.msg.startswith("recordrefdemo.TagSlot.tag moves in tags.Tag merges but keeps no history")
+
+
+def test_merge_policies_merge_along_the_class_hierarchy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model's own policy wins per key without dropping the keys its bases declare."""
+
+    monkeypatch.setattr(AngeeDataModel, "merge_policies", {"handle": MergePolicy.BLOCK, "message": MergePolicy.BLOCK})
+    policies = {(ref.model, ref.name): ref.policy for owner in (Handle, Message) for ref in references(owner)}
+    assert (policies[Participant, "handle"], policies[Participant, "message"]) == (MergePolicy.KEEP, MergePolicy.BLOCK)
 
 
 def test_a_moved_stance_keeps_its_recency_so_the_tie_break_keeps_its_winner() -> None:

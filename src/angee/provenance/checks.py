@@ -42,32 +42,38 @@ def check_merge_history(
     app_configs: Sequence[AppConfig] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
-    """Require history on every model a revertible merge moves.
+    """Require history, including the moved column, on every model a revertible merge moves.
 
     A merge of a model that keeps history is undone by ``Changeset.revert``,
-    which replays history rows only; a row it moved without history would stay
-    on the survivor. The moved references are the fold's own
-    (:meth:`MergeableMixin.moved_references`), so the check and the merge
-    cannot drift.
+    which replays history only; a row it moved without history, or through a
+    column its history excludes, would stay on the survivor. The moved
+    references are the fold's own (:meth:`MergeableMixin.moved_references`), so
+    the check and the merge cannot drift. Writes a fold makes outside that
+    derivation are not checked here: a pointing model's ``merge_contract``, the
+    model's ``retire_merged`` and hooks it runs (a handle's
+    ``_party_links_resolved``) answer for their own history.
     """
 
     del kwargs
     configs = apps.get_app_configs() if app_configs is None else app_configs
-    untracked: dict[tuple[str, str], tuple[type, str]] = {}
+    untracked: dict[tuple[str, str], tuple[type, str, str]] = {}
     for config in sorted(configs, key=lambda config: config.label):
         for model in sorted(config.get_models(), key=lambda model: model._meta.label):
             if not issubclass(model, MergeableMixin) or model_history(model) is None:
                 continue
             for reference in model.moved_references():
-                if model_history(reference.model) is None:
+                history = model_history(reference.model)
+                excluded = set(reference.columns) & set(history.excluded_fields) if history is not None else set()
+                if history is None or excluded:
+                    gap = f"excludes {', '.join(sorted(excluded))} from history" if excluded else "keeps no history"
                     key = (reference.model._meta.label, reference.name)
-                    untracked.setdefault(key, (reference.model, model._meta.label))
+                    untracked.setdefault(key, (reference.model, model._meta.label, gap))
     return [
         checks.Error(
-            f"{label}.{name} moves in {merger} merges but keeps no history, so reverting the merge cannot restore it.",
-            hint="Compose HistoryMixin on the moved model, or declare the key KEEP in its merge_policies.",
+            f"{label}.{name} moves in {merger} merges but {gap}, so reverting the merge cannot restore it.",
+            hint="Compose HistoryMixin on the moved model and track the key, or declare it KEEP in merge_policies.",
             obj=pointing,
             id="angee.E051",
         )
-        for (label, name), (pointing, merger) in sorted(untracked.items())
+        for (label, name), (pointing, merger, gap) in sorted(untracked.items())
     ]
