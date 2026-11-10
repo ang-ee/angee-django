@@ -23,7 +23,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.db.models.signals import post_save
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from openai import DefaultHttpxClient, OpenAI
@@ -132,7 +132,13 @@ def test_integration_branding_does_not_grant_vendor_read(
         with pytest.raises(Vendor.DoesNotExist):
             Vendor.objects.get(pk=integration.vendor_id)
         ordinary = Integration.objects.get(pk=integration.pk)
-        assert ordinary.display_label == label
+        assert ordinary.connection_vendor_slug() == "public-branding"
+        with CaptureQueriesContext(connection) as repeated, override_settings(REBAC_ALLOW_SUDO=False):
+            for _ in range(3):
+                assert ordinary.display_label == label
+                assert ordinary.connection_vendor_slug() == "public-branding"
+                assert str(ordinary) == f"public-branding:{ordinary.public_id}"
+        assert len(repeated) == 0
         assert str(ordinary) == f"public-branding:{ordinary.public_id}"
         projected = Integration.objects.annotate(**Integration.oauth_projection_expressions()).get(pk=integration.pk)
         with CaptureQueriesContext(connection) as captured:

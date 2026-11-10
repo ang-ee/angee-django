@@ -47,8 +47,6 @@ from angee.base.implementations import ImplBase, check_impl_registry, impl_regis
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
 _SETTINGS_FILENAME = "settings.yaml"
-_BACKEND_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND"
-_REGISTRY_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND_CLASSES"
 
 
 class AddonInstallerBackend(ImplBase):
@@ -338,7 +336,7 @@ def check_installer_backend_selection(app_configs: Any, **kwargs: Any) -> list[C
         return [
             *errors,
             Error(
-                f"settings.{_REGISTRY_SETTING} must be a non-empty mapping of key to dotted path.",
+                f"settings.{AddonInstallerBackend.registry_setting} must be a non-empty mapping of key to dotted path.",
                 id="angee.platform.E001",
             ),
         ]
@@ -347,7 +345,8 @@ def check_installer_backend_selection(app_configs: Any, **kwargs: Any) -> list[C
         return [
             *errors,
             Error(
-                f"settings.{_BACKEND_SETTING} = {selected!r} is not a key in settings.{_REGISTRY_SETTING}.",
+                f"settings.ANGEE_ADDON_INSTALLER_BACKEND = {selected!r} is not a key in "
+                f"settings.{AddonInstallerBackend.registry_setting}.",
                 id="angee.platform.E004",
             ),
         ]

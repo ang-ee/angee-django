@@ -221,3 +221,14 @@ def test_hierarchy_history_distinguishes_final_creation_from_reparenting(compose
         assert moved.path == page.path
         assert page.path.startswith(parent.path)
         assert moved.path != created.path
+
+
+def test_native_history_exposes_public_capture_declaration():
+    from angee.provenance.bases import ChangesetHistory
+    from angee.provenance.history import ChangesetHistory as HistoricalImport
+    from angee.provenance.querysets import model_history
+
+    assert HistoricalImport is ChangesetHistory
+    assert issubclass(OwnedRow.history.model, ChangesetHistory)
+    assert OwnedRow.history.model.provenance_history is model_history(OwnedRow)
+    assert model_history(OwnedRow) is not None

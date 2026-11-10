@@ -24,7 +24,7 @@ from rebac import (
 from rebac.models import SchemaOverride, SchemaPermission
 
 from angee.base.permissions import contextual_action_holds
-from angee.base.testing.queries import capture_planner_memory, statement_body
+from angee.base.testing.queries import capture_planner_memory, statement_body, supports_planner_memory
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.testing.models import Channel, Fragment, Message, Part, Thread
@@ -249,7 +249,7 @@ def test_inbox_parts_compile_the_message_graph_once(record_property) -> None:
                 sent_at=T0 + timedelta(minutes=index),
             )
             Part._base_manager.create(created_by=owner, message=message, name=f"{index}.pdf", position=index)
-    postgres = connection.vendor == "postgresql" and connection.pg_version >= 170000
+    postgres = supports_planner_memory()
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
         list(inbox.parts.order_by("pk")[:1])

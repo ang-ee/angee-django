@@ -403,7 +403,6 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                     node.last_edited_time.isoformat(),
                     target=target,
                     projection=self._projection(target),
-                    mapping_version=self.mapping_version,
                     mapped_payload=mapped,
                     dependency_digest=canonical_json_sha256([mapped["parent"], resolved_links]),
                     tombstone=node.is_trashed,

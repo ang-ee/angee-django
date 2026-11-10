@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
@@ -22,7 +22,6 @@ class PartyAspectMixin(StatementsMixin):
     """Lock a Party's identity owner before its dependent aspect subject."""
 
     party: Any
-    owned_reference_fields: ClassVar[tuple[str, ...]] = ("party",)
 
     class Meta:
         abstract = True

@@ -11,6 +11,7 @@ from django.db import NotSupportedError, connections, models, transaction
 from simple_history.exceptions import NotHistoricalModelError
 from simple_history.utils import get_history_manager_for_model
 
+from angee.provenance.bases import ChangesetHistory
 from angee.provenance.context import current_changeset, write_group
 
 if TYPE_CHECKING:
@@ -22,15 +23,12 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 def model_history(model: type[models.Model]) -> ModelHistory | None:
     """Read provenance's declaration from simple-history's native concrete-table registration."""
 
-    # HistoryQuerySet is imported while these model bases are being declared.
-    from angee.provenance.history import ChangesetHistory
-
     concrete = model._meta.concrete_model or model
     try:
         manager = get_history_manager_for_model(concrete)
     except NotHistoricalModelError:
         return None
-    return manager.model._provenance_history if issubclass(manager.model, ChangesetHistory) else None
+    return manager.model.provenance_history if issubclass(manager.model, ChangesetHistory) else None
 
 
 class HistoryQuerySet(models.QuerySet[_ModelT]):

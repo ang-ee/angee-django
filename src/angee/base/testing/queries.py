@@ -59,6 +59,12 @@ class PlannerMemory:
     allocated_kib: int
 
 
+def supports_planner_memory() -> bool:
+    """Whether the active database supports PostgreSQL's EXPLAIN MEMORY contract."""
+
+    return connection.vendor == "postgresql" and connection.get_database_version() >= (17,)
+
+
 @contextmanager
 def capture_planner_memory(match: Callable[[str], bool]) -> Iterator[list[PlannerMemory]]:
     """EXPLAIN matching read statements after the read; populate measurements on context exit.
@@ -69,7 +75,7 @@ def capture_planner_memory(match: Callable[[str], bool]) -> Iterator[list[Planne
     resident memory. Callers assert the expected statement count and returned rows.
     """
 
-    if connection.vendor != "postgresql" or connection.get_database_version() < (17,):
+    if not supports_planner_memory():
         raise NotSupportedError("EXPLAIN MEMORY requires PostgreSQL 17 or later")
     statements = []
     plans: list[PlannerMemory] = []

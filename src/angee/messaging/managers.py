@@ -2621,7 +2621,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
 
         handle_model = apps.get_model("parties", "Handle")
         actor = self.actor() or current_actor()
-        handles = cast(Any, reader_queryset(handle_model, actor))
+        handles = reader_queryset(handle_model.objects.all(), actor)
         return (
             handles.with_sender_name()
             .filter(pk=models.OuterRef("sender_id"))

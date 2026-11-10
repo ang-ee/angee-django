@@ -327,3 +327,14 @@ def test_lock_subject_preparation_keeps_foreign_key_values_and_caches_separate(r
     untouched = row.prepare_lock_subject({})
     assert untouched.vendor_id == original.pk
     assert not field.is_cached(untouched)
+
+
+def test_reader_queryset_preserves_custom_queryset_and_filters():
+    actor = SubjectRef.of("auth/user", "1")
+    source = GuardedSystemQueryThing.objects.filter(name="retained")
+    scoped = reader_queryset(source, actor)
+    assert isinstance(scoped, GuardedSystemQuerySet)
+    assert scoped.actor() == actor
+    assert scoped.query.where == source.query.where
+    with pytest.raises(TypeError, match="name is guarded"):
+        scoped.update(name="refused")

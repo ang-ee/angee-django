@@ -43,6 +43,12 @@ class StorageBackend(Storage):
     key: ClassVar[str] = ""
     """Optional key assertion; native Storage backends otherwise use their registry key."""
 
+    @classmethod
+    def matches_registry_key(cls, key: str) -> bool:
+        """Native storage classes may leave identity to their registry entry."""
+
+        return not cls.key or cls.key == key
+
     writable: ClassVar[bool] = True
     """Whether callers may create new objects through this backend."""
 

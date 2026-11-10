@@ -1111,10 +1111,12 @@ operational identities; statement querysets use `applied()` for winning value
 assertions. Source-copy identity remains reversible pair evidence and never
 chooses a transport or moves channel occurrences.
 
-[`HistoryMixin.history_relations`](../../src/angee/provenance/contrib/angee/history.py) declares owned
+[`PersistenceMixin.owned_relations`](../../src/angee/base/models/persistence.py) declares owned
 reverse-FK collections, such as dashboard widgets or project milestones. These
 rows keep their own history and read gates; document history groups their deltas
-with record identity. `history_tables()` is the one concrete-table inventory.
+with record identity. Live-reference retirement uses those same owned collections
+and preserves outside callers of any part. `history_tables()` is the one
+concrete-table inventory.
 `ChangesetQuerySet.touching(record)` and its inverse `records_touched()` own
 document membership, including MTI, pairs and generated statements. Projections
 consume these scopes instead of rediscovering documents from history rows.
@@ -1966,8 +1968,8 @@ bridge advisory lock as polling and delivery settlement.
   that does not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload and dependency digest in `ApplyResult`; the driver takes the declared
-  mapping version from `RecordChange`, promotes the primary link and pins the history row written for that
-  application. Observation saves the source on the link without changing that
+  mapping version from the stream, promotes the primary link and pins the history
+  row written for that application. Observation saves the source on the link without changing that
   protected pointer. History is the observation log; inbound state retains
   simultaneous and closed failures, and refused writes retain link outbox state.
   Unlinked event failures belong to the stream's `inbound` state. Mapping or

@@ -56,15 +56,13 @@ def check_reference_currency_setting(
     # there would configure Django before the composer has completed its graph.
     from django.conf import settings
 
-    from angee.money.models import REFERENCE_CURRENCY_SETTING
-
     if settings.ANGEE_MONEY_REFERENCE_CURRENCY:
         return []
     return [
         checks.Warning(
-            f"{REFERENCE_CURRENCY_SETTING} is not set.",
+            "ANGEE_MONEY_REFERENCE_CURRENCY is not set.",
             hint=(
-                f"Set {REFERENCE_CURRENCY_SETTING} to the ISO-4217 code all currency rates are "
+                "Set ANGEE_MONEY_REFERENCE_CURRENCY to the ISO-4217 code all currency rates are "
                 "relative to. Currency conversion raises ImproperlyConfigured until it is set; "
                 "single-currency use does not need it."
             ),

@@ -100,6 +100,14 @@ class _TransitionSpec:
     declaration: StateTransitions | None = None
 
 
+def _transition_spec(value: Any) -> _TransitionSpec | None:
+    """Read decorator metadata preserved by functools.wraps on transition methods."""
+
+    # Ordinary Python methods have no transition declaration.
+    spec = getattr(value, "_angee_transition_spec", None)
+    return spec if isinstance(spec, _TransitionSpec) else None
+
+
 def transition(
     field: StateField,
     *,
@@ -250,8 +258,7 @@ class StateTransitions:
             )
 
         for method_name, value in cls.__dict__.items():
-            # functools.wraps copies function metadata; ordinary Python methods have no transition declaration.
-            spec = getattr(value, "_angee_transition_spec", None)
+            spec = _transition_spec(value)
             if spec is None or not self._matches_field(spec.field):
                 continue
             spec.name = method_name
@@ -303,8 +310,7 @@ class StateTransitions:
             for method_name, value in vars(klass).items():
                 if method_name in seen:
                     continue
-                # functools.wraps copies function metadata; ordinary Python methods have no transition declaration.
-                spec = getattr(value, "_angee_transition_spec", None)
+                spec = _transition_spec(value)
                 if spec is None or not self._matches_field(spec.field):
                     continue
                 seen.add(method_name)
@@ -338,9 +344,8 @@ class StateTransitions:
         """
 
         method = getattr(type(instance), method_name)
-        # functools.wraps copies function metadata; ordinary Python methods have no transition declaration.
-        spec = getattr(method, "_angee_transition_spec", None)
-        if not isinstance(spec, _TransitionSpec) or spec.declaration is not self:
+        spec = _transition_spec(method)
+        if spec is None or spec.declaration is not self:
             raise ImproperlyConfigured(f"{method_name!r} is not a transition guarded by {self.name}.")
         try:
             self._allowed_values(instance, spec)

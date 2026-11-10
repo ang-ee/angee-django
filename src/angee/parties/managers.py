@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from itertools import chain, combinations, groupby, islice
-from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
 
 from django.apps import apps
 from django.conf import settings
@@ -156,8 +156,8 @@ class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQu
     def with_member_counts(self) -> Self:
         """Annotate each circle with its distinct readable-person count across its readable subtree."""
 
-        circles = cast(Any, reader_queryset(apps.get_model("parties", "Circle"), self.actor()))
-        people = cast(Any, reader_queryset(apps.get_model("parties", "Person"), self.actor()))
+        circles = reader_queryset(apps.get_model("parties", "Circle").objects.all(), self.actor())
+        people = reader_queryset(apps.get_model("parties", "Person").objects.all(), self.actor())
         visible_person_ids = people.scoped_for_aggregate().canonical().values("pk")
         subtree = circles.filter(owner_id=OuterRef(OuterRef("owner_id")), path__startswith=OuterRef(OuterRef("path")))
         subtree_count = (
@@ -749,7 +749,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
 
         actor = self.actor() or current_actor()
         organizations = reader_queryset(apps.get_model("parties", "Organization"), actor)
-        relationships = cast(Any, reader_queryset(apps.get_model("parties", "Relationship"), actor)).canonical()
+        relationships = reader_queryset(apps.get_model("parties", "Relationship").objects.all(), actor).canonical()
         organizations = organizations.scoped_for_aggregate()
         relationships = relationships.scoped_for_aggregate()
         return relationships.filter(

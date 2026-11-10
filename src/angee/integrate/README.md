@@ -43,10 +43,10 @@ with the local projection so the driver recognizes its next pull echo. The link
 checks its complete retained reflection precondition beside the transport's
 remote-version fence. Neither makes the two systems atomic.
 Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
-`ApplyResult` has no `mapping_version` argument. Promotion takes the declared
-mapping version carried by `RecordChange`; an apply cannot accidentally reset it
-to a default and replay the same link forever. Adapters keep the version on their
-stream declaration and observations, and return only the evidence apply learned.
+The stream declaration alone owns `mapping_version`. The driver stamps it at
+promotion, write-back reflection and quarantine; `RecordChange`, `LocalChange`
+and `ApplyResult` carry no version copies. Adapters return only the evidence
+apply learned.
 
 Each applied record retains the observe row and the application-evidence row;
 a record delivered again unchanged retains only its observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
@@ -72,10 +72,11 @@ the generic sync and on a workflow cycle alike. What reaches it is limited to th
 declaration's facts: `authoritative` flips and re-derives, a changed `direction` or
 `snapshot` or increased `mapping_version` opens a new baseline generation (a full
 re-read of that stream), and a changed `kind` is refused. The generation records
-its mapping version, so reopening
-the same declaration preserves progress; an older declaration cannot lower it.
-Adapters declare the version in `StreamDefinition` and use the declared version
-in their record and applied evidence, including after a rollback. An unknown
+its active mapping version, so reopening the same declaration preserves progress.
+A lower declaration preserves the cursor and generation but updates that active
+version: rollback output must retain its actual mapping. Returning to the newer
+declaration starts a baseline to revisit any output the rollback wrote. Adapters
+declare the version once in `StreamDefinition`; the driver stamps all evidence. An unknown
 stored version is seeded from the minimum applied link version, or the declared
 version for a stream without applied links; never-applied observations and
 quarantines do not lower it. Only a newer declaration starts a baseline.

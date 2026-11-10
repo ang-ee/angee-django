@@ -12,7 +12,7 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated, change_published
-from angee.base.testing.queries import capture_planner_memory, statement_startswith
+from angee.base.testing.queries import capture_planner_memory, statement_startswith, supports_planner_memory
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql import publishing
@@ -45,8 +45,9 @@ def kinds(settings):
 @pytest.mark.parametrize("viewer", ["admin", "member"])
 def test_timeline_read_planner_memory(review, settings, viewer, record_property):
     """Budget the actual page statement, with a waiting run and folded and standalone decisions."""
-    if connection.vendor != "postgresql" or connection.pg_version < 170000:
-        pytest.skip("EXPLAIN MEMORY requires PostgreSQL 17 or later")
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL planner budget")
+    assert supports_planner_memory(), "EXPLAIN MEMORY requires PostgreSQL 17 or later"
     settings.ANGEE_TIMELINE_KINDS = [
         "angee.workflows.timeline.timeline_kinds", "angee.decisions.timeline.timeline_kinds",
     ]
