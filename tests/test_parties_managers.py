@@ -7,7 +7,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test.utils import isolate_apps
+from django.db import connection
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import system_context
 
 from angee.base.managers import AngeeManager
@@ -248,3 +249,22 @@ def test_confirmed_preserves_actor_scope(owner: Any) -> None:
         party.with_actor(other).confirm(aspect="handle", handle=handle, values={})
 
     assert not Handle.objects.with_actor(owner).confirmed("email", handle.value).exists()
+
+
+def test_child_reaches_parent_statements_through_its_parent_link(owner: Any) -> None:
+    """An MTI child's parent-declared statements bind the loaded ancestor row without a query."""
+
+    with system_context(reason="test parent statements of a child"):
+        organization = Organization.objects.create(
+            display_name="Upcast Studio", legal_name="Upcast Legal", created_by=owner
+        )
+        organization.with_actor(owner).confirm(aspect="identity", values={"display_name": "Upcast Studio"})
+    reader = Organization.objects.with_actor(owner).get(pk=organization.pk)
+
+    with CaptureQueriesContext(connection) as captured:
+        subjects = [manager.instance for manager in reader.statement_managers()]
+    assert captured.captured_queries == []
+    assert [type(subject) for subject in subjects][0] is Party
+    assert all(subject.pk == organization.pk for subject in subjects)
+    with system_context(reason="test parent provenance of a child"):
+        assert list(reader.provenance("display_name").values_list("display_name", flat=True)) == ["Upcast Studio"]
