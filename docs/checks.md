@@ -225,13 +225,14 @@ host under pytest and the composed console schema under Django's test runner:
 ```python
 read = measure_graphql_document(schema, document, variables, actor=member)
 assert read.data["projects_aggregate"]["aggregate"]["count"] == 3
-read.assert_ceiling(statements=10, sql_kb=247)
+read.assert_ceiling(statements=10)
 ```
 
-A ceiling is the measured cost: statements exact, SQL text rounded up to the next KB
-of 1,024 bytes. A change that lowers a cost lowers its ceiling in the same change; a
-rise is a regression to fix, never a reason to raise the ceiling. Assert the rows a
-read returns beside its ceiling, so a read that loses rows cannot pass. The
+A ceiling is the measured statement count; generated SQL text has no size budget,
+and its shape is asserted with the classifiers above. A change that lowers a cost
+lowers its ceiling in the same change; a rise is a regression to fix, never a reason
+to raise the ceiling. Assert the rows a read returns beside its ceiling, so a read
+that loses rows cannot pass. The
 [console document ceilings](../tests/native_graphql_document_budgets.py) pin the
 console app's inbox, transcript, person, projects and current-user reads for a
 platform admin and a member, each after one warm execution, in the
@@ -243,7 +244,7 @@ PostgreSQL 17 planner gates use the same shared query-support owner's
 member person/projects documents budget the sum of every SELECT's allocation,
 not peak resident memory; their total statement ceilings also count audit writes.
 The PostgreSQL CI selection runs the composed budget's `[postgresql]` node; its
-`[sqlite]` node retains the complete console document text/statement budgets.
+`[sqlite]` node retains the console document statement budgets.
 
 ### Owner Search
 

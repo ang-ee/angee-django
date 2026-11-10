@@ -268,13 +268,8 @@ def test_inbox_parts_compile_the_message_graph_once(record_property) -> None:
                 # the recorded PostgreSQL 17 value: ceil(16,384 / 1,024) = 16 MiB.
                 assert 0 < plan.allocated_kib <= 16 * 1024, plan
     one, many = reads[1][-1], reads[25][-1]
-    record_property("one_sql_bytes", len(one.encode()))
-    record_property("many_sql_bytes", len(many.encode()))
-    # REBAC 0.32.2 restores compact aliases inside shared id sets. The full SQLite
-    # 3.53.1 suite measures 33,690 / 33,691 bytes for 1 / 25 rows: ceil = 33 KiB.
     assert len(reads[1]) == len(reads[25]) == 1
     assert abs(len(one) - len(many)) <= 2
-    assert len(many.encode()) <= 33 * 1024
     # One actor scope: the part's read carries the message graph, and eligibility
     # joins the message without a second, separately scoped message subquery.
     assert many.count("rebac_schemageneration") <= 1

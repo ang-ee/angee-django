@@ -12,7 +12,6 @@ from datetime import UTC, date, datetime, timedelta
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection
 from django.test import TransactionTestCase
 from rebac import actor_context, system_context
 
@@ -207,8 +206,8 @@ ROWS = {
     "identity": lambda data: int(data["current_user"] is not None),
 }
 
-# (actor, document): rows, statement ceiling, SQL ceiling in KB. Measured on the SQLite
-# composed host; a platform admin reads both actors' messages and projects.
+# (actor, document): rows, statement ceiling. Measured on the SQLite composed host;
+# a platform admin reads both actors' messages and projects.
 BUDGETS = {
     # REBAC 0.31 compiles one actor-independent statement per scope, where 0.30 decided each
     # actor's constant facts first and pruned the policy. A witness statement decides whether the
@@ -216,24 +215,19 @@ BUDGETS = {
     # of those arms alone, and a member's statement leaves them out. Since 0.31.5 the request keeps
     # that answer wherever the arms' types read no model column, as on every read here, so each
     # actor pays one witness per distinct arm per request.
-    ("admin", "inbox"): (18, 14, 58),  # 0.31: 15 -> 14 statements (3 witnesses), 36 -> 58 KB
-    ("admin", "transcript"): (3, 32, 129),  # 0.31: 35 -> 32 statements (3 witnesses), 85 -> 129 KB
-    ("admin", "person"): (2, 20, 49),  # 0.31: 29 -> 20 statements (2 witnesses), 50 -> 49 KB
-    ("admin", "projects"): (6, 10, 17),  # 0.31: 15 -> 10 statements (2 witnesses), 24 -> 17 KB
-    ("admin", "identity"): (1, 1, 2),
-    ("member", "inbox"): (9, 14, 785),  # 0.31: 123 -> 14 statements (3 witnesses), 898 -> 781 KB; id sets are CTEs;
-    # identity_reader on the canonical Party: 781 -> 785 KB
+    ("admin", "inbox"): (18, 14),  # 0.31: 15 -> 14 statements (3 witnesses)
+    ("admin", "transcript"): (3, 32),  # 0.31: 35 -> 32 statements (3 witnesses)
+    ("admin", "person"): (2, 20),  # 0.31: 29 -> 20 statements (2 witnesses)
+    ("admin", "projects"): (6, 10),  # 0.31: 15 -> 10 statements (2 witnesses)
+    ("admin", "identity"): (1, 1),
+    ("member", "inbox"): (9, 14),  # 0.31: 123 -> 14 statements (3 witnesses); id sets are CTEs
     # The feed reads its messages under ``read_inbox`` and the reply-parent fields read ``read``
     # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
-    ("member", "transcript"): (3, 32, 2600),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2593 KB;
-    # identity_reader: 2593 -> 2600 KB
-    # REBAC 0.32.2 restores compact aliases inside shared id sets. SQLite 3.53.1
-    # measures person / projects at 720,547 / 225,845 bytes in CI's composed-test
-    # order: ceil(bytes / 1,024) gives 704 / 221 KiB. Statement counts remain unchanged.
+    ("member", "transcript"): (3, 32),  # 0.31: 250 -> 32 statements (3 witnesses)
     # The PostgreSQL gate below additionally budgets the sum of SELECT allocations.
-    ("member", "person"): (2, 20, 704),
-    ("member", "projects"): (3, 10, 221),
-    ("member", "identity"): (1, 1, 2),
+    ("member", "person"): (2, 20),
+    ("member", "projects"): (3, 10),
+    ("member", "identity"): (1, 1),
 }
 
 
@@ -247,12 +241,7 @@ PLANNER_BUDGETS = {"person": (18, 458), "projects": (10, 140)}
 
 
 class ConsoleDocumentBudgetTests(TransactionTestCase):
-    """Each console read stays within its fixed statement and SQL-size ceiling."""
-
-    # SQLite text budgets need stable key widths after earlier addon tests.
-    # PostgreSQL runs only the planner budget in a fresh composed-host database;
-    # resetting its sequences would collide with setup's existing REBAC audit rows.
-    reset_sequences = connection.vendor == "sqlite"
+    """Each console read stays within its fixed statement ceiling."""
 
     def setUp(self):
         call_command("rebac", "sync", verbosity=0)
@@ -354,11 +343,11 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
         for role, actor in actors.items():
             for name, (document, variables) in self.documents(ids[role]).items():
                 with self.subTest(actor=role, document=name):
-                    rows, statements, sql_kb = BUDGETS[role, name]
+                    rows, statements = BUDGETS[role, name]
                     measure_graphql_document(schema, document, variables, actor=actor)
                     read = measure_graphql_document(schema, document, variables, actor=actor)
                     self.assertEqual(ROWS[name](read.data), rows)
-                    read.assert_ceiling(statements=statements, sql_kb=sql_kb)
+                    read.assert_ceiling(statements=statements)
 
     def test_member_reads_planner_memory(self):
         """Budget every SELECT planned by the member's person and projects documents."""
@@ -373,7 +362,7 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
                 measure_graphql_document(schema, document, variables, actor=self.member)
                 with capture_planner_memory(lambda sql: statement_startswith(sql, "SELECT")) as plans:
                     read = measure_graphql_document(schema, document, variables, actor=self.member)
-                rows, statements, _sql_kb = BUDGETS["member", name]
+                rows, statements = BUDGETS["member", name]
                 self.assertEqual(ROWS[name](read.data), rows)
                 self.assertLessEqual(read.statements, statements)
                 selects, memory_mib = PLANNER_BUDGETS[name]

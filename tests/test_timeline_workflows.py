@@ -77,10 +77,9 @@ def test_timeline_read_planner_memory(review, settings, viewer, record_property)
         read()
     [plan] = plans
     memory = plan.allocated_kib
-    record_property("sql_bytes", plan.sql_bytes)
     record_property("planner_memory_used_kib", plan.used_kib)
     record_property("planner_memory_allocated_kib", memory)
-    # REBAC 0.32.2's compact aliases: PostgreSQL 18.6 measures 29,591 SQL bytes,
+    # REBAC 0.32.2's compact aliases: PostgreSQL 18.6 measures
     # 10,415 KiB used / 16,384 KiB allocated for either actor. Allocation equals the
     # recorded PostgreSQL 17 value; ceil(16,384 / 1,024) = 16 MiB, with no headroom.
     assert 0 < memory <= 16 * 1024, (

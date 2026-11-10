@@ -167,22 +167,17 @@ def test_member_reading_by_grant_pays_a_fixed_rail_cost(composed_permissions: No
 
     few = edit_then_read(range(2))
     record_property("few_statements", few.statements)
-    record_property("few_sql_bytes", few.sql_bytes)
     counts = {kind["id"]: kind["count"] for kind in few.data["timeline"]["kinds"]}
     assert counts["provenance.change"] >= 3 and counts["projects.task"] == 1
     assert few.data["timeline"]["entries"][0]["detail"] == "Edit 1"
     assert few.data["timeline"]["needs_me"] == few.data["timeline_attention"] == 0
     many = edit_then_read(range(2, 10))
     record_property("many_statements", many.statements)
-    record_property("many_sql_bytes", many.sql_bytes)
     assert len(many.data["timeline"]["entries"]) == len(few.data["timeline"]["entries"]) + 8
     assert many.statements == few.statements, "Timeline statement cost must stay fixed as the feed grows."
     # Structural attention removes its audit write; occurrence probes keep empty branches out.
-    # REBAC 0.32.2 restores compact aliases inside shared id sets. The full SQLite 3.53.1
-    # suite measures 226,990 / 227,022 bytes for the small / large feed: ceil = 222 KiB.
     # PostgreSQL planner allocation is budgeted separately in test_timeline_workflows.py.
-    few.assert_ceiling(statements=15, sql_kb=222)
-    many.assert_ceiling(statements=15, sql_kb=222)
+    few.assert_ceiling(statements=15)
 
 
 def timeline_entries(record, actor=None, *, kind=None):

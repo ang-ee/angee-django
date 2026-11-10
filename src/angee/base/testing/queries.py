@@ -54,7 +54,6 @@ def is_rebac_revision_read(sql: str) -> bool:
 class PlannerMemory:
     """PostgreSQL's planning allocation for one captured, parameterized statement, in KiB."""
 
-    sql_bytes: int
     used_kib: int
     allocated_kib: int
 
@@ -91,4 +90,4 @@ def capture_planner_memory(match: Callable[[str], bool]) -> Iterator[list[Planne
         for sql, params in statements:
             cursor.execute("EXPLAIN (MEMORY, SUMMARY, FORMAT JSON) " + sql, params)
             planning = cursor.fetchone()[0][0]["Planning"]
-            plans.append(PlannerMemory(len(sql.encode()), planning["Memory Used"], planning["Memory Allocated"]))
+            plans.append(PlannerMemory(planning["Memory Used"], planning["Memory Allocated"]))

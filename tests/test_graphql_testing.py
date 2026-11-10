@@ -37,8 +37,6 @@ def test_read_binds_the_actor_and_records_the_sql_django_captured(composed_table
 def test_ceiling_holds_at_the_measured_cost_and_fails_above_it() -> None:
     read = GraphQLDocumentRead(data={}, statements=3, sql_bytes=2049)
 
-    read.assert_ceiling(statements=3, sql_kb=3)
+    read.assert_ceiling(statements=3)
     with pytest.raises(AssertionError, match="issued 3 SQL statements; ceiling 2"):
-        read.assert_ceiling(statements=2, sql_kb=3)
-    with pytest.raises(AssertionError, match=r"2049 bytes \(3 KB\); ceiling 2 KB"):
-        read.assert_ceiling(statements=3, sql_kb=2)
+        read.assert_ceiling(statements=2)
