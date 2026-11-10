@@ -11,6 +11,7 @@ from django.db import connection
 from rebac import system_context
 
 from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
+from angee.base.testing.queries import statement_body, statement_startswith
 from angee.projects.testing.models import Project, Task
 
 
@@ -28,7 +29,8 @@ def test_task_ordering_allocation_retains_explicit_ranks() -> None:
             execute: Callable[..., Any], sql: str, params: Any, many: bool, context: dict[str, Any],
         ) -> Any:
             # Observe the real contextual tail lookup rather than replacing its owner.
-            if sql.startswith("SELECT") and sql.split(" FROM ", 1)[0].endswith(' AS "sub_sort_order"'):
+            if (statement_startswith(sql, "SELECT")
+                    and statement_body(sql).split(" FROM ", 1)[0].endswith(' AS "sub_sort_order"')):
                 allocations.append(context["connection"].alias)
             return execute(sql, params, many, context)
 
@@ -106,7 +108,7 @@ def test_rank_rebalance_preserves_order_with_an_exhausted_tail():
         second = Task.objects.create(title="Second", sort_order=math.nextafter(1.0, math.inf))
         third = Task.objects.create(title="Last", sort_order=1e308)
         field = Task._meta.get_field("sort_order")
-        with Task.ordering_write(using=connection.alias, project_ids=(None,)):
+        with Task.ordering_write(project_ids=(None,)):
             field.rebalance(Task.system_queryset())
         assert list(Task._base_manager.order_by("sort_order").values_list("pk", "sort_order")) == [
             (first.pk, 1024), (second.pk, 2048), (third.pk, 3072),

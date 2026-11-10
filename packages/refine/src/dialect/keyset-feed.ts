@@ -11,12 +11,15 @@ import {
   type UseInfiniteQueryResult,
 } from "@tanstack/react-query";
 import { useCallback } from "react";
-import { useDataProvider } from "@refinedev/core";
+import { useDataProvider, useSubscription } from "@refinedev/core";
 import type { DocumentData } from "../typed-document";
 import type { AuthoredDocument, AuthoredVariables } from "./authored-hooks";
 import { useAuthoredLiveInterest } from "./authored-hooks";
 import { useActiveDataProviderName } from "./data-provider-context";
 import { authoredQueryKey, requestAuthoredData, sharedAuthoredMeta, useAuthoredErrorPolicy } from "./authored-query-options";
+import { graphqlDocumentIdentity } from "./wire";
+
+const NO_LIVE_EVENT = (): void => undefined;
 
 /** Public identities stay opaque; the domain supplies presentation order. */
 export interface KeysetRow { id: string }
@@ -215,12 +218,15 @@ export interface AuthoredKeysetFeedOptions<
   TWindow extends AuthoredDocument,
   TRevalidation extends AuthoredDocument,
   TMetadata = undefined,
+  TSubscription extends AuthoredDocument = AuthoredDocument,
 > {
   /** Supplied by the session owner; Refine never imports App or domain auth. */
   actor: string | undefined;
   enabled?: boolean;
   dataProviderName?: string;
   models: readonly string[];
+  /** A dedicated stream replaces model subscriptions and refreshes only this feed. */
+  subscription?: { document: TSubscription; variables: AuthoredVariables<TSubscription> };
   /** Exact record interests use the authored-query metadata owner. */
   records?: readonly { model: string; id: string }[];
   pageSize: number;
@@ -251,7 +257,8 @@ export function useAuthoredKeysetFeed<
   TWindow extends AuthoredDocument,
   TRevalidation extends AuthoredDocument,
   TMetadata = undefined,
->(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation, TMetadata>): {
+  TSubscription extends AuthoredDocument = AuthoredDocument,
+>(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation, TMetadata, TSubscription>): {
   /** Native tracked result; read only the properties the consumer needs. */
   query: UseInfiniteQueryResult<InfiniteData<KeysetFeedPage<TRow, TMetadata>, KeysetFeedCursor>, Error>;
   /** Discard loaded history and explicitly fetch the first page, including disabled/static feeds. */
@@ -286,7 +293,19 @@ export function useAuthoredKeysetFeed<
       ),
     ) : undefined,
   });
-  useAuthoredLiveInterest(enabled, models);
+  useAuthoredLiveInterest(enabled && !options.subscription, models);
+  useSubscription({
+    channel: `angee/authored/${hashKey(queryKey)}`,
+    params: { queryKey },
+    meta: options.subscription ? {
+      dataProviderName: provider,
+      gqlSubscription: graphqlDocumentIdentity(options.subscription.document).identity,
+      gqlVariables: options.subscription.variables,
+    } : undefined,
+    types: ["*"],
+    enabled: enabled && Boolean(options.subscription),
+    onLiveEvent: NO_LIVE_EVENT,
+  });
   useAuthoredErrorPolicy([queryKey]);
   const result = useInfiniteQuery({
     ...options.queryOptions, ...configured, enabled,

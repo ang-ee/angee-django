@@ -99,3 +99,14 @@ def test_comments_obey_the_hosts_thread_read_permission(comment_record, monkeypa
     assert hidden["timeline"]["entries"] == []
     assert next(kind["count"] for kind in hidden["timeline"]["kinds"] if kind["id"] == "messaging.comment") == 0
     assert len(read_timeline(record, comment_record.writer)["timeline"]["entries"]) == 1
+
+
+def test_retired_chatter_with_an_unreadable_survivor_is_empty(comment_record) -> None:
+    record, author = comment_record.record, comment_record.author
+    with actor_context(author):
+        record.message_post("Retired comment")
+    with system_context(reason="test.timeline.retired_chatter"):
+        survivor = type(record).objects.create(title="Private survivor")
+        survivor.message_thread().fold([record.message_thread()])
+    assert not CommentKind().queryset(record, author).exists()
+    assert read_timeline(record, author)["timeline"]["entries"] == []

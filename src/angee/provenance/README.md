@@ -80,6 +80,14 @@ its normal outbox/precondition policy.
 
 ## History surface
 
+For source-retirement decisions, `Changeset.objects.history_written_only_by(record, predicate)`
+in [the changeset queryset](managers.py) checks a created document against a Django
+`Q` predicate on its changesets. It shares the history-row selection used by
+`touching_filter`; missing attribution refuses. The caller supplies its source
+policy and checks every [owned reference part](../base/models/merge_references.py).
+That reference owner also supplies `has_live_references`, with Statement's
+principal/current-state policy declared on [Statement](statements.py).
+
 [`schema.py`](schema.py) owns the read surface in the `console` schema. The
 `history(model, id, limit, offset)` query returns one record's closed changesets newest
 first (`RecordHistoryType { total, entries: [HistoryEntryType!]! }`), resolved through the record's own

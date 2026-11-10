@@ -13,7 +13,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import DatabaseError, router, transaction
+from django.db import DatabaseError, transaction
 from django.db.models import F, Model, Q
 from django.db.models.functions import Now
 from django.db.models.signals import post_save
@@ -33,6 +33,7 @@ from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.relationships import delete_relationship, write_relationships
 from rebac.resources import model_for_resource_type
+from rebac.roles import is_role_type
 from rebac.schema import FieldBinding
 
 from angee.base.exceptions import exception_text
@@ -46,7 +47,6 @@ from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import AngeeQuerySet, by_key, row_lock_paths
 from angee.base.signals import connect_for_models
 from angee.iam.identity import group_subject_type, user_label
-from angee.iam.service_users import sync_service_user
 
 if TYPE_CHECKING:
     from angee.workflows.models import Trigger, TriggerEvent
@@ -124,7 +124,7 @@ class TriggerGrantTarget:
         if actor is not None and (label := self.readable_target_label(actor)) is not None:
             return label
         kind = self.target_kind()
-        if self.resource.resource_type.endswith("/role"):
+        if is_role_type(self.resource.resource_type):
             return f"{str(self.resource.resource_id).replace('_', ' ')} ({kind})"
         return kind
 
@@ -192,7 +192,7 @@ class TriggerSource(ImplBase):
     A registered subclass of a registered source refines it under another key
     and shares its native event: the base alone connects and dispatches.
     """
-    registry_setting = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
+    registry_setting: ClassVar[str] = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
 
     model_label: ClassVar[str] = ""
     fields: ClassVar[tuple[str, ...]] = ()
@@ -305,7 +305,7 @@ class TriggerSource(ImplBase):
         else:
             records = (record,)
         try:
-            with transaction.atomic(using=record._state.db), system_context(reason="workflows.source_dispatch"):
+            with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
                 cls.validate_model(model)
                 targets = [(item, generic_target(item)) for item in records]
                 groups: dict[type[Model], set[Hashable]] = {}
@@ -487,8 +487,7 @@ class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
             return
         for record in records:
             try:
-                using = router.db_for_write(self.model, instance=record)
-                with transaction.atomic(using=using), system_context(reason="workflows.capture"):
+                with transaction.atomic(), system_context(reason="workflows.capture"):
                     for trigger in implementation.matching_triggers(queryset, record).order_by("pk"):
                         self.model.system_queryset().update_or_create(
                             trigger=trigger, record_content_type=content_type, record_object_id=record.pk,
@@ -535,7 +534,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
         old = {TriggerGrantTarget.from_stored(value) for value in trigger.granted_targets}
         new = set(targets)
         workflow = apps.get_model("workflows", "Workflow").system_queryset().get(pk=trigger.workflow_id)
-        user = sync_service_user(workflow, prefix="workflow")
+        user = workflow.sync_service_user()
         subject = to_subject_ref(user)
         retained = {
             TriggerGrantTarget.from_stored(value)

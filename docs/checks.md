@@ -65,8 +65,10 @@ are historical upgrade assets only; retire them after the supported upgrade cuto
 and preserve Python imports still required by retained migration history.
 
 [`tests/test_layering.py`](../tests/test_layering.py) guards framework import
-boundaries and optional state-field declarations. See the
-[Database routing rule](backend/guidelines.md#rules) for persistence checks.
+boundaries and optional state-field declarations. The
+[Database routing rule](backend/guidelines.md#rules) is a system check: base's
+`angee.E050` refuses any `DATABASE_ROUTERS`
+([`tests/test_base_checks.py`](../tests/test_base_checks.py)).
 
 The PostgreSQL lane in [reusable checks](../.github/workflows/reusable-checks.yml)
 covers workflow definition, publication, execution,
@@ -78,7 +80,8 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_workflows_review_concurrency.py),
 [execution links](../tests/test_workflows_review_graphql.py), and
 [inbox predicates](../tests/test_decisions_inbox.py),
-[committed timeline waits and inherited record feeds](../tests/test_timeline_workflows.py), plus the
+[committed timeline waits and inherited timeline subscriptions](../tests/test_timeline_workflows.py),
+[timeline stream authorization](../tests/test_timeline_subscriptions.py), plus the
 [agent session loop](../tests/test_agent_sessions.py) and its
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
@@ -87,19 +90,28 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
 [comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
-knowledge, messaging, proposals, sequences, spaces, storage, the system
-queryset, work and task ordering locks, integrate streams and workflow
-integrate steps, the [grouped rows](../tests/test_group_rows.py) partitions, the
+[OIDC disconnect admission under the user lock](../tests/test_oidc.py),
+knowledge, [pgvector test-database readiness](../tests/test_postgresql_extensions.py),
+messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py)
+and [webform submission](../tests/test_messaging_webform_submission.py) races,
+[portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
+sequences, spaces, storage with its
+[window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
+the system queryset, work and task ordering locks,
+integrate streams and workflow integrate steps, the
+[grouped rows](../tests/test_group_rows.py) partitions, the
 messaging inbox's [explorer](../tests/test_inbox_explorer.py),
 [thread and message reads](../tests/test_messaging_inbox_read.py) and
-[part reads](../tests/test_inbox_part_reads.py), and the composed
+[part reads](../tests/test_inbox_part_reads.py), the composed member
+[person/projects planner budgets](../tests/test_composed_query_budgets.py), and the composed
 [intake access decision](../tests/test_intake_access_decision.py). It also runs
 [task ordering](../tests/test_task_rank_allocation.py),
-[record tasks](../tests/test_projects_record_tasks.py), and the
-[projects access campaign](../tests/test_projects_wave3_campaign.py).
+[record tasks](../tests/test_projects_record_tasks.py), and
+[project access and projections](../tests/test_projects_access_projections.py).
 `test_connections.py` and `test_system_queryset.py` contribute only their
 PostgreSQL test nodes because each also has SQLite-only tests; the PostgreSQL
-branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`
+branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`,
+and the [resource ledger's](../tests/test_resource_ledger.py) concurrent upsert,
 also run by node. Every other listed file runs whole, which keeps the SQLite
 floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
 by pytest-split's `least_duration` algorithm over the
@@ -114,13 +126,44 @@ apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
 skip explicitly on SQLite. Report those skips separately from the PostgreSQL
 lane's executed coverage.
 
+### Local PostgreSQL Prerequisites
+
+PostgreSQL runs require the pgvector extension on the server. CI uses
+`pgvector/pgvector:pg17`, retaining PostgreSQL 17. For a local Homebrew server,
+install [pgvector](https://formulae.brew.sh/formula/pgvector), then connect to
+that server as a PostgreSQL **superuser** and enable it in `template1` before
+running tests:
+
+```sh
+brew install pgvector
+psql -h localhost -U postgres -d template1 -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm;'
+```
+
+Replace `postgres` with the local superuser role and use the host and port of
+the server selected by `DATABASE_URL`. The server's
+extension files must match its PostgreSQL major; installing the Python `pgvector`
+package alone does not install the server extension. Django and pytest-django
+create test databases from [PostgreSQL's default `template1`](https://www.postgresql.org/docs/17/manage-ag-templatedbs.html),
+including the composed host's secondary databases. They inherit `vector` and `pg_trgm` even
+under `--nomigrations`, which bypasses the addon’s native `pre_migrate`
+extension receiver. That receiver is the single application extension owner;
+`makemigrations` does not generate extension creation operations. A role
+with `CREATEDB` can then run the tests without superuser privileges.
+
+Existing databases do not inherit later changes to `template1`: recreate a
+reused test database with pytest's `--create-db`, or have a superuser enable
+`vector` in that database too. Enable it separately in an existing application
+database before migrating the pgvector addon with a non-superuser role.
+
 Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
 the plugin; change `--randomly-seed` to reproduce or vary test order. Use `-n 0`
 or `-p no:xdist` for serial debugging. `--dist loadfile` keeps each test module on
 one worker. Pytest-django isolates worker databases; custom database and composed
 host fixtures must use process-local connections or pytest's worker-local
-`tmp_path`/`tmp_path_factory`, and restore registry changes after each test.
+`tmp_path`/`tmp_path_factory`, and restore registry changes after each test; the
+installed app registry is restored for every host loading the base fixtures (see
+[Source-addon Test Models](#source-addon-test-models)).
 
 ### Source-addon Test Models
 
@@ -148,6 +191,18 @@ principals parties declares: list
 `pytest_plugins` and request its `statement_sources` fixture (the framework's own
 hosts load them after every REBAC sync).
 
+Declare a test-local model under Django's `isolate_apps` when the code under test
+accepts a registry. When its owner reads the installed registry (content types, the
+deletion collector, system checks), create the model inside the test on an
+installed app label: the autouse `installed_app_registry` fixture in
+[`angee.base.testing.fixtures`](../src/angee/base/testing/fixtures.py) returns the installed registry to its
+state before each test, so a model the test creates is unregistered, with its
+through models, when the test ends, while a model module the test imports first
+keeps its models registered. Installed app configs a test changes are put back too.
+The plugin's `monkeypatch` fixture composes native `pytest.MonkeyPatch` inside the
+registry guard, so temporary modules disappear before restoration; their models
+are removed too.
+
 Workflow tests reach execution states through the shared `load_workflow`,
 `start_run`, `run_until`, `decide` and `run_factory(...).at(...)` drivers. These compose
 production admission and transition verbs; do not fabricate step runs or attempts
@@ -159,6 +214,11 @@ test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
 
 ### GraphQL Document Budgets
+
+Classify captured SQL with [`angee.base.testing.queries`](../src/angee/base/testing/queries.py).
+Its `statement_startswith` and `is_rebac_revision_read` helpers inspect the outer
+statement after CTEs and PostgreSQL cursor declarations; `statement_body` exposes
+that body for projection assertions. Each captured entry still counts once.
 
 [`angee.graphql.testing.documents`](../src/angee/graphql/testing/documents.py) executes
 one document as one actor, as served requests do, and records the SQL Django captured
@@ -179,6 +239,14 @@ read returns beside its ceiling, so a read that loses rows cannot pass. The
 console app's inbox, transcript, person, projects and current-user reads for a
 platform admin and a member, each after one warm execution, in the
 [composed query-budget host](../tests/test_composed_query_budgets.py) on SQLite.
+
+PostgreSQL 17 planner gates use the same shared query-support owner's
+`capture_planner_memory`, preserving SQL parameters for `EXPLAIN (MEMORY)` without
+`ANALYZE`. Timeline and inbox parts each budget a single planned statement. The
+member person/projects documents budget the sum of every SELECT's allocation,
+not peak resident memory; their total statement ceilings also count audit writes.
+The PostgreSQL CI selection runs the composed budget's `[postgresql]` node; its
+`[sqlite]` node retains the complete console document text/statement budgets.
 
 ### Owner Search
 
@@ -403,7 +471,9 @@ pushes to `main`. The current tiers are:
   keep that margin), the named PostgreSQL contract selection runs with
   `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each group writes JUnit output and checks that it did
-  not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
+  not skip tests. Its PostgreSQL 17 service includes pgvector and enables `vector`
+  in `template1` before any test database is created. Its server runs with
+  `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. The `uv` job passes only
   when Python quality, every SQLite shard and every PostgreSQL group pass, so
   callers keep one check name.
@@ -480,7 +550,9 @@ collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
 host through its authored `settings` module; pytest-django owns its separate test
-database. Pytest emits a thread dump after five minutes in one test protocol,
+database. The pgvector service enables `vector` in both the existing host database
+and `template1` before provisioning, so consumer test databases inherit it with
+`--nomigrations`. Pytest emits a thread dump after five minutes in one test protocol,
 including setup and teardown, without changing its outcome. Shared test plugins
 must defer model imports until Django's app registry is populated. Check tools
 come from the framework lockfile.

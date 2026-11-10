@@ -18,6 +18,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, system_context
 
+from angee.base.testing.queries import statement_startswith
 from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHandler
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -200,6 +201,37 @@ def test_authorization_flow_needs_pkce_or_a_client_secret() -> None:
     assert dict(parse.parse_qsl(parse.urlsplit(public).query))["code_challenge"] == "challenge"
     confidential = OAuthClient(**endpoints, supports_pkce=False, client_secret="secret")
     assert "code_challenge" not in OAuthClientProtocol(confidential).authorize_url(**flow)
+
+
+def test_authorize_url_reads_no_client_secret_and_omits_an_empty_scope() -> None:
+    """A PKCE flow builds its URL from public registration facts; provider extras never replace the grant's own."""
+
+    class ConfidentialClient:
+        client_id = "confidential-client"
+        authorize_endpoint = "https://provider.example/oauth/authorize"
+        supports_pkce = True
+        authorize_param_values = {"audience": "https://api.example", "client_id": "spoofed", "state": "spoofed"}
+
+        @property
+        def client_secret(self) -> str:
+            raise AssertionError("Building the authorize URL must not read the client secret.")
+
+    url = OAuthClientProtocol(ConfidentialClient()).authorize_url(
+        state="state-token",
+        redirect_uri="https://app.example/callback",
+        scopes=(),
+        code_challenge="challenge",
+    )
+
+    assert parse.parse_qsl(parse.urlsplit(url).query) == [
+        ("response_type", "code"),
+        ("client_id", "confidential-client"),
+        ("redirect_uri", "https://app.example/callback"),
+        ("state", "state-token"),
+        ("audience", "https://api.example"),
+        ("code_challenge", "challenge"),
+        ("code_challenge_method", "S256"),
+    ]
 
 
 def test_oauth_client_claim_accessors_support_dotted_paths() -> None:
@@ -671,7 +703,7 @@ def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "sqlite", reason="SQLite locking floor")
 def test_ensure_fresh_uses_plain_select_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Django omits row-lock SQL on SQLite while refresh retains its transaction."""
+    """SQLite reads without row-lock SQL while the provider exchange stays outside a transaction."""
 
     user = get_user_model().objects.create_user(username="refresh-sqlite", email="sqlite@example.com")
     call_command("rebac", "sync", verbosity=0)
@@ -682,7 +714,7 @@ def test_ensure_fresh_uses_plain_select_on_sqlite(monkeypatch: pytest.MonkeyPatc
     )
 
     def fake_refresh(self: Any, *, refresh_token: str) -> dict[str, Any]:
-        assert connection.in_atomic_block
+        assert not connection.in_atomic_block
         assert refresh_token == "old-refresh"
         return {"access_token": "sqlite-access", "refresh_token": "sqlite-refresh", "expires_in": 7200}
 
@@ -691,7 +723,7 @@ def test_ensure_fresh_uses_plain_select_on_sqlite(monkeypatch: pytest.MonkeyPatc
     with system_context(reason="test sqlite refresh run"), CaptureQueriesContext(connection) as captured:
         credential.ensure_fresh()
 
-    assert any(query["sql"].upper().startswith("SELECT") for query in captured.captured_queries)
+    assert any(statement_startswith(query["sql"].upper(), "SELECT") for query in captured.captured_queries)
     assert all("FOR UPDATE" not in query["sql"].upper() for query in captured.captured_queries)
     assert credential.secret_value() == "sqlite-access"
     reloaded = Credential.objects.sudo(reason="test sqlite refresh persisted").get(pk=credential.pk)

@@ -59,4 +59,4 @@ def persisted_state(task):
 
 
 def rule_context(task, enabled):
-    return task._work_verb_write() if enabled else nullcontext()
+    return system_context(reason="tests.work.rule_transition") if enabled else nullcontext()

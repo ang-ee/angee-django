@@ -40,6 +40,7 @@ from angee.graphql.relations import (
     with_record_reference_access,
 )
 from angee.graphql.subscriptions import changes
+from angee.graphql.view_as import ViewAs
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission
 from angee.storage import exceptions
@@ -160,7 +161,7 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     drive: strawberry.ID | None = actor_scoped_public_id("drive")
     folder: strawberry.ID | None = actor_scoped_public_id("folder")
 
-    @strawberry_django.field
+    @strawberry_django.field(only=["filename", "upload_state", "content_hash"])
     def url(self, info: strawberry.Info) -> str | None:
         """Return a READY row's download URL, empty when unready, null in previews.
 
@@ -169,7 +170,7 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         even before the token expires (see :meth:`File.download_url`).
         """
 
-        if getattr(get_request(info), "view_as", None) is not None:
+        if ViewAs.bound_to(get_request(info)) is not None:
             return None
         row = cast(Any, self)
         if row.upload_state != UploadState.READY:

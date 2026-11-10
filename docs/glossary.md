@@ -214,8 +214,9 @@ person rows authenticate. Real-world faces link to it one way, one shape:
 **Service account** — a `kind=service` user row: the database-layer principal
 of an agent or automation. Non-login (unusable password, excluded from OIDC
 linking and human-only member pickers). Access pickers include readable service
-users; agents and workflows link one service user each, with their row lifecycle
-calling IAM's shared sync and deactivation helper.
+users; agents and workflows link one service user each by composing
+[`ServiceUserMixin`](../src/angee/iam/models.py), whose sync and deactivation
+verbs their saves and delete receivers call.
 
 **Workflow principal** — the workflow's linked service user. Trigger source
 grants are direct REBAC tuples for this user. Admission, source and domain checks,
@@ -375,7 +376,8 @@ settlement. A retry creates another attempt for the same step run.
 
 **Settlement** — what a step returns: `Done`, `Wait`, `NextPage`, `Ask` or `Fail`. It describes the
 attempt's completion or continuation, and the transition owner persists it.
-Runner-only retry and diagnostic facts belong to the attempt record.
+Runner-only retry and diagnostic facts belong to the attempt record. The abstract
+`Settlement` base is framework-internal to extend; addons return these public variants.
 
 **Result** — what a workflow run reports, selected and projected from its
 declared producer bindings by `Definition`.

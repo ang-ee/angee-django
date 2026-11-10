@@ -11,7 +11,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Cast
 from django_cte import CTE, with_cte
-from rebac import to_subject_ref
+from rebac import share_id_sets, to_subject_ref
 
 from angee.base.models.identity import public_id_for
 from angee.base.pagination import KeysetOrder, keyset_signer
@@ -125,14 +125,16 @@ class Timeline:
         self.sources: dict[str, models.QuerySet] = {}
         branches = []
         for kind in self.kinds:
+            if not kind.occurs(record):
+                continue
             rows = kind.queryset(record, actor).order_by()
-            # An empty kind stays out of the statement: compiling its read scope and
-            # attention subquery there costs more than this probe of its bare scope.
-            if not rows.exists():
+            if isinstance(rows, models.query.EmptyQuerySet):
                 continue
             self.sources[kind.id] = rows
             fold_type, fold_pk = kind.fold(record) or (models.Value(None), models.Value(None))
-            waiting = kind.waiting_on(rows, actor).filter(pk=models.OuterRef("pk"))
+            # The outer branch already authorizes this row. Only its attention
+            # boolean crosses this boundary; do not repeat the read scope inside it.
+            waiting = kind.waiting_on(record, actor)
             branches.append(rows.annotate(
                 _timeline_kind=models.Value(kind.id, output_field=models.CharField()),
                 _timeline_type=models.Value(
@@ -140,7 +142,8 @@ class Timeline:
                 ),
                 _timeline_at=kind.at,
                 _timeline_pk=Cast("pk", output_field=models.BigIntegerField()),
-                _timeline_needs=models.Exists(waiting),
+                _timeline_needs=(models.Exists(waiting.filter(pk=models.OuterRef("pk")))
+                                 if waiting is not None else models.Value(False)),
                 # Typed, so a leading NULL operand cannot resolve the union column as text.
                 _timeline_fold_type=Cast(fold_type, output_field=models.IntegerField()),
                 _timeline_fold_pk=Cast(fold_pk, output_field=models.BigIntegerField()),
@@ -163,7 +166,7 @@ class Timeline:
         if self.lines is None:
             return {}
         return {row["_result_kind"]: (row["_result_count"], row["_result_waiting"])
-                for row in with_cte(self.source, self.lines, select=_totals(self.lines))}
+                for row in share_id_sets(with_cte(self.source, self.lines, select=_totals(self.lines)))}
 
     def attention(self) -> int:
         return sum(waiting for _, waiting in self.counts.values())
@@ -193,12 +196,12 @@ class Timeline:
         ))).values("_timeline_fold_type", "_timeline_fold_pk", "_timeline_kind").annotate(
             _timeline_count=models.Count("_timeline_pk", distinct=True),
         )
-        statement = with_cte(self.source, self.lines, page, select=entries.union(
+        statement = share_id_sets(with_cte(self.source, self.lines, page, select=entries.union(
             _totals(self.lines),
             _part(children, "child", kind=models.F("_timeline_kind"), pk=models.F("_timeline_fold_pk"),
                   type=models.F("_timeline_fold_type"), count=models.F("_timeline_count")),
             all=True,
-        ).order_by(*_ORDER.ordering(prefix="_result_")))
+        ).order_by(*_ORDER.ordering(prefix="_result_"))))
         selected: list[dict[str, Any]] = []
         counts: dict[str, tuple[int, int]] = {}
         children_of: dict[tuple[int, int], list[KindCount]] = {}

@@ -10,6 +10,7 @@ from django.core.exceptions import ValidationError
 from jsonpointer import JsonPointer
 from pydantic_ai.messages import BinaryContent, ModelRequest, SystemPromptPart, UserPromptPart
 
+from angee.agents.backends import TransientInferenceError as TransientInferenceError
 from angee.extraction.acquisition import ExtractionRequestConfig, PageCarrier
 from angee.extraction.contracts import DocumentPart, MappingResult, PipelineError, RecognitionResult
 
@@ -19,19 +20,15 @@ RETAINED_CARRIER_UNAVAILABLE = "retained_carrier_unavailable"
 """The carrier required to ground a retained fact is unavailable."""
 
 
-class TransientInferenceError(RuntimeError):
-    """A typed agents transport failure eligible for workflow retry."""
-
-
 def _request(model: Any, messages: Any, **kwargs: Any) -> Any:
     """Classify only declared agents request failures and retain stable diagnostics."""
     if model is None:
         raise ValidationError("Select an inference model.")
     try:
         return model.infer(messages, **kwargs)
-    except model.request_error_types() as error:
-        if model.is_transient_error(error):
-            raise TransientInferenceError("Inference transport failed.") from None
+    except TransientInferenceError:
+        raise
+    except model.request_error_types():
         raise PipelineError("Inference request failed.", stage="inference", code="request_failed") from None
 
 

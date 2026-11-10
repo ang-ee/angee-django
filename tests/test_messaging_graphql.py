@@ -22,8 +22,9 @@ from rebac import (
 )
 
 import tests.test_agents_graphql  # noqa: F401 -- register related models before native database setup
+from angee.base.signals import mute_changes
+from angee.base.testing.queries import statement_body, statement_startswith
 from angee.graphql.deletion import DeletePreview
-from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
@@ -350,7 +351,7 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
                 created_by=admin,
             )
             _replace_with_nested_part_tree(message, admin)
-            file = StorageFile.objects.ingest_bytes(f"Attachment {index}".encode(), filename=f"{index}.txt")
+            file, _created = StorageFile.objects.ingest_bytes(f"Attachment {index}".encode(), filename=f"{index}.txt")
             assert file.mime_type_id is not None
             messaging_models.Part.objects.create(
                 message=message, position=4, type="text/plain", disposition="attachment", file=file, created_by=admin
@@ -410,7 +411,9 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
         assert visited == [row["id"] for row in page]
         # Data loads project the owning table first. The first FROM can instead
         # belong to Message's title subquery, so it cannot identify the outer read.
-        mime_queries = tuple(sum(item["sql"].startswith(f"SELECT {table}.") for item in captured) for table in tables)
+        mime_queries = tuple(
+            sum(statement_startswith(item["sql"], f"SELECT {table}.") for item in captured) for table in tables
+        )
         assert mime_queries == expected_mime_queries, captured.captured_queries
         counts.append(len(captured))
     assert counts[0] == counts[1], f"{surface} transcript SQL grew at 3/6 messages: {counts}"
@@ -673,10 +676,10 @@ def test_handle_party_batches_one_related_model_query(
         "Party 2",
     ]
     party_selects = [
-        query["sql"]
+        sql
         for query in queries.captured_queries
-        if query["sql"].lstrip().upper().startswith("SELECT")
-        and f'FROM "{messaging_models.Party._meta.db_table}"' in query["sql"]
+        if statement_startswith((sql := statement_body(query["sql"])), "SELECT")
+        and f'FROM "{messaging_models.Party._meta.db_table}"' in sql
     ]
     # 0.31 (1 -> 2): one read of the parties, and REBAC's one batched decision of their gated fields
     # over the fetched ids.
@@ -2504,7 +2507,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
     with system_context(reason="test.messaging.record_attachment.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 404")
         _storage_drive(tmp_path, owner=admin)
-        file = StorageFile.objects.ingest_bytes(b"Attachment body", filename="brief.txt", owner_id=admin.pk)
+        file, _created = StorageFile.objects.ingest_bytes(b"Attachment body", filename="brief.txt", owner_id=admin.pk)
     schema = _schema()
 
     posted = _data(
@@ -2566,6 +2569,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
     ]
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_chatter_follow_toggle(composed_tables: None) -> None:
     """The custom record follower mutation mirrors Odoo's follow/unfollow contract."""
 
@@ -3276,12 +3280,13 @@ def test_channel_teardown_mutes_per_row_change_broadcasts(composed_tables: None)
     Fix 1 (the broadcast storm): each channel Message/Thread declares ``changes()``, so a
     naive bulk purge would emit one ``post_delete`` publisher per row — an ``exists()``
     thread probe plus a buffered ``group_send`` apiece. The teardown runs under
-    :func:`~angee.graphql.publishing.mute_changes`, so ``publish_change`` returns before the
+    :func:`~angee.base.signals.mute_changes`, so ``publish_change`` returns before the
     probe and nothing broadcasts. A positive control (an unmuted delete of a sibling row)
     proves the spy and publisher wiring are live, so the muted silence is real.
     """
 
-    from angee.graphql.publishing import change_published, connect_publishers, disconnect_publishers
+    from angee.base.signals import change_published
+    from angee.graphql.publishing import connect_publishers, disconnect_publishers
 
     channel = make_integration("chan-mute", model=Channel, backend_class="manual")
     with system_context(reason="test.channel.mute.seed"):

@@ -18,6 +18,7 @@ reconcile retains removed rows as history.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from importlib import metadata
@@ -48,6 +49,8 @@ from angee.platform.installer import (
     StaleAddonPreviewError,
     addon_installer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_addon_display_label(name: str, label: str) -> str:
@@ -154,9 +157,19 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 installer.apply_app_names(preview.roots_after, expected_text=preview.settings_text)
             except (OSError, NotImplementedError, StaleAddonPreviewError) as error:
                 return InstallResult.refusal(name, action, str(error))
-            self.reconcile_from_registry(desired=frozenset(preview.roots_after))
+            try:
+                self.reconcile_from_registry(desired=frozenset(preview.roots_after))
+            except DatabaseError:
+                # The settings edit is committed; a failed mirror refresh must not report it refused.
+                logger.exception("platform: saved addon roots for %s; catalogue reconciliation is pending", name)
+                reconciliation_pending = True
+            else:
+                reconciliation_pending = False
             return InstallResult(
-                name=name, action=action, already=preview.roots_before == preview.roots_after
+                name=name,
+                action=action,
+                already=preview.roots_before == preview.roots_after,
+                reconciliation_pending=reconciliation_pending,
             )
 
     def change_preview(
@@ -233,6 +246,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
             for entry in sorted(selection["app_entries"], key=lambda entry: entry["name"])
             if entry["name"] in target_names - loaded_names
         )
+        # django-compose publishes closure settings only in composed hosts.
         closure = getattr(settings, "COMPOSE_CLOSURE", None)
         dependencies = {} if closure is None else closure.dependencies
         loaded_roots = composed.root_app_names()
@@ -293,6 +307,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
 
         config = loaded.get(name)
         if config is not None and name not in composed.root_app_names():
+            # django-compose publishes closure settings only in composed hosts.
             closure = getattr(settings, "COMPOSE_CLOSURE", None)
             dependencies = {} if closure is None else closure.dependencies
             required_by = ", ".join(sorted(
@@ -381,7 +396,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         manifests = {name: manifest for name, (manifest, _origin) in available.items()}
         counts = composed.resource_counts()
         rows = self.all()
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             package_identity_index((
                 *((row.distribution, row.name) for row in rows.select_for_update() if row.distribution),
                 *((package["distribution"], name) for name, package in manifests.items()),
@@ -442,9 +457,10 @@ class AddonManager[T: Addon](AngeeManager[T]):
         """
 
         index = installed_components("angee.addons") if index is None else index
+        # django-compose publishes closure settings only in composed hosts.
         closure = getattr(settings, "COMPOSE_CLOSURE", None)
         dependencies = {} if closure is None else closure.dependencies
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             rows = list(self.select_for_update().order_by("name"))
             identities = package_identity_index((
                 *((entry.dist.metadata["Name"], name) for name, entry in installed_entry_points(index=index).items()
@@ -485,7 +501,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         ``INSTALLED_APPS``; overridden settings return an honest unknown state.
         """
 
-        if "INSTALLED_APPS" not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
+        if "INSTALLED_APPS" not in settings.ANGEE_PROJECT_YAML_SETTINGS:
             return None
         loaded = composed.root_app_names()
         desired = addon_installer().desired_app_names()

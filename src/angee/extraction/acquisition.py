@@ -73,16 +73,26 @@ class PartCarrier(BaseModel):
     content_hash: str
 
     @classmethod
-    def retain(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> PartCarrier:
-        """Retain text and structured values under the storage owner's permissions."""
-        file = apps.get_model("storage.File").objects.ingest_bytes(
+    def retain(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> tuple[PartCarrier, bool]:
+        """Retain text and structured values under the storage owner's permissions.
+
+        Returns the carrier and whether this call created its storage row, as
+        ``File.objects.ingest_bytes`` reports it.
+        """
+        file, created = apps.get_model("storage.File").objects.ingest_bytes(
             json.dumps(asdict(part), ensure_ascii=False).encode(),
             filename="extraction-part.json",
             owner_id=actor_user_id(to_subject_ref(actor)),
             drive_id=drive_id,
         )
-        return cls(source_position=part.source_position, source_page=part.source_page, kind=part.kind,
-                   file_id=str(file.sqid), content_hash=str(file.content_hash))
+        carrier = cls(
+            source_position=part.source_position,
+            source_page=part.source_page,
+            kind=part.kind,
+            file_id=str(file.sqid),
+            content_hash=str(file.content_hash),
+        )
+        return carrier, created
 
     def restore(self, ctx: Any) -> DocumentPart:
         """Read the envelope only after rechecking its file authority and digest."""
@@ -214,7 +224,7 @@ def prepare_pages(
                 parser = _Text()
                 parser.feed(text)
                 text = "\n".join(parser.chunks)
-            parts.append(_text_part(position, 0, text, "native_text"))
+            parts.append(text_part(position, 0, text, "native_text"))
             pages.append(PageCarrier(source_position=position, page_position=0))
         elif mime == "application/pdf":
             with pdfium.PdfDocument(content) as document:
@@ -225,7 +235,7 @@ def prepare_pages(
                     with closing(document[number]) as page, closing(page.get_textpage()) as textpage:
                         text = textpage.get_text_range().strip()
                         if text:
-                            parts.append(_text_part(position, number, text, "pdf_text"))
+                            parts.append(text_part(position, number, text, "pdf_text"))
                             pages.append(PageCarrier(source_position=position, page_position=number))
                         else:
                             dimensions = page.get_size()
@@ -247,7 +257,7 @@ def prepare_pages(
     for part in parts:
         heartbeat()
         drive_id = str(files[part.source_position].drive.sqid) if part.source_position < len(files) else ""
-        carriers.append(PartCarrier.retain(part, actor=actor, drive_id=drive_id))
+        carriers.append(PartCarrier.retain(part, actor=actor, drive_id=drive_id)[0])
     return PreparedDocument(sources=snapshots, pages=pages, parts=carriers, hold_reasons=holds)
 
 
@@ -257,7 +267,7 @@ def _raster(
     image.thumbnail((maximum, maximum))
     output = io.BytesIO()
     image.convert("RGB").save(output, format="JPEG", quality=90)
-    carrier = apps.get_model("storage.File").objects.ingest_bytes(
+    carrier, _created = apps.get_model("storage.File").objects.ingest_bytes(
         output.getvalue(),
         filename=f"extraction-{position}-{number}.jpg",
         owner_id=actor_user_id(to_subject_ref(actor)),
@@ -274,11 +284,15 @@ def _raster(
     )
 
 
-def _text_part(
+def text_part(
     source: int, page: int, text: str, method: str, *,
     kind: ExtractionPartKind = cast(ExtractionPartKind, ExtractionPartKind.NATIVE_TEXT),
     **metadata: Any,
 ) -> DocumentPart:
+    """Return plain-text evidence for one source page, addressed by the text's SHA-256 digest.
+
+    ``method`` names the acquisition tier; ``metadata`` carries the remaining ``DocumentPart`` fields.
+    """
     return DocumentPart(
         source,
         page,

@@ -2,7 +2,7 @@
 
 The upload behavior lives on the model (``File.objects.draft``,
 ``File.receive_bytes`` / ``File.finalize``); this module holds only the token
-constants and byte-level helpers they compose with — stream hashing, MIME
+signer and constants, and byte-level helpers they compose with — stream hashing, MIME
 detection, and the capped body reader. Keeping it free of any model import is
 what lets ``models.py`` import from here without a cycle.
 """
@@ -12,10 +12,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import mimetypes
+import time
 from io import Reader
 
 import magic
 from django.conf import settings
+from django.core import signing
 
 from angee.storage import exceptions
 
@@ -36,6 +38,9 @@ UPLOAD_TOKEN_HEADER = "X-Angee-Upload-Token"
 DOWNLOAD_TOKEN_MAX_AGE = 900
 """Seconds a proxy download token stays valid."""
 
+DOWNLOAD_TOKEN_WINDOW = 300
+"""Seconds per stable download URL window; validity from issue is 600–900 seconds."""
+
 DOWNLOAD_TOKEN_SALT = "angee.storage.download"
 """Signing salt namespacing proxy download tokens."""
 
@@ -53,6 +58,18 @@ ATTACHMENT_FALLBACK_STEM = "attachment"
 
 _EXTENSION_FIXUPS: dict[str, str] = {".jpe": ".jpg", ".jpeg": ".jpg"}
 """Normalise historical ``mimetypes`` oddities to their canonical extension."""
+
+
+class DownloadTokenSigner(signing.TimestampSigner):
+    """Django timestamp signatures aligned to five-minute download windows.
+
+    Validation stays with TimestampSigner and DOWNLOAD_TOKEN_MAX_AGE. A token
+    issued within a window has between max_age minus window and max_age seconds
+    remaining (600–900 seconds), and identical claims sign identically in it.
+    """
+
+    def timestamp(self) -> str:
+        return signing.b62_encode(int(time.time()) // DOWNLOAD_TOKEN_WINDOW * DOWNLOAD_TOKEN_WINDOW)
 
 
 def attachment_extension(mime: str) -> str:
@@ -231,6 +248,7 @@ class CappedReader:
     def close(self) -> None:
         """Close the wrapped reader when it supports closing."""
 
+        # Python io.Reader promises read, but does not require a close method.
         close = getattr(self._reader, "close", None)
         if callable(close):
             close()

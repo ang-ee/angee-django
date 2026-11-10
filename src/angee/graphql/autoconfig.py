@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypedDict
 
 from sentry_sdk.integrations.strawberry import StrawberryIntegration
 
@@ -13,7 +13,30 @@ from angee.graphql.constants import (
     PUBLIC_ID_FIELD_NAME,
 )
 
-SETTINGS = {
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER": bool,
+        "ANGEE_GRAPHQL_EXTENSION_FACTORIES": tuple[str, ...],
+        "COMPOSE_INTEGRATIONS:append": list[str],
+        "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": list[str],
+        "SENTRY_DISABLED_INTEGRATIONS:append": list[type[StrawberryIntegration]],
+        "ANGEE_GRAPHQL_RESOURCE_FILTERS": list[str],
+        "ANGEE_GRAPHQL_RELATED_COUNTS": list[str],
+        "STRAWBERRY_DJANGO:append": dict[str, Any],
+        "CHANNEL_LAYERS:append": dict[str, Any],
+    },
+)
+
+_DerivedSettings = TypedDict(
+    "_DerivedSettings",
+    {"ANGEE_GRAPHQL_IDE": str | None, "CHANNEL_LAYERS:append": dict[str, Any]},
+    total=False,
+)
+
+SETTINGS: _Settings = {
+    "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER": False,
+    "ANGEE_GRAPHQL_EXTENSION_FACTORIES": (),
     "COMPOSE_INTEGRATIONS:append": ["angee.graphql.sdl.SchemaIntegration"],
     "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": ["schemas"],
     # Native HTTP error capture sees coercion values before our safe log policy.
@@ -33,10 +56,10 @@ SETTINGS = {
 """Django settings contributed when GraphQL is installed."""
 
 
-def settings(namespace: Mapping[str, Any]) -> dict[str, str | None | dict[str, Any]]:
+def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
     """Return DEBUG-sensitive GraphQL settings."""
 
-    derived: dict[str, str | None | dict[str, Any]] = {
+    derived: _DerivedSettings = {
         "ANGEE_GRAPHQL_IDE": "graphiql" if namespace.get("DEBUG") else None
     }
     redis_url = _channel_redis_url(namespace)

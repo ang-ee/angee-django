@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from email.utils import formataddr, getaddresses
+from email.utils import formataddr, getaddresses, parseaddr
 from smtplib import SMTPRecipientsRefused, SMTPResponseException, SMTPServerDisconnected
 from typing import Any
 
@@ -19,15 +19,17 @@ from anymail.exceptions import (
 from anymail.message import AnymailMessage
 from django.apps import apps
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.mail import mailers
 from django.core.mail.backends.base import BaseEmailBackend
+from django.core.validators import validate_email
 from django.utils.html import strip_tags
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 
 from angee.integrate.errors import IntegrationError
-from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain
+from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain, OutboundEmailNotConfigured
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +49,37 @@ class AnymailEmailChannelBackend(ChannelBackend):
     label = "Email"
     icon = "mail"
 
+    @classmethod
+    def outbound_email_configured(cls) -> bool:
+        """Read the deployment's native email transport configuration decision."""
+
+        return bool(settings.ANGEE_EMAIL_DELIVERY_CONFIGURED)
+
+    def outbound_sender(self) -> tuple[str, str]:
+        """Resolve and validate this channel's configured default envelope sender.
+
+        The channel's ``from_email`` config wins over ``DEFAULT_FROM_EMAIL``. An
+        unconfigured transport raises :class:`OutboundEmailNotConfigured`; an invalid
+        address is refused under ``channel`` too.
+        """
+
+        if not self.outbound_email_configured():
+            raise OutboundEmailNotConfigured
+        config = self.bridge.config if isinstance(self.bridge.config, dict) else {}
+        name, address = parseaddr(str(config.get("from_email") or settings.DEFAULT_FROM_EMAIL))
+        try:
+            validate_email(address)
+        except ValidationError as error:
+            raise ValidationError({"channel": "Configure a valid sender address for this email channel."}) from error
+        return name, address
+
     def deliver(self, message: Any) -> DeliveryOutcome:
         """Render and send ``message`` when an email transport is configured."""
 
-        if not bool(getattr(settings, "ANGEE_EMAIL_DELIVERY_CONFIGURED", False)):
+        if not self.outbound_email_configured():
             logger.warning(
                 "Outbound email delivery is not configured; message %s was not sent.",
-                getattr(message, "pk", None),
+                message.pk,
             )
             raise IntegrationError("Outbound email delivery is not configured.")
         try:
@@ -64,7 +90,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         if not email.from_email or not (email.to or email.cc or email.bcc):
             logger.warning(
                 "Outbound email message %s has no complete from/to envelope; it was not sent.",
-                getattr(message, "pk", None),
+                message.pk,
             )
             raise IntegrationError("The email envelope is incomplete.")
         connection = mailers.default
@@ -190,8 +216,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         values = _source_addresses(message, "from")
         if values:
             return values[0]
-        config = self.bridge.config if isinstance(self.bridge.config, dict) else {}
-        return str(config.get("from_email") or getattr(settings, "DEFAULT_FROM_EMAIL", ""))
+        return formataddr(self.outbound_sender())
 
     def _recipients(self, message: Any, participants: list[Any]) -> dict[str, list[str]]:
         recipients: dict[str, list[str]] = {"to": [], "cc": [], "bcc": []}
@@ -242,10 +267,10 @@ class AnymailEmailChannelBackend(ChannelBackend):
 
 
 def _address(handle: Any) -> str:
-    value = str(getattr(handle, "value", "") or "").strip()
+    value = str(handle.value or "").strip()
     if "@" not in value:
         return ""
-    return formataddr((str(getattr(handle, "display_name", "") or "").strip(), value))
+    return formataddr((str(handle.display_name or "").strip(), value))
 
 
 def _source_addresses(message: Any, header: str) -> list[str]:

@@ -11,13 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, ClassVar, cast
 
-from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured, ValidationError
-from rebac import system_context
+from django.core.exceptions import ValidationError
 
 from angee.base.exceptions import exception_text
-from angee.base.implementations import resolve_impl_class
 from angee.integrate.impl import BridgeImpl
 from angee.storage.exceptions import UploadError
 from angee.storage.uploads import MIME_SNIFF_BYTES, detect_mime, sha256_stream
@@ -308,33 +305,18 @@ def validate_local_folder_root(path: str) -> Path:
     if not os.access(root, os.R_OK | os.X_OK):
         raise ValidationError(f"Local folder is not readable: {root}")
 
-    media_value = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
+    media_value = str(settings.MEDIA_ROOT or "").strip()
     if media_value:
         media_root = Path(media_value).resolve()
         if root == media_root or media_root in root.parents:
             raise ValidationError("Local folder must be outside MEDIA_ROOT.")
 
-    data_value = str(getattr(settings, "ANGEE_DATA_DIR", "") or "").strip()
+    data_value = str(settings.ANGEE_DATA_DIR or "").strip()
     if data_value:
         data_root = Path(data_value).resolve()
         if root == data_root or data_root in root.parents:
             raise ValidationError("Local folder must be outside ANGEE_DATA_DIR.")
     return root
-
-
-def browse_mount_source(
-    backend_class: str,
-    *,
-    credential: Any | None = None,
-    token: str = "",
-) -> MountBrowseResult:
-    """Dispatch pre-connection browsing through the configured Mount backend."""
-
-    try:
-        impl = resolve_impl_class(MountBackend, backend_class)
-    except ImproperlyConfigured as error:
-        raise ValidationError({"backend_class": str(error)}) from error
-    return cast(type[MountBackend], impl).browse(credential=credential, token=token)
 
 
 def _resolve_browsable_directory(path: Path) -> Path | None:
@@ -362,11 +344,6 @@ def _local_mount_location(path: Path) -> MountLocation:
     """Project one resolved local directory into the neutral browser contract."""
 
     reason = _local_folder_validation_reason(path)
-    if not reason:
-        mount_model = apps.get_model("storage_integrate", "Mount")
-        with system_context(reason="storage_integrate.browse_mount_source"):
-            if mount_model.objects.filter(config__root=str(path)).exists():
-                reason = "Already mounted"
     return MountLocation(
         token=str(path),
         label=path.name or str(path),

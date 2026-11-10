@@ -357,6 +357,23 @@ describe("MutationDialog", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledWith({ note: null }));
   });
 
+  test("hidden required fields do not block the editable dialog", async () => {
+    const submit = vi.fn().mockResolvedValue(ok);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Edit" fields={[
+        { name: "name", label: "Name", required: true },
+        { name: "token", required: true, hidden: true },
+      ]} submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} />
+    </AppRuntimeProvider>);
+
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Save" });
+    expect(button.disabled).toBe(true);
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Ready" } });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ name: "Ready", token: "" }));
+  });
+
   test("keeps submit invalid for a missing nested required list constraint", async () => {
     const [slots] = deserializeFormSpec({
       type: "object", required: ["slots"], properties: {

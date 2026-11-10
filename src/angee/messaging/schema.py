@@ -22,7 +22,7 @@ from django.db import models, transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
-from rebac import PermissionDenied, current_actor
+from rebac import PermissionDenied, RebacMixin, current_actor
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry_django.utils.requests import get_request
@@ -62,7 +62,7 @@ from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
-from angee.messaging import connect
+from angee.messaging.backends import PairingActionError
 from angee.messaging.managers import (
     ChannelQuerySet,
     MessageQuerySet,
@@ -133,7 +133,7 @@ class ChannelType(BridgeTypeMixin, AngeeNode):
         """Return the live bridge's actual pairing state, or null for poll channels."""
 
         try:
-            return connect.channel_pairing(cast(Any, self)).state
+            return cast(Any, self).pairing().state
         except ValueError:
             return None
 
@@ -174,7 +174,7 @@ def _pairing_result(operation: Any, *args: Any, **kwargs: Any) -> Any:
 
     try:
         return operation(*args, **kwargs)
-    except connect.PairingActionError as error:
+    except PairingActionError as error:
         raise GraphQLError(str(error), extensions={"code": "BAD_USER_INPUT"}) from error
 
 
@@ -192,7 +192,7 @@ class MessagingPairingQuery:
             queryset=Channel.objects.of_concrete_type(),
             reason="messaging.graphql.channel_pairing",
         )
-        return _pairing_result(connect.channel_pairing, channel)
+        return _pairing_result(channel.pairing)
 
 
 @strawberry.type
@@ -206,7 +206,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.resume_channel_pairing"
         ) as channel:
-            _pairing_result(connect.resume_channel_pairing, channel)
+            _pairing_result(channel.resume_pairing)
         return ActionResult(ok=True, message="Channel connection started.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -217,7 +217,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.submit_channel_password"
         ) as channel:
-            _pairing_result(connect.submit_channel_password, channel, password)
+            _pairing_result(channel.submit_pairing_password, password)
         return ActionResult(ok=True, message="Password submitted.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -227,7 +227,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.skip_channel_password"
         ) as channel:
-            _pairing_result(connect.skip_channel_password, channel)
+            _pairing_result(channel.skip_pairing_password)
         return ActionResult(ok=True, message="Password skipped.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -237,7 +237,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.reset_channel_pairing"
         ) as channel:
-            _pairing_result(connect.reset_channel_pairing, channel)
+            _pairing_result(channel.reset_pairing)
         return ActionResult(ok=True, message="Pairing reset; link the channel again.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -247,7 +247,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.disconnect_channel"
         ) as channel:
-            _pairing_result(connect.disconnect_channel, channel)
+            _pairing_result(channel.disconnect_pairing)
         return ActionResult(ok=True, message="Disconnected channel.")
 
 
@@ -720,7 +720,9 @@ class FollowerIdentity:
             return None
         cached_person = party._state.fields_cache.get("person")
         if "person" not in party._state.fields_cache or (
-            cached_person is not None and getattr(cached_person, "_rebac_actor", None) != current_actor()
+            cached_person is not None and (
+                not isinstance(cached_person, RebacMixin) or cached_person.actor() != current_actor()
+            )
         ):
             person = apps.get_model("parties", "Person").objects.with_actor(current_actor()).filter(pk=party.pk).first()
             party._meta.get_field("person").set_cached_value(party, person)
@@ -1011,6 +1013,7 @@ class RecordErrorPayload:
 
         code = "PERMISSION_DENIED" if isinstance(error, PermissionDenied) else invalid_code
         if isinstance(error, ValidationError):
+            # Django ValidationError omits code on aggregate errors.
             code = getattr(error, "code", None) or code
         message = " ".join(error.messages) if isinstance(error, ValidationError) else str(error)
         return cls(error=message, error_code=code)
@@ -2151,11 +2154,7 @@ def _record_message_access_cache(info: strawberry.Info | None) -> dict[Any, tupl
     request = get_request(info) if info is not None else None
     if request is None:
         return {}
-    cache = getattr(request, "_messaging_record_access", None)
-    if cache is None:
-        cache = {}
-        setattr(request, "_messaging_record_access", cache)
-    return cache
+    return request.__dict__.setdefault("_messaging_record_access", {})
 
 
 def _record_message_access(record: ThreadedModelMixin, user: Any) -> tuple[bool, bool]:
@@ -2180,7 +2179,10 @@ def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any
             record = message.threaded_record()
             cache[message.thread_id] = _record_message_access(record, user) if record is not None else (False, False)
         post_access, moderate_access = cache[message.thread_id]
-    return {"post_access": post_access, "moderate_access": moderate_access, "actor_id": getattr(user, "pk", None)}
+    return {
+        "post_access": post_access, "moderate_access": moderate_access,
+        "actor_id": user.pk if user is not None else None,
+    }
 
 
 def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
@@ -2257,11 +2259,10 @@ def _prime_record_messages(messages: list[Any]) -> None:
 
     if not messages:
         return
-    owner = Message.objects.db_manager(messages[0]._state.db)
     sender_names = dict(
-        owner.sudo(reason="messaging.record_thread.sender_labels")
+        Message.objects.sudo(reason="messaging.record_thread.sender_labels")
         .filter(pk__in=[message.pk for message in messages])
-        .annotate(_sender_name=owner.sender_name_expression())
+        .annotate(_sender_name=Message.objects.sender_name_expression())
         .values_list("pk", "_sender_name")
     )
     for message in messages:
@@ -2306,15 +2307,16 @@ def _record_thread_payload(
     _prime_follower_identities(followers, current_actor())
     attachment_count = (
         apps.get_model("messaging", "Part")
-        .objects.using(thread._state.db)
-        .filter(TrashQuerySet.untrashed_q("message__"), message__thread_id__in=thread.member_threads().values("pk"))
+        .objects.filter(
+            TrashQuerySet.untrashed_q("message__"), message__thread_id__in=thread.member_threads().values("pk"),
+        )
         .attachments()
         .count()
         if thread is not None
         else 0
     )
     user = _request_user(info) if info is not None else None
-    user_id = getattr(user, "pk", None)
+    user_id = (user.pk if user is not None else None)
     suggested_recipients = [
         SuggestedRecipientType(
             user=suggestion["user"],
@@ -2390,8 +2392,9 @@ def _request_user(info: strawberry.Info | None) -> Any | None:
     if info is None:
         return None
     request = get_request(info)
+    # Django AuthenticationMiddleware supplies user; bare HttpRequest does not.
     user = getattr(request, "user", None)
-    if user is None or getattr(user, "is_authenticated", False) is False:
+    if user is None or user.is_authenticated is False:
         return None
     return user
 

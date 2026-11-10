@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
@@ -30,9 +31,13 @@ from angee.extraction.contracts import (
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionStatus
 from angee.extraction.pointers import json_pointer_value, result_selectors
 from angee.provenance.evidence import EvidenceReference, readable_records
+from angee.storage.models import UploadState
 
 if TYPE_CHECKING:
     from angee.extraction.models import Extraction
+
+
+logger = logging.getLogger(__name__)
 
 
 class StaleExtraction(ValidationError):
@@ -347,10 +352,78 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
         actor: Any = None,
         part_carriers: Sequence[PartCarrier] = (),
     ) -> Any:
+        """Prepare and verify part carriers, then allocate the revision; discard carriers a failure leaves.
+
+        Carrier storage writes and verified reads run before the lineage
+        transaction. A failed allocation offers each carrier this call created to
+        :meth:`File.purge_if_unretained`, which keeps one anything else retains;
+        a cleanup failure is logged and the allocation's error propagates.
+        """
         envelope = [values[name] for name in ("schema", "result", "outcome", "profile_config", "schema_id")]
         envelope.extend((sources, pages, parts, mapping, retirement))
         if strip_null_bytes(envelope) != envelope:
             raise ValidationError("Retained evidence cannot contain null characters.")
+        existing = self.model._base_manager.filter(reuse_key=values["reuse_key"]).first()
+        if existing is not None:
+            existing.require_request_digest(values["outcome"]["request_digest"])
+            return existing
+        created: list[Any] = []
+        verified: list[tuple[Any, str]] = []
+        try:
+            if base is None:
+                if part_carriers and len(part_carriers) != len(parts):
+                    raise ValidationError("Each evidence part requires its matching carrier.")
+                file_model = self.model._meta.apps.get_model("storage.File")
+                first_file_id = next((source["file_id"] for source in sources if source["file_id"]), None)
+                drive_id = (
+                    str(file_model._base_manager.select_related("drive").get(pk=first_file_id).drive.sqid)
+                    if first_file_id
+                    else ""
+                )
+                for position, part in enumerate(parts):
+                    carrier, acquired = (
+                        (part_carriers[position], False)
+                        if part_carriers
+                        else PartCarrier.retain(DocumentPart(**part), actor=actor, drive_id=drive_id)
+                    )
+                    file = file_model._base_manager.get(sqid=carrier.file_id)
+                    if acquired:
+                        created.append(file)
+                    recovered = carrier.read(file)
+                    if dict(asdict(recovered), metadata=recovered.metadata or {}) != part:
+                        raise ValidationError("The part carrier differs from the retained evidence.")
+                    verified.append((file.pk, carrier.content_hash))
+            return self._retain_prepared(values, sources, pages, parts, base, mapping, retirement, verified=verified)
+        except Exception:
+            with system_context(reason="discard unretained extraction carriers"):
+                for file in created:
+                    try:
+                        file.purge_if_unretained()
+                    except Exception:
+                        # The allocation's own failure is the one to report.
+                        logger.exception("extraction carrier %s was not discarded", file.pk)
+            raise
+
+    def _retain_prepared(
+        self,
+        values: dict[str, Any],
+        sources: list[dict[str, Any]],
+        pages: list[dict[str, Any]],
+        parts: list[dict[str, Any]],
+        base: Any,
+        mapping: Any,
+        retirement: Any,
+        *,
+        verified: Sequence[tuple[Any, str]],
+    ) -> Any:
+        """Allocate one revision under the lineage lock from carriers verified beforehand.
+
+        Locks are taken in one order: the lineage row; then, for a revision
+        without a base, its source and carrier ``storage.File`` rows together in
+        one key-ordered read; then its source message parts. Under those locks the
+        sources must still carry their retained digests and each verified carrier
+        must still be the READY, untrashed bytes it read.
+        """
         lineage_model = self.model._meta.apps.get_model("extraction.ExtractionLineage")
         with transaction.atomic(), system_context(reason="retain authorized extraction snapshot"):
             lineage = lineage_model.objects.filter(identity=values["lineage_identity"]).first()
@@ -364,9 +437,9 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
             lineage = lineage_model.objects.lock_if_supported().get(pk=lineage.pk)
             existing = self.model._base_manager.filter(reuse_key=values["reuse_key"]).first()
             if existing is not None:
-                if existing.outcome["request_digest"] != values["outcome"]["request_digest"]:
-                    raise ValidationError("This request key already owns different evidence.")
+                existing.require_request_digest(values["outcome"]["request_digest"])
                 return existing
+            files = self._lock_prepared_inputs(sources, verified) if base is None else {}
             previous = lineage.head
             if values["outcome"]["kind"] == ExtractionStatus.FAILED and (mapping or retirement):
                 raise ValidationError("A retained source hold cannot remap or retire identities.")
@@ -423,27 +496,17 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                     part["carrier_file_id"] = retained.carrier_file_id
                     part["carrier_digest"] = retained.carrier_digest
             else:
-                if part_carriers and len(part_carriers) != len(parts):
-                    raise ValidationError("Each evidence part requires its matching carrier.")
-                file_model = self.model._meta.apps.get_model("storage.File")
-                first_file_id = next((source["file_id"] for source in sources if source["file_id"]), None)
-                drive_id = (
-                    str(file_model._base_manager.select_related("drive").get(pk=first_file_id).drive.sqid)
-                    if first_file_id
-                    else ""
-                )
-                for position, part in enumerate(parts):
-                    carrier = (
-                        part_carriers[position]
-                        if part_carriers
-                        else PartCarrier.retain(DocumentPart(**part), actor=actor, drive_id=drive_id)
-                    )
-                    file = file_model._base_manager.get(sqid=carrier.file_id)
-                    recovered = carrier.read(file)
-                    if dict(asdict(recovered), metadata=recovered.metadata or {}) != part:
-                        raise ValidationError("The part carrier differs from the retained evidence.")
-                    part["carrier_file_id"] = file.pk
-                    part["carrier_digest"] = carrier.content_hash
+                for part, (file_pk, digest) in zip(parts, verified, strict=True):
+                    carrier = files.get(file_pk)
+                    if (
+                        carrier is None
+                        or carrier.content_hash != digest
+                        or carrier.is_trashed
+                        or carrier.upload_state != UploadState.READY
+                    ):
+                        raise ValidationError("The prepared part carrier changed before retention.")
+                    part["carrier_file_id"] = file_pk
+                    part["carrier_digest"] = digest
             values["lineage"] = lineage
             values.pop("lineage_identity", None)
             extraction = self.model(
@@ -456,6 +519,44 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
             self._retain_children(extraction, sources, pages, parts, base)
             lineage.advance_head(extraction)
             return extraction
+
+    def _lock_prepared_inputs(
+        self,
+        sources: Sequence[Mapping[str, Any]],
+        verified: Sequence[tuple[Any, str]],
+    ) -> dict[Any, Any]:
+        """Lock the source and carrier files in one key-ordered read, then the source message parts.
+
+        Require each source to still carry the digest its carriers were prepared
+        from, and return the locked files by key for the carrier recheck.
+        """
+        file_model: Any = self.model._meta.apps.get_model("storage.File")
+        part_model: Any = (
+            self.model._meta.apps.get_model("extraction.ExtractionSource")._meta.get_field("message_part").related_model
+        )
+        file_digests = {
+            source["file_id"]: source["content_hash"] for source in sources if source["file_id"] is not None
+        }
+        part_digests = {
+            source["message_part_id"]: source["content_hash"]
+            for source in sources
+            if source["message_part_id"] is not None
+        }
+        files = (
+            file_model.system_queryset()
+            .lock_if_supported(no_key=True)
+            .order_by("pk")
+            .in_bulk([*file_digests, *(pk for pk, _digest in verified)])
+        )
+        parts = part_model._base_manager.select_for_update().order_by("pk").in_bulk(list(part_digests))
+        for pk, digest in file_digests.items():
+            if pk not in files or str(files[pk].content_hash) != digest:
+                raise ValidationError("The source changed during carrier preparation.")
+        for pk, digest in part_digests.items():
+            fragment = parts[pk].fragment if pk in parts else None
+            if fragment is None or str(fragment.hash) != digest:
+                raise ValidationError("The source changed during carrier preparation.")
+        return files
 
     @staticmethod
     def _preserve_authority(

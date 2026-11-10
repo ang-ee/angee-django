@@ -22,8 +22,10 @@ from angee.base.implementations import resolve_impl_class
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin, public_id_of
+from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.querysets import AngeeQuerySet
 from angee.base.schemas.forms import relation_positions
+from angee.base.serialization import ASCII_JSON, canonical_json_sha256
 from angee.resources.entries import (
     GRANT_KIND,
     ROW_KIND,
@@ -89,7 +91,10 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
             prefix, separator, _encoded = public_id.partition("_")
             if separator:
                 identity = SqidField(
-                    real_field_name="id", prefix=f"{prefix}_", min_length=sqid.min_length, alphabet=sqid.alphabet,
+                    real_field_name="id",
+                    prefix=f"{prefix}_",
+                    min_length=sqid.min_length,
+                    alphabet=sqid.alphabet,
                 )
                 value = identity.public_id_to_value(public_id)
                 if value is not None:
@@ -108,7 +113,8 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
         label = model_label.lower()
         index = installed_components("angee.addons")
         owners = [
-            config.name for config in apps.get_app_configs()
+            config.name
+            for config in apps.get_app_configs()
             if label in {retired.lower() for retired in retired_models_for(config, index=index)}
         ]
         return self.seeded_target_keys(model_label, source_addons=owners) if owners else set()
@@ -121,7 +127,7 @@ def seeded_record_merge_guard(record: models.Model) -> str | None:
     """
 
     with system_context(reason="resources.seeded_record_merge_guard"):
-        ledger = apps.get_model("resources", "Resource").objects.db_manager(record._state.db).seeding(record).first()
+        ledger = apps.get_model("resources", "Resource").objects.seeding(record).first()
     if ledger is None:
         return None
     return f"{record} is loaded from {ledger.source_addon} resources, which would recreate it; keep it instead."
@@ -142,7 +148,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     def resolve(self, handle: str, *, model: type[models.Model] | None = None) -> models.Model:
         """Resolve a ledger handle under the current actor, optionally checking its type."""
 
-        return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model, using=self.db)
+        return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model)
 
     def resolve_config_references(self, value: Any, *, schema: dict[str, Any]) -> Any:
         """Resolve dotted xrefs only at schema-declared relation positions.
@@ -171,19 +177,81 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         target = self.resolve(value, model=ModelLabelField.get_model(relation["resource"]))
         return str(public_id_of(target))
 
+    def upsert_target(
+        self,
+        *,
+        entry: ResourceEntry,
+        xref: str,
+        instance: models.Model,
+        model: type[models.Model],
+        content_hash: str,
+        replace: bool = True,
+    ) -> LedgerT:
+        """Record ``instance`` as the target of ``entry``'s ``xref`` and return the ledger row.
+
+        The row is read or inserted under its lock (``get_or_create``), so
+        concurrent first loads converge on one row, and a row bound to another
+        model is refused before anything is written. An existing row takes the
+        new target unless ``replace`` is false.
+        """
+
+        values = self._target_values(instance, entry=entry, model=model, content_hash=content_hash)
+        with transaction.atomic():
+            ledger, created = self.lock_if_supported().get_or_create(
+                source_addon=entry.addon.name,
+                xref=xref,
+                defaults=values,
+            )
+            ledger.require_target_model(model)
+            if replace and not created:
+                for field, value in values.items():
+                    setattr(ledger, field, value)
+                ledger.save(update_fields=update_fields_with_auto_now(ledger, values))
+        return ledger
+
     def bind_instance(
-        self, *, addon: Any, xref: str, instance: models.Model, source: str, replace: bool = False,
+        self,
+        *,
+        addon: Any,
+        xref: str,
+        instance: models.Model,
+        source: str,
+        replace: bool = False,
     ) -> None:
-        """Use the import ledger for owner-created installation identities."""
+        """Ledger an owner-created installation identity; only ``replace`` retargets a bound xref."""
+
+        entry = ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source)
+        identity = public_id_of(instance)
+        ledger = self.upsert_target(
+            entry=entry,
+            xref=entry.normalize_xref(xref, 0),
+            instance=instance,
+            model=type(instance),
+            content_hash=f"sha256:{canonical_json_sha256(chunks=(ASCII_JSON.encode({'identity': identity}),))}",
+            replace=replace,
+        )
+        if ledger.target_id != identity:
+            raise ResourceLoadError(f"{addon.name}.{ledger.xref} already identifies another record.")
+
+    @staticmethod
+    def _target_values(
+        instance: models.Model,
+        *,
+        entry: ResourceEntry,
+        model: type[models.Model],
+        content_hash: str,
+    ) -> dict[str, Any]:
+        """Project one saved target's ledger columns for an import row or an owner-bound identity."""
 
         if instance.pk is None:
             raise ResourceLoadError("Installation identities require a saved target.")
-        with transaction.atomic(using=self.db):
-            resource = build_resource(
-                type(instance), ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source),
-                ledger_model=self.model, addon_aliases=self._addon_aliases(apps.get_app_configs()), using=self.db,
-            )
-            resource.bind_instance(xref, instance, replace=replace)
+        return {
+            "source_path": entry.source,
+            "target_model": model._meta.label,
+            "content_hash": content_hash,
+            "target_id": public_id_of(instance),
+            "tier": entry.tier,
+        }
 
     def validate_addons(
         self,
@@ -195,7 +263,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
 
         selected_addons = tuple(addons)
         entries, row_groups, grant_groups, kind_declarations = self._groups_for(
-            selected_addons, tiers=tiers,
+            selected_addons,
+            tiers=tiers,
         )
         self._check_xref_collisions(row_groups)
         self._import_groups(
@@ -209,7 +278,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         return ValidationResult(
             checked_files=len(entries),
             checked_rows=(
-                sum(len(group.dataset) for group in row_groups) + sum(len(group.rows) for group in grant_groups)
+                sum(len(group.dataset) for group in row_groups)
+                + sum(len(group.rows) for group in grant_groups)
                 + sum(len(rows) for rows in kind_declarations.values())
             ),
         )
@@ -229,7 +299,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
 
         selected_addons = tuple(addons)
         entries, row_groups, grant_groups, kind_declarations = self._groups_for(
-            selected_addons, tiers=active_tiers,
+            selected_addons,
+            tiers=active_tiers,
         )
         self._check_xref_collisions(row_groups)
         return self._import_groups(
@@ -283,10 +354,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                     group.dataset.subset(rows=[index]),
                     [group.source_rows[index]],
                 )
-                with transaction.atomic(using=self.db):
-                    resource = build_resource(
-                        model, group.entry, ledger_model=self.model, addon_aliases=aliases, using=self.db,
-                    )
+                with transaction.atomic():
+                    resource = build_resource(model, group.entry, ledger_model=self.model, addon_aliases=aliases)
                     with system_context(reason="resources.load_xref resolve existing target"):
                         resolved, _ = resource.resolve_existing(((selected.dataset, resource),))
                     resolution = resolved.get((resource, xref))
@@ -304,7 +373,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                         actor=actor,
                     )
                     with system_context(reason="resources.load_xref resolve imported target"):
-                        instance = resolve_xref(handle, self.model, aliases, using=self.db)
+                        instance = resolve_xref(handle, self.model, aliases)
                     if not isinstance(instance, model):
                         raise ResourceLoadError(f"Resource {handle!r} did not produce {model._meta.label}.")
                     if resolution is None or resolution.instance is None:
@@ -345,7 +414,6 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                     ledger_model=self.model,
                     addon_aliases=addon_aliases,
                     kind_declarations=kind_declarations,
-                    using=self.db,
                 ),
             )
             for group in row_groups
@@ -360,9 +428,9 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
             with (
                 system_context(reason=reason),
                 ExitStack() as contexts,
-                transaction.atomic(using=self.db),
+                transaction.atomic(),
             ):
-                pre_load.send(sender=self.model, contexts=contexts, using=self.db)
+                pre_load.send(sender=self.model, contexts=contexts)
                 resource_classes = {
                     group.model.resource_class
                     for group, _ in loaded_groups
@@ -376,7 +444,6 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                             (grants_by_entry[entry.key],),
                             ledger_model=self.model,
                             addon_aliases=addon_aliases,
-                            using=self.db,
                         )
                         load_result = LoadResult(
                             created=load_result.created + created,
@@ -421,19 +488,18 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         self,
         loaded_groups: list[tuple[ResourceGroup, Any]],
     ) -> None:
-        """Dispatch model-owned hooks after all selected resource rows load."""
+        """Dispatch ``ResourceLoadMixin.after_resource_load`` after all selected resource rows load."""
 
         for group, resource in loaded_groups:
-            hook = getattr(group.model, "after_resource_load", None)
-            if not callable(hook):
+            if not issubclass(group.model, ResourceLoadMixin):
                 continue
-            instances_by_pk: dict[Any, models.Model] = {}
+            instances_by_pk: dict[Any, ResourceLoadMixin] = {}
             for xref in group.dataset["_xref"]:
                 instance = resource.instance_for_xref(xref)
                 if instance is not None:
                     instances_by_pk[instance.pk] = instance
             if instances_by_pk:
-                hook(
+                group.model.after_resource_load(
                     tuple(instances_by_pk.values()),
                     tier=group.entry.tier,
                     source=group.entry.source,
@@ -494,9 +560,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                 groups.extend(entry.read_groups())
             else:
                 declarations[entry.kind].extend(resolve_impl_class(ResourceEntryKind, entry.kind).read(entry))
-        return entries, tuple(groups), tuple(grant_groups), {
-            kind: tuple(rows) for kind, rows in declarations.items()
-        }
+        return entries, tuple(groups), tuple(grant_groups), {kind: tuple(rows) for kind, rows in declarations.items()}
 
     def _entries_for(
         self,
@@ -537,7 +601,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     def _excluded_entry_keys(self) -> frozenset[EntryKey]:
         """Return project-excluded resource entry keys from settings."""
 
-        raw = getattr(settings, "ANGEE_RESOURCE_EXCLUDED_ENTRIES", ())
+        raw = settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES
         if raw is None:
             return frozenset()
         if isinstance(raw, str) or not isinstance(raw, Iterable):

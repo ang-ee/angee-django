@@ -33,8 +33,10 @@ class InstancePrefetch:
     def reader(queryset: models.QuerySet[Any]) -> Any:
         """The reader the hint's queryset names (REBAC's ``relation_actor``).
 
-        ``None`` for an emptied hint (``require_rebac_queryset(..., actor=None)``),
-        which reads for no reader.
+        ``None`` for an emptied hint (``require_rebac_queryset(..., actor=None)``)
+        or when no actor resolves. An owner keys per-reader answers on it; an
+        owner that reads related rows composes ``relation_read_queryset`` instead,
+        so an actorless read takes REBAC's ambient scope.
         """
 
         return None if isinstance(queryset, EmptyQuerySet) else relation_actor(queryset)
@@ -71,6 +73,19 @@ def prefetched(row: models.Model, to_attr: str, build: Callable[[], models.Prefe
             raise ValueError(f"Reading {to_attr} for one row needs a hint to it, not to {prefetch.to_attr}.")
         models.prefetch_related_objects([row], prefetch)
     return getattr(row, to_attr)
+
+
+def prefetched_objects(row: models.Model, relation: str) -> list[Any] | None:
+    """Read an ordinary Django to-many prefetch without evaluating a queryset.
+
+    ``None`` is a cache miss; an empty list is a prefetched empty relation.
+    Authorization and completeness belong to the reader of these materialized
+    rows, which may reject them and fall back to its own queryset.
+    """
+
+    # Django creates this native cache only when relations are prefetched.
+    queryset = getattr(row, "_prefetched_objects_cache", {}).get(relation)
+    return queryset._result_cache if queryset is not None else None
 
 
 class ReaderMemo:

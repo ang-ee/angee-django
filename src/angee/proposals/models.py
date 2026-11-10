@@ -54,7 +54,7 @@ from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
 from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
+from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user, user_subject_ref
 from angee.base.prefetch import prefetched
 from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, ClosedUpdateQuerySet
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
@@ -63,6 +63,7 @@ from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
+from angee.proposals.validators import normalize_topic_key
 from angee.provenance.context import changeset, changeset_model, require_changeset
 
 if TYPE_CHECKING:
@@ -675,7 +676,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         if self.requester_party_id is None:
             return None
         return (
-            apps.get_model("parties", "Person").system_queryset().using(self._state.db)
+            apps.get_model("parties", "Person").system_queryset()
             .filter(
                 pk=self.requester_party_id,
             )
@@ -686,25 +687,25 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def _build_collections(self) -> list[tuple[models.QuerySet[AngeeModel], bool]]:
         """Return the retained shell/answer and owned track content this round governs."""
 
-        tracks = apps.get_model("projects", "Project").system_queryset().using(self._state.db).filter(
+        tracks = apps.get_model("projects", "Project").system_queryset().filter(
             source_proposal__round_id=self.pk,
         )
-        drives = apps.get_model("storage", "Drive").system_queryset().using(self._state.db).filter(
+        drives = apps.get_model("storage", "Drive").system_queryset().filter(
             project_bindings__project_id__in=tracks.values("pk"),
         )
         return [
-            (apps.get_model("proposals", "Proposal").system_queryset().using(self._state.db).filter(
+            (apps.get_model("proposals", "Proposal").system_queryset().filter(
                 round_id=self.pk,
             ), False),
-            (apps.get_model("proposals", "Answer").system_queryset().using(self._state.db).filter(
+            (apps.get_model("proposals", "Answer").system_queryset().filter(
                 proposal__round_id=self.pk,
             ), False),
             (tracks, True),
-            (apps.get_model("projects", "Task").system_queryset().using(self._state.db).filter(
+            (apps.get_model("projects", "Task").system_queryset().filter(
                 project_id__in=tracks.values("pk"),
             ), True),
             (drives, True),
-            (apps.get_model("storage", "File").system_queryset().using(self._state.db).filter(
+            (apps.get_model("storage", "File").system_queryset().filter(
                 drive_id__in=drives.values("pk"),
             ), True),
         ]
@@ -715,9 +716,9 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         requester = self.requester_user_id()
         if requester is None:
             return
-        if self.current_responders().using(self._state.db).filter(pk=requester).exists():
+        if self.current_responders().filter(pk=requester).exists():
             raise RecordAccessSubjectRefused()
-        relationships = active_relationship_model().objects.using(self._state.db)
+        relationships = active_relationship_model().objects.all()
         for rows, owned in self._build_collections():
             if owned:
                 assert isinstance(rows, OwnerQuerySet)
@@ -760,7 +761,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                     raise ValidationError({"party": "The shell has a different party."})
                 if track:
                     proposal.create_track()
-                if follow and getattr(user, "kind", None) == "person":
+                if follow and (user.kind if user is not None else None) == "person":
                     locked.message_subscribe(user=user)
         return proposal.with_actor(actor)
 
@@ -956,7 +957,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 clarification_by_manager=manager,
                 clarification_default_visibility=default,
                 clarification_surrendered=audience == "managers",
-                visibility="restricted" if audience == "managers" else default,
+                visibility=task_model.TaskVisibility.RESTRICTED if audience == "managers" else default,
                 assignee_id=locked.facilitator_id,
             )
             with actor_context(_CLARIFICATION_SYSTEM_ACTOR):
@@ -1098,7 +1099,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             return NotImplemented
         for round in rows.order_by("pk").lock_if_supported():
             round.requester_party = survivor
-            round.save(using=rows.db, update_fields=("requester_party", "updated_at"))
+            round.save(update_fields=("requester_party", "updated_at"))
         return None
 
     def clean(self) -> None:
@@ -1117,7 +1118,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             fields = kwargs.get("update_fields")
             requester_write = fields is None or bool({"requester_party", "requester_party_id"}.intersection(fields))
             if not self._state.adding and requester_write and "requester_party_id" in self.__dict__:
-                locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
+                locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
                 if locked.requester_party_id != self.requester_party_id:
                     locked.requester_party_id = self.requester_party_id
                     locked._validate_requester_exclusion()
@@ -1262,7 +1263,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         if self.pk is None:
             raise ValidationError("A saved round is required.")
         try:
-            outcome_value = RoundOutcome(getattr(outcome, "value", outcome))
+            outcome_value = RoundOutcome(outcome)
         except ValueError as error:
             raise ValidationError({"outcome": "Choose awarded or no award."}) from error
         accepted_ids = self._selection_ids(accepted, "accepted")
@@ -1368,7 +1369,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         """Record the immutable opening receipt."""
 
         self._stamp_opening_receipt()
-        self._transition_fields = {"opened_at", "opened_by"}
+        self.transition_fields = {"opened_at", "opened_by"}
 
     def _stamp_opening_receipt(self) -> None:
         """Record disclosure without changing a terminal lifecycle state."""
@@ -1385,7 +1386,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         self.closed_at = timezone.now()
         self.closed_by_id = _receipt_user_id(self.facilitator_id)
         self.allow_immutable_save("closed_at", "closed_by_id")
-        self._transition_fields = {"outcome", "closed_at", "closed_by"}
+        self.transition_fields = {"outcome", "closed_at", "closed_by"}
 
     @transition(
         status,
@@ -1400,7 +1401,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         self.closed_at = timezone.now()
         self.closed_by_id = _receipt_user_id(self.facilitator_id)
         self.allow_immutable_save("closed_at", "closed_by_id")
-        self._transition_fields = {"outcome", "closed_at", "closed_by"}
+        self.transition_fields = {"outcome", "closed_at", "closed_by"}
 
     def _validate_target(self) -> None:
         if (self.task_id is None) == (self.project_id is None):
@@ -1497,20 +1498,24 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
 
         return self.name
 
+    def normalize_key(self) -> None:
+        """Normalize and require this topic's stable machine key."""
+
+        try:
+            self.key = normalize_topic_key(str(self.key or ""))
+        except ValueError as error:
+            raise ValidationError({"key": str(error)}) from error
+
     def clean(self) -> None:
         """Normalize the immutable machine key."""
 
-        self.key = str(self.key or "").strip().lower()
-        if not self.key:
-            raise ValidationError({"key": "Topic key is required."})
+        self.normalize_key()
         super().clean()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the normalized stable key."""
 
-        self.key = str(self.key or "").strip().lower()
-        if not self.key:
-            raise ValidationError({"key": "Topic key is required."})
+        self.normalize_key()
         super().save(*args, **kwargs)
 
 
@@ -1534,12 +1539,21 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         round: Round,
         party: Party | None = None,
     ) -> T:
-        """Interpret one reply atomically and submit only after all rows succeed."""
+        """Interpret one reply atomically and submit only after all rows succeed.
+
+        Capture requires write on the round, and read on the message and on an
+        explicit party, for the round's explicit, pinned or ambient actor; an
+        omitted party resolves from the sender. A trusted system context admits
+        an actorless capture.
+        """
 
         if message.pk is None or round.pk is None:
             raise ValidationError("A saved message and round are required for capture.")
-        actor = current_actor()
-        with transaction.atomic():
+        actor = round.require_access("write")
+        message.require_access("read", actor=actor)
+        if party is not None:
+            party.require_access("read", actor=actor)
+        with transaction.atomic(), actor_context(actor) if actor is not None else nullcontext():
             locked_round = (
                 type(round).objects.sudo(reason="proposals.capture.round").lock_if_supported().get(pk=round.pk)
             )
@@ -1555,22 +1569,21 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
             payload_hash = self._payload_hash(locked_message)
             proposal = self._locked_capture_proposal(message=locked_message, round=locked_round, party=resolved_party)
             if proposal.state != ProposalState.DRAFT:
-                if (
+                if not (
                     proposal.state == ProposalState.SUBMITTED
                     and proposal.capture_payload_hash == payload_hash
                     and proposal.capture_parser_version == self.CAPTURE_PARSER_VERSION
                 ):
-                    if actor is not None:
-                        proposal.with_actor(actor)
-                    return proposal
-                raise ValidationError("Captured proposal does not match the replayed interpretation.")
-
-            self._apply_interpretation(
-                proposal, message=locked_message, interpretation=interpretation, payload_hash=payload_hash
-            )
-            proposal._submit_locked(fallback_user_id=locked_message.created_by_id or locked_round.facilitator_id)
+                    raise ValidationError("Captured proposal does not match the replayed interpretation.")
+            else:
+                self._apply_interpretation(
+                    proposal, message=locked_message, interpretation=interpretation, payload_hash=payload_hash
+                )
+                proposal._submit_locked(fallback_user_id=locked_message.created_by_id or locked_round.facilitator_id)
         if actor is not None:
             proposal.with_actor(actor)
+        else:
+            proposal.unsudo()
         return proposal
 
     def _locked_capture_proposal(
@@ -1946,7 +1959,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 raise ValidationError({"round": "This round is not accepting proposal shells."})
             self.round = locked_round
             if self.responder_id is not None:
-                subject = SubjectRef.of(user_subject_type(), str(self.responder_id))
+                subject = user_subject_ref(user_id=self.responder_id)
                 if (
                     backend()
                     .check_access(subject=subject, action="manage", resource=to_object_ref(locked_round))
@@ -2116,11 +2129,13 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         return self
 
     def identify_party(self, party: Party) -> Self:
-        """Set the external identity once under Round-first row locks."""
+        """Set a readable external identity once, after proposal write admission, under Round-first row locks."""
 
         if self.pk is None or party.pk is None:
             raise ValidationError("A saved proposal and party are required.")
-        with transaction.atomic():
+        actor = self.require_access("write")
+        party.require_access("read", actor=actor)
+        with transaction.atomic(), actor_context(actor) if actor is not None else nullcontext():
             round_model = apps.get_model("proposals", "Round")
             locked_round = (
                 round_model.objects.sudo(reason="proposals.proposal.identify.round")
@@ -2261,7 +2276,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         self.submitted_at = timezone.now()
         self.submitted_by_id = _receipt_user_id(fallback_user_id)
         self.allow_immutable_save("submitted_at", "submitted_by_id")
-        self._transition_fields = {"submitted_at", "submitted_by"}
+        self.transition_fields = {"submitted_at", "submitted_by"}
 
     @transition(state, source=ProposalState.SUBMITTED, target=ProposalState.ACCEPTED, on_success=save_state)
     def _mark_accepted(self, fallback_user_id: Any | None = None) -> None:
@@ -2296,7 +2311,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         self.decided_at = timezone.now()
         self.decided_by_id = _receipt_user_id(fallback_user_id)
         self.allow_immutable_save("decided_at", "decided_by_id")
-        self._transition_fields = {"decided_at", "decided_by"}
+        self.transition_fields = {"decided_at", "decided_by"}
 
     def _submit_locked(self, fallback_user_id: Any | None = None) -> None:
         if self.state == ProposalState.SUBMITTED:
@@ -2984,8 +2999,8 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
 
         super().clean()
         if self.proposal_id is not None and self.topic_id is not None:
-            proposal_round_id = getattr(self.proposal, "round_id", None)
-            topic_round_id = getattr(self.topic, "round_id", None)
+            proposal_round_id = self.proposal.round_id
+            topic_round_id = self.topic.round_id
             if proposal_round_id != topic_round_id:
                 raise ValidationError({"topic": "Answer topic must belong to the proposal's round."})
 

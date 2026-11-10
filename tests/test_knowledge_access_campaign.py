@@ -7,6 +7,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -190,13 +191,30 @@ def test_binding_writes_require_both_ends_and_are_role_keyed(composed_permission
             listed = set(RecordBinding.objects.for_record(record).values_list("pk", flat=True))
         assert listed == {first.pk, other_role.pk}
         table = connection.ops.quote_name(RecordBinding._meta.db_table)
-        assert sum(query["sql"].startswith(f"SELECT {table}.") for query in queries) == 1
+        assert sum(statement_startswith(query["sql"], f"SELECT {table}.") for query in queries) == 1
         with pytest.raises(PermissionDenied):
             RecordBinding.objects.unbind(page=page, target=record)
     with actor_context(writer):
         assert RecordBinding.objects.unbind(page=page, target=record) == 1
     with system_context(reason="test.binding.remaining"):
         assert list(RecordBinding.objects.values_list("pk", flat=True)) == [other_role.pk]
+
+
+def test_binding_selections_chain_on_a_selected_population_and_keep_its_actor(composed_permissions):
+    author, stranger = create_user("binding-chain-author"), create_user("binding-chain-stranger")
+    knowledge = vault_for(author, name="Chain knowledge")
+    record = vault_for(author, name="Chain record")
+    with actor_context(author):
+        page = Page.objects.create_in(knowledge, title="Chained")
+        RecordBinding.objects.upsert(page=page, target=record)
+        reference = RecordBinding.objects.upsert(page=page, target=record, role="reference")
+        vault_reference = RecordBinding.objects.upsert(vault=knowledge, target=record, role="reference")
+
+    selected = RecordBinding.objects.with_actor(author).filter(role="reference")
+    assert set(selected.for_record(record).values_list("pk", flat=True)) == {reference.pk, vault_reference.pk}
+    assert list(selected.pages_for_record(record).values_list("pk", flat=True)) == [reference.pk]
+    assert list(selected.for_knowledge(page).values_list("pk", flat=True)) == [reference.pk]
+    assert not RecordBinding.objects.with_actor(stranger).filter(role="reference").for_record(record).exists()
 
 
 def test_binding_refuses_undeclared_and_untyped_targets(composed_permissions):

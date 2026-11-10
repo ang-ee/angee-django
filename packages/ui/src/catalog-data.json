@@ -210,6 +210,15 @@
   },
   {
     "package": "@angee/app",
+    "name": "readSharedIdentity",
+    "source": "packages/app/src/providers/auth.tsx",
+    "kind": null,
+    "reason": "Shared identity cache read without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/app",
     "name": "resourcePageRoutes",
     "source": "packages/app/src/define-base-addon.ts",
     "kind": null,
@@ -8290,6 +8299,15 @@
     "source": "packages/ui/src/runtime/user-preferences.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "usePreviewUrl",
+    "source": "packages/ui/src/preview/PreviewPane.tsx",
+    "kind": "surface",
+    "owner": "@angee/ui:PreviewPane",
     "status": "stable",
     "storyId": null
   },

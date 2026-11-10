@@ -44,6 +44,7 @@ class BaseConfig(AppConfig):
         """Validate runtime safety and persistence independently of API addons."""
 
         super().ready()
+        # django-compose publishes snapshot settings only in composed hosts.
         if getattr(conf.settings, "COMPOSE_SNAPSHOT", None) is not None:
             from django_compose.serving import artifact_path
 
@@ -76,11 +77,13 @@ class BaseConfig(AppConfig):
 
         # Model-owned checks require completed app population.
         from angee.base.checks import (
+            check_database_routers,
             check_ownership,
             check_rebac_caveats,
         )
 
         checks.register(check_settings, checks.Tags.models)
+        checks.register(check_database_routers, checks.Tags.models)
 
         checks.register(check_ownership, checks.Tags.models)
         checks.register(check_rebac_caveats, checks.Tags.models)

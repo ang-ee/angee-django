@@ -15,12 +15,16 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
+from django.http import HttpRequest
 from pydantic import BaseModel, ConfigDict, Field
 
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
+
+if TYPE_CHECKING:
+    from angee.integrate_vcs.models import VcsBridge
 
 HTTP_TIMEOUT_SECONDS = 15
 DEFAULT_API_BASE = "https://api.github.com"
@@ -154,14 +158,14 @@ class GitHubBackend(VCSBackend):
 
         return self._descriptor(self._get(f"/repos/{name}"))
 
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
+    def verify_webhook(self, vcs_bridge: VcsBridge, request: HttpRequest) -> bool:
         """Verify an inbound push webhook's HMAC-SHA256 signature against the secret."""
 
-        secret = str(getattr(vcs_bridge, "webhook_secret", "") or "")
-        signature = _request_header(request, WEBHOOK_SIGNATURE_HEADER)
+        secret = str(vcs_bridge.webhook_secret or "")
+        signature = str(request.headers.get(WEBHOOK_SIGNATURE_HEADER, "") or "")
         if not secret or not signature:
             return False
-        digest = hmac.new(secret.encode("utf-8"), _request_body(request), hashlib.sha256).hexdigest()
+        digest = hmac.new(secret.encode("utf-8"), request.body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(signature, f"sha256={digest}")
 
     # Internals ---------------------------------------------------------------
@@ -174,15 +178,9 @@ class GitHubBackend(VCSBackend):
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "angee-integrate-github",
         }
-        credential_field = self.bridge._meta.get_field("credential")
-        if not credential_field.is_cached(self.bridge):
-            credential_field.set_cached_value(
-                self.bridge,
-                credential_field.related_model._base_manager.select_related("oauth_client").get(
-                    pk=self.bridge.credential_id
-                ),
-            )
-        credential: Any = self.bridge.credential
+        credential = self.bridge.load_connection_credential()
+        if credential is None:
+            raise GitHubApiError("GitHub requests require an attached credential", status=0)
         headers.update(credential.auth_headers())
         return headers
 
@@ -233,17 +231,3 @@ class GitHubBackend(VCSBackend):
         )
 
 
-def _request_header(request: Any, name: str) -> str:
-    """Return one header from a Django request or a test double."""
-
-    headers = getattr(request, "headers", None)
-    if headers is not None:
-        return str(headers.get(name, "") or "")
-    return str(getattr(request, name, "") or "")
-
-
-def _request_body(request: Any) -> bytes:
-    """Return the raw request body from a Django request or a test double."""
-
-    body = getattr(request, "body", b"")
-    return body if isinstance(body, bytes) else str(body).encode("utf-8")

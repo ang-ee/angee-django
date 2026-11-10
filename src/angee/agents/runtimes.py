@@ -31,7 +31,6 @@ from django.core.exceptions import ValidationError
 from django.utils.module_loading import import_string
 from rebac import MissingActorError, current_actor, system_context
 
-from angee.agents.autoconfig import SETTINGS as AGENTS_SETTINGS
 from angee.agents.protocol import ACP_PATH
 from angee.agents.runners import SessionRunner
 from angee.base.implementations import ImplBase
@@ -40,6 +39,8 @@ from angee.operator.daemon import OperatorDaemon
 
 if TYPE_CHECKING:
     from angee.agents.backends import InferenceBackend
+    from angee.agents.models import InferenceModel
+    from angee.integrate.models import Credential
 
 # Anthropic requires this beta opt-in header to accept an OAuth (Personal Plans)
 # token. Shared by the claude-code runtime's container env and the Anthropic SDK
@@ -152,7 +153,7 @@ class AgentRuntime(ImplBase):
             routed = daemon.service_endpoint(service)
             if not routed.get("routed"):
                 raise ValidationError("Agent service is not reachable over a routed endpoint.")
-            ttl = str(getattr(settings, "ANGEE_AGENT_CHAT_TOKEN_TTL", AGENTS_SETTINGS["ANGEE_AGENT_CHAT_TOKEN_TTL"]))
+            ttl = str(settings.ANGEE_AGENT_CHAT_TOKEN_TTL)
             token = daemon.mint_route_token(str(actor.object), service, ttl=ttl)
             endpoint = {
                 "url": str(routed.get("url", "")),
@@ -186,14 +187,14 @@ class AgentRuntime(ImplBase):
 
         return credential.kind in self.supported_credential_kinds
 
-    def model_handle(self, model: Any) -> str:
+    def model_handle(self, model: InferenceModel) -> str:
         """Return the selected model handle in this runtime's convention.
 
         The generic runtime renders the catalogue handle verbatim (e.g. opencode's
         ``anthropic/claude-…`` provider-qualified handle).
         """
 
-        return str(getattr(model, "name", "") or "")
+        return model.name
 
     def auth_env(self, *, backend: InferenceBackend, credential: Any, secret_name: str) -> dict[str, str]:
         """Return the container env block this runtime uses to authenticate inference.
@@ -252,7 +253,7 @@ class OpenCodeRuntime(AgentRuntime):
     WARNING: using a Claude Pro/Max (Personal Plans) OAuth token in OpenCode is against
     Anthropic's terms and risks account suspension — OpenCode removed built-in support in
     1.3.0. Prefer a static API-key credential. OAuth stays disabled until the operator
-    sets :attr:`oauth_enabled_setting` *and* builds the opencode image with the auth plugin
+    sets ``ANGEE_OPENCODE_OAUTH_ENABLED`` *and* builds the opencode image with the auth plugin
     (see ``OPENCODE_ANTHROPIC_AUTH_PLUGIN`` in the service Dockerfile); enabling it without
     the plugin would silently drop Anthropic from the model list.
     """
@@ -270,7 +271,6 @@ class OpenCodeRuntime(AgentRuntime):
     # OAuth needs a community Anthropic plugin in the opencode image. Allowing OAuth without
     # it would silently drop Anthropic from the model list (the original bug), so OAuth is
     # gated on an operator opt-in that pairs with building the image with the plugin.
-    oauth_enabled_setting: ClassVar[str] = "ANGEE_OPENCODE_OAUTH_ENABLED"
 
     def supports_credential(self, credential: Any) -> bool:
         """Allow OAuth only when opted in (plugin bundled) and the token can be refreshed.
@@ -282,7 +282,7 @@ class OpenCodeRuntime(AgentRuntime):
         """
 
         if credential.kind == CredentialKind.OAUTH:
-            if not bool(getattr(settings, self.oauth_enabled_setting, False)):
+            if not settings.ANGEE_OPENCODE_OAUTH_ENABLED:
                 return False
             return bool(credential.reveal().get("refresh_token"))
         return super().supports_credential(credential)
@@ -303,7 +303,7 @@ class OpenCodeRuntime(AgentRuntime):
             return self._oauth_auth_content(credential)
         return super().auth_secret_value(credential)
 
-    def _oauth_auth_content(self, credential: Any) -> str:
+    def _oauth_auth_content(self, credential: Credential) -> str:
         """Return base64 of OpenCode's ``auth.json`` for an Anthropic OAuth credential.
 
         The plugin refreshes the access token from the stored refresh token, so the
@@ -311,7 +311,7 @@ class OpenCodeRuntime(AgentRuntime):
         """
 
         material = credential.reveal()
-        expires = getattr(credential, "expires_at", None)
+        expires = credential.expires_at
         entry = {
             "type": "oauth",
             "refresh": str(material.get("refresh_token") or ""),
@@ -336,10 +336,10 @@ class ClaudeCodeRuntime(AgentRuntime):
     service_template_name = "claude-code"
     supported_credential_kinds = frozenset({CredentialKind.STATIC_TOKEN, CredentialKind.OAUTH})
 
-    def model_handle(self, model: Any) -> str:
+    def model_handle(self, model: InferenceModel) -> str:
         """Return the provider's native model name, falling back to the catalogue handle."""
 
-        return str(getattr(model, "provider_model_name", "") or getattr(model, "name", "") or "")
+        return model.provider_model_name
 
     def auth_env(self, *, backend: InferenceBackend, credential: Any, secret_name: str) -> dict[str, str]:
         """Render Claude Code's OAuth token env (plus beta header), or the static key env."""

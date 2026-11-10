@@ -51,7 +51,7 @@ def test_message_lists_the_inbox_navigator_and_same_as_pairs_batch_their_avatars
                 )
                 Party.objects.assert_handle(person, sender, asserted_by=owner)
                 picture = File.objects.ingest_image(PNG_BYTES + bytes([100 + index]))
-                Handle.objects.set_avatar(sender, picture)
+                sender.set_avatar(picture)
                 shown[public_id_of(person)] = public_id_of(own or picture)
                 twin = Person._base_manager.create(display_name=f"Twin {index}", created_by=owner)
                 for party, value in ((person, f"+1858342{index:04d}"), (twin, f"+1 858 342 {index:04d}")):

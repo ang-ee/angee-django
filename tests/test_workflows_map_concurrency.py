@@ -8,11 +8,11 @@ import pytest
 from django.db import close_old_connections, connection, connections, reset_queries
 from django.test.utils import CaptureQueriesContext
 
+from angee.base.testing.queries import is_rebac_revision_read
 from angee.workflows.runner import runner
 from angee.workflows.steps import StepMode
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepAttempt, WorkflowRun
-from tests.queries import is_rebac_revision_read
 from tests.test_workflows_map import MapEcho, body_rows, start_map
 from tests.test_workflows_map import map_steps as map_steps
 

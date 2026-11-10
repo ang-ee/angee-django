@@ -14,7 +14,7 @@ from angee.workflows.steps import Wait
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, StepWatch, WorkflowRun
 from tests.conftest import Vault, create_user, vault_for
-from tests.test_workflows_review_concurrency import submit, wait_for_lock
+from tests.lock_waits import submit, wait_for_lock
 from tests.test_workflows_watches import Watch, record_deliveries, start_watcher
 from tests.test_workflows_watches import watched_source as watched_source
 from tests.workflow_steps import document

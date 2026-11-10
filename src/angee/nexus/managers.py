@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING, Any, Self
 
 from django.apps import apps
 from django.db import models, transaction
-from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rebac import current_actor
 
 from angee.base.managers import AngeeManager
 from angee.base.querysets import AngeeQuerySet
+from angee.messaging.managers import MessageQuerySet
 
 if TYPE_CHECKING:
     from angee.nexus.models import Cadence, Tie
@@ -629,7 +629,7 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
         message_model = apps.get_model("messaging", "Message")
         edge_model = apps.get_model("messaging", "MessageEdge")
         published = message_model.objects.sudo(reason="nexus.interaction.evidence").published().values("pk")
-        interaction_at = Coalesce("message__sent_at", "message__created_at")
+        interaction_at = MessageQuerySet.chronological_time("message__")
         addressed = (
             participant_model._base_manager.filter(
                 message_id__in=published,
@@ -661,7 +661,7 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
             "interaction_at",
         )
 
-        reply_at = Coalesce("sent_at", "created_at")
+        reply_at = MessageQuerySet.chronological_time()
         replies = (
             message_model._base_manager.filter(
                 pk__in=published,
@@ -690,7 +690,7 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
             "interaction_at",
         )
 
-        mention_at = Coalesce("src__sent_at", "src__created_at")
+        mention_at = MessageQuerySet.chronological_time("src__")
         mentions = (
             edge_model._base_manager.filter(
                 src_id__in=published,

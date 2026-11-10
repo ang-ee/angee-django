@@ -16,7 +16,7 @@ from typing import ClassVar, Protocol, cast
 from asgiref.sync import sync_to_async
 from django.apps import apps
 from django.conf import settings
-from django.db import connections, models, router, transaction
+from django.db import connection, models, transaction
 from django.db.models.base import ModelState
 from django.utils import timezone
 
@@ -32,7 +32,7 @@ class ChangesetRequired(Exception):
 def changeset_model_label() -> str:
     """Return the swappable storage label; empty when attribution storage is disabled."""
 
-    return cast(str, getattr(settings, "ANGEE_CHANGESET_MODEL", "") or "")
+    return settings.ANGEE_CHANGESET_MODEL
 
 
 def changeset_model() -> type[models.Model]:
@@ -93,8 +93,7 @@ class _ChangesetBoundary:
     actors, such as a per-event trigger loop. Every row closes with the boundary.
     """
 
-    def __init__(self, facts: dict[str, object], *, defaults: bool, using: str | None = None) -> None:
-        self.using = using
+    def __init__(self, facts: dict[str, object], *, defaults: bool) -> None:
         self.facts = facts
         self.explicit = set() if defaults else set(facts)
         self.rows: dict[tuple[threading.Thread, str], _ChangesetRow] = {}
@@ -137,8 +136,6 @@ class _ChangesetBoundary:
                 origin = facts.pop("origin", None)
                 facts.setdefault("occurred_at", timezone.now())
                 instance = cast(ChangesetLike, model(actor_ref=key[1], **facts))
-                if self.using is not None:
-                    instance._state.db = self.using
                 if origin is not None:
                     setattr(instance, "origin", origin)
                 row = self.rows[key] = _ChangesetRow(instance)
@@ -151,8 +148,6 @@ class _ChangesetBoundary:
             instance.change_reason = cast(str, self.facts.get("change_reason", instance.ambient_attribution()[1]))
             row.attributed = True
         if record and not row.persisted:
-            using = self.using or router.db_for_write(changeset_model(), instance=instance)
-            connection = connections[using]
             # Django removes callbacks on savepoint/transaction rollback and
             # retains them on savepoint release. The queue owns that distinction.
             if row.pending_commit is None or not any(
@@ -160,13 +155,13 @@ class _ChangesetBoundary:
             ):
                 instance._set_pk_val(None)
                 instance._state.adding = True
-                instance.save(force_insert=True, using=using)
+                instance.save(force_insert=True)
 
                 def mark_persisted() -> None:
                     row.persisted = True
 
                 row.pending_commit = mark_persisted
-                transaction.on_commit(mark_persisted, using=using)
+                transaction.on_commit(mark_persisted)
         return instance
 
     def discard(self, instance: ChangesetLike) -> None:
@@ -190,16 +185,15 @@ class _ChangesetBoundary:
     @staticmethod
     def _close_row(row: _ChangesetRow, outcome: str) -> None:
         instance = row.instance
-        using = instance._state.db or router.db_for_write(changeset_model(), instance=instance)
 
         def close_persisted() -> None:
             if not row.persisted:
                 return
-            with transaction.atomic(using=using):
+            with transaction.atomic():
                 instance.close(outcome)
 
-        if connections[using].in_atomic_block:
-            transaction.on_commit(close_persisted, using=using, robust=True)
+        if connection.in_atomic_block:
+            transaction.on_commit(close_persisted, robust=True)
         else:
             close_persisted()
 
@@ -265,16 +259,14 @@ def discard_changeset_claim(instance: ChangesetLike) -> None:
         boundary.discard(instance)
 
 
-class _ChangesetScope:
+class ChangesetContext:
     """One ``changeset()`` entry, usable with ``with`` and ``async with``.
 
     The asynchronous exit closes the boundary in Django's thread-sensitive worker
     so an async entrypoint never hops threads for the request itself.
     """
 
-    def __init__(self, facts: dict[str, object], *, fresh: bool, process: bool = False,
-                 using: str | None = None) -> None:
-        self.using = using
+    def __init__(self, facts: dict[str, object], *, fresh: bool, process: bool = False) -> None:
         self.facts = facts
         self.fresh = fresh
         self.process = process
@@ -287,13 +279,10 @@ class _ChangesetScope:
         global _process_boundary
         existing = _open_boundary()
         if existing is not None and not self.fresh:
-            if self.using is not None:
-                if existing.using != self.using:
-                    raise ValueError('Joined changeset must use its existing database; open a fresh boundary')
             existing.refine(self.facts)
             self.joined = existing
             return existing.mark_failed
-        self.boundary = _ChangesetBoundary(self.facts, defaults=self.fresh, using=self.using)
+        self.boundary = _ChangesetBoundary(self.facts, defaults=self.fresh)
         self.token = _current_changeset.set(self.boundary)
         if self.process:
             self.previous_process, _process_boundary = _process_boundary, self.boundary
@@ -341,8 +330,7 @@ def changeset(
     occurred_at: datetime | None = None,
     fresh: bool = False,
     process: bool = False,
-    using: str | None = None,
-) -> _ChangesetScope:
+) -> ChangesetContext:
     """Open logical attribution, yielding a callback to mark a handled failure.
 
     Entrypoints use ``fresh=True`` to own a boundary; their facts are defaults.
@@ -353,10 +341,9 @@ def changeset(
     each writing thread and actor records its own row under the shared facts.
     Asynchronous entrypoints use ``async with``. ``process=True`` is for an
     entrypoint that owns the whole process (a management command, a test): threads
-    it starts without copying the context write under this boundary too. An explicit
-    ``using`` passes a Django-supplied alias (a command's ``--database``) through to
-    fresh attribution rows; omitted, Django's router places them. Nested scopes
-    restore the previous boundary.
+    it starts without copying the context write under this boundary too. Angee runs
+    on one database; Django places the rows. Nested scopes restore the previous
+    boundary.
     """
 
     facts: dict[str, object] = {
@@ -371,7 +358,7 @@ def changeset(
         )
         if value is not None
     }
-    return _ChangesetScope(facts, fresh=fresh, process=process, using=using)
+    return ChangesetContext(facts, fresh=fresh, process=process)
 
 
 @dataclass

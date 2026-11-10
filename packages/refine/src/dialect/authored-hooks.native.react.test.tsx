@@ -441,7 +441,7 @@ test("auth error policy covers data-only consumers and imperative refreshes", as
   expect(f.notify).toHaveBeenCalledTimes(1);
   const { dataProvider: provider } = createRefineTestProviders({ dataProvider: { custom: f.custom } });
   await act(async () => {
-    await f.client.fetchQuery(authoredQueryOptions(f.client, () => provider, "default", DOCUMENT, { id: "a" })).catch(() => undefined);
+    await f.client.query(authoredQueryOptions(f.client, () => provider, "default", DOCUMENT, { id: "a" })).catch(() => undefined);
   });
   await waitFor(() => expect(f.onError).toHaveBeenCalledTimes(2));
   expect(f.notify).toHaveBeenCalledTimes(2);
@@ -452,10 +452,10 @@ test("imperative authored refresh preserves all cache-registered model interests
   const { dataProvider: provider } = createRefineTestProviders({
     dataProvider: { custom: async () => ({ data: { notes: [{ id: "a" }] } }) },
   });
-  await client.fetchQuery(authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "a" }, ["notes.Note"]));
-  await client.fetchQuery(authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "a" }, ["iam.User"]));
+  await client.query(authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "a" }, ["notes.Note"]));
+  await client.query(authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "a" }, ["iam.User"]));
   const options = authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "a" });
-  await client.fetchQuery(options);
+  await client.query(options);
   expect(client.getQueryCache().find({ queryKey: options.queryKey, exact: true })?.meta?.angeeModels).toEqual(["iam.User", "notes.Note"]);
 });
 

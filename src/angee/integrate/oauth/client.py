@@ -7,9 +7,11 @@ extends this in ``angee.iam_integrate_oidc.protocol.OAuthClientOidcProtocol``.
 
 The OAuth2 protocol mechanism (token request, client authentication, PKCE, and
 the token-response parsing) is owned by Authlib's ``OAuth2Client`` over httpx2;
-this module is the thin per-row adapter behind a stable seam. The authorization
-URL is still built here (a deterministic string the OIDC layer extends), and the
-small ``token_request_format == "json"`` provider quirk — a non-standard JSON
+this module is the thin per-row adapter behind a stable seam. Authlib's
+``prepare_grant_uri`` also builds the authorization URL from the row's endpoint
+and client id, with no client session or secret (the OIDC layer adds its
+nonce), and the small
+``token_request_format == "json"`` provider quirk — a non-standard JSON
 token body Authlib does not emit, plus Anthropic's required ``state`` echo —
 keeps a documented shim.
 
@@ -22,24 +24,26 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib import parse
 
 import httpx2
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.httpx_client import OAuth2Client
+from authlib.oauth2.rfc6749.parameters import prepare_grant_uri
 
 from angee.integrate.errors import IntegrationError, RequestNotSentError
-from angee.integrate.http import PinnedTransport
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient, PinnedTransport
 from angee.integrate.oauth.errors import (
     CLIENT_NOT_CONFIGURED,
     MISSING_ENDPOINT,
     TOKEN_EXCHANGE_FAILED,
-    USERINFO_FAILED,
     OAuthFlowError,
 )
 
-HTTP_TIMEOUT_SECONDS = 10
+if TYPE_CHECKING:
+    from angee.integrate.models import OAuthClient
+
 # An honest, non-browser User-Agent for all outbound connection requests. Must NOT
 # spoof a browser: Anthropic's edge denylists browser/curl User-Agents with a 429
 # ``rate_limit_error`` (and blocks the HTTP client's default UA with a 403), while
@@ -63,12 +67,28 @@ _TOKEN_MATERIAL_KEYS = ("access_token", "refresh_token", "id_token", "expires_in
 # access token cannot call the provider's userinfo endpoint (Anthropic's long-lived
 # inference-only token is one such case).
 _TOKEN_RESPONSE_IDENTITY_KEYS = ("account", "organization")
+_GRANT_URI_ARGUMENTS = frozenset({"uri", "client_id", "response_type", "redirect_uri", "scope", "state"})
+"""``prepare_grant_uri``'s own arguments, which a provider's authorize extras never replace."""
+
+
+def oauth_get_json(
+    url: str, *, headers: dict[str, str] | None = None, transport: httpx2.BaseTransport | None = None,
+) -> Any:
+    """GET OAuth JSON with honest headers and support for configured private identity providers.
+
+    The shared HTTP client owns transport and decoding. Discovery and userinfo
+    retain their distinct failure policies at their callers.
+    """
+
+    return HttpClient().get_json(
+        url, headers={**OUTBOUND_HEADERS, **(headers or {})}, allow_private=True, transport=transport,
+    )
 
 
 class OAuthClientProtocol:
     """OAuth2 authorization-code + refresh protocol for one ``OAuthClient`` row."""
 
-    def __init__(self, oauth_client: Any) -> None:
+    def __init__(self, oauth_client: OAuthClient) -> None:
         """Bind the protocol to one OAuth client registration row."""
 
         self.oauth_client = oauth_client
@@ -93,13 +113,7 @@ class OAuthClientProtocol:
     ) -> str:
         """Return the provider authorization URL for one OAuth code flow."""
 
-        query = self._authorize_query(
-            state=state,
-            redirect_uri=redirect_uri,
-            scopes=scopes,
-            code_challenge=code_challenge,
-        )
-        return with_query(self._endpoint("authorize_endpoint"), query)
+        return self._grant_uri(state=state, redirect_uri=redirect_uri, scopes=scopes, code_challenge=code_challenge)
 
     def exchange_code(
         self,
@@ -118,7 +132,7 @@ class OAuthClientProtocol:
         """
 
         grant: dict[str, Any] = {"code": code, "redirect_uri": redirect_uri}
-        if getattr(self.oauth_client, "supports_pkce", False) and code_verifier:
+        if self.oauth_client.supports_pkce and code_verifier:
             grant["code_verifier"] = code_verifier
         if self._uses_json_token_request() and state:
             grant["state"] = state
@@ -170,19 +184,19 @@ class OAuthClientProtocol:
                 userinfo_endpoint = str(self.oauth_client.userinfo_endpoint or "")
             if not userinfo_endpoint:
                 return {}
-            return _get_json(
+            claims = oauth_get_json(
                 with_query(userinfo_endpoint, params or {}),
                 headers={"Authorization": f"Bearer {access_token}"},
-                error_code=USERINFO_FAILED,
-                _transport=self._transport,
+                transport=self._transport,
             )
+            return claims if isinstance(claims, dict) else {}
         except Exception:
             return {}
 
     def revoke_token(self, token: str) -> None:
         """Best-effort RFC 7009 token revocation for an OAuth credential."""
 
-        revoke_endpoint = str(getattr(self.oauth_client, "revoke_endpoint", "") or "")
+        revoke_endpoint = self.oauth_client.revoke_endpoint
         if not revoke_endpoint or not token:
             return
         session = self._session()
@@ -198,12 +212,15 @@ class OAuthClientProtocol:
             session.close()
 
     def ensure_endpoints(self) -> dict[str, Any]:
-        """Ask the OAuth client row to fill endpoints from OIDC metadata discovery."""
+        """Ask the OAuth client row to fill blank endpoints from OIDC metadata discovery.
 
-        discover = getattr(self.oauth_client, "discover_endpoints", None)
-        if not callable(discover):
-            return {}
-        return dict(discover())
+        A no-op when the row carries no ``discovery_url`` (its endpoints are then
+        configured explicitly). The document is cached per URL, and the filled
+        endpoints serve this protocol's request in memory; the operator's
+        discovery action persists them (``discover_endpoints(persist=True)``).
+        """
+
+        return dict(self.oauth_client.discover_endpoints())
 
     def exchange_grant(self, grant_type: str, **grant: Any) -> dict[str, Any]:
         """Exchange a standard or provider-specific grant for validated material.
@@ -216,9 +233,7 @@ class OAuthClientProtocol:
 
         token_endpoint = self._endpoint("token_endpoint")
         self._token_response_claims = {}
-        extra = self.oauth_client.provider.token_params(
-            grant_type, _param_values(self.oauth_client, "token_param_values"),
-        )
+        extra = self.oauth_client.provider.token_params(grant_type, self.oauth_client.token_param_values)
         if self._uses_json_token_request():
             return self._json_token_request(token_endpoint, grant_type, grant, extra)
         return self._authlib_token_request(token_endpoint, grant_type, grant, extra)
@@ -226,7 +241,7 @@ class OAuthClientProtocol:
     def _uses_json_token_request(self) -> bool:
         """Return whether this row uses the non-standard JSON token shim."""
 
-        return getattr(self.oauth_client, "token_request_format_value", "form") == "json"
+        return self.oauth_client.token_request_format_value == "json"
 
     def _authlib_token_request(
         self,
@@ -261,7 +276,7 @@ class OAuthClientProtocol:
             # Authlib parses the token body as JSON before checking the status, so a
             # non-JSON 4xx (the documented Anthropic/CDN 403/429 block page) surfaces as
             # a ValueError, and a transport failure as httpx2.HTTPError — both map to the
-            # stable OAuthFlowError seam, like the JSON-shim and _get_json paths.
+            # stable OAuthFlowError seam, like the JSON-shim and discovery paths.
             self._log_token_failure(f"transport_error:{type(exc).__name__}", None)
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if isinstance(exc, httpx2.TransportError) else 400) from exc
         finally:
@@ -281,7 +296,7 @@ class OAuthClientProtocol:
 
         body: dict[str, Any] = {
             **extra,
-            "client_id": str(getattr(self.oauth_client, "client_id", "")),
+            "client_id": self.oauth_client.client_id,
             "grant_type": grant_type,
             **grant,
         }
@@ -323,7 +338,7 @@ class OAuthClientProtocol:
 
         secret = self._client_secret()
         return OAuth2Client(
-            client_id=str(getattr(self.oauth_client, "client_id", "")),
+            client_id=self.oauth_client.client_id,
             client_secret=secret or None,
             token_endpoint_auth_method="client_secret_post" if secret else "none",
             headers=dict(OUTBOUND_HEADERS),
@@ -371,51 +386,59 @@ class OAuthClientProtocol:
         """Log bounded token-request metadata without provider-controlled values."""
 
         del body
-        client_label = str(getattr(self.oauth_client, "slug", "") or "unknown")
+        client_label = self.oauth_client.slug or "unknown"
         logger.warning(
             "OAuth token request failed for %s: status=%s",
             client_label,
             status,
         )
 
-    def _authorize_query(
+    def _grant_uri(
         self,
         *,
         state: str,
         redirect_uri: str,
         scopes: Iterable[str],
         code_challenge: str | None,
-    ) -> dict[str, str]:
-        """Return the shared authorize query parameters (OIDC adds ``nonce``/``openid``).
+        **extras: str,
+    ) -> str:
+        """Build the authorization URL with Authlib's ``prepare_grant_uri`` (OIDC adds ``nonce``).
 
-        A flow needs PKCE or a client secret: with neither, nothing would
-        authenticate the code exchange, so a misconfigured confidential client
-        is refused before the provider redirect.
+        Provider authorize parameters and the flow's ``extras`` ride as extra
+        query parameters and never replace the grant's own arguments; an empty
+        scope is omitted. A flow needs PKCE or a client secret: with neither,
+        nothing would authenticate the code exchange, so a misconfigured
+        confidential client is refused before the provider redirect. With PKCE
+        the secret is never read.
         """
 
-        challenge = code_challenge if getattr(self.oauth_client, "supports_pkce", False) else None
+        challenge = code_challenge if self.oauth_client.supports_pkce else None
         if not challenge and not self._client_secret():
             raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client needs PKCE or a client secret.")
-        query: dict[str, str] = {
-            **_string_param_values(self.oauth_client, "authorize_param_values"),
-            "client_id": str(getattr(self.oauth_client, "client_id", "")),
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(scopes),
-            "state": state,
+        params = {
+            key: value
+            for key, value in self.oauth_client.authorize_param_values.items()
+            if key not in _GRANT_URI_ARGUMENTS
         }
         if challenge:
-            query["code_challenge"] = challenge
-            query["code_challenge_method"] = "S256"
-        return query
+            params.update(code_challenge=challenge, code_challenge_method="S256")
+        params.update(extras)
+        return prepare_grant_uri(
+            self._endpoint("authorize_endpoint"),
+            str(self.oauth_client.client_id),
+            "code",
+            redirect_uri,
+            list(scopes),
+            state,
+            **params,
+        )
 
-    def _endpoint(self, field: str) -> str:
-        """Return a configured endpoint value, or raise when the row omits it."""
+    def _endpoint(self, field: Literal["authorize_endpoint", "token_endpoint"]) -> str:
+        """Return one endpoint field, discovering blank endpoints first, or raise when still blank."""
 
-        value = str(getattr(self.oauth_client, field, "") or "")
-        if not value:
+        if not getattr(self.oauth_client, field):
             self.ensure_endpoints()
-            value = str(getattr(self.oauth_client, field, "") or "")
+        value = str(getattr(self.oauth_client, field))
         if not value:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
         return value
@@ -439,24 +462,6 @@ def _outbound_kwargs(transport: httpx2.BaseTransport | None) -> dict[str, Any]:
     }
 
 
-def _param_values(oauth_client: object, property_name: str) -> dict[str, Any]:
-    """Return provider-specific JSON/form params without changing scalar types."""
-
-    value = getattr(oauth_client, property_name, {})
-    if isinstance(value, Mapping):
-        return {str(key): item for key, item in value.items() if item is not None}
-    return {}
-
-
-def _string_param_values(oauth_client: object, property_name: str) -> dict[str, str]:
-    """Return provider-specific URL parameters as strings."""
-
-    value = getattr(oauth_client, property_name, {})
-    if isinstance(value, Mapping):
-        return {str(key): str(item) for key, item in value.items() if item is not None}
-    return {}
-
-
 def with_query(url: str, query: Mapping[str, str]) -> str:
     """Return ``url`` with ``query`` appended or merged."""
 
@@ -464,29 +469,6 @@ def with_query(url: str, query: Mapping[str, str]) -> str:
     existing = parse.parse_qsl(parts.query, keep_blank_values=True)
     encoded = parse.urlencode([*(pair for pair in existing if pair[0] not in query), *query.items()])
     return parse.urlunsplit((parts.scheme, parts.netloc, parts.path, encoded, parts.fragment))
-
-
-def _get_json(
-    url: str,
-    *,
-    headers: Mapping[str, str] | None = None,
-    error_code: str,
-    _transport: httpx2.BaseTransport | None = None,
-) -> dict[str, Any]:
-    """GET a JSON document over httpx2 with the shared outbound headers."""
-
-    request_headers = {**OUTBOUND_HEADERS, **dict(headers or {})}
-    try:
-        with httpx2.Client(**_outbound_kwargs(_transport)) as client:
-            response = client.get(url, headers=request_headers)
-            response.raise_for_status()
-            data = response.json()
-    except (RequestNotSentError, httpx2.HTTPError, ValueError) as exc:
-        status = 503 if isinstance(exc, (RequestNotSentError, httpx2.TransportError)) else 400
-        raise OAuthFlowError(error_code, status) from exc
-    if not isinstance(data, dict):
-        raise OAuthFlowError(error_code, 400)
-    return data
 
 
 def _token_material(response: Mapping[str, Any]) -> dict[str, Any]:

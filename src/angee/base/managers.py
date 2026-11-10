@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from django.db import models
 from rebac.managers import RebacManager
 
@@ -15,6 +17,11 @@ class AngeeManager[T: models.Model](_AngeeManagerBase[T]):
 
     model: type[T]
     _hints: dict[str, models.Model]
+
+    def admit_view_as(self, actor: Any, public_id: str) -> T | None:
+        """Refuse a preview identity unless its manager declares an admission policy."""
+
+        return None
 
 
 _AngeeUnscopedManagerBase = models.Manager.from_queryset(AngeeUnscopedQuerySet)

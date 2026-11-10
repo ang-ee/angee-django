@@ -22,7 +22,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count, Prefetch
-from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
 from rebac import PermissionDenied, check_new, generic_target, system_context, to_subject_ref
@@ -57,6 +56,7 @@ from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.related_counts import RelatedCount
+from angee.graphql.schema import AngeeSchema
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
@@ -71,9 +71,7 @@ from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationManager
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
-from angee.integrate.oauth.registrations import OAuthRegistrationExtension
-from angee.integrate.queue import queue_bridge_sync
-from angee.integrate.registry import models_with
+from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
@@ -547,7 +545,9 @@ def _console_credentials(info: strawberry.Info) -> Any:
 def _exposed_model_labels(info: strawberry.Info) -> set[str]:
     """Return model resources carried by this exact composed GraphQL schema."""
 
-    return {resource.model_label for resource in getattr(info.schema, "angee_resources", ())}
+    if not isinstance(info.schema, AngeeSchema):
+        return set()
+    return {resource.model_label for resource in info.schema.angee_resources}
 
 
 _OAUTH_CLIENT_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(
@@ -812,17 +812,15 @@ class ConnectionMutation:
             id,
             reason="integrate.graphql.discover_oauth_endpoints",
         ) as oauth_client:
-            if not str(getattr(oauth_client, "discovery_url", "") or ""):
-                return ActionResult(ok=False, message="Set an OIDC metadata discovery URL first.")
             try:
-                discovery = oauth_client.discover_endpoints()
+                discovery = oauth_client.discover_endpoints(persist=True)
+            except ValidationError as error:
+                return ActionResult(ok=False, message=exception_text(error))
             except OAuthFlowError as error:
                 return ActionResult(ok=False, message=error.public_message)
             except Exception:  # noqa: BLE001 — provider diagnostics stay outside the action payload.
                 return ActionResult(ok=False, message="OIDC metadata discovery failed.")
-            oauth_client.save()
-        issuer = discovery.get("issuer") if isinstance(discovery, dict) else None
-        return ActionResult(ok=True, message=f"Discovered endpoints for {issuer or 'provider'}.")
+        return ActionResult(ok=True, message=f"Discovered endpoints for {discovery.get('issuer') or 'provider'}.")
 
     @strawberry.mutation
     def connect_account_complete(
@@ -1062,13 +1060,18 @@ class IntegrationConnectionMixin:
         extensions=[PermissionsExtension(("write",))],
         prefetch_related=[_connection_credential],
         annotate={
-            **{name: partial(_oauth_projection, name) for name in ("_connection_vendor_slug", "_connection_impl_key")},
+            name: partial(_oauth_projection, name) for name in ("_connection_vendor_branding", "_connection_impl_key")
         },
     )
     def can_connect(self) -> bool:
         """Project the model's owner-scoped OAuth Connect admission."""
 
-        return bool(cast(Any, self).can_connect(write_access="write" in held_permissions(cast(Any, self), ("write",))))
+        return bool(
+            cast(Any, self).can_connect(
+                write_access="write" in held_permissions(cast(Any, self), ("write",)),
+                ready_slugs=operation_registration_slugs(),
+            )
+        )
 
     @strawberry_django.field(
         only=[
@@ -1147,13 +1150,13 @@ class IntegrationOAuthMixin:
     @strawberry_django.field(
         only=["vendor_id", "concrete_type_id"],
         annotate={
-            name: partial(_oauth_projection, name) for name in ("_connection_vendor_slug", "_connection_impl_key")
+            name: partial(_oauth_projection, name) for name in ("_connection_vendor_branding", "_connection_impl_key")
         },
     )
     def is_oauth_connectable(self) -> bool:
         """Read public registration readiness without resolving protected relations."""
 
-        return bool(cast(Any, self).is_oauth_connectable())
+        return bool(cast(Any, self).is_oauth_connectable(ready_slugs=operation_registration_slugs()))
 
 
 @strawberry.type
@@ -1167,7 +1170,10 @@ class IntegrationLabelMixin(IntegrationConnectionMixin):
     type without adding a GraphQL interface to the SDL.
     """
 
-    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"], prefetch_related=["vendor"])
+    @strawberry_django.field(
+        only=["display_name", "vendor_id", "lifecycle"],
+        annotate={"_connection_vendor_branding": partial(_oauth_projection, "_connection_vendor_branding")},
+    )
     def display_name(self) -> str:
         """Return the operator label, falling back to the vendor-derived one."""
 
@@ -1568,10 +1574,7 @@ def _authorized_failure(
         if linked.stream_id != epoch.pk:
             raise ValidationError("The failure link does not belong to the selected stream.")
         owner = linked
-    for failure in owner.failures():
-        if failure.slot == slot:
-            return failure
-    raise ValidationError("The retained sync failure no longer exists.")
+    return owner.failure_at(slot)
 
 
 @strawberry.type
@@ -1843,13 +1846,8 @@ class IntegrationActionMutation:
     def sync_integration(self, id: PublicID) -> ActionResult:
         """Queue every bridge of one integration for sync now."""
 
-        queued = 0
         with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
-            now = timezone.now()
-            for model in models_with(base=Bridge):
-                for bridge in model._default_manager.of_concrete_type().filter(pk=integration.pk).order_by("pk"):
-                    if queue_bridge_sync(bridge, now=now):
-                        queued += 1
+            queued = integration.request_sync()
         if queued == 0:
             return ActionResult(ok=True, message="No bridges need a new sync.")
         return ActionResult(ok=True, message=f"Queued {queued} bridge sync(s).")

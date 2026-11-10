@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
-from django.db import connections, transaction
+from django.db import transaction
 from django.http import HttpRequest, HttpResponse
 from rebac import actor_context
 from rebac.actors import is_sudo
@@ -18,13 +17,14 @@ from strawberry.extensions import SchemaExtension
 from strawberry.types.graphql import OperationType
 
 from angee.base.exceptions import DomainError
+from angee.base.managers import AngeeManager
 from angee.base.models.identity import public_id_of
 
 if TYPE_CHECKING:
     from django.contrib.auth.models import _User
 
     class _ViewAsRequest(HttpRequest):
-        view_as: ViewAs
+        view_as: ViewAs | None = None
 
 logger = logging.getLogger(__name__)
 _DENIED = "View-as is not permitted."
@@ -40,9 +40,9 @@ class ViewAsReadOnly(DomainError):
 class ViewAs:
     """Typed ``request.view_as`` carrier shared with identity resolvers.
 
-    The composed user manager may implement ``admit_view_as(actor, public_id)``:
-    return an authorized target with no pinned actor or elevation, or ``None``.
-    IAM owns that admission policy. Without the hook previews are refused.
+    The composed user manager's ``admit_view_as(actor, public_id)`` returns an
+    authorized target with no pinned actor or elevation, or ``None``. IAM owns
+    admission; the base manager's default refuses previews.
     This adapter owns request binding and rollback only.
     """
 
@@ -50,16 +50,23 @@ class ViewAs:
     target: _User
     operations: list[str] = field(default_factory=list)
 
+    @staticmethod
+    def bound_to(request: HttpRequest | None) -> ViewAs | None:
+        """Read this transport's optional request binding, including outside dispatch."""
+
+        return request.__dict__.get("view_as") if request is not None else None
+
     @classmethod
     def from_request(cls, request: HttpRequest) -> ViewAs | None:
         target_id = request.headers.get("X-Angee-View-As")
         if target_id is None:
             return None
+        # Django AuthenticationMiddleware supplies user; bare HttpRequest does not.
         real_user = getattr(request, "user", None)
         if real_user is None or not real_user.is_authenticated or is_sudo():
             raise PermissionDenied(_DENIED)
-        admit = getattr(get_user_model()._default_manager, "admit_view_as", None)
-        target = admit(real_user, target_id) if callable(admit) else None
+        manager = get_user_model()._default_manager
+        target = manager.admit_view_as(real_user, target_id) if isinstance(manager, AngeeManager) else None
         if target is None:
             raise PermissionDenied(_DENIED)
         return cls(real_user=real_user, target=target)
@@ -77,15 +84,11 @@ class ViewAs:
         request.view_as = self
         request.user = self.target
         try:
-            with actor_context(self.target), ExitStack() as transactions:
-                aliases = sorted(connections)
-                for alias in aliases:
-                    transactions.enter_context(transaction.atomic(using=alias))
+            with actor_context(self.target), transaction.atomic():
                 try:
                     return view(request)
                 finally:
-                    for alias in aliases:
-                        transaction.set_rollback(True, using=alias)
+                    transaction.set_rollback(True)
         finally:
             request.user = self.real_user
             del request.view_as
@@ -101,8 +104,9 @@ class ViewAsReadOnlyExtension(SchemaExtension):
     def on_parse(self) -> Iterator[None]:
         yield
         context = self.execution_context.context
+        # Strawberry permits mapping contexts and custom objects carrying request.
         request = context.get("request") if isinstance(context, Mapping) else getattr(context, "request", None)
-        preview = getattr(request, "view_as", None)
+        preview = ViewAs.bound_to(request)
         if preview is None or self.execution_context.graphql_document is None:
             return
         try:

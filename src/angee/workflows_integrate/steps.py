@@ -15,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.integrate.impl import AdapterContractError, BridgeImpl
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge
 from angee.integrate.net import AddressResolutionError
 from angee.integrate.states import StreamPhase, SyncFailureKind
@@ -193,10 +192,7 @@ class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
     def ask(self, ctx: StepContext) -> Settlement:
         streams = ctx.input.current_streams(_bridge_subject(ctx))
         conflicts = [
-            row
-            for stream in streams
-            for row in stream.sync_failures(open_only=True)
-            if row.kind == SyncFailureKind.CONFLICT
+            row for stream in streams for row in stream.sync_failures(open_only=True, kind=SyncFailureKind.CONFLICT)
         ]
         # Decisions reference permission-bearing owners, never a JSON state slot.
         records = tuple(
@@ -230,9 +226,7 @@ class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
 
     def continue_with(self, ctx: StepContext, decision: Any, outcome: str) -> Settlement:
         streams = ctx.input.current_streams(_bridge_subject(ctx))
-        if any(
-            row.kind == SyncFailureKind.CONFLICT for stream in streams for row in stream.sync_failures(open_only=True)
-        ):
+        if any(stream.sync_failures(open_only=True, kind=SyncFailureKind.CONFLICT) for stream in streams):
             raise ValidationError({"conflicts": "Resolve the sync conflicts before retrying this step."})
         return ctx.done(StreamStageOutput.for_streams(streams, counts={"streams": len(streams)}))
 
@@ -269,7 +263,7 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
     """
     try:
         with closing(bridge.capability_impl) as adapter:
-            lock = bridge_advisory_lock(bridge) if adapter.sync_parallelism == 1 else nullcontext(True)
+            lock = bridge.sync_lock() if adapter.sync_parallelism == 1 else nullcontext(True)
             with lock as acquired:
                 if not acquired:
                     yield ctx.wait(until=ctx.now + timedelta(seconds=1), state=ctx.state)

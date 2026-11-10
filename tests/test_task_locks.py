@@ -1,8 +1,10 @@
-"""Tests for the jobs app's task lock abstraction."""
+"""Tests for the base advisory lock owner."""
 
 from __future__ import annotations
 
 import multiprocessing
+import threading
+import time
 import uuid
 
 import psycopg
@@ -10,8 +12,8 @@ import pytest
 from django.db import connection
 from psycopg import sql
 
-from angee.jobs import locks
-from angee.jobs.locks import LocalLockBackend, LockKey, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
+from angee.base import locks
+from angee.base.locks import LocalLockBackend, LockKey, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
 from tests.task_lock_process import hold_postgres_advisory_lock
 
 
@@ -50,6 +52,54 @@ def test_local_lock_backend_excludes_same_key() -> None:
     assert second is None
     first.release()
     assert backend.try_acquire(key) is not None
+
+
+def test_local_blocking_acquire_waits_for_another_threads_release() -> None:
+    """A blocking acquire waits for the holder and then owns the key."""
+
+    backend = LocalLockBackend()
+    key = record_lock_key("integrate.Credential", 7, "refresh")
+    holder = backend.try_acquire(key)
+    assert holder is not None
+    acquired = threading.Event()
+    handles = []
+
+    def wait_for_key() -> None:
+        handles.append(backend.acquire(key))
+        acquired.set()
+
+    waiter = threading.Thread(target=wait_for_key)
+    waiter.start()
+    assert not acquired.wait(0.1)
+    holder.release()
+    assert acquired.wait(5)
+    waiter.join(5)
+    assert backend.is_held(key) is True
+    handles[0].release()
+    assert backend.is_held(key) is False
+
+
+def test_local_blocking_acquire_refuses_the_holders_own_key() -> None:
+    """Waiting on a key this thread holds could never end, so it fails fast."""
+
+    backend = LocalLockBackend()
+    key = record_lock_key("integrate.Credential", 8, "refresh")
+    holder = backend.try_acquire(key)
+    assert holder is not None
+    with pytest.raises(RuntimeError, match="not reentrant"):
+        backend.acquire(key)
+    holder.release()
+
+
+@pytest.mark.django_db
+def test_task_lock_blocking_acquires_a_free_key() -> None:
+    """``blocking=True`` yields an owned key and releases it on exit."""
+
+    key = record_lock_key("integrate.Credential", 9, "refresh")
+    with task_lock(key, blocking=True) as acquired:
+        assert acquired is True
+        assert task_lock_is_held(key) is True
+    assert task_lock_is_held(key) is False
 
 
 def test_postgres_advisory_pair_uses_positive_int4_values() -> None:
@@ -145,6 +195,62 @@ def test_postgres_advisory_probe_ignores_same_pair_in_other_database() -> None:
             )
             if cursor.fetchone() == (marker,):
                 cursor.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(database_name)))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_postgres_blocking_acquire_waits_for_another_session() -> None:
+    """A second consumer waits in ``pg_advisory_lock`` until the holder releases."""
+
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL advisory lock behavior")
+    backend = locks.PostgresAdvisoryLockBackend()
+    key = record_lock_key("integrate.Credential", uuid.uuid4().hex, "refresh")
+    context = multiprocessing.get_context("spawn")
+    parent_pipe, child_pipe = context.Pipe()
+    process = context.Process(
+        target=hold_postgres_advisory_lock,
+        args=(_postgres_process_params(), _advisory_pair(key.name), True, child_pipe),
+    )
+    process.start()
+    try:
+        assert parent_pipe.poll(10), "spawned lock holder did not report readiness"
+        assert parent_pipe.recv() == "held"
+        assert backend.try_acquire(key) is None
+        release = threading.Timer(0.5, parent_pipe.send, args=("release",))
+        started = time.monotonic()
+        release.start()
+        handle = backend.acquire(key)
+        assert time.monotonic() - started >= 0.4
+        assert backend.is_held(key) is True
+        handle.release()
+        assert backend.is_held(key) is False
+    finally:
+        process.join(timeout=10)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+        parent_pipe.close()
+        child_pipe.close()
+        assert process.exitcode == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_postgres_blocking_acquire_refuses_this_sessions_own_key() -> None:
+    """A session lock would nest silently, so a wait on this session's own key fails fast."""
+
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL advisory lock behavior")
+    backend = locks.PostgresAdvisoryLockBackend()
+    key = record_lock_key("integrate.Credential", uuid.uuid4().hex, "refresh")
+    holder = backend.try_acquire(key)
+    assert holder is not None
+    try:
+        with pytest.raises(RuntimeError, match="not reentrant"):
+            backend.acquire(key)
+    finally:
+        holder.release()
+    # The refusal took no nested session lock: one release frees the key.
+    assert backend.is_held(key) is False
 
 
 @pytest.mark.django_db

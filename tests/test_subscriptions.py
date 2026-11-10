@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -36,6 +35,7 @@ from rebac.roles import grant as grant_role
 from rebac.roles import revoke as revoke_role
 from strawberry_django.utils.requests import get_request
 
+from angee.base.signals import publish_change
 from angee.graphql import access, publishing, subscriptions
 from angee.graphql.actions import session_user
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
@@ -43,6 +43,7 @@ from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
+from angee.graphql.testing import capture_broadcasts
 from angee.iam import schema as iam_schema
 from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import UserAccountAction
@@ -391,7 +392,7 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
 
 
 def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
-    """``publish_change`` keeps opted-out rows off the subscription transport.
+    """A declared feed keeps opted-out rows off the subscription transport.
 
     The emission mirror of a read scope that hides rows: a model isolates some rows
     (record chatter) to a record-scoped surface, so their changes never reach the
@@ -399,35 +400,34 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     holds for deletes too. A row without the hook broadcasts by default.
     """
 
-    sent: list[dict[str, object]] = []
-    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
-    # Run the on_commit callback inline so the (non-)broadcast is observable now.
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    stub_payload = ChangePayload(model="tests.Row", id="1", action="update")
-    monkeypatch.setattr(
-        publishing.ChangePayload,
-        "from_instance",
-        classmethod(lambda cls, instance, **kwargs: replace(stub_payload, broadcasts=kwargs["broadcasts"])),
-    )
+    class OptOutGroup(ChangeBroadcastMixin, Group):
+        """Feed row carrying only the broadcast opt-out decision."""
 
-    class Row(ChangeBroadcastMixin):
-        """Minimal instance carrying only the broadcast opt-out decision."""
-
-        def __init__(self, broadcasts: bool) -> None:
-            self._broadcasts = broadcasts
+        class Meta:
+            proxy = True
+            app_label = "auth"
 
         def broadcasts_changes(self) -> bool:
-            return self._broadcasts
+            return self.name != "hidden"
 
-    publishing.publish_change(Row(broadcasts=False), action="update", update_fields=None)
-    assert sent == []
+    # Run the on_commit callback inline so the (non-)broadcast is observable now.
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
+    publishing.connect_publishers(OptOutGroup)
+    publishing.connect_publishers(Group)
+    try:
+        with capture_broadcasts() as sent:
+            publish_change(OptOutGroup(id=1, name="hidden"), action="update", update_fields=None)
+            assert sent == []
 
-    publishing.publish_change(Row(broadcasts=True), action="delete", update_fields=None)
-    assert sent == [stub_payload.as_message()]
+            publish_change(OptOutGroup(id=2, name="shown"), action="delete", update_fields=None)
+            assert [(event["id"], event["action"]) for event in sent] == [("2", "delete")]
 
-    # A plain model with no hook keeps the default broadcast behavior.
-    publishing.publish_change(object(), action="create", update_fields=None)
-    assert sent == [stub_payload.as_message(), stub_payload.as_message()]
+            # A feed row with no hook keeps the default broadcast behavior.
+            publish_change(Group(id=3, name="plain"), action="create", update_fields=None)
+            assert [(event["id"], event["action"]) for event in sent] == [("2", "delete"), ("3", "create")]
+    finally:
+        publishing.disconnect_publishers(OptOutGroup)
+        publishing.disconnect_publishers(Group)
 
 
 @pytest.mark.parametrize(

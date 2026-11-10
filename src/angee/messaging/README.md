@@ -47,8 +47,9 @@ uncertain and never trigger a blind retry. A missing
 permanently. Lock contention defers work without consuming an attempt.
 
 `Message.deliver()` composes `queue_message_delivery`; the task composes
-`Message.objects.claim_delivery` and `record_delivery`. Enqueue sets a bounded
-delivery lease and publishes through the jobs owner's on-commit hook. The periodic
+`Message.objects.claim_delivery` and `record_delivery`. `Message.reserve_delivery`
+locks the row, decides eligibility and sets a bounded delivery lease; the dispatch
+publishes the reserved identifiers through the jobs owner's on-commit hook. The periodic
 `release_held_messages` task releases due drafts/retries and recovers expired
 unclaimed dispatch leases, with SQL eligibility, skip-locked claims and a savepoint per row. Retry
 settlement retains the enqueue-owned lease through the next scheduled attempt;

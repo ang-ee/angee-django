@@ -56,7 +56,7 @@ class RecordRef:
         )
 
 
-def record_view_refs(*records: RecordRef, using: str | None = None) -> tuple[RecordRef, ...]:
+def record_view_refs(*records: RecordRef) -> tuple[RecordRef, ...]:
     """Include existing inherited views of canonical records, querying ids in batches."""
 
     result = list(dict.fromkeys(records))
@@ -70,7 +70,7 @@ def record_view_refs(*records: RecordRef, using: str | None = None) -> tuple[Rec
     for record in result:
         children(apps.get_model(record.model_label), {record.object_id})
     for child, ids in grouped.items():
-        present = child._base_manager.using(using).filter(pk__in=ids).values_list("pk", flat=True)
+        present = child._base_manager.filter(pk__in=ids).values_list("pk", flat=True)
         result.extend(RecordRef.from_model(child, pk) for pk in present)
     return tuple(dict.fromkeys(result))
 
@@ -120,10 +120,7 @@ def generic_pointer_target(record: models.Model) -> tuple[ContentType, Any]:
     ungated one; see :func:`generic_pointer_model`.
     """
 
-    content_type = ContentType.objects.db_manager(record._state.db, hints={"instance": record}).get_for_model(
-        generic_pointer_model(type(record))
-    )
-    return content_type, record.pk
+    return ContentType.objects.get_for_model(generic_pointer_model(type(record))), record.pk
 
 
 def _pk_ancestor_chain(model: type[models.Model]) -> Iterator[type[models.Model]]:

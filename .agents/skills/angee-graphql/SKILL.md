@@ -83,7 +83,7 @@ Run `angee-design` first for the owner map; `angee-models` and
    )
    ```
 
-   If insert and update differ → `insertable=`/`updatable=` (tags `_TAG_RESOURCE`). If a column is server-owned → leave it out of the write lists. If reads need a scope → `get_queryset=lambda info: Tag.objects.canonical()`. If a donor contributes columns → `declared_hasura_resource_fields(Model, "hasura_readable_fields")` (tags `_TAG_EXTENSION_READ_FIELDS`). If the rows are not a model → `hasura_pydantic_resource(RowModel, name=…, model_label=…, filterable=…, sortable=…, rows=…)` (iam `_ROLE_RESOURCE`).
+   If insert and update differ → `insertable=`/`updatable=` (tags `_TAG_RESOURCE`). If a column is server-owned → leave it out of the write lists. If reads need a scope → `get_queryset=lambda info: Tag.objects.canonical()`. If a donor contributes columns → collect each explicitly declared query/write axis with `declared_hasura_resource_fields` (tags `_TAG_EXTENSION_FILTER_FIELDS`); follow [Resource extension axes](../../../docs/backend/guidelines.md#rules). If the rows are not a model → `hasura_pydantic_resource(RowModel, name=…, model_label=…, filterable=…, sortable=…, rows=…)` (iam `_ROLE_RESOURCE`).
    **Owner rule:** the resource is the one declaration of query and write capability; metadata, forms and MCP read the finalized result and never re-list fields ([Rules](../../../docs/backend/guidelines.md#rules) "Declare resource query intent once on the resource", [GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **Server-owned fields are excluded from the write surface**).
 
 3. **Author non-CRUD roots as thin dispatchers.** A resolver's budget is input, context, dispatch, result.
@@ -133,7 +133,7 @@ Run `angee-design` first for the owner map; `angee-models` and
    ```
 
    If the child exists only as part of its parent and saves with it → lines; an associated record stays its own resource. A child whose state locks fields composes `RowLockMixin` and projects `locked_fields` on its node. A writable child relation needs `public_id_fields`.
-   **Owner rule:** lines are the user's writes elevated by the parent's authorization; the child's own guards still run ([GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **Lines are owned parts, written as the user**).
+   **Owner rule:** lines are the user's writes elevated by the parent's authorization (`replace_lines` in `src/angee/base/models/base.py`); the child's own guards still run ([GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **Lines are owned parts, written as the user**).
 
 6. **Stream changes from the schema declaration only.**
 

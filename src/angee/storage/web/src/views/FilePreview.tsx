@@ -26,7 +26,8 @@ export function FilePreview({ file, page }: { file: StorageFile; page?: number |
   const t = useStorageT();
   const fallback = <EmptyState icon="file" title={file.title || file.filename} description={t("preview.unsupported")} />;
   if (!file.url) return fallback;
-  return <PreviewPane file={{ url: file.url, name: file.filename, mime: file.mime_type?.mime_type, size: file.size_bytes }} page={page}
+  return <PreviewPane file={{ identity: { id: file.id, version: file.content_hash },
+    url: file.url, name: file.filename, mime: file.mime_type?.mime_type, size: file.size_bytes }} page={page}
     fallback={fallback} />;
 }
 

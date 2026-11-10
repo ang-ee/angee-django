@@ -11,6 +11,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.core.cache import DEFAULT_CACHE_ALIAS, cache, caches
@@ -20,7 +21,9 @@ from django.utils import timezone
 
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
 
-_DEFAULT_STATE_TTL_SECONDS = 600
+if TYPE_CHECKING:
+    from angee.integrate.models import OAuthClient
+
 _CACHE_PREFIX = "angee.integrate.oauth.state:"
 
 
@@ -53,7 +56,7 @@ class StateRecord:
 
 
 def issue(
-    oauth_client: object,
+    oauth_client: OAuthClient,
     redirect_uri: str,
     *,
     user_id: str | None = None,
@@ -66,11 +69,11 @@ def issue(
     _check_state_cache()
     state_token = secrets.token_urlsafe(32)
     record = StateRecord(
-        oauth_client_id=str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", ""))),
+        oauth_client_id=str(oauth_client.sqid),
         redirect_uri=redirect_uri,
         user_id=user_id,
         nonce=secrets.token_urlsafe(32),
-        code_verifier=secrets.token_urlsafe(64) if getattr(oauth_client, "supports_pkce", False) else None,
+        code_verifier=secrets.token_urlsafe(64) if oauth_client.supports_pkce else None,
         created_at=timezone.now(),
         next_path=next_path,
         flow=flow,
@@ -101,13 +104,13 @@ def _cache_key(state_token: str) -> str:
 def _state_ttl_seconds() -> int:
     """Return the configured lifetime for one redirect state record."""
 
-    return int(getattr(settings, "ANGEE_INTEGRATE_OAUTH_STATE_TTL", _DEFAULT_STATE_TTL_SECONDS))
+    return int(settings.ANGEE_INTEGRATE_OAUTH_STATE_TTL)
 
 
 def _check_state_cache() -> None:
     """Raise when OAuth state is backed by a per-process production cache."""
 
-    if getattr(settings, "DEBUG", False) or getattr(settings, "ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE", False):
+    if settings.DEBUG or settings.ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE:
         return
     if isinstance(caches[DEFAULT_CACHE_ALIAS], LocMemCache):
         raise ImproperlyConfigured("OAuth redirect state requires a shared cache; LocMemCache is per-process.")

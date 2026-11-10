@@ -78,10 +78,33 @@ def test_oidc_login_establishes_person_only_for_explicitly_verified_email(compos
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("factory", ["create_user", "create_superuser", "create_person_as_system"])
+@pytest.mark.parametrize("factory", ["create_user", "create_superuser"])
 def test_user_factory_preserves_explicit_manager_database(factory: str) -> None:
+    """Django's native factories save on the manager's database, as ``createsuperuser --database`` requires."""
+
     users = User.objects.db_manager("unconfigured-explicit-database")
-    options = {"reason": "test.iam.database"} if factory == "create_person_as_system" else {}
     with pytest.raises(ConnectionDoesNotExist):
-        getattr(users, factory)("explicit-database", "explicit-db@example.com", **options)
+        getattr(users, factory)("explicit-database", "explicit-db@example.com")
     assert not User.system_queryset().filter(username="explicit-database").exists()
+
+
+@pytest.mark.django_db
+def test_seeded_users_are_passwordless_people_with_the_first_free_username() -> None:
+    """A trusted identity's proposed name is sanitized, bounded and suffixed past collisions."""
+
+    with system_context(reason="test.iam.seed"):
+        User.objects.create_user("ada-lovelace@example.com", "taken@example.com")
+        User.objects.create_user("ada-lovelace@example.com-1", "taken-1@example.com")
+        first = User.objects.create_user_from_seed(
+            "  ada lovelace@example.com ", fallback="oidc-user", email="ada@example.com", first_name="Ada",
+        )
+        empty = User.objects.create_user_from_seed("!!!", fallback="oidc-user")
+        long = User.objects.create_user_from_seed("x" * 400, fallback="oidc-user")
+        long_again = User.objects.create_user_from_seed("x" * 400, fallback="oidc-user")
+
+    assert first.username == "ada-lovelace@example.com-2"
+    assert (first.email, first.first_name, first.kind) == ("ada@example.com", "Ada", "person")
+    assert not first.has_usable_password()
+    assert not first.is_staff and not first.is_superuser
+    assert empty.username == "oidc-user"
+    assert len(long.username) == 140 and long_again.username == f"{'x' * 140}-1"

@@ -10,3 +10,10 @@ class PortfolioConfig(AppConfig):
 
     default = True
     name = "angee.portfolio"
+
+    def ready(self) -> None:
+        """Bind the report projection receivers once the models are populated."""
+
+        from angee.portfolio import signals
+
+        signals.connect()

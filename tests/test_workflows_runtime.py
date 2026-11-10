@@ -22,9 +22,9 @@ from rebac.roles import grant as grant_role
 from angee.base.models.locks import StaleRevisionError
 from angee.jobs.enqueue import celery_app
 from angee.workflows import managers as managers_module
-from angee.workflows import runner as runner_module
+from angee.workflows import models as models_module
 from angee.workflows.definition import Definition, DefinitionInvalid
-from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunManager
+from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Done, Fail, RetryPolicy, Step, StepMode, Superseded, Wait
@@ -1333,9 +1333,10 @@ def test_failure_text_strips_nul_and_respects_field_bounds(execution, register_s
     assert "\x00" not in retained_run.error + attempt.error + attempt.stacktrace
     expected = "Invalidfailure text" + "x" * 70000
     if phase == "body":
+        bound = StepAttempt._meta.get_field("error").max_length
         assert attempt.result == "failed"
-        assert attempt.error == expected[:StepAttempt._meta.get_field("error").max_length]
-        assert StepRun.system_queryset().get(pk=step_run.pk).output == {"error": attempt.error}
+        assert attempt.error == f"ValueError: {expected}"[:bound]
+        assert StepRun.system_queryset().get(pk=step_run.pk).output == {"error": expected[:bound]}
         assert len(attempt.stacktrace) == StepAttempt._meta.get_field("stacktrace").max_length
         assert retained_run.error == ""
     else:
@@ -1362,7 +1363,7 @@ def test_failure_recording_database_errors_preserve_successful_body(
     register_step(RetainedBody)
     monkeypatch.setattr(Definition, "result_for", result_error)
     if failure_write == "state":
-        monkeypatch.setattr(WorkflowRunManager, "_write_state", invalid_write)
+        monkeypatch.setattr(WorkflowRun, "_write_state", invalid_write)
     else:
         _fail_run_publication(monkeypatch, workflow)
     assert runner.execute(step_run.pk)
@@ -1423,14 +1424,14 @@ def test_soft_time_limit_during_settlement_belongs_to_open_attempt(execution, re
 
 def _fail_run_publication(monkeypatch, workflow):
     """Break the run owner's notification without breaking step settlement."""
-    original = managers_module.publish_change
+    original = models_module.publish_change
 
     def publish(instance, **kwargs):
         if isinstance(instance, WorkflowRun):
             Workflow.objects.filter(pk=workflow.pk).update(key=None)
         return original(instance, **kwargs)
 
-    monkeypatch.setattr(managers_module, "publish_change", publish)
+    monkeypatch.setattr(models_module, "publish_change", publish)
 
 
 def test_publication_database_error_keeps_successful_outcome(execution, register_step, monkeypatch, caplog):
@@ -1494,7 +1495,7 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
     workflow = load_workflow(document("entry"), key="expired_failure_recovery", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = StepRun.system_queryset().get(run=run)
-    original_settle, original_record_failure = StepRunQuerySet.settle, runner_module._record_failure
+    original_settle, original_isolate_failure = StepRunQuerySet.settle, models_module.isolate_failure
     settlements = []
 
     def reject_result(self, row, settlement):
@@ -1507,11 +1508,11 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
     def expire_before_failure_recovery(operation):
         if operation == "settlement failure":
             StepRun.objects.filter(pk=step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
-        with original_record_failure(operation):
+        with original_isolate_failure(operation):
             yield
 
     monkeypatch.setattr(StepRunQuerySet, "settle", reject_result)
-    monkeypatch.setattr(runner_module, "_record_failure", expire_before_failure_recovery)
+    monkeypatch.setattr(models_module, "isolate_failure", expire_before_failure_recovery)
 
     assert runner.execute(step_run.pk) is False
     assert settlements == ["done", "fail"]

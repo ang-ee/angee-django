@@ -9,6 +9,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import active_relationship_model
 
+from angee.base.testing.queries import statement_startswith
 from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import Link, MarkdownPage, Page, RecordBinding, Vault, create_platform_admin, create_user
@@ -271,7 +272,7 @@ def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables,
         _grant(source, "viewer", actor)
         with actor_context(actor), CaptureQueriesContext(connection) as captured:
             clone = Vault.objects.create_from(source, name=f"Copy {size}")
-        child_inserts = sum(query["sql"].startswith(child_insert) for query in captured.captured_queries)
+        child_inserts = sum(statement_startswith(query["sql"], child_insert) for query in captured.captured_queries)
         assert child_inserts == size
         counts.append(len(captured) - 3 * child_inserts)
         record_property(f"clone_queries_{size}", len(captured))

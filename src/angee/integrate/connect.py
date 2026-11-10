@@ -17,11 +17,9 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models
 from django.http import HttpRequest
-from rebac import system_context
 
-from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import (
@@ -81,41 +79,6 @@ class AccountConnectCompletion:
     claims: dict[str, Any]
     next_path: str
     integration_id: str = ""
-
-
-def oauth_client_slug_from_hint(hint: Any, *, owner_label: str, vendor_slug: str = "") -> str:
-    """Expand a backend's client hint using its vendor identity."""
-
-    raw_hint = str(hint or "").strip()
-    if not raw_hint:
-        raise OAuthFlowError(
-            "oauth_client_not_connectable",
-            400,
-            f"{owner_label} has no OAuth client.",
-        )
-    return raw_hint.format(vendor=vendor_slug)
-
-
-def enabled_oauth_client_from_hint(
-    hint: Any,
-    *,
-    owner_label: str,
-    reason: str,
-    vendor_slug: str = "",
-) -> Any:
-    """Resolve a complete enabled registration for an actual OAuth flow."""
-
-    slug = oauth_client_slug_from_hint(hint, owner_label=owner_label, vendor_slug=vendor_slug)
-    OAuthClient = cast(Any, apps.get_model("integrate", "OAuthClient"))
-    with system_context(reason=reason):
-        oauth_client = OAuthClient.objects.enabled_for_slug(slug)
-    if oauth_client is None:
-        raise OAuthFlowError(
-            "oauth_client_not_connectable",
-            400,
-            f"{owner_label} has no enabled OAuth client.",
-        )
-    return oauth_client
 
 
 def complete_account_connect(
@@ -183,36 +146,23 @@ def complete_external_account_link(
 ) -> AccountConnectCompletion:
     """Link an external account to ``user`` and store its OAuth credential."""
 
-    email = oauth_client.email_from_claims(claims) or ""
     Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
-    Credential = cast(Any, apps.get_model("integrate", "Credential"))
-    with system_context(reason=reason), transaction.atomic():
-        try:
-            account = Account.objects.link(
-                oauth_client,
-                external_id,
-                owner=user,
-                email=email,
-                identity_claims=claims,
-                display_name=oauth_client.display_name_from_claims(claims, email),
-                avatar_url=oauth_client.avatar_url_from_claims(claims),
-            )
-        except ValidationError as error:
-            if error.code == "account_already_linked":
-                raise OAuthFlowError("account_already_linked", 409) from error
-            raise
-        credential = Credential.objects.upsert_for_user(
-            user,
+    try:
+        account = Account.objects.connect_oauth(
             oauth_client,
-            CredentialKind.OAUTH,
-            tokens,
-            external_account=account,
+            user=user,
+            external_id=external_id,
+            tokens=tokens,
+            claims=claims,
+            reason=reason,
         )
-        account.credential = credential
-        account.save(update_fields=["credential", "updated_at"])
+    except ValidationError as error:
+        if error.code == "account_already_linked":
+            raise OAuthFlowError("account_already_linked", 409) from error
+        raise
     return AccountConnectCompletion(
         account=cast(models.Model, account),
-        credential=cast(models.Model, credential),
+        credential=cast(models.Model, account.credential),
         user=user,
         claims=claims,
         next_path=next_path or "/",
@@ -226,9 +176,7 @@ def _state_user(record: StateRecord) -> AbstractBaseUser:
     if not record.user_id:
         raise OAuthFlowError(INVALID_STATE, 400)
     user_model = get_user_model()
-    with system_context(reason="integrate.oauth.connect.user"):
-        try:
-            user = cast(Any, user_model.objects).get(pk=record.user_id)
-        except user_model.DoesNotExist as exc:
-            raise OAuthFlowError(INVALID_STATE, 400) from exc
-    return cast(AbstractBaseUser, user)
+    try:
+        return cast(AbstractBaseUser, cast(Any, user_model.objects).get_for_session(record.user_id))
+    except user_model.DoesNotExist as exc:
+        raise OAuthFlowError(INVALID_STATE, 400) from exc

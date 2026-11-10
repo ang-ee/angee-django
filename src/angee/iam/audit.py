@@ -22,7 +22,8 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from django.db.models import Prefetch
+from django.db.models import DEFERRED, Model, Prefetch
+from django.http import HttpRequest
 from strawberry_django.utils.requests import get_request
 
 from angee.graphql.ids import optional_public_id
@@ -33,6 +34,15 @@ def user_label_prefetch(relation: str, _info: strawberry.Info) -> Prefetch:
     """Bind native relation loading to IAM's scalar-label projection owner."""
 
     return Prefetch(relation, queryset=user_label_queryset(), to_attr=f"_iam_{relation}_label_source")
+
+
+def user_relation_label(row: Model, relation: str, *, request: HttpRequest | None) -> str | None:
+    """Read the same named label projection as user_label_prefetch, with a request-memo fallback."""
+
+    user = getattr(row, f"_iam_{relation}_label_source", DEFERRED)
+    if user is not DEFERRED:
+        return user_label(user) if user is not None else None
+    return user_display_label(getattr(row, f"{relation}_id"), request=request)
 
 
 @strawberry.type
@@ -54,10 +64,7 @@ class AuthoredRefMixin:
     def created_by_label(self, info: strawberry.Info) -> str | None:
         """Return the creator's display label - no user object exposed."""
 
-        if hasattr(self, "_iam_created_by_label_source"):
-            user = cast(Any, self)._iam_created_by_label_source
-            return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).created_by_id, request=get_request(info))
+        return user_relation_label(cast(Any, self), "created_by", request=get_request(info))
 
     @strawberry_django.field(only=["updated_by_id"])
     def updated_by(self) -> strawberry.ID | None:
@@ -69,10 +76,7 @@ class AuthoredRefMixin:
     def updated_by_label(self, info: strawberry.Info) -> str | None:
         """Return the last editor's display label - no user object exposed."""
 
-        if hasattr(self, "_iam_updated_by_label_source"):
-            user = cast(Any, self)._iam_updated_by_label_source
-            return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).updated_by_id, request=get_request(info))
+        return user_relation_label(cast(Any, self), "updated_by", request=get_request(info))
 
 
 @strawberry.type
@@ -99,7 +103,4 @@ class TrashedRefMixin:
     def trashed_by_label(self, info: strawberry.Info) -> str | None:
         """Return the display label of the user who moved the record to the trash."""
 
-        if hasattr(self, "_iam_trashed_by_label_source"):
-            user = cast(Any, self)._iam_trashed_by_label_source
-            return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).trashed_by_id, request=get_request(info))
+        return user_relation_label(cast(Any, self), "trashed_by", request=get_request(info))

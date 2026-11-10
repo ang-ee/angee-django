@@ -47,7 +47,7 @@ from slack_sdk.http_retry import (
 from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import CursorInvalid, StreamPage
 from angee.messaging.backends import ChannelBackend, MediaItem, ParsedMessage
-from angee.messaging_integrate_slack.identity import parsed_message, response_data
+from angee.messaging_integrate_slack.identity import current_message, parsed_message, response_data
 
 _CONVERSATION_TYPES = "public_channel,private_channel,mpim,im"
 _PAGE_LIMIT = 200
@@ -679,20 +679,12 @@ def _next_cursor(data: Mapping[str, Any]) -> str:
 def _files(raw: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
     """Return current-message file mappings; event unwrap is reserved for a future live seam."""
 
-    current = _current_message(raw)
+    current = current_message(raw)[0]
     return tuple(item for item in current.get("files") or () if isinstance(item, Mapping))
 
 
-def _current_message(raw: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Unwrap a future live-layer ``message_changed`` event; polling returns current messages."""
-
-    if str(raw.get("subtype") or "") == "message_changed" and isinstance(raw.get("message"), Mapping):
-        return raw["message"]
-    return raw
-
-
 def _timestamp(raw: Mapping[str, Any]) -> str:
-    return str(_current_message(raw).get("ts") or raw.get("ts") or "")
+    return str(current_message(raw)[0].get("ts") or raw.get("ts") or "")
 
 
 def _timestamp_text_key(timestamp: str) -> tuple[int, int, str]:
@@ -725,7 +717,7 @@ def _thread_parent(raw: Mapping[str, Any]) -> bool:
 
 
 def _reply_to(raw: Mapping[str, Any], parent_ts: str) -> bool:
-    return str(_current_message(raw).get("thread_ts") or "") == parent_ts
+    return str(current_message(raw)[0].get("thread_ts") or "") == parent_ts
 
 
 def _thread_watermark(raw: Any, parent_ts: str) -> str:

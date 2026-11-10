@@ -14,14 +14,14 @@ from rebac import actor_context
 
 from angee.base.models.identity import public_id_of
 from angee.base.pagination import KeysetOrder, keyset_signer
-from angee.graphql.publishing import mute_changes
-from angee.graphql.testing.documents import execute_schema, result_data
+from angee.base.signals import mute_changes
+from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.messaging.timeline import CommentKind
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from angee.timeline.kinds import timeline_kinds
 from angee.timeline.reading import Timeline
-from tests.conftest import addon_schema, create_platform_admin, vault_for
+from tests.conftest import addon_schema, create_platform_admin, create_user, vault_for
 
 KINDS = [
     "angee.provenance.timeline.timeline_kinds",
@@ -114,7 +114,7 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     with CaptureQueriesContext(connection) as queries:
         data = read_timeline(vault, owner)
     # The page, every kind's totals (read again by timeline_attention) and the
-    # page's children share one statement over the kinds with readable rows.
+    # page's children share one statement; structurally empty sources are omitted.
     statements = [query["sql"] for query in queries if '"timeline_source"' in query["sql"]]
     assert len(statements) == 1
     assert "UNION ALL" in statements[0] and "LIMIT 26" in statements[0]
@@ -139,6 +139,50 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     with CaptureQueriesContext(connection) as queries:
         assert Timeline(vault, owner).attention() == 1
     assert sum('"timeline_source"' in query["sql"] for query in queries) == 1
+
+
+# Reset sequences keep the bound identifiers, and so the SQL text, the same length in any run order.
+@pytest.mark.django_db(transaction=True, reset_sequences=True)
+@pytest.mark.usefixtures("activity_catalog")
+@override_settings(ANGEE_TIMELINE_KINDS=KINDS)
+def test_member_reading_by_grant_pays_a_fixed_rail_cost(composed_permissions: None, record_property) -> None:
+    """A member granted read on the record reads the rail at a fixed cost, however many lines it has."""
+    owner, member = create_user("timeline-grant-owner"), create_user("timeline-grant-member")
+    with open_changeset(fresh=True, change_reason="vault"):
+        vault = vault_for(owner)
+    with actor_context(owner):
+        vault.with_actor(owner).grant_record_access("viewer", member)
+        apps.get_model("projects", "Task").objects.schedule(vault.with_actor(owner), title="Follow up")
+    schema = addon_schema(timeline_schema.schemas, "console")
+    variables = {"model": vault._meta.label, "id": public_id_of(vault)}
+
+    def edit_then_read(edits: range) -> GraphQLDocumentRead:
+        for index in edits:
+            with actor_context(owner), open_changeset(fresh=True, change_reason=f"Edit {index}"):
+                vault.name = f"Edit {index}"
+                vault.save(update_fields=["name"])
+        # Measured after one warm read, like the console document ceilings, on SQLite.
+        measure_graphql_document(schema, QUERY, variables, actor=member)
+        return measure_graphql_document(schema, QUERY, variables, actor=member)
+
+    few = edit_then_read(range(2))
+    record_property("few_statements", few.statements)
+    record_property("few_sql_bytes", few.sql_bytes)
+    counts = {kind["id"]: kind["count"] for kind in few.data["timeline"]["kinds"]}
+    assert counts["provenance.change"] >= 3 and counts["projects.task"] == 1
+    assert few.data["timeline"]["entries"][0]["detail"] == "Edit 1"
+    assert few.data["timeline"]["needs_me"] == few.data["timeline_attention"] == 0
+    many = edit_then_read(range(2, 10))
+    record_property("many_statements", many.statements)
+    record_property("many_sql_bytes", many.sql_bytes)
+    assert len(many.data["timeline"]["entries"]) == len(few.data["timeline"]["entries"]) + 8
+    assert many.statements == few.statements, "Timeline statement cost must stay fixed as the feed grows."
+    # Structural attention removes its audit write; occurrence probes keep empty branches out.
+    # REBAC 0.32.2 restores compact aliases inside shared id sets. The full SQLite 3.53.1
+    # suite measures 226,990 / 227,022 bytes for the small / large feed: ceil = 222 KiB.
+    # PostgreSQL planner allocation is budgeted separately in test_timeline_workflows.py.
+    few.assert_ceiling(statements=15, sql_kb=222)
+    many.assert_ceiling(statements=15, sql_kb=222)
 
 
 def timeline_entries(record, actor=None, *, kind=None):

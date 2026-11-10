@@ -3,7 +3,6 @@
 from datetime import timedelta
 
 import pytest
-from django.apps import apps
 from django.db import models
 from django.db.models.functions import Now
 
@@ -40,12 +39,8 @@ def protected_execution(execution):
             app_label = "workflows"
             db_table = "test_workflows_retention_evidence"
 
-    try:
-        with model_tables((RetentionEvidence,)):
-            yield RetentionEvidence
-    finally:
-        del apps.all_models["workflows"][RetentionEvidence._meta.model_name]
-        apps.clear_cache()
+    with model_tables((RetentionEvidence,)):
+        yield RetentionEvidence
 
 
 def retry_prune(run):

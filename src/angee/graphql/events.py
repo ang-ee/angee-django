@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any, cast
 from uuid import uuid4
 
@@ -14,8 +14,9 @@ from rebac import ObjectRef
 from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
+from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_of
-from angee.base.refs import RecordRef, record_view_refs
+from angee.base.refs import RecordRef
 from angee.base.serialization import json_safe
 
 ReadableFields = Iterable[str] | Callable[[], Iterable[str]]
@@ -28,11 +29,6 @@ class ChangeRelatedRecord:
 
     model: str
     id: str
-
-    @classmethod
-    def for_records(cls, *records: RecordRef) -> tuple[ChangeRelatedRecord, ...]:
-        """Include existing inherited views of a canonical concern identity."""
-        return tuple(cls(record.model_label, record.public_id) for record in record_view_refs(*records))
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,14 +65,8 @@ class ChangePayload:
     related_records: tuple[ChangeRelatedRecord, ...] = ()
     """Readable parent records whose exact authored reads depend on this change."""
 
-    during_ingestion: bool = False
-    """Whether the change happened inside a sync ingestion context; not part of the wire message."""
-
-    instance: models.Model | None = field(default=None, compare=False, repr=False)
-    """Source row available during synchronous local delivery, including deletes; never serialized."""
-
     broadcasts: bool = True
-    """Whether this occurrence reaches the channel layer; local observers still receive it."""
+    """Whether this occurrence is queued for the channel layer; never serialized."""
 
     @classmethod
     def from_instance(
@@ -86,16 +76,20 @@ class ChangePayload:
         action: str,
         update_fields: Iterable[str] | None,
         readable_fields: ReadableFields = (),
-        during_ingestion: bool = False,
         broadcasts: bool = True,
+        field_values: Mapping[str, Any] | None = None,
     ) -> ChangePayload:
-        """Return the channel payload for a saved or deleted model instance."""
+        """Return the channel payload for a saved or deleted model instance.
+
+        ``field_values`` are the changed values the write observation captured;
+        without them the instance's current values are read.
+        """
 
         changed_fields = tuple(sorted(str(field) for field in update_fields)) if update_fields is not None else None
         changed_values = None
         if changed_fields is not None:
             readable = readable_fields() if callable(readable_fields) else readable_fields
-            changed_values = _changed_values(instance, changed_fields, frozenset(readable))
+            changed_values = _changed_values(instance, changed_fields, frozenset(readable), field_values)
         resource_id = None
         if model_resource_type(type(instance)):
             resource_id = model_resource_id(instance)
@@ -112,8 +106,6 @@ class ChangePayload:
             read_resource_type=None if read_resource is None else read_resource.resource_type,
             read_resource_id=None if read_resource is None else read_resource.resource_id,
             related_records=related_records,
-            during_ingestion=during_ingestion,
-            instance=instance,
             broadcasts=broadcasts,
         )
 
@@ -200,6 +192,7 @@ def _changed_values(
     instance: models.Model,
     changed_fields: tuple[str, ...],
     readable_fields: frozenset[str],
+    field_values: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return projected concrete-field values, including inherited columns, without relation fetches."""
 
@@ -208,7 +201,8 @@ def _changed_values(
         field = _concrete_field(instance, name)
         if field is None or not ({name, field.name, field.attname} & readable_fields):
             continue
-        values[name] = json_safe(getattr(instance, field.attname, None))
+        value = field_values.get(name) if field_values is not None else getattr(instance, field.attname, None)
+        values[name] = json_safe(value)
     return values
 
 
@@ -221,25 +215,24 @@ def _change_read_resource(instance: models.Model) -> ObjectRef | None:
     create, update, and delete events on the same authorization boundary.
     """
 
-    resolver = getattr(instance, "change_read_resource", None)
-    if not callable(resolver):
-        return None
-    resource = resolver()
+    resource = instance.change_read_resource() if isinstance(instance, AngeeModel) else None
     if resource is not None and not isinstance(resource, ObjectRef):
         raise TypeError("change_read_resource() must return rebac.ObjectRef or None")
     return resource
 
 
 def _change_related_records(instance: models.Model) -> tuple[ChangeRelatedRecord, ...]:
-    """Return model-owned canonical parents for exact authored-query invalidation."""
+    """Project the model-owned records whose authored reads this change invalidates.
 
-    resolver = getattr(instance, "change_related_records", None)
-    if not callable(resolver):
-        return ()
-    records = tuple(resolver())
-    if any(not isinstance(record, ChangeRelatedRecord) for record in records):
-        raise TypeError("change_related_records() must return ChangeRelatedRecord values")
-    return records
+    A model declares ``change_related_records()`` returning :class:`RecordRef`
+    values. The projection is one-to-one: a hook that also invalidates inherited
+    views widens its own references with ``record_view_refs``.
+    """
+
+    records = tuple(instance.change_related_records()) if isinstance(instance, AngeeModel) else ()
+    if any(not isinstance(record, RecordRef) for record in records):
+        raise TypeError("change_related_records() must return RecordRef values")
+    return tuple(ChangeRelatedRecord(record.model_label, record.public_id) for record in records)
 
 
 def _concrete_field(

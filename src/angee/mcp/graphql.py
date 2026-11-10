@@ -23,6 +23,7 @@ Boundary conventions (the agent surface differs from the GraphQL wire):
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -42,10 +43,13 @@ from graphql import (
     GraphQLList,
     GraphQLNonNull,
     GraphQLScalarType,
+    OperationType,
     Undefined,
     assert_input_object_type,
     ast_from_value,
     get_named_type,
+    get_operation_ast,
+    parse,
     print_ast,
 )
 from pydantic import BaseModel
@@ -73,6 +77,9 @@ DEFAULT_QUERY_LIMIT = 25
 
 MAX_QUERY_LIMIT = 50
 """Maximum rows a caller may request from a collection tool."""
+
+ACTOR_EXECUTION_META: dict[str, Any] = {"angee": {"execution_context": "actor"}}
+"""Native ``Tool.meta`` of a tool that runs under the ambient REBAC actor outside a FastMCP request."""
 
 ACTION_RESULT = tuple(
     "sqid" if field.python_name == "id" else field.python_name
@@ -120,7 +127,14 @@ def _execute_sync(built: Any, document: str, variables: dict[str, Any] | None) -
 
     close_old_connections()
     try:
-        with transaction.atomic():
+        operation = get_operation_ast(parse(document))
+        # Read operations may call approved providers. Mutation owners retain
+        # the existing atomic statement boundary and native write semantics.
+        boundary = (
+            transaction.atomic() if operation is not None and operation.operation == OperationType.MUTATION
+            else nullcontext()
+        )
+        with boundary:
             user = _actor_user()
             request = HttpRequest()
             request.user = (
@@ -389,6 +403,7 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
         parameters=parameters,
         output_schema=_output_schema(node, leaves, is_list),
         annotations=ToolAnnotations(readOnlyHint=(op_type == "query")),
+        meta=ACTOR_EXECUTION_META,
         tags=set(spec.tags),
         schema_name=spec.schema,
         op_type=op_type,
@@ -427,6 +442,7 @@ def _return_node(rtype: Any) -> tuple[Any, bool, str | None]:
     if isinstance(node, GraphQLList):
         element = get_named_type(node.of_type)
         return element, True, None
+    # graphql-core exposes fields only on object, interface, and input-object types.
     fields = getattr(node, "fields", {})
     if "results" in fields:
         element = get_named_type(fields["results"].type)
@@ -679,3 +695,36 @@ def _json_type(gql_type: Any) -> tuple[dict[str, Any], bool]:
     if isinstance(gql_type, GraphQLInputObjectType):
         return {"type": "object"}, False
     return {}, False
+
+
+def require_actor_tool(tool: Tool) -> bool:
+    """Validate a built-in tool's actor-only execution contract and return its read posture.
+
+    The in-process runtime runs ``Tool.run`` outside any FastMCP request, where
+    request-scoped ``Context`` injection and ``get_access_token`` are unavailable.
+    A tool admitted there declares :data:`ACTOR_EXECUTION_META` in its native
+    ``Tool.meta``; the declaration, never an inspection of the callable, carries
+    that fact, and a tool without it fails closed. ``ToolAnnotations.readOnlyHint``
+    is the one read/write fact; a compiled GraphQL tool's hint must also agree with
+    its root operation type.
+    """
+
+    annotations = tool.annotations
+    if isinstance(tool, _CompiledTool):
+        if tool.op_type not in {"query", "mutation"}:
+            raise ImproperlyConfigured(f"GraphQL MCP tool {tool.name!r} has invalid operation type {tool.op_type!r}.")
+        if annotations is None or annotations.readOnlyHint is not (tool.op_type == "query"):
+            raise ImproperlyConfigured(
+                f"GraphQL MCP tool {tool.name!r} readOnlyHint disagrees with its {tool.op_type} operation."
+            )
+    elif annotations is None or annotations.readOnlyHint is None:
+        raise ImproperlyConfigured(
+            f"Non-GraphQL built-in MCP tool {tool.name!r} must explicitly declare ToolAnnotations.readOnlyHint."
+        )
+    contract = (tool.meta or {}).get("angee")
+    if not isinstance(contract, dict) or contract.get("execution_context") != "actor":
+        raise ImproperlyConfigured(
+            f"Built-in MCP tool {tool.name!r} must declare actor-only execution in Tool.meta; "
+            "request-scoped FastMCP Context is unavailable in process."
+        )
+    return bool(annotations.readOnlyHint)

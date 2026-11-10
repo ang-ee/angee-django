@@ -19,13 +19,14 @@ from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.implementations import impl_choices
+from angee.base.testing.queries import statement_startswith
 from angee.integrate import connect
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol, with_query
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
-from angee.integrate.oauth.registrations import OAuthRegistrationExtension, oauth_client_is_ready
+from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.schema import IntegrationConnectionMixin, IntegrationOAuthMixin
 from tests.conftest import Credential, ExternalAccount, Feed, OAuthClient, create_user, make_integration
 
@@ -105,12 +106,11 @@ def test_registration_snapshot_uses_readiness_and_environment_priority_without_s
     next(operation)
     try:
         with CaptureQueriesContext(connection) as queries:
-            assert not oauth_client_is_ready("preferred")
-            assert not oauth_client_is_ready("incomplete")
-            assert not oauth_client_is_ready("missing")
+            assert operation_registration_slugs() == frozenset()
+            assert operation_registration_slugs() == frozenset()
     finally:
         operation.close()
-    reads = [query["sql"] for query in queries if query["sql"].startswith("SELECT")]
+    reads = [query["sql"] for query in queries if statement_startswith(query["sql"], "SELECT")]
     assert len(reads) == 1, reads
     assert "client_secret" not in reads[0]
     with system_context(reason="test configure registration"):
@@ -118,7 +118,7 @@ def test_registration_snapshot_uses_readiness_and_environment_priority_without_s
         production.save(update_fields=["is_enabled"])
         assert list(OAuthClient.objects.connectable()) == [production]
         assert OAuthClient.objects.enabled_for_slug("preferred") == production
-    assert oauth_client_is_ready("preferred")
+    assert operation_registration_slugs() == {"preferred"}
 
 
 @pytest.mark.usefixtures("composed_tables")
@@ -163,6 +163,8 @@ def test_non_admin_connection_projection_batches_health_and_restricts_credential
     }] * 4}
     feed_reads = [query["sql"] for query in queries if Feed._meta.db_table in query["sql"]]
     assert len(feed_reads) == 1
+    readiness_reads = [query for query in queries if f'FROM "{OAuthClient._meta.db_table}"' in query["sql"]]
+    assert len(readiness_reads) == 1
     assert "feed_backend_class" in feed_reads[0]
     assert "client_secret" not in " ".join(query["sql"] for query in queries)
     # Unexpired listing rows use only public health; no encrypted material is loaded.
@@ -193,7 +195,7 @@ def test_connection_health_listing_decrypts_only_the_expired_row(monkeypatch, ro
         assert all(not credential.is_reconnect_required for credential in credentials)
     assert len(credentials) == rows
     assert decrypt.call_count == int(expired_row)
-    reads = [query for query in queries if query["sql"].startswith("SELECT")
+    reads = [query for query in queries if statement_startswith(query["sql"], "SELECT")
              and Credential._meta.db_table in query["sql"]]
     assert len(reads) == 1 + int(expired_row)
     assert len([query for query in queries if "material" in query["sql"]]) == int(expired_row)

@@ -6,10 +6,9 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from typing import Any
 
-from django.core.exceptions import ValidationError
-from django.db import models, router
+from django.db import models
 
-from angee.provenance.context import _ChangesetScope, changeset, changeset_model, current_changeset
+from angee.provenance.context import ChangesetContext, changeset, current_changeset
 
 SERVER_COMMANDS = frozenset({"celery", "runserver", "serve", "test"})
 """Commands whose units of work own their boundaries instead of the process.
@@ -25,16 +24,13 @@ logical write and keeps the command boundary.
 
 def management_context(
     command: str, argv: Sequence[str], options: Mapping[str, Any],
-) -> _ChangesetScope | nullcontext[None]:
+) -> ChangesetContext | nullcontext[None]:
     """Attribute command writes while servers, workers and tests own their boundaries."""
 
-    del argv
+    del argv, options
     if command in SERVER_COMMANDS:
         return nullcontext()
-    return changeset(
-        fresh=True, activity="system", change_reason=f"manage.{command}", process=True,
-        using=options.get("database"),
-    )
+    return changeset(fresh=True, activity="system", change_reason=f"manage.{command}", process=True)
 
 
 @contextmanager
@@ -42,13 +38,6 @@ def merge_context(survivor: models.Model, *, join: bool = False) -> Iterator[Non
     """Preserve a whole fold's attribution, including an unchanged survivor."""
 
     context = current_changeset() if join else None
-    if context is not None:
-        # Attribution is lazy: an uncaptured owner can fold before its ambient
-        # changeset has been inserted. The native write router owns that future
-        # destination just as it owns current_changeset(record=True).
-        context_alias = context._state.db or router.db_for_write(changeset_model(), instance=context)
-        if context_alias != survivor._state.db:
-            raise ValidationError("A fold and its changeset must be routed to one database.")
     with changeset(
         fresh=context is None,
         activity="merge" if context is None else None,

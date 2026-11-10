@@ -579,8 +579,9 @@ def test_search_pages_matches_title_and_body_actor_scoped(composed_tables: None)
     assert denied.errors is not None
 
 
+@pytest.mark.parametrize("passages", [False, True])
 def test_search_projection_batches_relations_and_preserves_backend_rank_and_access(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, passages: bool,
 ) -> None:
     """Ranked materialized search results receive every selected Page hint in bulk."""
 
@@ -601,11 +602,16 @@ def test_search_projection_batches_relations_and_preserves_backend_rank_and_acce
         id title has_children ancestors { title has_children } wikilinks { title page }
       }
     }"""
+    if passages:
+        query = query.replace('search_pages(query: "Needle", first: $first) {',
+                              'search_passages(query: "Needle", first: $first) { hits { page {')
+        query = query.rsplit("}", 1)[0] + "} } }"
     result_data(execute_schema(schema, query, {"first": len(pages)}, user=reader))
     counts = []
     for size in (1, len(pages)):
         with CaptureQueriesContext(connection) as captured:
-            rows = result_data(execute_schema(schema, query, {"first": size}, user=reader))["search_pages"]
+            data = result_data(execute_schema(schema, query, {"first": size}, user=reader))
+            rows = [hit["page"] for hit in data["search_passages"]["hits"]] if passages else data["search_pages"]
         counts.append(len(captured))
         expected = list(reversed(pages))[:size]
         assert rows == [{
@@ -639,6 +645,10 @@ def test_page_backlinks_list_resolved_sources(composed_tables: None) -> None:
         )
     )["pages_by_pk"]
     assert detail["backlinks"] == [{"title": "Linker", "display_text": "see target"}]
+    links = apps.get_model("knowledge", "Link").objects.with_actor(alice)
+    chained = links.filter(display_text="see target").backlinks_to(target)
+    assert list(chained.values_list("source_page_id", flat=True)) == [linker.pk]
+    assert not links.filter(display_text="elsewhere").backlinks_to(target).exists()
 
 
 def test_crud_update_is_row_scoped(composed_tables: None) -> None:

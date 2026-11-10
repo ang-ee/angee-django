@@ -17,8 +17,8 @@ class TimelineConfig(AppConfig):
     def ready(self) -> None:
         from django.db.models.signals import pre_delete, pre_save
 
-        from angee.base.signals import bulk_updated, connect_for_models
-        from angee.graphql.publishing import change_published, connect_observers
+        from angee.base.models.base import AngeeModel
+        from angee.base.signals import bulk_updated, change_published, connect_for_models, connect_observers
         from angee.timeline.events import before_delete, before_save, kinds_for, queue_change, queue_updates
 
         checks.register(check_settings, checks.Tags.models)
@@ -37,6 +37,7 @@ class TimelineConfig(AppConfig):
             )
         connect_for_models(
             bulk_updated, queue_updates,
-            applies=lambda model: bool(kinds_for(model)) and callable(getattr(model, "change_batch_targets", None)),
+            applies=lambda model: bool(kinds_for(model))
+            and issubclass(model, AngeeModel) and model.change_batch_targets is not None,
             dispatch_uid="timeline.batch",
         )

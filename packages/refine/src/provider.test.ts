@@ -25,7 +25,6 @@ function invalidationClient(invalidateQueries: QueryClient["invalidateQueries"])
   const client = new QueryClient();
   return {
     invalidateQueries,
-    cancelQueries: vi.fn(async () => undefined),
     getQueryCache: () => client.getQueryCache(),
   };
 }
@@ -280,7 +279,8 @@ describe("Angee Hasura provider defaults", () => {
     );
   });
 
-  test("subscribes to backend-declared change roots as refine live events", () => {
+  test("subscribes to backend-declared change roots as refine live events", async () => {
+    vi.useFakeTimers();
     const dispose = vi.fn();
     const subscribe = vi.fn((_payload, sink) => {
       sink.next({
@@ -308,6 +308,8 @@ describe("Angee Hasura provider defaults", () => {
       callback,
       params: { resource: "notes" },
     });
+    expect(callback).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
     provider.unsubscribe(subscription);
 
     expect(subscribe).toHaveBeenCalledWith(
@@ -366,12 +368,129 @@ describe("Angee Hasura provider defaults", () => {
       predicate: expect.any(Function),
       type: "all",
       refetchType: "active",
-    }));
+    }, { cancelRefetch: false }));
     const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as
       | ((query: { meta: unknown }) => boolean)
       | undefined;
     expect(predicate?.({ meta: { angeeModels: ["workflows.Decision"] } })).toBe(true);
     expect(predicate?.({ meta: { angeeModels: ["workflows.StepRun"] } })).toBe(false);
+  });
+
+  test("a burst of changes to one row delivers one resource callback after the quiet window", async () => {
+    vi.useFakeTimers();
+    const live = resourceLiveHarness();
+    for (let index = 0; index < 20; index++) {
+      live.emit({ id: "note_1", action: "update", changedFields: ["title"], changedValues: { title: `Title ${index}` } });
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    await vi.advanceTimersByTimeAsync(289);
+    expect(live.callback).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(live.callback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      type: "updated",
+      payload: expect.objectContaining({ id: "note_1", ids: ["note_1"], changedFields: ["title"], changedValues: { title: "Title 19" } }),
+    }));
+    live.stop();
+  });
+
+  test("a continuous resource change stream delivers by the max wait", async () => {
+    vi.useFakeTimers();
+    const live = resourceLiveHarness();
+    for (let tick = 0; tick < 20; tick++) {
+      live.emit({ id: "note_1", action: "update" });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(live.callback).toHaveBeenCalledTimes(tick === 19 ? 1 : 0);
+    }
+    for (let tick = 0; tick < 20; tick++) {
+      live.emit({ id: "note_1", action: "update" });
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(live.callback).toHaveBeenCalledTimes(2);
+    live.stop();
+  });
+
+  test("a resource burst preserves every changed id and related record across mixed actions", async () => {
+    vi.useFakeTimers();
+    const live = resourceLiveHarness();
+    live.emit({ id: "note_1", action: "create", changedFields: ["title"], changedValues: { title: "First" },
+      relatedRecords: [{ model: "notes.Tag", id: "tag_1" }] });
+    live.emit({ id: "note_2", action: "update", changedFields: ["body"], changedValues: { body: "Second" },
+      relatedRecords: [{ model: "notes.Tag", id: "tag_2" }, { model: "notes.Tag", id: "tag_1" }] });
+    live.emit({ id: "note_1", action: "delete" });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(live.callback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      type: "*",
+      payload: {
+        ids: ["note_1", "note_2"], model: "notes.Note", action: "*",
+        changedFields: ["title", "body"], changedValues: {},
+        relatedRecords: [{ model: "notes.Tag", id: "tag_1" }, { model: "notes.Tag", id: "tag_2" }],
+      },
+    }));
+    live.stop();
+  });
+
+  test.each([0, 1, 2])("a model-wide change at burst position %s stays model-wide", async (position) => {
+    vi.useFakeTimers();
+    const live = resourceLiveHarness();
+    const changes: Record<string, unknown>[] = [
+      { id: "note_1", action: "update" }, { id: "note_2", action: "delete" },
+    ];
+    changes.splice(position, 0, { action: "*" });
+    changes.forEach(live.emit);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(live.callback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      type: "*",
+      payload: { model: "notes.Note", action: "*", changedFields: [], changedValues: {} },
+    }));
+    live.stop();
+  });
+
+  test.each(["unsubscribe", "disable", "error"])("%s drops a buffered resource delivery", async (reason) => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const live = resourceLiveHarness();
+    live.emit({ id: "note_1", action: "update" });
+    if (reason === "unsubscribe") live.stop();
+    else if (reason === "disable") live.provider.setEnabled(false);
+    else live.sink.error(new Error("closed"));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(live.callback).not.toHaveBeenCalled();
+    live.stop();
+    error.mockRestore();
+  });
+
+  test("direct model subscriptions retain individual event values while resource callbacks coalesce", async () => {
+    vi.useFakeTimers();
+    const live = resourceLiveHarness();
+    const callback = vi.fn();
+    const direct = live.provider.subscribe({
+      channel: "angee/preferences", types: ["updated"], callback, params: { models: ["notes.Note"] },
+    });
+    for (const id of ["note_1", "note_2"]) live.emit({ id, action: "update", changedValues: { title: id } });
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(callback).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      payload: expect.objectContaining({ id: "note_1", changedValues: { title: "note_1" } }),
+    }));
+    expect(live.callback).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(live.callback).toHaveBeenCalledTimes(1);
+    live.provider.unsubscribe(direct);
+    live.stop();
+  });
+
+  test("unsubscribing one resource callback drops its burst while shared consumers continue", async () => {
+    vi.useFakeTimers();
+    const live = resourceLiveHarness();
+    const callback = vi.fn();
+    const second = live.provider.subscribe({
+      channel: "resources/notes", types: ["*"], callback, params: { resource: "notes" },
+    });
+    live.emit({ id: "note_1", action: "update" });
+    live.stop();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(live.callback).not.toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledTimes(1);
+    live.provider.unsubscribe(second);
   });
 
   test("skips resources without change roots", () => {
@@ -408,9 +527,9 @@ describe("Angee Hasura provider defaults", () => {
       meta: { angeeModels: ["notes.Tag"] },
       staleTime: Infinity,
     };
-    await client.fetchQuery(noteQuery);
-    await client.fetchQuery(unrelated);
-    await client.fetchQuery({ ...noteQuery, queryKey: ["message-feed", "inactive"] });
+    await client.query(noteQuery);
+    await client.query(unrelated);
+    await client.query({ ...noteQuery, queryKey: ["message-feed", "inactive"] });
     const observer = new QueryObserver(client, noteQuery);
     const unsubscribeObserver = observer.subscribe(() => undefined);
     const socket = connectingClient();
@@ -648,7 +767,7 @@ describe("Angee Hasura provider defaults", () => {
       queryKey: ["notes", "enable"], queryFn, staleTime: Infinity,
       meta: { angeeModels: ["notes.Note"] },
     };
-    await client.fetchQuery(query);
+    await client.query(query);
     const observer = new QueryObserver(client, query);
     const stopObserver = observer.subscribe(() => undefined);
     const socket = connectingClient();
@@ -674,7 +793,8 @@ describe("Angee Hasura provider defaults", () => {
     }
   });
 
-  test("shares one upstream subscription across consumers for the same resource", () => {
+  test("shares one upstream subscription across consumers for the same resource", async () => {
+    vi.useFakeTimers();
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
@@ -701,6 +821,9 @@ describe("Angee Hasura provider defaults", () => {
     nthSink(sinks, 0).next({
       data: { noteChanged: { model: "notes.Note", id: "note_1", action: "update" } },
     });
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
 
@@ -737,7 +860,8 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).toHaveBeenCalledTimes(2);
   });
 
-  test("pauses existing and newly mounted consumers, drops late events, then reopens once", () => {
+  test("pauses existing and newly mounted consumers, drops late events, then reopens once", async () => {
+    vi.useFakeTimers();
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
@@ -758,6 +882,7 @@ describe("Angee Hasura provider defaults", () => {
     nthSink(sinks, 0).next(event);
     expect(callback).not.toHaveBeenCalled();
     nthSink(sinks, 1).next(event);
+    await vi.advanceTimersByTimeAsync(300);
     expect(callback).toHaveBeenCalledTimes(2);
     provider.unsubscribe(first);
     provider.unsubscribe(second);
@@ -792,7 +917,7 @@ describe("Angee Hasura provider defaults", () => {
     expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalledWith(
       "Angee live subscription failed; the next subscriber will reconnect.",
-      expect.objectContaining({ changesRoot: "noteChanged" }),
+      expect.objectContaining({ model: "notes.Note", subscription: "noteChanged" }),
       expect.any(Error),
     );
   });
@@ -882,7 +1007,7 @@ describe("Angee Hasura provider defaults", () => {
       predicate: expect.any(Function),
       type: "all",
       refetchType: "active",
-    }));
+    }, { cancelRefetch: false }));
     const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as
       | ((query: { meta: unknown }) => boolean)
       | undefined;
@@ -972,6 +1097,24 @@ interface RecordedSink {
   next: (result: { data: unknown }) => void;
   error: (error: unknown) => void;
   dispose: ReturnType<typeof vi.fn>;
+}
+
+function resourceLiveHarness() {
+  const { subscribe, sinks } = recordingClient();
+  const provider = createAngeeChangeLiveProvider(
+    { subscribe, on: vi.fn(() => () => undefined) } as never,
+    [resource({ changes: "noteChanged" })],
+  );
+  const callback = vi.fn();
+  const subscription = provider.subscribe({
+    channel: "resources/notes", types: ["*"], callback, params: { resource: "notes" },
+  });
+  const sink = nthSink(sinks, 0);
+  return {
+    provider, callback, sink,
+    emit: (change: Record<string, unknown>) => sink.next({ data: { noteChanged: { model: "notes.Note", ...change } } }),
+    stop: () => provider.unsubscribe(subscription),
+  };
 }
 
 function recordingClient(): {
@@ -1070,4 +1213,60 @@ test("the shared GraphQL transport resolves its configured endpoint on each requ
   endpoint = "https://replacement.example.test/graphql";
   await client.request("query { ping }");
   expect(urls).toEqual(["https://daemon.example.test/ops/graphql", "https://replacement.example.test/graphql"]);
+});
+
+test("a dedicated timeline stream coalesces only its rail reads, leaving inbox model reads alone", async () => {
+  vi.useFakeTimers();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  const names = ["NexusInboxNavigator", "NexusInboxMessage", "NexusInboxRelatedTarget", "NexusInboxConnections", "timeline", "other-timeline"];
+  const reads = names.map(() => vi.fn(async () => ({})));
+  const keys = names.map(name => [name]);
+  const observers = keys.map((queryKey, index) => new QueryObserver(client, {
+    queryKey, queryFn: reads[index]!, meta: { angeeModels: ["integrate.Integration"] },
+  }));
+  const stops = observers.map(observer => observer.subscribe(() => undefined));
+  await vi.advanceTimersByTimeAsync(0);
+  let emit: (result: { data: { timelineChanged: boolean } }) => void = () => undefined;
+  const dispose = vi.fn();
+  const subscribe = vi.fn((_request, sink) => { emit = sink.next; return dispose; });
+  const provider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn(() => () => undefined) } as never, [], { queryClient: client });
+  const request = {
+    channel: "timeline", types: ["*"], callback: vi.fn(), params: { queryKey: keys[4] },
+    meta: { gqlSubscription: "subscription($model: String!, $id: ID!) { timelineChanged(model: $model, id: $id) }",
+      gqlVariables: { model: "integrate.Integration", id: "integration-1" } },
+  };
+  const header = provider.subscribe(request);
+  const rail = provider.subscribe(request);
+  try {
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(subscribe.mock.calls[0]?.[0]).toEqual({ query: request.meta.gqlSubscription, variables: request.meta.gqlVariables });
+    for (let index = 0; index < 10; index++) emit({ data: { timelineChanged: true } });
+    await vi.advanceTimersByTimeAsync(299);
+    expect(reads.map(read => read.mock.calls.length)).toEqual([1, 1, 1, 1, 1, 1]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads.map(read => read.mock.calls.length)).toEqual([1, 1, 1, 1, 2, 1]);
+    for (let elapsed = 0; elapsed < 2000; elapsed += 100) {
+      emit({ data: { timelineChanged: true } });
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(reads.map(read => read.mock.calls.length)).toEqual([1, 1, 1, 1, 3, 1]);
+    provider.setEnabled(false);
+    emit({ data: { timelineChanged: true } });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads[4]).toHaveBeenCalledTimes(3);
+    provider.setEnabled(true);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    provider.unsubscribe(header);
+    emit({ data: { timelineChanged: true } });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads[4]).toHaveBeenCalledTimes(4);
+    provider.unsubscribe(rail);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    emit({ data: { timelineChanged: true } });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads[4]).toHaveBeenCalledTimes(4);
+  } finally {
+    provider.unsubscribe(header); provider.unsubscribe(rail);
+    stops.forEach(stop => stop()); client.clear();
+  }
 });

@@ -10,8 +10,10 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.graphql.testing import capture_broadcasts
 from angee.projects.testing.models import Task
 from angee.tags.testing.models import Tag
+from angee.timeline.reading import Timeline
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.test_timeline import read_timeline, timeline_entries
 
@@ -62,7 +64,7 @@ def test_ask_then_decide_updates_the_line_and_live_attention(people) -> None:
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 1
     assert not read_timeline(subject, requester, needsMe=True)["timeline"]["entries"]
 
-    Decision.objects.decide(question, actor=reviewer, chosen=["complete"], revision=question.revision)
+    question.decide(actor=reviewer, chosen=["complete"], revision=question.revision)
     original_key = event.key
     event, = timeline_entries(subject, reviewer)
     assert event.key == original_key
@@ -84,6 +86,26 @@ def test_record_reader_without_decision_read_sees_no_line_identity_or_count(peop
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 0
 
 
+@pytest.mark.parametrize("viewer", ["requester", "reviewer"])
+def test_decision_attention_requires_act_on_readable_questions(people, viewer) -> None:
+    requester, reviewer, _, subject = people
+    question = Decision.objects.ask(DecisionRequest(
+        kind="review", records=(subject,), assignees=(requester, reviewer), requester=requester,
+        proposal=DecisionProposal(alternatives=[{"key": "done", "label": "Done", "outcome": "done"}]),
+    ), actor=requester)
+    actor = reviewer if viewer == "reviewer" else requester
+    assert question.with_actor(actor).has_access("read")
+    assert question.with_actor(actor).has_access("act") is (viewer == "reviewer")
+    with actor_context(reviewer):
+        timeline = Timeline(subject, actor)
+        page = timeline.page()
+    entry, = page.entries
+    assert entry.target_id == public_id_of(question)
+    assert entry.needs_me is (viewer == "reviewer")
+    assert timeline.counts == {"decisions.decision": (1, int(viewer == "reviewer"))}
+    assert page.needs_me == timeline.attention() == int(viewer == "reviewer")
+
+
 def test_unassigned_attention_uses_answer_permission_without_claiming_others_assignments(people) -> None:
     requester, reviewer, bystander, subject = people
     admin = create_platform_admin("timeline-unassigned-admin")
@@ -94,13 +116,13 @@ def test_unassigned_attention_uses_answer_permission_without_claiming_others_ass
     assert read_timeline(subject, admin)["timeline_attention"] == 1
     assert read_timeline(subject, requester)["timeline_attention"] == 0
     assert read_timeline(subject, bystander)["timeline"]["entries"] == []
-    Decision.objects.decide(decision, actor=admin, revision=decision.revision, chosen=["done"])
+    decision.decide(actor=admin, revision=decision.revision, chosen=["done"])
     ask(people)
     assert read_timeline(subject, admin)["timeline_attention"] == 0
     assert read_timeline(subject, reviewer)["timeline_attention"] == 1
 
 
-def test_subscribers_read_committed_sources_at_the_change_broadcast(people, monkeypatch) -> None:
+def test_subscribers_read_committed_sources_at_the_change_broadcast(people) -> None:
     subject = people[3]
     seen = []
 
@@ -109,8 +131,8 @@ def test_subscribers_read_committed_sources_at_the_change_broadcast(people, monk
             assert not transaction.get_connection().in_atomic_block
             seen.append([line.target_id for line in timeline_entries(subject, people[1])])
 
-    monkeypatch.setattr("angee.graphql.publishing._broadcast", broadcast)
-    question = ask(people)
+    with capture_broadcasts(observer=broadcast):
+        question = ask(people)
     assert seen == [[public_id_of(question)]]
 
 
@@ -118,7 +140,7 @@ def test_withdraw_publishes_the_owner_update_and_clears_attention(people) -> Non
     requester, reviewer, _, subject = people
     question = ask(people)
     with system_context(reason="test.timeline.withdraw"):
-        Decision.objects.withdraw(question, actor=requester)
+        question.withdraw(actor=requester)
     assert timeline_entries(subject, reviewer)[0].detail == "Withdrawn"
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
 
@@ -142,18 +164,16 @@ def test_merge_keeps_one_occurrence_on_the_survivor(composed_permissions, both_r
     with actor_context(requester):
         survivor.with_actor(requester).merge(records=[public_id_of(duplicate)])
     event, = timeline_entries(survivor, reviewer)
-    Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
+    question.decide(actor=reviewer, chosen=["complete"])
     current, = timeline_entries(survivor, reviewer)
     assert current.key == event.key
     assert current.detail == "Complete"
     assert len(timeline_entries(survivor, reviewer)) == 1
 
 
-def test_rollback_discards_invalidations_and_source_rows(people, monkeypatch):
+def test_rollback_discards_invalidations_and_source_rows(people):
     _, reviewer, _, subject = people
-    broadcasts = []
-    monkeypatch.setattr("angee.graphql.publishing._broadcast", lambda model, payload: broadcasts.append(payload))
-    with transaction.atomic():
+    with capture_broadcasts() as broadcasts, transaction.atomic():
         with pytest.raises(ValueError, match="rollback"):
             with transaction.atomic():
                 ask(people)
@@ -161,7 +181,7 @@ def test_rollback_discards_invalidations_and_source_rows(people, monkeypatch):
         assert timeline_entries(subject, reviewer) == []
         assert broadcasts == []
         question = ask(people)
-        Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
+        question.decide(actor=reviewer, chosen=["complete"])
         assert broadcasts == []
     assert broadcasts
     assert timeline_entries(subject, reviewer)[0].detail == "Complete"

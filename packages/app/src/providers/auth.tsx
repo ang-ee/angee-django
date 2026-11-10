@@ -190,12 +190,9 @@ export function createAngeeAuthProviderFromRequest(
     const data = await request(AngeeCurrentUserDocument, { refs: permitted });
     return currentUserPayload(data.current_user);
   };
-  const sharedIdentity = async (): Promise<AuthIdentity | null> => {
-    const query = identityQueryOptions(provider);
-    // The mounted identity observer refreshes invalidations; route checks reuse
-    // its last answer instead of issuing a second public and preview read.
-    return options.queryClient ? options.queryClient.ensureQueryData(query) : query.queryFn();
-  };
+  const sharedIdentity = (): Promise<AuthIdentity | null> => options.queryClient
+    ? readSharedIdentity(options.queryClient, provider)
+    : identityQueryOptions(provider).queryFn();
   const provider: RefineAuthProvider = {
     async check() {
       try {
@@ -274,7 +271,7 @@ export function createAngeeAuthProviderFromRequest(
       // remains valid, so only the authoritative identity endpoint may log out.
       try {
         const identity = options.queryClient
-          ? await options.queryClient.fetchQuery({
+          ? await options.queryClient.query({
               ...identityQueryOptions(provider),
               staleTime: 0,
             })
@@ -293,11 +290,13 @@ export function createAngeeAuthProviderFromRequest(
  * The identity-query contract, owned once. Refine's `useGetIdentity` reads the
  * react-query entry keyed `keys().auth().action("identity")`; the route gate
  * (`@angee/app` `beforeLoad`) reaches that SAME entry through
- * `queryClient.ensureQueryData(identityQueryOptions(authProvider))`, as do
- * `check` and `getPermissions`, so the gate, `useRuntimeAuthState`, `check`,
+ * `readSharedIdentity(queryClient, authProvider)`,
+ * as do `check` and `getPermissions`, so the gate, `useRuntimeAuthState`, `check`,
  * and `getPermissions` share one session/preview identity query and reuse its
- * answer: the mounted observer re-reads an invalidated entry, and the host's
- * `onAuthChange` reset leaves a login or logout nothing to reuse.
+ * answer. A `"static"` read returns even an invalidated answer; the mounted
+ * observer keeps these options' `staleTime: Infinity`, so it is the one that
+ * re-reads an invalidated entry, and the host's `onAuthChange` reset leaves a
+ * login or logout nothing to reuse.
  * Its public session read gates the console-only preview projection.
  * `staleTime: Infinity` keeps warm navigations from
  * re-issuing it — refine's `useInvalidateAuthStore` (login/logout and preference
@@ -327,6 +326,14 @@ export function identityQueryOptions(authProvider: RefineAuthProvider) {
       ((await authProvider.getIdentity?.()) ?? null) as AuthIdentity | null,
     ...IDENTITY_QUERY_SETTINGS,
   };
+}
+
+/** Reuse the last identity answer; the mounted observer owns invalidation refreshes.
+ * @kind null
+ * @reason Shared identity cache read without rendered anatomy.
+ */
+export function readSharedIdentity(queryClient: QueryClient, authProvider: RefineAuthProvider): Promise<AuthIdentity | null> {
+  return queryClient.query({ ...identityQueryOptions(authProvider), staleTime: "static" });
 }
 
 /**
@@ -495,6 +502,14 @@ export function UserPreferencesProvider({
     },
     [queryClient, queue, userId],
   );
+  useSubscription({
+    channel: `angee/user-preferences/${userId}`,
+    params: { models: USER_PREFERENCES_LIVE_MODELS },
+    types: ["updated"],
+    enabled: userId !== null && !previewBlocked,
+    onLiveEvent: onPreferencesChange,
+    meta: { dataProviderName },
+  });
 
   useEffect(() => {
     queue.open();
@@ -526,41 +541,9 @@ export function UserPreferencesProvider({
   );
   return (
     <UserPreferencesContext.Provider value={value}>
-      {userId && !previewBlocked ? (
-        <UserPreferencesSubscription
-          key={userId}
-          userId={userId}
-          dataProviderName={dataProviderName}
-          onLiveEvent={onPreferencesChange}
-        />
-      ) : null}
       {children}
     </UserPreferencesContext.Provider>
   );
-}
-
-interface UserPreferencesSubscriptionProps {
-  userId: string;
-  dataProviderName?: string;
-  onLiveEvent: (event: LiveEvent) => void;
-}
-
-function UserPreferencesSubscription({
-  userId,
-  dataProviderName,
-  onLiveEvent,
-}: UserPreferencesSubscriptionProps): null {
-  // Refine's subscription effect re-subscribes only when ``enabled`` changes;
-  // the actor-keyed child remount makes the user-bound callback honest.
-  useSubscription({
-    channel: `angee/user-preferences/${userId}`,
-    params: { models: USER_PREFERENCES_LIVE_MODELS },
-    types: ["updated"],
-    enabled: true,
-    onLiveEvent,
-    meta: { dataProviderName },
-  });
-  return null;
 }
 
 /**

@@ -12,10 +12,11 @@ from typing import Any
 
 from django.apps import AppConfig, apps
 from django.conf import settings
-from django.db import connections, router
+from django.db import connection
 from django.db.models import Field, Model
 from django_compose.components import installed_components
 from pydantic import BaseModel, PrivateAttr
+from rebac.resources import model_resource_type
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.implementations import ImplChoice, impl_choices
@@ -43,7 +44,7 @@ class PlatformFieldRow(BaseModel):
         row = cls(
             id=f"{model._meta.label_lower}.{field.name}",
             name=field.name,
-            attname=getattr(field, "attname", field.name),
+            attname=field.attname,
             kind=field.get_internal_type(),
             is_relation=bool(field.is_relation),
             relation_target=related._meta.label_lower if related else None,
@@ -102,7 +103,7 @@ class PlatformModelRow(BaseModel):
             db_table=model._meta.db_table,
             addon_id=config.name,
             addon_label=config.label,
-            resource_type=getattr(model._meta, "rebac_resource_type", None),
+            resource_type=model_resource_type(model),
             field_count=len(fields),
             relation_count=len(relations),
             depends_on=sorted(
@@ -215,6 +216,7 @@ class PlatformImplementationDetail(PlatformImplementationRow):
 def addons() -> list[AppConfig]:
     """Return the composed Angee addon app configs, sorted by name."""
 
+    # django-compose publishes closure settings only in composed hosts.
     closure = getattr(settings, "COMPOSE_CLOSURE", None)
     names = closure.components.values() if closure is not None else installed_components("angee.addons").providers
     return sorted(
@@ -232,14 +234,17 @@ def root_app_names() -> frozenset[str]:
 def root_app_aliases() -> dict[str, str]:
     """Project authored native app spellings through the frozen identity entries."""
 
+    # django-compose publishes snapshot settings only in composed hosts.
     snapshot = getattr(settings, "COMPOSE_SNAPSHOT", None)
     entries = {} if snapshot is None else {entry.entry: entry.name for entry in snapshot.entries}
+    # django-compose publishes root settings only in composed hosts.
     return {root: entries.get(root, root) for root in getattr(settings, "COMPOSE_ROOTS", ())}
 
 
 def is_historical(model: type[Model]) -> bool:
     """Return whether ``model`` is a simple-history audit shadow (carries ``instance_type``)."""
 
+    # django-simple-history adds instance_type only to generated history models.
     return getattr(model, "instance_type", None) is not None
 
 
@@ -294,10 +299,7 @@ def resource_counts() -> dict[str, int]:
         resource = apps.get_model("resources", "Resource")
     except LookupError:
         return {}
-    database = router.db_for_read(resource)
-    if not router.allow_migrate_model(database, resource):
-        return {}
-    if resource._meta.db_table not in connections[database].introspection.table_names():
+    if resource._meta.db_table not in connection.introspection.table_names():
         return {}
     return resource.objects.counts_by_addon()
 

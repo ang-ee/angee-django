@@ -1,6 +1,7 @@
 """Record protocol persistence contracts; transport and driver tests are separate."""
 
 from collections.abc import Iterator
+from io import StringIO
 from typing import Any
 from unittest.mock import Mock
 
@@ -23,6 +24,7 @@ from angee.integrate.states import (
     SyncFailureKind,
     SyncFailureStatus,
 )
+from angee.integrate.streams import LocalChange
 from angee.integrate.testing.integration import Integration
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Channel
@@ -220,6 +222,9 @@ def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monke
     retained_conflict = next(
         (row for row in SyncStream.objects.get(pk=replica.pk).sync_failures(open_only=False) if row.id == conflict.pk)
     )
+    stream = SyncStream.objects.get(pk=replica.pk)
+    assert stream.sync_failures(kind=SyncFailureKind.CONFLICT) == (retained_conflict,)
+    assert stream.sync_failures(kind=SyncFailureKind.REMOTE_REJECTED) == ()
     retained_link = RecordLink.objects.filter(pk=link.pk).values().get()
     adapter = Mock(spec=BridgeImpl, supports_identity_reads=True)
     monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
@@ -231,6 +236,37 @@ def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monke
     assert RecordLink.objects.filter(pk=link.pk).values().get() == retained_link
     assert not applied_history().filter(id=link.pk).exists()
     adapter.read_keys.assert_not_called()
+    adapter.write_back.assert_not_called()
+    adapter.close.assert_called_once_with()
+
+
+def test_preview_push_command_reports_current_streams_through_one_adapter(
+    replica: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The command dispatches to Integration.preview_push, which closes its adapter and writes nothing."""
+
+    replica.direction = StreamDirection.BIDIRECTIONAL
+    replica.save(update_fields=["direction"])
+    SyncStream.objects.advance(replica, {}, exhausted=True)
+    held = RecordLink.objects.observe(replica, "person:held")
+    held.pin()
+    adapter = Mock(spec=BridgeImpl)
+    adapter.local_changes.return_value = [
+        LocalChange("person:new", {"name": "New"}),
+        LocalChange("person:held", {"name": "Held"}),
+    ]
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
+    integration = Integration.objects.get(pk=replica.integration_id)
+
+    out = StringIO()
+    call_command("preview_push", integration.sqid, "--keys", stdout=out)
+
+    assert out.getvalue().splitlines() == [
+        f"{integration.sqid} contacts book: 1 to write, 1 held back by conflicts or refusals",
+        "  write person:new",
+        "  held  person:held",
+    ]
     adapter.write_back.assert_not_called()
     adapter.close.assert_called_once_with()
 

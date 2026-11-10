@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import FieldDoesNotExist, PermissionDenied, ValidationError
-from django.db import close_old_connections, connection, connections
+from django.db import close_old_connections, connection, connections, transaction
 from django.db.models import CharField
 from django.db.models.deletion import PROTECT
 from django.test import override_settings
@@ -20,20 +20,22 @@ from rebac import actor_context, generic_target, system_context
 
 from angee.base.fields.state import StateField
 from angee.base.models.derived import DerivedFrom
-from angee.extraction.acquisition import PageCarrier
+from angee.extraction.acquisition import PageCarrier, PartCarrier
 from angee.extraction.contracts import (
     DocumentPart,
     ExtractionPartKind,
     Result,
     Source,
 )
-from angee.extraction.managers import StaleExtraction
+from angee.extraction.managers import ExtractionManager, StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
 from angee.provenance.evidence import FactAuthority
 from angee.storage.models import File as AbstractFile
+from angee.storage.models import FileManager
 from angee.workflows_extraction.steps import InferEvidenceInput, InferEvidenceStep
 from tests.conftest import Drive, File, create_platform_admin
 from tests.extraction_models import Extraction, ExtractionLineage, ExtractionPage, ExtractionPart, ExtractionSource
+from tests.lock_waits import submit, wait_for_lock
 from tests.mtidemo.models import MtiChild
 from tests.test_storage import drive as drive
 
@@ -88,7 +90,7 @@ def evidence(drive, monkeypatch):
     monkeypatch.setattr(File, "rebac_grantable", AbstractFile.rebac_grantable)
     content = b"Note\nFirst line\nSecond line"
     with actor_context(drive.alice):
-        source = File.objects.ingest_bytes(content, filename="note.txt", drive_id=str(drive.sqid))
+        source, _created = File.objects.ingest_bytes(content, filename="note.txt", drive_id=str(drive.sqid))
     document_source = Source(0, source.content_hash, "text/plain", content, file=source)
     part = DocumentPart(
         0,
@@ -207,6 +209,95 @@ def test_exact_retry_reuses_revision_and_conflicting_request_is_rejected(evidenc
     assert Extraction.objects.count() == 1
 
 
+def test_retained_inference_admission_settles_without_reading_sources(evidence, monkeypatch):
+    retain, values = evidence
+    row = retain()
+    unresolved = replace(values["result"], provider_metadata={"unresolved_reasons": ["missing total"]})
+    pending = retain(result=unresolved, request_key="unresolved")
+    held = retain(result=unresolved, request_key="held", error_code="source_hold")
+    monkeypatch.setattr(Extraction, "document_sources", lambda self: pytest.fail("Admission must not read sources."))
+
+    assert row.inference_admission(allow_inference=True, identity_mapping={}) == "unchanged"
+    assert pending.inference_admission(allow_inference=False, identity_mapping={}) == "unchanged"
+    assert pending.inference_admission(allow_inference=True, identity_mapping={}) == "infer"
+    assert row.retained_inference_parts() == row.document_parts()
+    assert held.retained_inference_parts() == ()
+
+
+def test_carrier_storage_writes_and_reads_precede_the_lineage_transaction(evidence, monkeypatch):
+    retain, _values = evidence
+    ingest, read = FileManager.ingest_bytes, File.read_verified
+    calls = []
+
+    def ingest_outside(self, *args, **kwargs):
+        assert not connection.in_atomic_block
+        calls.append("write")
+        return ingest(self, *args, **kwargs)
+
+    def read_outside(self, *args, **kwargs):
+        assert not connection.in_atomic_block
+        calls.append("read")
+        return read(self, *args, **kwargs)
+
+    monkeypatch.setattr(FileManager, "ingest_bytes", ingest_outside)
+    monkeypatch.setattr(File, "read_verified", read_outside)
+    row = retain()
+    assert calls == ["write", "read"]
+    assert row.parts.count() == 1
+
+
+def test_failed_allocation_discards_only_the_carrier_it_created(evidence, monkeypatch):
+    retain, _values = evidence
+    with system_context(reason="test extraction carrier inventory"):
+        before = set(File.objects.values_list("pk", flat=True))
+
+    def refuse(*args, **kwargs):
+        raise ValidationError("allocation refused")
+
+    monkeypatch.setattr(ExtractionManager, "_retain_prepared", refuse)
+    with pytest.raises(ValidationError, match="allocation refused"):
+        retain()
+    with system_context(reason="test extraction carrier cleanup"):
+        assert set(File.objects.values_list("pk", flat=True)) == before
+
+
+def test_failed_allocation_keeps_a_carrier_a_retained_revision_holds(evidence, monkeypatch):
+    retain, _values = evidence
+    allocate = ExtractionManager._retain_prepared
+    retained = []
+
+    def allocate_then_refuse(self, *args, **kwargs):
+        retained.append(allocate(self, *args, **kwargs))
+        raise ValidationError("the caller refused after allocation")
+
+    monkeypatch.setattr(ExtractionManager, "_retain_prepared", allocate_then_refuse)
+    with pytest.raises(ValidationError, match="refused after allocation"):
+        retain()
+    with system_context(reason="test extraction held carrier"):
+        carrier = retained[0].parts.get().carrier_file
+        assert File.objects.filter(pk=carrier.pk).exists()
+        assert not carrier.purge_if_unretained()
+
+
+def test_allocation_rechecks_the_source_identity_after_carrier_preparation(evidence, monkeypatch):
+    retain, values = evidence
+    read = PartCarrier.read
+    with system_context(reason="test extraction carrier inventory"):
+        before = set(File.objects.values_list("pk", flat=True))
+
+    def change_source(self, file):
+        part = read(self, file)
+        File._base_manager.filter(pk=values["target"].pk).update(content_hash="b" * 64)
+        return part
+
+    monkeypatch.setattr(PartCarrier, "read", change_source)
+    with pytest.raises(ValidationError, match="source changed during carrier preparation"):
+        retain()
+    assert Extraction.objects.count() == 0
+    with system_context(reason="test extraction carrier cleanup"):
+        assert set(File.objects.values_list("pk", flat=True)) == before
+
+
 def test_lineage_compare_and_swap_rejects_a_stale_parent(evidence):
     retain, _values = evidence
     first = retain()
@@ -221,7 +312,11 @@ def test_lineage_compare_and_swap_rejects_a_stale_parent(evidence):
 
 def test_file_extraction_rejects_sources_outside_its_target(evidence):
     retain, values = evidence
-    other = File.objects.ingest_bytes(b"Another note", filename="other.txt", drive_id=str(values["target"].drive.sqid))
+    other, _created = File.objects.ingest_bytes(
+        b"Another note",
+        filename="other.txt",
+        drive_id=str(values["target"].drive.sqid),
+    )
     original = values["sources"][0]
     additional = Source(1, other.content_hash, "text/plain", b"Another note", file=other)
     with pytest.raises(ValidationError, match="belongs to the extraction target"):
@@ -310,6 +405,36 @@ def test_competing_revision_requests_allocate_exactly_one_successor(evidence):
     winner = next(value for value in results if value is not None)
     assert ExtractionLineage.objects.get(pk=base.lineage_id).head_id == winner
     assert list(Extraction.objects.order_by("revision").values_list("revision", flat=True)) == [1, 2]
+
+
+@pytest.mark.parametrize("change", ["carrier purge", "source edit"])
+def test_retention_waits_for_a_held_file_and_refuses_its_committed_change(evidence, change):
+    """Retention locks its source and carrier files before rechecking them, so a held purge or edit wins."""
+
+    if connection.vendor != "postgresql":
+        pytest.skip("Row-lock waits need PostgreSQL.")
+    retain, values = evidence
+    carrier, _created = PartCarrier.retain(
+        values["result"].parts[0],
+        actor=values["actor"],
+        drive_id=str(values["target"].drive.sqid),
+    )
+    held = File._base_manager.get(sqid=carrier.file_id) if change == "carrier purge" else values["target"]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            with system_context(reason="test extraction holds a file"):
+                locked = File.system_queryset(lock=("self",)).get(pk=held.pk)
+            future, pid = submit(pool, lambda: retain(part_carriers=(carrier,)))
+            wait_for_lock(pid, future)
+            with system_context(reason="test extraction changes the held file"):
+                if change == "carrier purge":
+                    locked.purge()
+                else:
+                    File._base_manager.filter(pk=held.pk).update(content_hash="b" * 64)
+        expected = "carrier changed before retention" if change == "carrier purge" else "source changed"
+        with pytest.raises(ValidationError, match=expected):
+            future.result(timeout=10)
+    assert Extraction.objects.count() == 0
 
 
 def test_explicit_correspondence_preserves_reordered_lines_and_records_retirement(evidence):
@@ -401,7 +526,7 @@ def test_retention_requires_independent_source_and_target_read_access(evidence, 
             created_by=outsider,
             updated_by=outsider,
         )
-        other = File.objects.ingest_bytes(
+        other, _created = File.objects.ingest_bytes(
             b"Other evidence",
             filename="other.txt",
             drive_id=str(other_drive.sqid),

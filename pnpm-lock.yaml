@@ -16,7 +16,7 @@ packageExtensionsChecksum: sha256-kjhz5CDWkITwMu1ZPr7n8WeGo4fun7D9Kx1TJK9a39I=
 pnpmfileChecksum: sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
 
 patchedDependencies:
-  '@refinedev/core@5.0.12': 68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8
+  '@refinedev/core@5.0.12': 4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289
   nuqs@2.10.1: 2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4
 
 importers:
@@ -55,7 +55,7 @@ importers:
         version: link:../../../../../packages/ui
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
     devDependencies:
       '@tanstack/react-router':
         specifier: ^1.170.41
@@ -123,7 +123,7 @@ importers:
         version: 6.2.3(graphql@16.15.0)
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@sentry/react':
         specifier: ^11.4.0
         version: 11.11.0(react@19.3.1)
@@ -147,7 +147,7 @@ importers:
         version: 8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)
     devDependencies:
       '@tanstack/react-query':
-        specifier: ^5.101.1
+        specifier: ^5.102.0
         version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.41
@@ -205,7 +205,7 @@ importers:
     dependencies:
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       valibot:
         specifier: ^1.4.2
         version: 1.5.0(typescript@6.0.3)
@@ -230,16 +230,16 @@ importers:
         version: 3.2.0(graphql@16.15.0)
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@refinedev/hasura':
         specifier: ^7.0.1
-        version: 7.0.1(@refinedev/core@5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))
+        version: 7.0.1(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))
       graphql:
         specifier: ^16.14.0
         version: 16.15.0
     devDependencies:
       '@tanstack/react-query':
-        specifier: ^5.101.1
+        specifier: ^5.102.0
         version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.41
@@ -309,7 +309,7 @@ importers:
         version: link:../ui
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       nuqs:
         specifier: 2.10.1
         version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
@@ -415,7 +415,7 @@ importers:
         version: 0.6.2(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@tanstack/react-table':
         specifier: ^8.21.3
         version: 8.21.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -484,7 +484,7 @@ importers:
         version: 1.5.0(typescript@6.0.3)
     devDependencies:
       '@tanstack/react-query':
-        specifier: ^5.101.1
+        specifier: ^5.102.0
         version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.41
@@ -551,7 +551,7 @@ importers:
         version: 0.14.26(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(use-sync-external-store@1.7.0(react@19.3.1))
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@streamdown/code':
         specifier: ^1.1.1
         version: 1.1.1(react@19.3.1)
@@ -732,7 +732,7 @@ importers:
         version: link:../../../../packages/ui
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       react-hook-form:
         specifier: ^7.81.0
         version: 7.91.0(@types/react@19.3.0)(react@19.3.1)
@@ -1035,7 +1035,7 @@ importers:
         version: link:../../../../packages/ui
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       lucide-react:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
@@ -1127,9 +1127,9 @@ importers:
         version: link:../../../../packages/ui
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@tanstack/react-query':
-        specifier: ^5.101.2
+        specifier: ^5.102.0
         version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       '@tanstack/react-virtual':
         specifier: ^3.14.10
@@ -1326,9 +1326,9 @@ importers:
         version: link:../../../../packages/ui
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@tanstack/react-query':
-        specifier: ^5.101.2
+        specifier: ^5.102.0
         version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       lucide-react:
         specifier: ^1.21.0
@@ -1399,7 +1399,7 @@ importers:
         specifier: ^3.2.0
         version: 3.2.0(graphql@16.15.0)
       '@tanstack/react-query':
-        specifier: ^5.101.1
+        specifier: ^5.102.0
         version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.41
@@ -1531,7 +1531,7 @@ importers:
         version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
     devDependencies:
       '@tanstack/react-query':
-        specifier: ^5.101.1
+        specifier: ^5.102.0
         version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.41
@@ -1801,7 +1801,7 @@ importers:
         version: link:../../../../packages/ui
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       lucide-react:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
@@ -1859,7 +1859,7 @@ importers:
         version: link:../../../../packages/ui
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       lucide-react:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
@@ -2046,7 +2046,7 @@ importers:
         version: 2.4.0
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@vidstack/react':
         specifier: ^1.12.13
         version: 1.15.7(@types/react@19.3.0)(react@19.3.1)
@@ -2559,7 +2559,7 @@ importers:
         version: link:../../../../packages/storybook
       '@refinedev/core':
         specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -9723,7 +9723,7 @@ snapshots:
 
   '@radix-ui/rect@1.1.3': {}
 
-  '@refinedev/core@5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
       '@refinedev/devtools-internal': 2.0.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@tanstack/react-query': 5.107.1(@types/react@19.3.0)(react@19.3.1)
@@ -9759,9 +9759,9 @@ snapshots:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
 
-  '@refinedev/hasura@7.0.1(@refinedev/core@5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))':
+  '@refinedev/hasura@7.0.1(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))':
     dependencies:
-      '@refinedev/core': 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@refinedev/core': 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       camelcase: 6.3.0
       gql-query-builder: 3.8.0
       graphql: 15.11.0

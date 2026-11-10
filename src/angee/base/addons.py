@@ -3,16 +3,17 @@
 Distribution metadata and django-compose own addon identity and activation. This
 module only exposes package data; it never resolves an application graph.
 """
+
 from __future__ import annotations
 
 import importlib
 import json
 import tomllib
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from importlib import metadata
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Literal, overload
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
@@ -24,7 +25,10 @@ from django_compose.components import InstalledComponents, installed_components
 
 
 def addon_facts(
-    app_name: str, capability: str, *, index: InstalledComponents | None = None,
+    app_name: str,
+    capability: str,
+    *,
+    index: InstalledComponents | None = None,
 ) -> dict[str, Any]:
     """Read ``[tool.<capability>]`` for a group member without importing it.
 
@@ -81,6 +85,7 @@ def is_angee_addon(app_config: AppConfig, *, index: InstalledComponents | None =
     """
 
     if index is None:
+        # django-compose publishes closure settings only in composed hosts.
         closure = getattr(settings, "COMPOSE_CLOSURE", None) if settings.configured else None
         if closure is not None and app_config.name in closure.dependencies:
             return app_config.name in closure.components.values()
@@ -89,7 +94,10 @@ def is_angee_addon(app_config: AppConfig, *, index: InstalledComponents | None =
 
 
 def optional_addon_module(
-    app_config: AppConfig, module_name: str, *, index: InstalledComponents | None = None,
+    app_config: AppConfig,
+    module_name: str,
+    *,
+    index: InstalledComponents | None = None,
 ) -> ModuleType | None:
     """Import an optional addon module, preserving errors in a present module."""
 
@@ -116,18 +124,67 @@ def addon_modules(module_name: str) -> Iterator[tuple[AppConfig, ModuleType]]:
             yield config, module
 
 
-def addon_contribution(module: ModuleType, name: str, *, allow_callable: bool = True) -> list[Any]:
-    """Read ``module.<name>`` as one ordered contribution.
+@overload
+def addon_contribution(
+    module: ModuleType,
+    name: str,
+    *,
+    kind: Literal["iterable"] = "iterable",
+    allow_callable: bool | Literal["required"] = True,
+) -> list[Any]: ...
 
-    An unbound name contributes nothing; a callable is called when the convention
-    allows one. The result must be an ordered iterable: strings, bytes, mappings
-    and sets raise ``ImproperlyConfigured``.
+
+@overload
+def addon_contribution(
+    module: ModuleType,
+    name: str,
+    *,
+    kind: Literal["mapping"],
+    allow_callable: bool | Literal["required"] = True,
+) -> Mapping[str, Any]: ...
+
+
+@overload
+def addon_contribution(
+    module: ModuleType,
+    name: str,
+    *,
+    kind: Literal["callable"],
+) -> Callable[..., Any] | None: ...
+
+
+def addon_contribution(
+    module: ModuleType,
+    name: str,
+    *,
+    kind: Literal["iterable", "mapping", "callable"] = "iterable",
+    allow_callable: bool | Literal["required"] = True,
+) -> list[Any] | Mapping[str, Any] | Callable[..., Any] | None:
+    """Read one optional module export through its declared contribution contract.
+
+    Missing exports contribute an empty collection, or None for a callable.
+    Present exports must match the contract, including explicit None values.
+    Iterable and mapping contributions invoke factories when allowed;
+    ``allow_callable="required"`` requires a factory, and False forbids one.
+    Callable contributions return the callable without executing it. Ordered
+    iterables reject strings, bytes, mappings and sets.
     """
 
-    if not hasattr(module, name):
-        return []
-    contribution = getattr(module, name)
+    # Python modules have optional convention exports, with no shared class base.
+    absent = object()
+    contribution = getattr(module, name, absent)
+    if contribution is absent:
+        return None if kind == "callable" else {} if kind == "mapping" else []
+    if kind == "callable" or allow_callable == "required":
+        if not callable(contribution):
+            raise ImproperlyConfigured(f"{module.__name__}.{name} must be callable")
+        if kind == "callable":
+            return contribution
     value = contribution() if allow_callable and callable(contribution) else contribution
+    if kind == "mapping":
+        if not isinstance(value, Mapping):
+            raise ImproperlyConfigured(f"{module.__name__}.{name} must resolve to a mapping")
+        return value
     if not isinstance(value, Iterable) or isinstance(value, str | bytes | Mapping | set | frozenset):
         suffix = "iterable or callable" if allow_callable else "iterable"
         raise ImproperlyConfigured(f"{module.__name__}.{name} must be {suffix}")

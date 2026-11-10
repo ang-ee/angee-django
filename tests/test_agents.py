@@ -79,7 +79,6 @@ from angee.agents.models import (
 )
 from angee.agents.models import Agent as AbstractAgent
 from angee.agents.sdk_backends import SDKInferenceBackend
-from angee.agents.skills import parse_skill_meta
 from angee.agents.testing.models import InferenceModel, InferenceProvider, Skill
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
@@ -133,31 +132,31 @@ def test_agent_runtime_registry_matches_implementation_keys() -> None:
     assert AbstractAgent._meta.get_field("runtime_class").check() == []
 
 
-# --- parse_skill_meta (pure) --------------------------------------------------
+# --- Skill.parse_manifest (pure) ---------------------------------------------
 
 
-def test_parse_skill_meta_reads_frontmatter() -> None:
+def test_skill_manifest_reads_frontmatter() -> None:
     """The parser lifts name/description and keeps the rest as metadata."""
 
-    descriptor = parse_skill_meta(b"---\nname: Calculator\ndescription: arithmetic\nversion: 2\n---\nbody")
+    descriptor = Skill.parse_manifest(b"---\nname: Calculator\ndescription: arithmetic\nversion: 2\n---\nbody")
     assert descriptor["name"] == "Calculator"
     assert descriptor["description"] == "arithmetic"
     assert descriptor["metadata"] == {"version": 2}
 
 
-def test_parse_skill_meta_coerces_typed_values_json_safe() -> None:
+def test_skill_manifest_coerces_typed_values_json_safe() -> None:
     """An unquoted date becomes a ``date`` YAML-side; the parser keeps metadata JSON-safe."""
 
-    descriptor = parse_skill_meta(b"---\nname: Dated\nreleased: 2024-01-15\n---\n")
+    descriptor = Skill.parse_manifest(b"---\nname: Dated\nreleased: 2024-01-15\n---\n")
     assert descriptor["metadata"] == {"released": "2024-01-15"}
     json.dumps(descriptor["metadata"])  # must not raise
 
 
-def test_parse_skill_meta_tolerates_missing_or_malformed_frontmatter() -> None:
+def test_skill_manifest_tolerates_missing_or_malformed_frontmatter() -> None:
     """No frontmatter (or an unterminated block) yields an empty descriptor, not an error."""
 
-    assert parse_skill_meta(b"# just a heading")["name"] == ""
-    assert parse_skill_meta(b"---\nnot: [valid")["metadata"] == {}
+    assert Skill.parse_manifest(b"# just a heading")["name"] == ""
+    assert Skill.parse_manifest(b"---\nnot: [valid")["metadata"] == {}
 
 
 # --- skill discovery ----------------------------------------------------------
@@ -368,14 +367,36 @@ def test_ollama_backend_owns_protocol_details_and_provider_identity() -> None:
     }
 
 
-def test_openai_model_filtering_keeps_its_existing_prefix_policy() -> None:
-    """Lifting the prefix data onto the class does not broaden OpenAI's catalogue."""
+@pytest.mark.parametrize("generation_limit", [2048, "2048", 2048.0])
+def test_ollama_backend_accepts_exact_integral_generation_limits(generation_limit: object) -> None:
+    backend = OllamaInferenceBackend(
+        SimpleNamespace(credential=None, base_url="", config={"generation_limit": generation_limit})
+    )
+
+    assert backend.request_settings(None)["max_tokens"] == 2048
+
+
+def test_ollama_backend_extends_the_native_provider_profile() -> None:
+    """Models bind pydantic-ai's Ollama provider; the backend adds only its output envelope."""
+
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="", config={}))
+    model = backend._build_model("qwen3:8b", AsyncOpenAI(api_key="not-required", base_url=backend.default_base_url))
+
+    assert model.system == "ollama"
+    assert model.profile["supports_json_schema_output"] is True
+    assert model.profile["openai_supports_strict_tool_definition"] is False
+    assert model.profile["native_output_requires_schema_in_instructions"] is True
+    assert model.profile["default_structured_output_mode"] == "native"
+
+
+def test_openai_model_filtering_admits_chat_and_embeddings() -> None:
+    """Hosted discovery admits embeddings alongside the existing chat prefixes."""
 
     backend = OpenAIInferenceBackend(SimpleNamespace(config={}, base_url=""))
 
-    assert backend._is_chat_model("gpt-4.1") is True
-    assert backend._is_chat_model("llama3.2:latest") is False
-    assert backend._is_chat_model("text-embedding-3-large") is False
+    assert backend._is_catalogue_model("gpt-4.1") is True
+    assert backend._is_catalogue_model("llama3.2:latest") is False
+    assert backend._is_catalogue_model("text-embedding-3-large") is True
 
 
 @pytest.mark.parametrize("base_url", ["", "https://api.openai.com/v1", "https://API.OpenAI.COM./v1/"])
@@ -389,7 +410,7 @@ def test_openai_hosted_endpoints_require_owned_credentials(base_url: str, monkey
         backend._client_kwargs()
     with pytest.raises(ValueError, match="requires an attached credential"):
         backend._async_client_kwargs()
-    assert not backend._is_chat_model("llama3.2:latest")
+    assert not backend._is_catalogue_model("llama3.2:latest")
 
 
 @pytest.mark.parametrize("attached", [False, True])
@@ -446,11 +467,18 @@ def test_openai_compatible_model_discovery_keeps_config_and_deny_policy(monkeypa
         )
     )
     monkeypatch.setattr(backend, "client", lambda: nullcontext(client))
-    assert [spec.handle for spec in backend.list_models()] == ["llama3.2:latest", "openai/llama3.2:latest"]
+    assert [spec.handle for spec in backend.list_models()] == [
+        "llama3.2:latest",
+        "openai/llama3.2:latest",
+        "text-embedding-3-large",
+        "openai/text-embedding-3-large",
+    ]
     provider.config = {"model_allow_prefixes": ["gpt-"]}
     assert backend.list_models() == []
     provider.config = {"model_allow_prefixes": [], "model_deny_prefixes": ["llama"]}
-    assert not backend._is_chat_model("llama3.2:latest")
+    assert not backend._is_catalogue_model("llama3.2:latest")
+    provider.config = {"model_deny_prefixes": ["text-embedding-"]}
+    assert not backend._is_catalogue_model("text-embedding-3-large")
 
 
 @pytest.mark.parametrize(
@@ -771,7 +799,7 @@ def test_openai_backend_refresh_syncs_native_and_broker_models(
         material={"api_key": "api-key"},
     )
 
-    assert provider.refresh_models() == 4
+    assert provider.refresh_models() == 6
 
     client = _FakeOpenAIClient.instances[-1]
     assert client.closed
@@ -779,7 +807,18 @@ def test_openai_backend_refresh_syncs_native_and_broker_models(
     assert client.models.calls == [{}]
     with system_context(reason="test read"):
         models = {model.name: model for model in InferenceModel.objects.filter(provider=provider)}
-    assert set(models) == {"gpt-4.1", "openai/gpt-4.1", "gpt-4.2", "openai/gpt-4.2"}
+    assert set(models) == {
+        "gpt-4.1",
+        "openai/gpt-4.1",
+        "gpt-4.2",
+        "openai/gpt-4.2",
+        "text-embedding-3-large",
+        "openai/text-embedding-3-large",
+    }
+    for name in ("text-embedding-3-large", "openai/text-embedding-3-large"):
+        assert models[name].model_use == InferenceModelUse.EMBEDDING
+        assert "embedding_dimensions" not in models[name].capabilities
+        assert models[name].context_window == 8192
     assert models["gpt-4.1"].display_name == "gpt-4.1"
     assert models["gpt-4.1"].config == {
         "provider_model": "gpt-4.1",
@@ -1136,7 +1175,7 @@ def test_ollama_backend_does_not_repeat_failed_native_requests(monkeypatch, fail
     assert backend.is_transient_error(error.value)
 
 
-@pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded"])
+@pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded", 1.5, "1.5", float("inf"), float("nan")])
 def test_ollama_backend_rejects_invalid_generation_limits(generation_limit: object) -> None:
     backend = OllamaInferenceBackend(
         SimpleNamespace(credential=None, base_url="", config={"generation_limit": generation_limit})

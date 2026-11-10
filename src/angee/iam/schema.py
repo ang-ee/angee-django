@@ -70,6 +70,7 @@ from angee.iam.roles import (
 from angee.iam.roles import (
     IAMGrantRow,
     IAMRoleRow,
+    OverviewInfo,
     validate_subject,
 )
 from angee.iam.roles import assignment_subject_labels as _assignment_subject_labels_owner
@@ -81,9 +82,6 @@ from angee.iam.roles import (
 )
 from angee.iam.roles import (
     group_members as _group_members_owner,
-)
-from angee.iam.roles import (
-    iam_overview as _iam_overview_owner,
 )
 from angee.iam.roles import (
     permission_conditions as _permission_conditions_owner,
@@ -114,7 +112,7 @@ strawberry.enum(cast(Any, UserAccountAction))
 def _view_as(info: strawberry.Info) -> ViewAs | None:
     """Read the optional view-as carrier owned by the GraphQL transport."""
 
-    return cast(ViewAs | None, getattr(get_request(info), "view_as", None))
+    return ViewAs.bound_to(get_request(info))
 
 
 def _account_action_allowed(action: str, info: strawberry.Info) -> Any:
@@ -124,17 +122,17 @@ def _account_action_allowed(action: str, info: strawberry.Info) -> Any:
     request = get_request(info)
     if not isinstance(request, HttpRequest):
         return User.account_action_annotations(actor)[action]
-    memo = getattr(request, "_iam_account_action_annotations", None)
+    memo = request.__dict__.get("_iam_account_action_annotations")
     if memo is None or memo[0] != actor:
         memo = (actor, User.account_action_annotations(actor))
-        setattr(request, "_iam_account_action_annotations", memo)
+        request.__dict__["_iam_account_action_annotations"] = memo
     return memo[1][action]
 
 
 def _preference_object(user: Any) -> JSON:
     """Return a safe UI preference object for user projections."""
 
-    preferences = getattr(user, "preferences", {})
+    preferences = user.preferences
     return cast(JSON, preferences if isinstance(preferences, dict) else {})
 
 
@@ -578,12 +576,6 @@ def _principal_access(subject: str) -> IAMPrincipalAccessType:
     )
 
 
-def _iam_overview(peek_limit: int) -> IAMOverviewType:
-    """Return IAM dashboard facts independent of paginated list rows."""
-
-    return cast(IAMOverviewType, _iam_overview_owner(peek_limit))
-
-
 def _admin_relationship_queryset(info: strawberry.Info) -> QuerySet[Any]:
     """Return active REBAC relationship rows scoped to platform admins.
 
@@ -810,11 +802,7 @@ class IAMQuery:
 
         view_as = _view_as(info)
         user = view_as.target if view_as is not None else get_current_user(info)
-        if isinstance(user, AnonymousUser) or not getattr(
-            user,
-            "is_authenticated",
-            False,
-        ):
+        if isinstance(user, AnonymousUser) or not (user is not None and user.is_authenticated):
             return None
         return cast(CurrentUserType, user)
 
@@ -886,7 +874,7 @@ class IAMConsoleQuery:
                 you=ref == viewer,
             )
             for ref in refs
-            if ref in resolved and getattr(resolved[ref], "kind", None) == "person"
+            if ref in resolved and isinstance(resolved[ref], User) and cast(Any, resolved[ref]).is_person
         ]
 
     @strawberry.field
@@ -948,7 +936,7 @@ class IAMConsoleQuery:
     ) -> IAMOverviewType:
         """Return IAM dashboard aggregates and peek rows."""
 
-        return _iam_overview(peek_limit)
+        return cast(IAMOverviewType, OverviewInfo.build(peek_limit))
 
 
 @strawberry.type

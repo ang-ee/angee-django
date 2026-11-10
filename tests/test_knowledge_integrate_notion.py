@@ -109,6 +109,19 @@ def targets(bridge):
     }
 
 
+def test_rollback_stamps_the_declared_mapping_in_record_evidence(bridge, api):
+    """Rollback preserves progress without labelling older output with a newer mapping."""
+    api.add(node(10, "Rollback page"), "Body")
+    backend = NotionBackend(integration=bridge)
+    stream = open_stream(bridge, "pages", "", backend)
+    stream.mapping_version = backend.mapping_version + 1
+    stream.save(update_fields=["mapping_version"])
+    reopened = open_stream(bridge, "pages", "", backend)
+    assert (reopened.pk, reopened.cursor) == (stream.pk, stream.cursor)
+    assert advance_stream(reopened, backend).count == 1
+    assert reopened.links.get().mapping_version == backend.mapping_version
+
+
 def test_import_replay_database_rows_and_late_parents(bridge, api):
     parent = node(20, "Parent")
     repeated = "Repeated" * 80
@@ -398,11 +411,11 @@ def test_sync_action_requires_write_access(composed_tables, monkeypatch):
     schema = addon_schema(schemas, "console")
     queued = []
 
-    def queue(row):
+    def request_sync(row):
         queued.append(row)
         return True
 
-    monkeypatch.setattr("angee.knowledge_integrate_notion.schema.queue_bridge_sync", queue)
+    monkeypatch.setattr(NotionConnection, "request_sync", request_sync)
     mutation = "mutation Sync($id: ID!) { sync_notion_connection(id: $id) { ok } }"
     variables = {"id": str(connection.sqid)}
     for user in (AnonymousUser(), create_user("notion-outsider")):

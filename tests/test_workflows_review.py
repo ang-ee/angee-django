@@ -150,7 +150,7 @@ def test_multiple_choices_receive_the_set_and_route_done(review):
     _, people, sent, _ = review
     run, step = start_review(review, input={"multiple": True})
     decision = questions(step)[0]
-    Decision.objects.decide(decision, actor=people[0], chosen=["reject", "approve"])
+    decision.decide(actor=people[0], chosen=["reject", "approve"])
     assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     assert run.outcome == "done" and run.output["chosen"] == ["approve", "reject"]
@@ -164,7 +164,7 @@ def test_choose_is_applied_on_workflow_resume(review):
     run, step = start_review(review, input={"choose": True})
     decision = questions(step)[0]
     values = {public_id_of(question.review_subject): {"name": "Answerer's value"}}
-    Decision.objects.decide(decision, actor=people[0], chosen=["approve"], values=values)
+    decision.decide(actor=people[0], chosen=["approve"], values=values)
     question.review_subject.refresh_from_db()
     assert question.review_subject.name != "Answerer's value"
     assert Decision.system_queryset().get(pk=decision.pk).verdict_values == values
@@ -347,7 +347,7 @@ def test_answered_question_can_be_replaced_without_losing_its_run_association(re
 
     def context(for_run, principal):
         return StepContext(run=for_run, step_run=step, step=Followup, attempt=None,
-                           input={}, config=None, actor=principal, now=first.answered_at)
+                           input={}, config=None, actor=principal, now=first.answered_at, runner=runner)
 
     assert context(run, actor).decision(public_id_of(first)).pk == first.pk
     other, other_step = start_review((actor, people, sent, Followup))
@@ -370,7 +370,7 @@ def test_open_question_cannot_be_replaced(review):
     run, step = start_review(review)
     current = questions(step)[0]
     ctx = StepContext(run=run, step_run=step, step=question, attempt=None,
-                      input={}, config=None, actor=actor, now=run.created_at)
+                      input={}, config=None, actor=actor, now=run.created_at, runner=runner)
     before = Decision.system_queryset().count()
     with pytest.raises(ValidationError, match="still has an open decision"):
         question().ask(ctx).admit(ctx)
@@ -419,7 +419,7 @@ def test_concrete_action_owner_applies_child_fields_with_canonical_concern(compo
     ), actor=actor)
     concern = decision.records.with_actor(actor).get()
     assert type(concern.record) is MtiParent
-    decision = Decision.objects.decide(decision, actor=reader, chosen=["confirm"])
+    decision = decision.decide(actor=reader, chosen=["confirm"])
     with pytest.raises(PermissionDenied):
         apply_proposals(decision, actor=reader)
     record.refresh_from_db()
@@ -454,7 +454,7 @@ def test_proposal_uses_prepared_subject_lock_and_rechecks_permission(review, mon
     observed = []
 
     def lock(instance, members=None):
-        observed.append((instance.name, instance._state.db))
+        observed.append(instance.name)
         return original_lock(instance, members)
 
     def access(instance, action, **kwargs):
@@ -466,5 +466,5 @@ def test_proposal_uses_prepared_subject_lock_and_rechecks_permission(review, mon
     monkeypatch.setattr(model, "has_access", access)
     assert apply_proposals(decision, actor=actor) == "approved"
     question.review_subject.refresh_from_db()
-    assert observed == [("Applied", question.review_subject._state.db)]
+    assert observed == ["Applied"]
     assert question.review_subject.name == "Applied"

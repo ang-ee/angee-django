@@ -31,7 +31,7 @@ import posixpath
 import re
 import secrets
 from collections import OrderedDict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import datetime
 from io import Reader
 from pathlib import Path
@@ -50,8 +50,8 @@ from django.core.exceptions import (
 )
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, models, router, transaction
-from django.db.models import Q
+from django.db import IntegrityError, models, transaction
+from django.db.models import ProtectedError, Q
 from django.db.models.signals import post_save
 from django.urls import reverse
 from django.utils import timezone
@@ -61,14 +61,12 @@ from rebac import (
     GenericTarget,
     NoActorResolvedError,
     PermissionDenied,
-    SubjectRef,
     current_actor,
     generic_target,
     require_permission,
     system_context,
     to_object_ref,
     to_subject_ref,
-    user_subject_type,
 )
 from rebac.backends import backend as rebac_backend
 from rebac.field_backing import resolve_field_backing
@@ -86,7 +84,7 @@ from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQue
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet, TrashMixin, TrashQuerySet
-from angee.base.permissions import DirectRecordAccess, actor_user_id
+from angee.base.permissions import DirectRecordAccess, actor_user_id, user_subject_ref
 from angee.base.querysets import row_lock_paths
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
@@ -104,6 +102,7 @@ from angee.storage.uploads import (
     UPLOAD_TOKEN_SALT,
     BodyTooLarge,
     CappedReader,
+    DownloadTokenSigner,
     attachment_extension,
     detect_mime,
     require_image,
@@ -177,7 +176,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     objects = StorageMasterManager()
 
     _storage_cache: ClassVar[OrderedDict[tuple[Any, ...], StorageBackend]] = OrderedDict()
-    """Resolved backend instances keyed by database, row, selected class and resolved config."""
+    """Resolved backend instances keyed by row, selected class and resolved config."""
 
     class Meta:
         """Django model options for storage backends."""
@@ -211,7 +210,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
 
     @property
     def storage(self) -> StorageBackend:
-        """Return the resolved backend instance, cached per database, row, implementation and config.
+        """Return the resolved backend instance, cached per row, implementation and config.
 
         The cache key includes the resolved config, so rotating an env-backed
         credential takes effect on the next lookup without a worker restart.
@@ -219,7 +218,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
 
         config = self.resolved_config()
         backend_class = self.get_backend_class_impl()
-        key = (self._state.db, self.pk, backend_class, _frozen(config))
+        key = (self.pk, backend_class, _frozen(config))
         cached = self._storage_cache.pop(key, None)
         if cached is not None:
             self._storage_cache[key] = cached
@@ -234,12 +233,31 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
 class DriveQuerySet[DriveT: Drive](OwnerQuerySet[DriveT], StorageMasterQuerySet[DriveT]):
     """Archive reads and protected ownership writes for storage volumes."""
 
+    def browsable(self) -> Self:
+        """Return the drives listings offer: all but the image drive, as with ``File.objects.browsable``."""
+
+        return self.exclude(slug=settings.ANGEE_STORAGE_IMAGE_DRIVE)
+
 
 _DriveManagerBase = AngeeHistoryManager.from_queryset(DriveQuerySet)
 
 
 class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
     """Provision independent volumes on the configured default backend."""
+
+    def configured_default(self) -> DriveT | None:
+        """Return the drive ``ANGEE_STORAGE_DEFAULT_DRIVE`` names, with its backend, or ``None`` while absent.
+
+        The infrastructure read is elevated; it grants the caller nothing for
+        what it then creates.
+        """
+
+        return (
+            self.model.system_queryset()
+            .filter(slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE)
+            .select_related("backend")
+            .first()
+        )
 
     def create_on_default_backend(self, *, slug: str, name: str, owns_items: bool = False) -> DriveT:
         """Create an ownerless drive with its own key namespace.
@@ -249,7 +267,7 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
         permissions and attribution.
         """
 
-        default = self.model.system_queryset().filter(slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE).first()
+        default = self.configured_default()
         if default is None:
             raise ValidationError({"drive": "Configure an existing default drive before creating a volume."})
         drive = self.model(
@@ -265,11 +283,6 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
         except IntegrityError as error:
             raise ValidationError({"slug": "This drive slug or key namespace is already in use."}) from error
         return drive
-
-    def browsable(self) -> DriveQuerySet[DriveT]:
-        """Return the drives listings offer: all but the image drive, as with ``File.objects.browsable``."""
-
-        return self.exclude(slug=settings.ANGEE_STORAGE_IMAGE_DRIVE)
 
     def image_drive(self) -> DriveT | None:
         """Return the image drive (``ANGEE_STORAGE_IMAGE_DRIVE``), creating it at first use.
@@ -289,7 +302,7 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
         """
 
         slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
-        everyone = DirectRecordAccess(relation="viewer", subject=SubjectRef.of(user_subject_type(), "*"))
+        everyone = DirectRecordAccess(relation="viewer", subject=user_subject_ref(user_id="*"))
         with system_context(reason="storage.drive.image_drive"):
             drive = self.model.system_queryset().filter(slug=slug).first()
             if drive is None:
@@ -406,6 +419,64 @@ class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel, concre
 class FolderQuerySet[FolderT: Folder](HierarchyQuerySet[FolderT], AngeeHistoryQuerySet[FolderT]):
     """Actor-scoped folder trees with paths maintained by HierarchyMixin."""
 
+    def prune_missing(self, drive: Any, present: Collection[Sequence[str]]) -> int:
+        """Delete this selection's real folders whose source directory vanished and that hold no rows.
+
+        The folder mirror of ``File.objects.trash_missing_external``: a
+        directory removed from an external source must not linger in the tree.
+        Only an empty leaf goes: a folder that parents a file (live, or trashed
+        and kept for history) or a surviving subfolder stays, so the reconcile
+        never orphans a row. ``File.folder`` is ``SET_NULL``, so deleting a
+        folder that parents a file would silently detach it; each candidate is
+        therefore rechecked under its own row lock, one folder per transaction,
+        deepest first. Source paths come from the native hierarchy
+        (:meth:`ancestors_of`), so a narrowed selection still names its folders
+        by their full path. ``present`` is the set of drive-relative directory
+        paths the current sync mirrored.
+        """
+
+        present_paths = {tuple(parts) for parts in present}
+        file_model = self.model._meta.get_field("files").related_model
+        assert file_model is not None
+        with system_context(reason="storage.folder.prune_missing"):
+            candidates = self.filter(drive=drive, is_virtual=False)
+            folders = list(candidates.only("pk", "parent_id", "name", "path"))
+            ancestors = self.model.objects.ancestors_of(folders).only("path", "name")
+            names = {folder.path: folder.name for folder in (*ancestors, *folders)}
+            selected = [folder.pk for folder in folders]
+            child_counts = dict(
+                self.model._base_manager.filter(parent_id__in=selected)
+                .order_by()
+                .values("parent_id")
+                .annotate(count=models.Count("pk"))
+                .values_list("parent_id", "count")
+            )
+            folders_with_files = set(
+                file_model._base_manager.filter(folder_id__in=selected)
+                .order_by()  # a distinct values_list must clear Meta.ordering
+                .values_list("folder_id", flat=True)
+                .distinct()
+            )
+            pruned = 0
+            for folder in sorted(folders, key=lambda row: len(row.ancestor_paths()), reverse=True):
+                if tuple(names[path] for path in (*folder.ancestor_paths(), folder.path)) in present_paths:
+                    continue
+                if folder.pk in folders_with_files or child_counts.get(folder.pk, 0):
+                    continue
+                with transaction.atomic():
+                    current = candidates.filter(pk=folder.pk, path=folder.path, name=folder.name)
+                    if (
+                        current.lock_if_supported().first() is None
+                        or self.model._base_manager.filter(parent_id=folder.pk).exists()
+                        or file_model._base_manager.filter(folder_id=folder.pk).exists()
+                    ):
+                        continue
+                    current.delete()
+                pruned += 1
+                if folder.parent_id is not None:
+                    child_counts[folder.parent_id] = child_counts.get(folder.parent_id, 1) - 1
+            return pruned
+
 
 _FolderManagerBase = AngeeHistoryManager.from_queryset(FolderQuerySet)
 
@@ -481,62 +552,6 @@ class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
                 )
                 prefixes[prefix] = parent
         return parent
-
-    def prune_missing(self, drive: Any, present: Collection[Sequence[str]]) -> int:
-        """Delete real folders whose source directory vanished and hold no rows.
-
-        The folder mirror of :meth:`FileManager.trash_missing_external`: a
-        directory removed from an external source must not linger in the tree.
-        Only a truly empty leaf is removed — a folder that still parents a file
-        (a live one, or a soft-trashed one kept for history) or a surviving
-        subfolder is retained, so the reconcile never orphans a row and needs no
-        recursion. The ``folders_with_files`` guard is load-bearing precisely
-        because ``File.folder`` is ``SET_NULL`` (not ``PROTECT``): deleting a
-        folder that still parents a file would silently null the file's folder
-        rather than being blocked, so the guard — not the FK constraint — is what
-        keeps a live sync from detaching a row. Deepest paths are removed first,
-        so the ``parent`` PROTECT constraint always holds. ``present`` is the set
-        of drive-relative directory paths the current sync mirrored.
-        """
-
-        present_paths = {tuple(parts) for parts in present}
-        file_model = self.model._meta.get_field("files").related_model
-        assert file_model is not None and issubclass(file_model, File)
-        with system_context(reason="storage.folder.prune_missing"):
-            rows = list(self.filter(drive=drive, is_virtual=False).values_list("pk", "parent_id", "name"))
-            parents: dict[Any, tuple[Any, str]] = {pk: (parent_id, name) for pk, parent_id, name in rows}
-            child_counts: dict[Any, int] = {}
-            for _pk, parent_id, _name in rows:
-                if parent_id is not None:
-                    child_counts[parent_id] = child_counts.get(parent_id, 0) + 1
-            folders_with_files = set(
-                file_model._default_manager.filter(drive=drive, folder__isnull=False)
-                .order_by()  # a distinct values_list must clear Meta.ordering
-                .values_list("folder_id", flat=True)
-                .distinct()
-            )
-
-            def path_of(pk: Any) -> tuple[str, ...]:
-                names: list[str] = []
-                cursor: Any = pk
-                while cursor is not None:
-                    parent_id, name = parents[cursor]
-                    names.append(name)
-                    cursor = parent_id
-                return tuple(reversed(names))
-
-            pruned = 0
-            for pk in sorted(parents, key=lambda folder_pk: len(path_of(folder_pk)), reverse=True):
-                parent_id, _name = parents[pk]
-                if path_of(pk) in present_paths:
-                    continue
-                if pk in folders_with_files or child_counts.get(pk, 0) > 0:
-                    continue
-                self.filter(pk=pk).delete()
-                pruned += 1
-                if parent_id is not None:
-                    child_counts[parent_id] = child_counts.get(parent_id, 1) - 1
-            return pruned
 
 
 class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
@@ -626,9 +641,7 @@ class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=
 
         super().clean()
         self._validate_drive()
-        parent = self._hierarchy_parent()
-        self._reject_cross_scope_parent(parent)
-        self._reject_cycle(parent)
+        self.validate_hierarchy_parent()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate folder kinds; native hierarchy owns parent and drive moves."""
@@ -685,6 +698,43 @@ class MimeType(ResourceLoadMixin, AngeeDataModel, concrete=True):
 class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], AngeeHistoryQuerySet[FileT]):
     """REBAC-scoped reads for file rows; ``trashed()`` backs the Trash smart folder."""
 
+    def trash_missing_external(self, drive: Any, present_paths: Collection[str]) -> int:
+        """Soft-trash this selection's live rows in ``drive`` whose external path vanished."""
+
+        present = {str(path) for path in present_paths}
+        with system_context(reason="storage.file.trash_missing_external"):
+            rows = self.filter(drive=drive).untrashed().values_list("pk", "storage_path")
+            missing = [pk for pk, storage_path in rows.iterator(chunk_size=2000) if str(storage_path) not in present]
+            if not missing:
+                return 0
+            return int(self.filter(pk__in=missing).trash())
+
+    def purge(self, *, chunk_size: int = 500, on_error: Callable[[Any, Exception], None] | None = None) -> int:
+        """Purge each row still selected, one row per transaction, and return how many went.
+
+        Each row is reread under its lock against this selection's predicate just
+        before :meth:`File.purge`, so a row that left the selection meanwhile
+        (finalized, restored) is skipped. A row that fails is reported to
+        ``on_error``, or logged without one, and the rest continue.
+        """
+
+        purged = 0
+        for pk in self.values_list("pk", flat=True).iterator(chunk_size=max(1, chunk_size)):
+            try:
+                with transaction.atomic():
+                    row = self.filter(pk=pk).lock_if_supported().first()
+                    if row is None:
+                        continue
+                    row.purge()
+            except Exception as error:
+                if on_error is None:
+                    logger.exception("storage.file.purge failed for pk=%s", pk)
+                else:
+                    on_error(pk, error)
+                continue
+            purged += 1
+        return purged
+
     def stale_drafts(self, cutoff: datetime) -> Self:
         """Return unfinished DRAFT/FAILED rows reserved before ``cutoff``."""
 
@@ -713,11 +763,11 @@ class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], Ange
         """Refuse bulk delete: it bypasses soft-trash and orphans backend bytes.
 
         ``QuerySet.delete()`` issues SQL without calling :meth:`File.delete`, so
-        callers must iterate and soft-delete, or :meth:`File.purge` to hard-delete.
+        callers must iterate and soft-delete, or :meth:`purge` to hard-delete.
         """
 
         raise NotImplementedError(
-            "Bulk File delete is disabled; call File.delete() per row to trash, or File.purge() to hard-delete."
+            "Bulk File delete is disabled; call File.delete() per row to trash, or purge() to hard-delete."
         )
 
 
@@ -853,17 +903,19 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         drive_id: str = "",
         drive_slug: str = "",
         folder_id: str = "",
-    ) -> FileT:
-        """Ingest bytes already in hand into a drive and return the READY File.
+    ) -> tuple[FileT, bool]:
+        """Ingest bytes already in hand into a drive and return ``(file, created)``, as ``get_or_create`` does.
 
         The server-side sibling of the proxy upload: the bytes are trusted (a
         sync fetched them), so this writes them to a unique reserved key and
         finalizes in one call instead of minting an upload token. Existing READY
-        bytes with inherited visibility return their row; a record-scoped
-        collision raises ``UploadConflict`` without identifying that row.
-        ``owner_id`` sets ``owner`` independently of attribution; the whole verb runs
-        elevated, so a sync needs no per-actor drive grant, and read access is
-        scoped afterwards by that owner.
+        bytes with inherited visibility return their row with ``created`` false;
+        a record-scoped collision raises ``UploadConflict`` without identifying
+        that row. ``created`` names the call whose insert became the READY row,
+        not exclusive use: an identical concurrent ingest resolves to the same
+        row. ``owner_id`` sets ``owner`` independently of attribution; the whole
+        verb runs elevated, so a sync needs no per-actor drive grant, and read
+        access is scoped afterwards by that owner.
         """
 
         digest = hashlib.sha256(content).hexdigest()
@@ -888,13 +940,21 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         through the drive's grant. Raises :class:`exceptions.UploadTooLarge` or
         :class:`exceptions.UploadTypeRefused` before anything is stored, and
         :class:`exceptions.UploadTargetNotFound` while no image drive can exist.
+        An image-drive convenience, it returns the bare File rather than
+        :meth:`ingest_bytes`'s ``(file, created)``: a shared, ownerless image is
+        never its caller's to discard, so whether this call created it decides nothing.
         """
 
         mime = require_image(content)
         drive = self.model.drive.field.related_model.objects.image_drive()
         if drive is None:
             raise exceptions.UploadTargetNotFound("The image drive needs a default drive to provision it.")
-        return self.ingest_bytes(content, filename=f"image{attachment_extension(mime)}", drive_slug=drive.slug)
+        image, _created = self.ingest_bytes(
+            content,
+            filename=f"image{attachment_extension(mime)}",
+            drive_slug=drive.slug,
+        )
+        return image
 
     def ingest_stream(
         self,
@@ -908,10 +968,11 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         drive_id: str = "",
         drive_slug: str = "",
         folder_id: str = "",
-    ) -> FileT:
-        """Ingest a pre-hashed stream without materializing it in memory.
+    ) -> tuple[FileT, bool]:
+        """Ingest a pre-hashed stream without materializing it in memory; return ``(file, created)``.
 
-        The caller hashes outside this write path. An inherited READY hit returns
+        ``created`` is as in :meth:`ingest_bytes`. The caller hashes outside this
+        write path. An inherited READY hit returns
         before the reader is consumed; otherwise the bytes stream through the
         selected Django storage backend and the normal finalize contract
         verifies the declared digest and size. Source filenames are display text,
@@ -934,9 +995,9 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                 owner_id=owner_id,
             )
             if row.upload_state == UploadState.READY:
-                self._grant_dedup_reach(row, owner_id)
-                self._merge_row_metadata(row, metadata)
-                return row  # content-addressed dedup hit — the bytes already exist
+                row._grant_dedup_reach(owner_id)
+                row.merge_metadata(metadata)
+                return row, False  # content-addressed dedup hit — the bytes already exist
             storage = row.storage
             saved_path = storage.save(row.storage_path, DjangoFile(reader, name=row.storage_path))
             if saved_path and saved_path != row.storage_path:
@@ -959,12 +1020,12 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                     visibility=FileVisibility.INHERITED,
                 ).first()
                 if winner is not None:
-                    self._grant_dedup_reach(winner, owner_id)
+                    winner._grant_dedup_reach(owner_id)
                     result = winner
                 else:
                     raise
-            self._merge_row_metadata(result, metadata)
-            return result
+            result.merge_metadata(metadata)
+            return result, result.pk == row.pk
 
     def index_external(
         self,
@@ -1023,7 +1084,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                     size_bytes=max(int(size_bytes), 0),
                     mime_type_id=mime.pk if mime is not None else None,
                     storage_path=path,
-                    metadata=self._merged_metadata({}, metadata_patch),
+                    metadata=self.model.merged_metadata({}, metadata_patch),
                     upload_state=UploadState.READY,
                     owner_id=owner_id,
                 )
@@ -1071,7 +1132,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                 **self.model.UNTRASHED_VALUES,
             }
             if metadata_patch:
-                values["metadata"] = self._merged_metadata(row.metadata, metadata_patch)
+                values["metadata"] = self.model.merged_metadata(row.metadata, metadata_patch)
             for field, value in values.items():
                 if getattr(row, field) != value:
                     setattr(row, field, value)
@@ -1101,17 +1162,6 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                 row._emit_finalized()
             return row
 
-    def trash_missing_external(self, drive: Any, present_paths: Collection[str]) -> int:
-        """Soft-trash live rows in ``drive`` whose external path vanished."""
-
-        present = {str(path) for path in present_paths}
-        with system_context(reason="storage.file.trash_missing_external"):
-            rows = self.filter(drive=drive).untrashed().values_list("pk", "storage_path")
-            missing = [pk for pk, storage_path in rows.iterator(chunk_size=2000) if str(storage_path) not in present]
-            if not missing:
-                return 0
-            return int(self.filter(pk__in=missing).trash())
-
     def _cached_mime_row(self, mime_type: str, *, cache: dict[str, Any | None] | None) -> Any | None:
         """Resolve one MIME taxonomy row, caching distinct values for a sync run."""
 
@@ -1129,40 +1179,6 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         if cache is not None:
             cache[key] = row
         return row
-
-    def _merge_row_metadata(self, row: Any, metadata: dict[str, Any] | None) -> None:
-        """Merge caller-owned metadata into ``row`` without dropping other owners."""
-
-        if not metadata:
-            return
-        merged = self._merged_metadata(row.metadata, metadata)
-        if merged == row.metadata:
-            return
-        row.metadata = merged
-        row.save(update_fields=["metadata", "updated_at"])
-
-    def _merged_metadata(
-        self,
-        current: Any,
-        updates: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Return ``current`` recursively merged with ``updates``.
-
-        A nested :class:`~collections.abc.Mapping` under any key is merged
-        recursively, so a caller updating one owner's sub-dict keeps every other
-        owner's facts; a non-mapping value (or a value replacing a non-mapping)
-        overwrites outright. The metadata schema is opaque to storage — an owner
-        namespaces its own keys and this merge names none of them.
-        """
-
-        merged = dict(current) if isinstance(current, Mapping) else {}
-        for key, value in updates.items():
-            existing = merged.get(key)
-            if isinstance(existing, Mapping) and isinstance(value, Mapping):
-                merged[key] = self._merged_metadata(existing, dict(value))
-            else:
-                merged[key] = value
-        return merged
 
     def _raise_external_duplicate(
         self,
@@ -1272,23 +1288,13 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             return None
         folder_model = self.model.folder.field.related_model
         folder = folder_model._default_manager.all().from_public_id(str(folder_id))
-        if folder is None or folder.is_virtual:
-            raise exceptions.UploadTargetNotFound("folder not found")
-        if folder.drive_id != drive.pk:
-            raise exceptions.UploadConflict("folder does not belong to the drive")
+        try:
+            self.model.validate_placement(folder, drive.pk)
+        except ValidationError as error:
+            if error.code == "folder_not_found":
+                raise exceptions.UploadTargetNotFound("folder not found") from error
+            raise exceptions.UploadConflict("folder does not belong to the drive") from error
         return folder
-
-    def _grant_dedup_reach(self, row: Any, owner_id: Any) -> None:
-        """Grant a dedup-hit file read reach to the requested ingest owner."""
-
-        with transaction.atomic():
-            locked = type(row).system_queryset(lock=("self",)).get(pk=row.pk)
-            if locked.visibility != FileVisibility.INHERITED:
-                raise exceptions.UploadConflict("identical bytes already exist")
-            if owner_id is None or str(locked.owner_id or "") == str(owner_id):
-                return
-            user = get_user_model().objects.get(pk=owner_id)
-            locked.grant_record_access("viewer", user)
 
 
 class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
@@ -1372,9 +1378,26 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         super().clean()
         if self.folder_id:
             folder_model = type(self).folder.field.related_model
-            folder = folder_model._base_manager.filter(pk=self.folder_id).values("drive_id", "is_virtual").first()
-            if folder is None or folder["is_virtual"] or folder["drive_id"] != self.drive_id:
-                raise ValidationError({"folder": "Folder must be a real folder in this file's drive."})
+            folder = folder_model._base_manager.filter(pk=self.folder_id).only("drive_id", "is_virtual").first()
+            try:
+                self.validate_placement(folder, self.drive_id)
+            except ValidationError as error:
+                raise ValidationError({"folder": error}) from error
+
+    @staticmethod
+    def validate_placement(folder: Any, drive_id: Any) -> None:
+        """Require ``folder`` to be a real folder of the drive ``drive_id`` names.
+
+        The one placement rule for a file row and for a draft naming its folder.
+        Raises ``ValidationError`` coded ``folder_not_found`` for an absent or
+        smart folder and ``wrong_drive`` for a folder of another drive.
+        """
+
+        message = "Folder must be a real folder in this file's drive."
+        if folder is None or folder.is_virtual:
+            raise ValidationError(message, code="folder_not_found")
+        if folder.drive_id != drive_id:
+            raise ValidationError(message, code="wrong_drive")
 
     def set_visibility(self, value: FileVisibility | str) -> Self:
         """Narrow with file write, or widen with drive share, retaining all grants."""
@@ -1397,6 +1420,65 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
                 locked.sudo(reason="storage.file.set_visibility").save(update_fields=["visibility"])
             self.visibility = locked.visibility
         return self
+
+    def merge_metadata(self, metadata: Mapping[str, Any] | None) -> None:
+        """Merge caller-owned ``metadata`` into the stored row without dropping other owners' keys.
+
+        The merge reads the committed metadata under the row lock, so concurrent
+        owners each keep their keys (:meth:`merged_metadata`). Unless the row's
+        own authority is elevated (:meth:`effective_actor`), its actor needs
+        ``write``, as the row's save would. This instance takes the stored result.
+        """
+
+        if not metadata:
+            return
+        actor, elevated = self.effective_actor()
+        if not elevated:
+            self.require_access("write", actor)
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            merged = type(self).merged_metadata(locked.metadata, metadata)
+            if merged != locked.metadata:
+                locked.metadata = merged
+                locked.save(update_fields=["metadata", "updated_at"])
+        self.metadata = locked.metadata
+        self.updated_at = locked.updated_at
+
+    @staticmethod
+    def merged_metadata(current: Any, updates: Mapping[str, Any]) -> dict[str, Any]:
+        """Return ``current`` recursively merged with ``updates``.
+
+        A nested :class:`~collections.abc.Mapping` under any key is merged
+        recursively, so a caller updating one owner's sub-dict keeps every other
+        owner's facts; a non-mapping value (or a value replacing a non-mapping)
+        overwrites outright. The metadata schema is opaque to storage — an owner
+        namespaces its own keys and this merge names none of them.
+        """
+
+        merged = dict(current) if isinstance(current, Mapping) else {}
+        for key, value in updates.items():
+            existing = merged.get(key)
+            if isinstance(existing, Mapping) and isinstance(value, Mapping):
+                merged[key] = File.merged_metadata(existing, value)
+            else:
+                merged[key] = value
+        return merged
+
+    def _grant_dedup_reach(self, owner_id: Any) -> None:
+        """Give an ingest owner read reach to the existing row its bytes deduplicated onto.
+
+        Only an inherited-visibility row is shared this way; a record-scoped row
+        conflicts without being identified.
+        """
+
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            if locked.visibility != FileVisibility.INHERITED:
+                raise exceptions.UploadConflict("identical bytes already exist")
+            if owner_id is None or str(locked.owner_id or "") == str(owner_id):
+                return
+            user = get_user_model().objects.get(pk=owner_id)
+            locked.grant_record_access("viewer", user)
 
     @property
     def storage(self) -> StorageBackend:
@@ -1427,11 +1509,8 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         reaches into the storage shape from outside.
         """
 
-        path_fn = getattr(self.storage, "path", None)
-        if path_fn is None:
-            return None
         try:
-            return Path(path_fn(self.storage_path))
+            return Path(self.storage.path(self.storage_path))
         except NotImplementedError, ValueError:
             return None
 
@@ -1454,14 +1533,16 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         ``NoActorResolvedError``. The claim uses the actor's public identity.
         The token remains a bearer capability; download lookup re-checks that
         actor's ``read`` permission on every request. Expiry rides on the
-        signature (``DOWNLOAD_TOKEN_MAX_AGE``).
+        signature (``DOWNLOAD_TOKEN_MAX_AGE``). Five-minute window alignment
+        keeps repeated reads identical, with 600–900 seconds of validity from
+        issue; ``for_download_token`` still owns expiry and read authorization.
         """
 
         subject = current_actor() if actor is None else to_subject_ref(actor)
         if subject is None:
             raise NoActorResolvedError("an actor is required to issue a download token")
-        return signing.dumps(
-            {"file": str(self.sqid), "actor": str(public_subject_ref(subject))}, salt=DOWNLOAD_TOKEN_SALT
+        return DownloadTokenSigner(salt=DOWNLOAD_TOKEN_SALT).sign_object(
+            {"file": str(self.sqid), "actor": str(public_subject_ref(subject))},
         )
 
     def download_url(self, request: Any | None = None) -> str:
@@ -1469,11 +1550,12 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
 
         The filename rides in the path (so the browser saves under it and the URL
         reads cleanly); the signed ``token`` identifies the row and the ambient
-        actor whose read permission is re-checked. Built absolute against
+        actor whose read permission is re-checked. The content digest versions
+        the browser cache independently of credential rotation. Built absolute against
         ``request`` when one is given, otherwise root-relative.
         """
 
-        query = urlencode({"token": self.issue_download_token()})
+        query = urlencode({"token": self.issue_download_token(), "version": self.content_hash})
         path = f"{reverse('storage_download', args=[self.filename])}?{query}"
         return request.build_absolute_uri(path) if request is not None else path
 
@@ -1680,7 +1762,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         relies on its single-writer serialization instead.
         """
 
-        nonce = getattr(self, "_upload_nonce", None)
+        nonce = self._upload_nonce
         with system_context(reason="storage.upload.consume_token"), transaction.atomic():
             locked = type(self)._base_manager.select_for_update().filter(pk=self.pk).first()
             if locked is None:
@@ -1743,16 +1825,49 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
 
         storage = self.storage
         key = self.storage_path
-        using = router.db_for_write(type(self), instance=self)
         drive_id = self.drive_id
         model = type(self)
-        super().delete(using=using)
+        super().delete()
 
         def discard_unreferenced() -> None:
-            if not model.system_queryset().using(using).filter(drive_id=drive_id, storage_path=key).exists():
+            if not model.system_queryset().filter(drive_id=drive_id, storage_path=key).exists():
                 storage.discard(key, context="purge")
 
-        transaction.on_commit(discard_unreferenced, using=using)
+        transaction.on_commit(discard_unreferenced)
+
+    def purge_if_unretained(self) -> bool:
+        """Purge this row only while nothing retains it, and return whether it did.
+
+        The cleanup for an acquisition its flow created: ``created`` from
+        :meth:`FileManager.ingest_bytes` names an insert, not exclusive use, so
+        the decision is made here under the row lock. A committed edit or owner
+        change since this instance was read, a direct share, or any reverse
+        foreign key keeps the row, regardless of its on-delete policy. Unless
+        the row's own authority is elevated (:meth:`effective_actor`), its actor needs ``delete``; once
+        admitted, the retention recheck and the purge run in a system scope.
+        """
+
+        actor, elevated = self.effective_actor()
+        if not elevated:
+            self.require_access("delete", actor)
+        try:
+            with transaction.atomic(), system_context(reason="storage.file.purge_if_unretained"):
+                locked = type(self).system_queryset(lock=("self",)).filter(pk=self.pk).first()
+                if (
+                    locked is None
+                    or (locked.updated_at, locked.owner_id) != (self.updated_at, self.owner_id)
+                    or any(
+                        relation.related_model._base_manager.filter(**{relation.field.name: locked}).exists()
+                        for relation in locked._meta.get_fields(include_hidden=True)
+                        if isinstance(relation, models.ManyToOneRel)
+                    )
+                    or locked.system_direct_record_access()
+                ):
+                    return False
+                locked.purge()
+        except ProtectedError:
+            return False
+        return True
 
     def _fail(self, *, reason: str) -> None:
         """Transition this row to FAILED, recording why for audit surfaces."""
@@ -1785,7 +1900,34 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         )
 
 
-class FileAttachmentManager[AttachmentT: FileAttachment](AngeeHistoryManager[AttachmentT]):
+class FileAttachmentQuerySet[AttachmentT: FileAttachment](AngeeHistoryQuerySet[AttachmentT]):
+    """Actor-scoped file edges selected by their record or by their verified bytes."""
+
+    def for_record(self, record: models.Model) -> Self:
+        """Return the readable edges from a canonical record to its live files."""
+
+        return self.filter(
+            **generic_target(record).lookups(self.model, "target"),
+            file__is_trashed=False,
+        ).select_related("file")
+
+    def with_same_content(self, file: Any, record: models.Model) -> Self:
+        """Return readable edges of this record type carrying the same verified bytes."""
+
+        if not file.content_hash or file.upload_state != UploadState.READY:
+            return self.none()
+        return self.filter(
+            content_type=generic_target(record).content_type,
+            file__content_hash=file.content_hash,
+            file__upload_state=UploadState.READY,
+            file__is_trashed=False,
+        )
+
+
+_FileAttachmentManagerBase = AngeeHistoryManager.from_queryset(FileAttachmentQuerySet)
+
+
+class FileAttachmentManager[AttachmentT: FileAttachment](_FileAttachmentManagerBase[AttachmentT]):
     """Owns the polymorphic file edge, stored at :func:`rebac.generic_target`.
 
     A record and each of its REBAC-typed MTI ancestors share one attachment set.
@@ -1810,31 +1952,6 @@ class FileAttachmentManager[AttachmentT: FileAttachment](AngeeHistoryManager[Att
             self._lock_target(target)
             file = type(file).system_queryset(lock=("self",)).get(pk=file.pk)
             return self._attach(file, target, label=label)
-
-    def for_record(self, record: models.Model) -> AngeeHistoryQuerySet[AttachmentT]:
-        """Return actor-readable file edges for a canonical record."""
-
-        return (
-            self.get_queryset()
-            .filter(
-                **generic_target(record).lookups(self.model, "target"),
-                file__is_trashed=False,
-            )
-            .select_related("file")
-        )
-
-    def with_same_content(self, file: Any, record: models.Model) -> AngeeHistoryQuerySet[AttachmentT]:
-        """Readable edges of this record type carrying the same verified bytes."""
-        return (
-            self.get_queryset().filter(
-                content_type=generic_target(record).content_type,
-                file__content_hash=file.content_hash,
-                file__upload_state=UploadState.READY,
-                file__is_trashed=False,
-            )
-            if file.content_hash and file.upload_state == UploadState.READY
-            else self.none()
-        )
 
     def has_record_arm(self, target: GenericTarget) -> bool:
         """Whether record-scoped files read and write through this target type's attachments.

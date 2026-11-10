@@ -179,10 +179,7 @@ def _space_threads(info: strawberry.Info) -> QuerySet[ThreadModel]:
     """Return actor-scoped threads that are explicitly bound to at least one group."""
 
     del info
-    return Thread.objects.filter(
-        modality=Thread.Modality.GROUP,
-        groups__isnull=False,
-    ).distinct()
+    return Thread.spaces.bound_to_groups()
 
 
 _GROUP_RESOURCE = hasura_model_resource(

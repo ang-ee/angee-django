@@ -26,6 +26,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Organization, Party
 from angee.storage import schema as storage_schema
+from angee.tags import schema as tags_schema
 from angee.tags.schema import TaggedNode
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import File, SchemaAddon, create_user
@@ -61,6 +62,25 @@ def _storage_schemas(name: str) -> GraphQLSchemas:
     """Return storage's own ``name`` schema as a throwaway addon."""
 
     return _addon_schemas(storage_schema, name)
+
+
+def test_tag_resource_axes_require_explicit_declarations() -> None:
+    """A consumer's readable marker grants no query axes; each declaration is independent."""
+    schema = _addon_schemas(tags_schema, "console").build("console")
+    resource = next(item for item in schema.angee_resources if item.model_label == "tags.Tag")
+    filter_fields = schema._schema.get_type(resource.type_names.filter).fields
+    order_fields = schema._schema.get_type(resource.type_names.order).fields
+
+    assert "color" in filter_fields
+    assert "attention" in order_fields
+    assert "color" in resource.query.axes
+    assert "created_at" in resource.aggregate_fields
+    assert "shared_marker" not in resource.aggregate_fields
+    assert "shared_marker" not in filter_fields
+    assert "shared_marker" not in order_fields
+    assert "shared_marker" not in resource.query.axes
+    assert "shared_marker" in resource.create_fields
+    assert "shared_marker" in resource.update_fields
 
 
 def _tagged_files(drive: Any, count: int) -> tuple[list[Any], list[Any]]:

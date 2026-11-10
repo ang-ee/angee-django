@@ -2,10 +2,11 @@
 
 import pytest
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection, router
+from django.db import connection
 from django.db.models.signals import post_save
 from rebac import actor_context, to_subject_ref
 
+from angee.base.testing.queries import statement_startswith
 from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import StepWatch, Trigger, TriggerEvent
 from tests.conftest import Page, Vault
@@ -37,13 +38,6 @@ def test_clone_native_batch_delivers_all_receivers_triggers_and_new_watches(
     sent.clear()
     observed = []
     budget_active = False
-    watch_read_routes = []
-    native_read = router.db_for_read
-
-    def observe_read(model, **hints):
-        if model is StepWatch:
-            watch_read_routes.append(model)
-        return native_read(model, **hints)
 
     def native_receiver(sender, instance, created, raw, created_batch=None, **kwargs):
         nonlocal budget_active
@@ -55,13 +49,12 @@ def test_clone_native_batch_delivers_all_receivers_triggers_and_new_watches(
             StepWatch.objects.register(step, created_batch, actor=actor)
             if parameter_budget is not None:
                 monkeypatch.setattr(type(connection.features), "max_query_params", parameter_budget)
-                monkeypatch.setattr(router, "db_for_read", observe_read)
                 budget_active = True
 
     def enforce_budget(execute, sql, params, many, context):
         # Start after the ordinary receiver has installed its real watches.
         # Emulate a driver's declared bound only for observation SELECTs.
-        if budget_active and sql.lstrip().upper().startswith("SELECT"):
+        if budget_active and statement_startswith(sql.lstrip().upper(), "SELECT"):
             if Page._meta.db_table in sql or StepWatch._meta.db_table in sql:
                 assert len(params or ()) <= parameter_budget, "Observation exceeded the native query parameter budget."
         return execute(sql, params, many, context)
@@ -83,5 +76,4 @@ def test_clone_native_batch_delivers_all_receivers_triggers_and_new_watches(
         step_run=step, content_type=content_type, object_id__in=copied_keys, pending=True,
     ).count() == batch_size
     assert len(record_deliveries(sent)) == batch_size
-    assert not watch_read_routes, "Pending-watch admission must probe its write database, not a read replica."
     assert Page.history.filter(vault_id=copy.pk).count() == batch_size

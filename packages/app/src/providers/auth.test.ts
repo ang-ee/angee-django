@@ -32,7 +32,7 @@ describe("Angee app auth provider", () => {
     const identityRequest = vi.fn(async () => ({ current_user: currentUser, real_user: currentUser }));
     const provider = createAngeeAuthProviderFromRequest(request as never, { queryClient, identityRequest: identityRequest as never });
 
-    await queryClient.ensureQueryData(identityQueryOptions(provider));
+    await queryClient.query(identityQueryOptions(provider));
     await queryClient.invalidateQueries({ queryKey: identityQueryOptions(provider).queryKey, refetchType: "none" });
     await provider.check();
     await provider.getPermissions?.();

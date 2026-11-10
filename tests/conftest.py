@@ -24,6 +24,7 @@ from rebac.roles import grant as grant_role
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
+from angee.base.testing.fixtures import installed_app_registry as installed_app_registry
 from angee.base.testing.packages import write_addon_distribution
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -50,6 +51,8 @@ from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
+from angee.knowledge_graph_pgvector.models import PageIndexState, VaultEmbeddingModel, VaultGraphExtraction
+from angee.knowledge_graph_pgvector.testing import models as pgv_models  # noqa: F401 -- register passage test models
 from angee.knowledge_integrate_notion.models import NotionConnection as AbstractNotionConnection
 from angee.messaging.testing import models as messaging_models  # noqa: F401 -- register messaging test models
 from angee.messaging.testing.models import Channel
@@ -108,7 +111,6 @@ def source_change_publishers() -> Iterator[None]:
     finally:
         for model in connected:
             disconnect_publishers(model)
-        connect_change_publishers({})
 
 
 @pytest.fixture
@@ -128,10 +130,11 @@ def composed_tables(composed_tables: None) -> None:
 
 @pytest.fixture
 def activity_catalog(composed_tables: None) -> None:
-    """Declare the activity types record tasks use in these scenarios."""
+    """Load projects' completion subtype and declare the activity types record tasks use."""
 
     del composed_tables
     with system_context(reason="tests.projects.activity_catalog"):
+        Resource.objects.load_xref("angee.projects.activity_done", model=messaging_models.MessageSubtype)
         projects_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
         projects_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
 
@@ -201,7 +204,7 @@ class WebhookSubscription(AbstractWebhookSubscription):
         rebac_resource_type = "integrate/webhook_subscription"
 
 
-class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, AbstractVault):
+class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, VaultGraphExtraction, VaultEmbeddingModel, AbstractVault):
     """Concrete knowledge vault carrying workflow, projects and spaces donors."""
 
     rebac_grantable = AbstractVault.rebac_grantable
@@ -228,7 +231,7 @@ class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, AbstractVault):
         rebac_resource_type = "knowledge/vault"
 
 
-class Page(RecordChangedOptIn, AbstractPage):
+class Page(RecordChangedOptIn, PageIndexState, AbstractPage):
     """Concrete knowledge page used by source-addon tests."""
 
     @classmethod
@@ -670,6 +673,7 @@ from angee.operator.testing import models as operator_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
 from angee.projects.testing import models as projects_models  # noqa: E402, F401
 from angee.provenance.testing import load_statement_sources  # noqa: E402
+from angee.resources.testing.models import Resource  # noqa: E402
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
 from angee.uom.testing import models as uom_models  # noqa: E402, F401
@@ -691,7 +695,7 @@ def make_mount(
     *,
     drive: Any,
     root: Path,
-    mode: MountMode | str = MountMode.REFERENCE,
+    mode: MountMode = MountMode.REFERENCE,
     config: dict[str, Any] | None = None,
     **attrs: Any,
 ) -> Mount:
@@ -877,6 +881,7 @@ def make_addon(
         monkeypatch.setitem(sys.modules, f"{name}.schema", schema_module)
         tool["graphql"] = {"schema": "schema.schemas"}
     if resources is not None:
+
         def authored_source(value: Any) -> Any:
             if isinstance(value, str):
                 addon, separator, source = value.partition(":")
@@ -887,15 +892,14 @@ def make_addon(
                 return value.removeprefix("resources/")
             if isinstance(value, dict):
                 return {
-                    key: authored_source(item) if key in {"path", "depends_on"} else item
-                    for key, item in value.items()
+                    key: authored_source(item) if key in {"path", "depends_on"} else item for key, item in value.items()
                 }
             if isinstance(value, tuple | list):
                 return [authored_source(item) for item in value]
             return value
+
         tool["resources"] = {
-            key: value if key == "retired_models" else authored_source(value)
-            for key, value in resources.items()
+            key: value if key == "retired_models" else authored_source(value) for key, value in resources.items()
         }
     write_addon_distribution(path, name, depends_on=depends_on, label=label, capabilities=tool, metadata_root=path)
     monkeypatch.syspath_prepend(str(path))
@@ -929,9 +933,13 @@ def catalogue_package(name: str, *, depends_on: tuple[str, ...] = (), descriptio
     """One already-projected catalogue value for isolated marketplace tests."""
 
     return {
-        "name": name, "namespace": name.split(".", 1)[0],
-        "distribution": name.replace(".", "-").replace("_", "-"), "description": description,
-        "keywords": (), "category": "", "depends_on": depends_on,
+        "name": name,
+        "namespace": name.split(".", 1)[0],
+        "distribution": name.replace(".", "-").replace("_", "-"),
+        "description": description,
+        "keywords": (),
+        "category": "",
+        "depends_on": depends_on,
         "requirements": tuple(dependency.replace(".", "-").replace("_", "-") for dependency in depends_on),
     }
 

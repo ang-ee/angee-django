@@ -11,9 +11,10 @@ import sys
 from collections.abc import Callable
 from functools import partial
 from inspect import getattr_static
+from typing import cast
 
 from django.apps import apps
-from django.conf import settings
+from django.conf import Settings, UserSettingsHolder, settings
 from django.db import models
 from mypy.build import PRI_MYPY
 from mypy.nodes import MypyFile, TypeInfo
@@ -122,7 +123,12 @@ class ProvenancePlugin(Plugin):
     def configured_model() -> type[models.Model] | None:
         """Read storage through the runtime owner after native Django setup."""
 
-        if not settings.configured or not apps.apps_ready or not changeset_model_label():
+        if not settings.configured or not apps.apps_ready:
+            return None
+        # LazySettings forwards this public API, but its dynamic-setting stub
+        # does not expose the method declared on Django's two settings owners.
+        configured = cast(Settings | UserSettingsHolder, settings)
+        if not configured.is_overridden("ANGEE_CHANGESET_MODEL") or not changeset_model_label():
             return None
         try:
             return changeset_model()

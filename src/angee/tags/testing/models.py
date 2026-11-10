@@ -20,6 +20,14 @@ class Tag(AbstractTag):
     """
 
     shared_marker = models.BooleanField(default=True)
+    # Consumer declarations deliberately keep readable fields separate from query axes.
+    hasura_readable_fields = ("shared_marker",)
+    hasura_filterable_fields = ("color",)
+    hasura_sortable_fields = ("attention",)
+    hasura_aggregatable_fields = ("created_at",)
+    hasura_groupable_fields = ("color",)
+    hasura_insertable_fields = ("shared_marker",)
+    hasura_updatable_fields = ("shared_marker",)
 
     class Meta(AbstractTag.Meta):
         """Django model options for the canonical test tag."""

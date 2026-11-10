@@ -11,7 +11,8 @@ from django.db.models.functions import Now
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
-from angee.graphql.publishing import change_published
+from angee.base.signals import change_published
+from angee.workflows import models as models_module
 from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet
 from angee.workflows.runner import runner
@@ -685,7 +686,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
 
     actor, sent = execution
     observed = {}
-    original_publish = runner_module.publish_change
+    original_publish = models_module.publish_change
 
     def failed_publication(*args, **kwargs):
         raise RuntimeError("Result publication unavailable")
@@ -707,7 +708,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
             ctx.heartbeat()
             ctx.begin_effect()
             if publication_failure:
-                monkeypatch.setattr(runner_module, "publish_change", failed_publication)
+                monkeypatch.setattr(models_module, "publish_change", failed_publication)
             return ctx.done({"value": 41})
 
     register_step(RecoverableBranch)
@@ -727,7 +728,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
     assert len(sent) == observed["deliveries"]
     assert not StepRun.system_queryset().filter(run=run, node_key="join").exists()
 
-    monkeypatch.setattr(runner_module, "publish_change", original_publish)
+    monkeypatch.setattr(models_module, "publish_change", original_publish)
     failed = StepRun.system_queryset().get(run=run, node_key="failed")
     StepRun.objects.retry_step(failed, actor=actor)
     run_until(run)

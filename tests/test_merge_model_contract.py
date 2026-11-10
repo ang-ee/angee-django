@@ -57,6 +57,10 @@ def test_reference_contracts_continue_to_accept_plain_django_models() -> None:
         class Link(MergeContractMixin):
             target = models.ForeignKey(Target, on_delete=models.PROTECT)
 
+            @classmethod
+            def blocks_target_delete(cls, target):
+                return False
+
             class Meta:
                 app_label = "merge_contract"
 
@@ -68,6 +72,7 @@ def test_reference_contracts_continue_to_accept_plain_django_models() -> None:
         assert reference.lookup(row) == {"target_id": 7}
         assert reference.columns == ("target",)
         assert not issubclass(Link, AngeeDataModel)
+        assert reference.live_rows(row).query.is_empty()
 
 
 def test_real_foreign_key_on_generic_edge_always_blocks_creation_undo():
@@ -96,3 +101,4 @@ def test_real_foreign_key_on_generic_edge_always_blocks_creation_undo():
 
         reference = ForeignKeyReference(Edge, MergePolicy.MOVE, Edge._meta.get_field("target"))
         assert reference.blocks_target_delete(Target)
+        assert not reference.live_rows(Target(pk=7)).query.is_empty()

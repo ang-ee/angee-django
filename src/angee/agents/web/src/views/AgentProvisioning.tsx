@@ -4,7 +4,7 @@ import type {
 } from "@angee/metadata";
 import { useOne, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  OperatorTransportProvider, ServiceLogs, ServiceRow, WorkspaceSources, WorkspaceRow, useWorkspaceStatus, type WorkspaceStatusResult, } from "@angee/operator/runtime";
+  ServiceLogs, ServiceRow, WorkspaceSources, WorkspaceRow, useWorkspaceStatus, type WorkspaceStatusResult, } from "@angee/operator/runtime";
 import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
@@ -104,22 +104,18 @@ export function AgentProvisioning({
         )
       ) : (
         <>
-          {agent.last_error ? <ErrorBanner description={String(agent.last_error)} /> : null}
+          <ErrorBanner description={agent.last_error ? String(agent.last_error) : null} />
           {conflictName && conflictKind ? (
-            <OperatorTransportProvider>
-              <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
-            </OperatorTransportProvider>
+            <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
           ) : null}
           {showRuntime ? (
-            <OperatorTransportProvider>
-              <AgentOperatorRuntime
-                expectsService={expectsService}
-                pane={pane}
-                service={service}
-                lifecycle={lifecycle}
-                workspace={workspace}
-              />
-            </OperatorTransportProvider>
+            <AgentOperatorRuntime
+              expectsService={expectsService}
+              pane={pane}
+              service={service}
+              lifecycle={lifecycle}
+              workspace={workspace}
+            />
           ) : conflictName ? null : (
             <div className="flex flex-col items-start gap-2">
               <p className={textRoleVariants({ role: "meta" })}>
@@ -172,7 +168,7 @@ function ConflictingWorkspace({ name }: { name: string }): React.ReactElement {
   const { status, error } = useWorkspaceStatus(name);
   return (
     <>
-      {error ? <ErrorBanner description={error.message} /> : null}
+      <ErrorBanner description={error?.message ?? null} />
       <WorkspaceSources
         emptyContent={t("provisioning.workspaceSourcesEmpty")}
         sources={status?.sources ?? []}
@@ -195,18 +191,18 @@ function AgentOperatorRuntime({
   lifecycle: string;
   workspace: string;
 }): React.ReactElement {
-  const runtime = useProvisionRuntime(workspace);
+  const { status, error } = useWorkspaceStatus(workspace);
 
   return pane === "service" ? (
     <ServiceRuntimeView
-      error={runtime.error}
+      error={error}
       expectsService={expectsService}
       service={service}
     />
   ) : (
     <WorkspaceRuntimeView
-      error={runtime.error}
-      status={runtime.workspaceStatus}
+      error={error}
+      status={status}
       workspace={workspace}
       lifecycleStatus={lifecycle}
     />
@@ -219,7 +215,7 @@ function WorkspaceRuntimeView({
   status,
   workspace,
 }: {
-  error: string;
+  error: WorkspaceStatusResult["error"];
   lifecycleStatus: string;
   status: WorkspaceStatusResult["status"];
   workspace: string;
@@ -230,7 +226,7 @@ function WorkspaceRuntimeView({
 
   return (
     <div className="flex flex-col gap-4">
-      {error ? <ErrorBanner description={error} /> : null}
+      <ErrorBanner description={error?.message ?? null} />
       {workspace ? (
         <WorkspaceRow
           emptyContent={t("provisioning.activityWaiting")}
@@ -258,7 +254,7 @@ function ServiceRuntimeView({
   expectsService,
   service,
 }: {
-  error: string;
+  error: WorkspaceStatusResult["error"];
   expectsService: boolean;
   service: string;
 }): React.ReactElement {
@@ -266,7 +262,7 @@ function ServiceRuntimeView({
 
   return (
     <div className="flex flex-col gap-4">
-      {error ? <ErrorBanner description={error} /> : null}
+      <ErrorBanner description={error?.message ?? null} />
       {service ? (
         <>
           <ServiceRow
@@ -284,17 +280,6 @@ function ServiceRuntimeView({
       )}
     </div>
   );
-}
-
-function useProvisionRuntime(workspace: string): {
-  error: string;
-  workspaceStatus: WorkspaceStatusResult["status"];
-} {
-  const workspaceStatusResult = useWorkspaceStatus(workspace);
-  const workspaceStatus = workspaceStatusResult.status;
-  const error = workspaceStatusResult.error?.message ?? "";
-
-  return { error, workspaceStatus };
 }
 
 function isLifecycleActive(status: string | null | undefined): boolean {

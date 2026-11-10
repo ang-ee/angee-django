@@ -19,7 +19,7 @@ Mount and protocol collisions fail fast. Unmounted HTTP goes to Django's handler
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from typing import cast
 
@@ -62,7 +62,7 @@ class _Application:
                     raise ImproperlyConfigured(f"{config.name}: invalid HTTP mount {prefix!r}")
                 self._claim(mount_owners, prefix, config.name)
                 self.mounts[prefix] = handler
-            protocols: Mapping[str, ASGI3Application] = getattr(module, "protocols", dict)()
+            protocols = addon_contribution(module, "protocols", kind="mapping", allow_callable="required")
             for protocol, handler in protocols.items():
                 self._claim(protocol_owners, protocol, config.name)
                 self.protocols[protocol] = handler

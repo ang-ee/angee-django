@@ -17,6 +17,7 @@ from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, Task
+from angee.spaces.testing.models import Membership
 from tests.conftest import Drive, File, FileAttachment, create_platform_admin
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_campaign import campaign as campaign
@@ -824,3 +825,51 @@ def test_requester_party_merge_uses_round_identity_owner(campaign: ProposalCampa
         survivor.merge(records=[source.public_id])
         round.refresh_from_db()
         assert round.requester_party_id == survivor.pk
+
+
+def test_round_managers_read_write_and_share_task_content_only_while_the_task_owner_admits_it(
+    campaign: ProposalCampaign,
+) -> None:
+    """A trashed question or track task is concealed from its round's managers, and a retired seat withholds one.
+
+    The trash removal authority (the target project's owner for an inherited question,
+    the track's owner for its task) and platform admins keep reading what the round's
+    managers no longer see.
+    """
+
+    c = campaign
+    team = c.team(member="member")
+    round = c.round(team=team)
+    track = c.admit(round, "responder", track=True)
+    c.admit(round, "former-responder")
+    facilitator, former = c.person("facilitator"), c.person("former-responder")
+    admin = create_platform_admin(f"{c.prefix}-admin")
+    question = c.ask(round)
+    with system_context(reason="tests.proposals.campaign.track_task"):
+        track_task = Task.objects.create(
+            project=track.track, title="Track work", visibility="restricted", owner=c.person("track-owner"),
+        )
+    for row in (question, track_task):
+        for permission in ("read", "write", "share"):
+            assert as_actor(row, facilitator).has_access(permission), (row.title, permission)
+
+    with actor_context(facilitator):
+        as_actor(round, facilitator).remove_responder(former)
+    with system_context(reason="tests.proposals.campaign.former_responder_manages"):
+        Membership.objects.create(
+            group=team, party=Person.objects.for_user(former), role="moderator", is_confirmed=True,
+        )
+    assert as_actor(round, former).has_access("manage")
+    assert_read(question, former, False)
+    assert_read(question, facilitator, True)
+
+    with system_context(reason="tests.proposals.campaign.trash"):
+        question.trash(reason="Withdrawn")
+        track_task.trash(reason="Withdrawn")
+    for row in (question, track_task):
+        assert_read(row, facilitator, False)
+        for permission in ("write", "share"):
+            assert not as_actor(row, facilitator).has_access(permission), (row.title, permission)
+        assert_read(row, admin, True)
+    assert_read(question, c.person("project-owner"), question.visibility == Task.TaskVisibility.INHERITED)
+    assert_read(track_task, c.person("track-owner"), True)

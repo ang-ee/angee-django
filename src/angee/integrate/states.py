@@ -112,6 +112,8 @@ class StreamDefinition:
     config: dict[str, Any] = field(default_factory=dict)
     snapshot: bool = False
     authoritative: bool = False
+    mapping_version: int = 1
+    """Increase when mapping changes require a fresh baseline of existing records."""
 
     @classmethod
     def from_stream(cls, stream: SyncStream) -> StreamDefinition:
@@ -218,6 +220,4 @@ class SyncFailure(BaseModel):
     def resolve_conflict(self, *, keep: ConflictKeep) -> SyncFailure:
         if self.link is None:
             raise ValidationError("Conflict resolution requires a linked conflict.")
-        from angee.integrate.streams import resolve_conflict
-
-        return resolve_conflict(self.link, self._slot, keep)
+        return self.link.resolve_conflict(self._slot, keep)

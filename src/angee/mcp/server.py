@@ -21,16 +21,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import cache
-from types import ModuleType
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from django.apps import AppConfig
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
 from fastmcp import FastMCP
 
-from angee.base.addons import addon_modules, optional_addon_module
+from angee.base.addons import addon_contribution, addon_modules, optional_addon_module
 from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
 
@@ -43,9 +41,10 @@ ToolRegistrar = Callable[[FastMCP], None]
 Non-GraphQL tools must explicitly declare ``ToolAnnotations.readOnlyHint``.
 Compiled GraphQL tools carry their root ``op_type`` as the structural actor-posture
 fact (their annotation must agree). Builtins also run through the in-process
-pydantic runtime, so their callable may not depend on FastMCP's request-scoped
-``Context`` or ``get_access_token``; the native toolset asserts these contracts
-when it advertises a granted tool.
+pydantic runtime, outside FastMCP's request-scoped ``Context`` and
+``get_access_token``: they declare ``meta=ACTOR_EXECUTION_META``, and the runtime
+admits a granted tool only through ``angee.mcp.graphql.require_actor_tool``.
+Compiled GraphQL tools declare it by construction.
 """
 
 MOUNT_PATH = "/mcp"
@@ -78,11 +77,14 @@ def mcp_app() -> StarletteWithLifespan:
         for host in settings.ALLOWED_HOSTS
         for pattern in ((host[1:], f"*{host}") if host.startswith(".") else (host,))
     ]
-    if internal_host := urlsplit(getattr(settings, "ANGEE_BUILTIN_MCP_URL", "")).hostname:
+    if internal_host := urlsplit(settings.ANGEE_BUILTIN_MCP_URL).hostname:
         hosts.append(internal_host)
     return mcp_server().http_app(
-        path="/", stateless_http=True, json_response=True,
-        host_origin_protection=True, allowed_hosts=hosts,
+        path="/",
+        stateless_http=True,
+        json_response=True,
+        host_origin_protection=True,
+        allowed_hosts=hosts,
         allowed_origins=list(settings.CSRF_TRUSTED_ORIGINS),
     )
 
@@ -102,22 +104,14 @@ def _registrars() -> tuple[ToolRegistrar, ...]:
     """
 
     return tuple(
-        registrar for _config, module in addon_modules('mcp_tools')
-        if (registrar := _module_registrar(module)) is not None
+        registrar
+        for _config, module in addon_modules("mcp_tools")
+        if (registrar := addon_contribution(module, "register", kind="callable")) is not None
     )
 
 
 def tool_registrar(app_config: AppConfig) -> ToolRegistrar | None:
     """Load the conventional registrar only from an enabled addon."""
 
-    module = optional_addon_module(app_config, 'mcp_tools')
-    return _module_registrar(module) if module is not None else None
-
-
-def _module_registrar(module: ModuleType) -> ToolRegistrar | None:
-    if not hasattr(module, 'register'):
-        return None
-    registrar = module.register
-    if not callable(registrar):
-        raise ImproperlyConfigured(f'{module.__name__}.register must be callable')
-    return registrar
+    module = optional_addon_module(app_config, "mcp_tools")
+    return addon_contribution(module, "register", kind="callable") if module is not None else None

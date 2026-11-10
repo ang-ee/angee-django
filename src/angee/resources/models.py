@@ -9,6 +9,7 @@ from angee.base.fields.text import ModelLabelField
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
 from angee.resources.entries import resolve_model
+from angee.resources.exceptions import ResourceLoadError
 from angee.resources.managers import ResourceManager
 from angee.resources.tiers import ResourceTier
 
@@ -47,6 +48,21 @@ class Resource(AngeeModel, concrete=True):
     objects = ResourceManager()
     """Manager with validate, load, and diff operations."""
 
+    def require_target_model(self, model: type[models.Model]) -> None:
+        """Refuse this ledger row for another target model.
+
+        The row may name ``model`` or one of its multi-table parents: a row moved
+        onto a child keeps its parent's ledger until the child is saved.
+        """
+
+        expected = model._meta.label
+        parents = {parent._meta.label for parent in model._meta.get_parent_list()}
+        if self.target_model != expected and self.target_model not in parents:
+            raise ResourceLoadError(
+                f"xref collision in {self.source_addon}: {self.xref!r} "
+                f"already targets {self.target_model}, not {expected}"
+            )
+
     def target_instance(self) -> models.Model | None:
         """Resolve this ledger's stored public identity through its model owner."""
 
@@ -54,9 +70,7 @@ class Resource(AngeeModel, concrete=True):
             return None
 
         model = resolve_model(self.target_model)
-        return instance_from_public_id(
-            model, self.target_id, queryset=model._default_manager.using(self._state.db),
-        )
+        return instance_from_public_id(model, self.target_id)
 
     class Meta:
         """Django model options for the abstract resource ledger."""

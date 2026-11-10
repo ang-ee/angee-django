@@ -1,16 +1,15 @@
-"""Bridge sync context and progress helpers."""
+"""Bridge sync dispatch and the bridge that receives nested progress reports."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING
 
-from django.db import transaction
-
-from angee.graphql.publishing import publication_ingestion_context
+if TYPE_CHECKING:
+    from angee.integrate.models import Bridge
 
 
 class SyncDispatch(StrEnum):
@@ -19,93 +18,28 @@ class SyncDispatch(StrEnum):
     DISPATCHED = "dispatched"
 
 
-@contextmanager
-def bridge_sync_context() -> Iterator[None]:
-    """Mark a bridge sync and annotate the changes it publishes."""
-
-    with publication_ingestion_context():
-        yield
-
-
-_current_bridge_progress: ContextVar[BridgeProgressReporter | None] = ContextVar(
-    "angee_current_bridge_progress",
-    default=None,
-)
-
-
-class BridgeProgressReporter:
-    """Persist generic progress for the bridge currently being synchronized."""
-
-    def __init__(self, bridge: Any) -> None:
-        self.bridge = bridge
-
-    def report(
-        self,
-        stage: str,
-        *,
-        message: str = "",
-        details: Mapping[str, Any] | None = None,
-        **extra: Any,
-    ) -> dict[str, Any]:
-        """Merge telemetry under a row lock; supplied details replace prior details.
-
-        Dispatch identity belongs to Bridge.sync_run_id, independently of this
-        payload. A progress report preserves a queued stage until work starts.
-        """
-
-        with transaction.atomic():
-            row = (
-                type(self.bridge)
-                .objects.sudo(reason="integrate.bridge.progress")
-                .lock_if_supported()
-                .get(pk=self.bridge.pk)
-            )
-            existing = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
-            payload = dict(existing)
-            queue_pending = str(row.sync_stage) == str(row.SyncStage.QUEUED)
-            if not queue_pending:
-                payload["stage"] = str(stage)
-            if message:
-                payload["message"] = message
-            elif "message" in payload:
-                payload.pop("message")
-            if details is not None:
-                payload["details"] = dict(details)
-            payload.update(extra)
-
-            row.sync_progress = payload
-            update_fields = ["sync_progress", "updated_at"]
-            if not queue_pending and str(stage) in getattr(row.SyncStage, "values", ()):
-                row.sync_stage = str(stage)
-                update_fields.append("sync_stage")
-            row.save(update_fields=update_fields)
-        self.bridge.sync_progress = payload
-        self.bridge.sync_stage = row.sync_stage
-        return payload
+_progress_bridge: ContextVar[Bridge | None] = ContextVar("angee_progress_bridge", default=None)
 
 
 @contextmanager
-def bridge_progress_context(bridge: Any) -> Any:
-    """Make ``bridge`` progress reporting available to nested sync code."""
+def progress_bridge_context(bridge: Bridge) -> Iterator[Bridge]:
+    """Make ``bridge`` the receiver of progress reports from nested sync code."""
 
-    reporter = BridgeProgressReporter(bridge)
-    token = _current_bridge_progress.set(reporter)
+    token = _progress_bridge.set(bridge)
     try:
-        yield reporter
+        yield bridge
     finally:
-        _current_bridge_progress.reset(token)
+        _progress_bridge.reset(token)
 
 
-def current_bridge_progress() -> BridgeProgressReporter | None:
-    """Return the current bridge progress reporter, if a bridge sync is active."""
+def current_progress_bridge() -> Bridge | None:
+    """Return the bridge whose sync is running here; report through its ``report_progress``."""
 
-    return _current_bridge_progress.get()
+    return _progress_bridge.get()
 
 
 __all__ = [
-    "BridgeProgressReporter",
     "SyncDispatch",
-    "bridge_progress_context",
-    "bridge_sync_context",
-    "current_bridge_progress",
+    "progress_bridge_context",
+    "current_progress_bridge",
 ]

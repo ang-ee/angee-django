@@ -53,10 +53,10 @@ def rebuild_backlinks(
 
 
 def refresh_bulk_targets(
-    sender: type[Any], instances: Iterable[Any], update_fields: Iterable[str], using: str, **_: Any,
+    sender: type[Any], instances: Iterable[Any], update_fields: Iterable[str], **_: Any,
 ) -> None:
     """Bulk trash/restore uses the same index owner as individual target saves."""
 
     if (sender._meta.label_lower in {_MARKDOWN_LABEL, "knowledge.page"}
             and {"title", "is_trashed"}.intersection(update_fields)):
-        apps.get_model("knowledge", "Link").objects.db_manager(using).refresh_targets(instances)
+        apps.get_model("knowledge", "Link").objects.refresh_targets(instances)

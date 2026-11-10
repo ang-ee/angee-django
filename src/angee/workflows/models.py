@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
@@ -11,7 +12,7 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import models, transaction
+from django.db import DatabaseError, models, transaction
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Coalesce, Concat, Length, Now, Substr
 from django.db.models.lookups import IsNull
@@ -20,22 +21,26 @@ from django_compose.models import Composable
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.exceptions import exception_text
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField, ModelLabelField
 from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
 from angee.base.models.base import AngeeDataModel
-from angee.base.models.identity import public_id_for
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.permissions import require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch, ReaderMemo
-from angee.graphql.events import ChangeRelatedRecord
+from angee.base.querysets import row_lock_paths
+from angee.base.refs import RecordRef
+from angee.base.serialization import strip_null_bytes
+from angee.base.signals import publish_change
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.service_users import sync_service_user
+from angee.iam.models import ServiceUserMixin
+from angee.jobs.enqueue import enqueue_task
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -50,8 +55,12 @@ from angee.workflows.managers import (
     WorkflowRunManager,
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
+from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
+    CANCELED_OUTCOME,
+    DONE_OUTCOME,
     ERROR_OUTCOME,
+    INTERRUPTED_OUTCOME,
     NAME_MAX_LENGTH,
     AttemptResult,
     RecordOperation,
@@ -61,7 +70,9 @@ from angee.workflows.states import (
     StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import Step
+from angee.workflows.steps import AttemptRecord, Fail, Step
+from angee.workflows.subjects import RunSubject
+from angee.workflows.transactions import isolate_failure
 from angee.workflows.triggers import (
     TriggerEventManager,
     TriggerGrantTarget,
@@ -104,6 +115,7 @@ class RunGraph:
     edges: tuple[RunGraphEdge, ...]
 
 
+logger = logging.getLogger(__name__)
 _READER = ReaderMemo("_workflows_reader_answers")
 """A run row's answers from one reader's batch read (graph, write, open work)."""
 
@@ -185,7 +197,7 @@ class _NodeFailureRoute(models.Func):
         )
 
 
-class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Workflow(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """Editable identity and draft, pointing to one immutable published version.
 
     A workflow is a grant root with transferable ownership
@@ -197,6 +209,7 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, conc
     resource_class = WorkflowDefinitionResource
     rebac_grantable = {"editor": "write", "viewer": "write", "starter": "write", "operator": "write"}
     sqid_prefix = "wfl_"
+    service_user_prefix = "workflow"
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
@@ -244,7 +257,7 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, conc
         with transaction.atomic():
             super().save(*args, **kwargs)
             if creating or (name_written and previous_name != self.name):
-                sync_service_user(self, prefix="workflow")
+                self.sync_service_user()
 
     def __str__(self) -> str:
         """Return the authored workflow name."""
@@ -337,7 +350,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
     _reader_cancel = _ReaderBatch("prepare_cancel")
     _policy_versions = _PolicyVersions()
 
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+    def change_related_records(self) -> tuple[RecordRef, ...]:
         """Invalidate the records this execution has worked on."""
         return self.records.all().change_related_records()
 
@@ -345,7 +358,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         """Identify an execution by its workflow and start time."""
         if self.version_id is None:
             return str(self._meta.verbose_name)
-        name = getattr(self, "_workflow_name", None)
+        name = self.__dict__.get("_workflow_name", None)
         if name is None:
             with system_context(reason="workflows.run_label"):
                 name = self.policy_version.workflow.name
@@ -411,6 +424,211 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
             status=StepRunStatus.FAILED,
         ).order_by("rank", "map_index", "pk").only("status", "output")
         return next((reason for row in rows if (reason := row.failure_reason)), None)
+
+    def _lock_run_subject(self, *, required: bool = True) -> RunSubject | None:
+        """Lock this root run's opted-in subject after the caller has locked the run."""
+        if self.parent_step_id is not None:
+            return None
+        model = self.subject_model_class
+        if model is None or not issubclass(model, RunSubject):
+            return None
+        subject = model._default_manager.filter(pk=self.subject_object_id).select_for_update(
+            no_key=True, of=row_lock_paths(model),
+        ).first()
+        if subject is None and required:
+            raise ValidationError("The workflow run subject no longer exists.")
+        return cast(RunSubject | None, subject)
+
+    def _write_state(self, *, status: str, outcome: str, output: Any, error: str = "", actor: Any = None) -> None:
+        """Write this locked run's state; its first terminal transition releases its owned work.
+
+        Cleanup receivers, open-decision withdrawal and the subject's settlement share the
+        terminal write's transaction. Unawaited owned children are canceled after it commits.
+        """
+        runs = type(self).objects
+        runs.filter(pk=self.pk).update(
+            status=status, outcome=outcome, output=strip_null_bytes(output),
+            error=error,
+            finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
+        )
+        if status in RunStatus.terminal_values() and not self.is_terminal:
+            # The sender owns this savepoint: a receiver that poisons the
+            # transaction rolls back its cleanup, never the terminal write.
+            try:
+                with transaction.atomic():
+                    run_stopping.send_robust(sender=type(self), run=self)
+            except DatabaseError:
+                logger.exception("Workflow run cleanup left the transaction unusable; its cleanup was rolled back.")
+            decisions = apps.get_model("decisions", "Decision").objects
+            with system_context(reason="workflows.terminal.withdraw"):
+                for decision in decisions.filter(requesting_steps__run=self).open().order_by("pk"):
+                    decision.withdraw(actor=actor or self.run_as)
+            if (subject := self._lock_run_subject(required=False)) is not None:
+                subject.settle_run(runs.get(pk=self.pk), status)
+            if status != RunStatus.CANCELED:
+                transaction.on_commit(lambda: runs.cancel_abandoned(self.pk), robust=True)
+            enqueue_task("workflows.wake_run", kwargs={"run_id": self.pk}, robust=True)
+        self._publish_update()
+
+    def _publish_update(self) -> None:
+        """Reload this run and publish its change, isolating a publication failure."""
+        with isolate_failure("run change publication"):
+            self.refresh_from_db()
+            publish_change(self, action="update", update_fields=None)
+
+    def advance(
+        self,
+        step_run: Any = None,
+        settlement: AttemptRecord | None = None,
+        *,
+        records: list[Any] | None = None,
+        notes: list[dict[str, str]] | None = None,
+    ) -> None:
+        """Settle an attempt, plan the graph and write this held run's state.
+
+        Settlement and planning have their own savepoints, so a bad plan cannot
+        poison the transaction that records the failure. A terminal run only keeps
+        a preserved IO sibling's late settlement and republishes its evidence; its
+        plan and state stay untouched. Failures propagate to the runner, which
+        classifies them for :meth:`fail_advance`.
+        """
+        terminal = self.is_terminal
+        if terminal and settlement is None:
+            return
+        # This run may carry a requester's pin, which its related manager keeps
+        # inside system_context; settling and planning always act elevated.
+        step_runs = self.step_runs.system_context(reason="workflows.advance")
+        with system_context(reason="workflows.advance"):
+            if settlement is not None:
+                with transaction.atomic():
+                    step_runs.settle(step_run, settlement)
+                    if not isinstance(settlement.settlement, Fail):
+                        for record in records or ():
+                            type(record).objects.get_or_create(
+                                run_id=record.run_id, step_run_id=record.step_run_id,
+                                content_type_id=record.content_type_id, object_id=record.object_id,
+                                operation=record.operation, defaults={"label": record.label},
+                            )
+                        if notes:
+                            step_runs.filter(pk=step_run.pk).update(notes=[*step_run.notes, *notes])
+            if terminal:
+                self._publish_update()
+                return
+            output: Any
+            with transaction.atomic():
+                # The reverse manager needs its connecting FK to populate
+                # Django's known-related-object cache without one query per row.
+                rows = list(step_runs.only(
+                    "run_id", "node_key", "map_index", "status", "outcome", "waiting_kind", "input",
+                ))
+                definition = self.version.definition
+                if definition.unrouted_failure(rows):
+                    status, outcome, output = RunStatus.FAILED, ERROR_OUTCOME, {}
+                else:
+                    planned = definition.ready_nodes(rows, map_concurrency=settings.ANGEE_WORKFLOW_MAP_CONCURRENCY)
+                    wake = [node.node_key for node in planned if node.existing]
+                    if wake:
+                        step_runs.filter(node_key__in=wake).to_ready()
+                    new_steps = [
+                        step_runs.model(
+                            run=self, node_key=node.node_key, map_index=node.map_index,
+                            status=StepRunStatus(node.status), rank=node.rank,
+                        ) for node in planned if not node.existing
+                    ]
+                    if new_steps:
+                        step_runs.bulk_create(new_steps)
+                    statuses = set(step_runs.values_list("status", flat=True))
+                    if statuses & {StepRunStatus.READY, StepRunStatus.RUNNING}:
+                        status, outcome, output = RunStatus.RUNNING, "", {}
+                    elif StepRunStatus.WAITING in statuses:
+                        status, outcome, output = RunStatus.WAITING, "", {}
+                    else:
+                        status = RunStatus.SUCCEEDED
+                        outcome, output = definition.result_for(step_runs.all(), self.input) or (DONE_OUTCOME, {})
+                self._write_state(status=status, outcome=outcome, output=output)
+
+    def admit_subject(self) -> None:
+        """Lock this held root run's opted-in subject and let it admit the run.
+
+        The subject's refusal raises ``ValidationError`` and rolls the caller back.
+        """
+        if (subject := self._lock_run_subject()) is not None:
+            subject.admit_run(self)
+
+    def reopen(self) -> None:
+        """Clear this held run's terminal facts and readmit its subject; the runner replans it."""
+        self.admit_subject()
+        self._write_state(status=str(RunStatus.RUNNING), outcome="", output={})
+
+    def interrupt(self) -> None:
+        """Settle this held run as interrupted by a process restart and close its open steps."""
+        self._write_state(status=str(RunStatus.INTERRUPTED), outcome=INTERRUPTED_OUTCOME, output={})
+        self.step_runs.cancel_open()
+
+    def cancel_owned_work(self, *, actor: Any) -> tuple[bool, int]:
+        """Stop this held run's open work, keeping its terminal facts.
+
+        Return whether the run transitioned to canceled and how many open steps closed.
+        """
+        stopped = self.stopped_at is None and (not self.is_terminal or self.status == RunStatus.FAILED)
+        if stopped:
+            type(self).objects.filter(pk=self.pk).update(stopped_at=Now(), updated_at=Now())
+            self.refresh_from_db(fields=["stopped_at"])
+        transitioning = not self.is_terminal
+        if transitioning:
+            self._write_state(status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME, output={}, actor=actor)
+        # Cleanup locks sessions and turns before cancel_open deletes their watches.
+        changed = self.step_runs.cancel_open()
+        if not transitioning and (changed or stopped):
+            self._publish_update()
+        return transitioning, changed
+
+    def cancel_on_commit(self, actor: Any) -> None:
+        """Deliver an authorized cancellation after this transaction releases its locks.
+
+        Rollback discards the request. The task cancels as the same actor,
+        rechecking access and terminal state under the run manager's cancel.
+        Robust delivery failures are logged without interrupting other callbacks.
+        """
+        actor = self.require_access("write", actor)
+        if actor is None:
+            raise PermissionDenied("Deferred cancellation requires an actor.")
+        enqueue_task("workflows.cancel", kwargs={"run_id": self.pk, "actor": str(to_subject_ref(actor))}, robust=True)
+
+    def fail_advance(self, step_run: Any, settlement: AttemptRecord | None, failure: AttemptRecord) -> None:
+        """Record an advancement failure the runner classified, each write in its own savepoint.
+
+        A planning failure follows a completed settlement and cannot replace it; a
+        settlement that failed still owns its fence and records the failure on its
+        attempt. An open run fails with the error unless its attempt already holds it.
+        """
+        terminal = self.is_terminal
+        step_runs = self.step_runs.system_context(reason="workflows.advance")
+        run_error = failure.error
+        with system_context(reason="workflows.advance"):
+            if step_run is not None:
+                recorded_on_attempt = False
+                with isolate_failure("settlement failure"):
+                    if step_runs.filter(pk=step_run.pk, status=StepRunStatus.RUNNING).exists():
+                        step_runs.settle(step_run, failure)
+                        recorded_on_attempt = True
+                with isolate_failure("attempt close"):
+                    if failure.timed_out:
+                        error, stacktrace = failure.diagnostic_error or "", failure.stacktrace
+                    else:
+                        error, stacktrace = (
+                            (settlement.diagnostic_error or settlement.error, settlement.stacktrace)
+                            if settlement else ("", "")
+                        )
+                    closed = step_run.attempts.close(failure.result, error, stacktrace)
+                    if recorded_on_attempt or failure.timed_out and closed:
+                        run_error = ""
+            if terminal:
+                # A preserved IO sibling's evidence changed without a run state transition.
+                self._publish_update()
+            else:
+                with isolate_failure("run state"):
+                    self._write_state(status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error)
 
     def graph(self, actor: Any) -> RunGraph | None:
         """Read this run's frozen topology; ``None`` once the reader can no longer read the run.
@@ -642,16 +860,15 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 class WorkflowDecision(Composable, extends="decisions.Decision"):
     """Contribute retained requesting runs to the decision owner's reference seam."""
 
-
     class Meta:
         abstract = True
 
     @classmethod
     def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
-        runs = apps.get_model("workflows", "WorkflowRun").system_queryset().annotate(
+        runs = apps.get_model("workflows", "WorkflowRun")._base_manager.annotate(
             _decision_id=models.F("step_runs__decision_id"),
         )
-        retained = apps.get_model("workflows", "WorkflowRun").system_queryset().filter(
+        retained = apps.get_model("workflows", "WorkflowRun")._base_manager.filter(
             records__content_type__app_label=cls._meta.app_label,
             records__content_type__model=cls._meta.model_name,
             records__operation=RecordOperation.CREATED,
@@ -715,25 +932,62 @@ class StepRun(AngeeDataModel, concrete=True):
         rows = tuple(instances)
         if not rows:
             return ()
-        using = rows[0]._state.db
-        decisions = apps.get_model("decisions", "Decision")._base_manager.using(using).filter(
+        decisions = apps.get_model("decisions", "Decision")._base_manager.filter(
             pk__in={row.decision_id for row in rows if row.decision_id},
         ).defer("proposal", "context", "verdict", "verdict_values") if "decision_id" in update_fields else ()
         return decisions
 
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+    def change_related_records(self) -> tuple[RecordRef, ...]:
         """A step changes both its run graph and that run's record timelines."""
         run = self._meta.get_field("run").related_model
         evidence = self._meta.get_field("records").related_model
         assert run is not None and issubclass(run, WorkflowRun)
         assert evidence is not None and issubclass(evidence, StepRecord)
-        records = [ChangeRelatedRecord(run._meta.label, run.public_id_from_pk(self.run_id)),
+        records = [RecordRef.from_model(run, self.run_id),
                    *evidence.objects.filter(run_id=self.run_id).change_related_records()]
         if self.decision_id:
             decision = self._meta.get_field("decision").related_model
             assert decision is not None
-            records.append(ChangeRelatedRecord(decision._meta.label, public_id_for(decision, self.decision_id)))
+            records.append(RecordRef.from_model(decision, self.decision_id))
         return tuple(records)
+
+    def wake(self) -> bool:
+        """Make this held waiter ready and drop its watches; its run replans."""
+        self.run.step_runs.filter(pk=self.pk).to_ready()
+        self.watches.all().delete()
+        return True
+
+    def redispatch(self) -> bool:
+        """Count one tick redelivery of this held ready row.
+
+        Return whether exhausting the delivery allowance parked it for an operator,
+        which replans its run.
+        """
+        rows = self.run.step_runs.filter(pk=self.pk)
+        rows.count_redispatch()
+        if self.dispatches + 1 < settings.ANGEE_WORKFLOW_MAX_DISPATCHES:
+            return False
+        rows.to_waiting(kind=WaitingKind.ERROR, reason="Task delivery exhausted its retry allowance.")
+        return True
+
+    def reap(self) -> bool:
+        """Fail this held expired claim as a retryable timeout; its run replans.
+
+        An unregistered step implementation closes the attempt and waits for an operator.
+        """
+        try:
+            with transaction.atomic():
+                self.run.step_runs.expire(self, AttemptRecord.failure(
+                    "The attempt deadline expired.", retryable=True, timed_out=True,
+                ))
+        except ImproperlyConfigured as failure:
+            self.attempts.filter(number=self.attempt).close(AttemptResult.TIMED_OUT, exception_text(failure))
+            self.run.step_runs.filter(pk=self.pk).to_waiting(
+                kind=WaitingKind.ERROR,
+                reason="The step implementation is unavailable; restore its registration before retrying.",
+            )
+        return True
+
     hold_states = {
         (StepRunStatus.FAILED, None): "error",
         (StepRunStatus.WAITING, WaitingKind.ERROR): "error",

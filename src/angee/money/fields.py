@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import decimal
+from collections.abc import Mapping
 from typing import Any
 
 from django.apps import apps
@@ -11,9 +12,10 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
 from angee.graphql.field_types import register_field_type
+from angee.provenance.statements import StatementField
 
 
-class MoneyField(models.DecimalField):
+class MoneyField(models.DecimalField, StatementField):
     """A decimal amount paired with the currency its row is denominated in.
 
     ``docs/stack.md`` keeps money native: a ``DecimalField`` (default
@@ -36,6 +38,9 @@ class MoneyField(models.DecimalField):
     backend vocabulary.
     """
 
+    db_index: bool
+    """Django Field stores this constructor option; its current stub omits the attribute."""
+
     angee_widget = "money"
 
     def __init__(self, *args: Any, currency_field: str = "currency", **kwargs: Any) -> None:
@@ -51,6 +56,15 @@ class MoneyField(models.DecimalField):
         """Return the currency path this field declares for resource metadata."""
 
         return self.currency_field
+
+    def for_statement(self, fields: Mapping[str, models.Field]) -> models.Field:
+        """An amount-only statement retains the subject's currency binding."""
+
+        if self.currency_field in fields:
+            return self
+        return models.DecimalField(
+            max_digits=self.max_digits, decimal_places=self.decimal_places, db_index=self.db_index,
+        )
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
         """Validate that ``currency_field`` resolves to the money addon's ``Currency``."""
@@ -112,7 +126,7 @@ class MoneyField(models.DecimalField):
                 obj=self,
                 id="angee.E011",
             )
-        if not (getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False)):
+        if not (field.many_to_one or field.one_to_one):
             return checks.Error(
                 f"MoneyField currency_field={self.currency_field!r}: "
                 f"{model._meta.label}.{field_name} is not a foreign key.",

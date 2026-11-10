@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Iterator
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -14,6 +15,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.db.models.deletion import Collector
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import actor_context, current_actor, system_context
 from rebac.models import PermissionAuditEvent
 
@@ -26,6 +28,7 @@ from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn
 from angee.base.exceptions import TransitionNotAllowed
+from angee.base.testing.queries import statement_body, statement_startswith
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from angee.workflows.testing.drivers import capture_tasks as capture_task_sends
 from angee.workflows.testing.drivers import observe
@@ -529,11 +532,10 @@ def test_start_requires_an_available_in_process_runtime(
 def test_deprovision_closes_sessions(session: AgentSession) -> None:
     turn = session.post("Open during deprovision")
     session.claim_turn()
-    result = provisioning.deprovision_agent(session.agent.sqid)
+    assert provisioning.deprovision_agent(session.agent) == "Deprovisioned."
     session.refresh_from_db()
     turn.refresh_from_db()
     session.agent.refresh_from_db()
-    assert result.ok
     assert session.status == SessionStatus.CLOSED
     assert turn.status == TurnStatus.CANCELED
 
@@ -542,8 +544,7 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
     """A stale ready instance cannot open a session after teardown closed them."""
 
     stale_agent = Agent.objects.get(pk=session.agent_id)
-    result = provisioning.deprovision_agent(stale_agent.sqid)
-    assert result.ok
+    assert provisioning.deprovision_agent(stale_agent) == "Deprovisioned."
     assert stale_agent.can_chat
 
     with pytest.raises(ValidationError, match="Agent is not running"):
@@ -552,6 +553,13 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
     session.refresh_from_db()
     assert session.status == SessionStatus.CLOSED
     assert AgentSession.objects.filter(agent=stale_agent).count() == 1
+
+
+def test_provisioning_refuses_an_unsaved_agent() -> None:
+    """Verbs take a saved agent; an unsaved row is refused before any lock or daemon call."""
+
+    with pytest.raises(provisioning.ProvisioningError, match="saved agent"):
+        provisioning.deprovision_agent(Agent(name="Unsaved agent"))
 
 
 def test_stream_updates_do_no_database_work_before_the_flush_interval(
@@ -608,12 +616,13 @@ def test_append_reads_only_lock_and_save_fields_without_system_audits(session: A
             assert turn.append_updates([_chunk("First batch")])
             assert turn.append_updates([_chunk("Second batch")])
         assert PermissionAuditEvent.objects.count() == audits
-    selects = [query["sql"].split(" FROM ", 1)[0] for query in queries if query["sql"].startswith("SELECT ")]
+    selects = [statement_body(query["sql"]).split(" FROM ", 1)[0]
+               for query in queries if statement_startswith(query["sql"], "SELECT ")]
     assert selects
     assert all('"updates"' not in projection for projection in selects)
     turn_selects = [projection for projection in selects if f'"{AgentTurn._meta.db_table}"."status"' in projection]
     assert turn_selects
-    assert all(not projection.startswith("SELECT DISTINCT ") for projection in turn_selects)
+    assert all(not statement_startswith(projection, "SELECT DISTINCT ") for projection in turn_selects)
     timestamp_selects = [
         projection for projection in selects if f'"{AgentTurn._meta.db_table}"."updated_at"' in projection
     ]
@@ -656,7 +665,8 @@ def test_failed_settlement_does_not_rewrite_replay_state(
         session.settle_turn(turn, TurnOutcome(kind=kind, replay_state=["Discard"], usage={"tokens": 1}))
 
     session_updates = [
-        query["sql"] for query in queries if query["sql"].startswith(f'UPDATE "{AgentSession._meta.db_table}" ')
+        query["sql"] for query in queries
+        if statement_startswith(query["sql"], f'UPDATE "{AgentSession._meta.db_table}" ')
     ]
     assert session_updates
     assert all('"replay_state" =' not in query for query in session_updates)
@@ -777,12 +787,45 @@ def test_deprovision_closes_sessions_of_another_person(session: AgentSession) ->
     with system_context(reason="test historical session user"):
         AgentSession.objects.filter(pk=session.pk).update(user=other)
 
-    result = provisioning.deprovision_agent(session.agent.sqid)
-
-    assert result.ok
+    assert provisioning.deprovision_agent(session.agent) == "Deprovisioned."
     with system_context(reason="test deprovisioned session"):
         session.refresh_from_db()
     assert session.status == SessionStatus.CLOSED
+
+
+def test_session_execution_dispatch_carries_the_callers_delivery_bound(
+    session: AgentSession,
+    capture_tasks: list[Any],
+) -> None:
+    """The session owns its execution task; a caller supplies only expiry and broker-error policy."""
+
+    expires = timezone.now() + timedelta(minutes=5)
+    capture_tasks.clear()
+
+    session.enqueue_execution(expires=expires)
+
+    assert capture_tasks == [
+        ("agents.run_session", {"kwargs": {"session_id": session.pk}, "queue": None, "expires": expires}),
+    ]
+    with capture_task_sends(error=RuntimeError("broker down")) as failed, transaction.atomic():
+        session.enqueue_execution(robust=True)
+    assert [name for name, _options in failed] == ["agents.run_session"]
+
+
+def test_selected_session_close_keeps_sessions_outside_the_selection_open(session: AgentSession) -> None:
+    """A selected-set close cancels its open turns and leaves every other session open."""
+
+    turn = session.post("Close with the selection")
+    other = AgentSession.objects.start(session.agent, user=session.user, context={})
+
+    AgentSession.system_queryset().filter(pk=session.pk).close_as_system(reason="test selected close")
+
+    session.refresh_from_db()
+    other.refresh_from_db()
+    turn.refresh_from_db()
+    assert session.status == SessionStatus.CLOSED
+    assert turn.status == TurnStatus.CANCELED
+    assert other.status == SessionStatus.IDLE
 
 
 def test_provider_exception_detail_is_logged_without_being_shown_to_readers(

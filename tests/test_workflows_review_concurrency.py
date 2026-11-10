@@ -1,12 +1,9 @@
 """Independent decision answers race cancellation without holding a question group."""
 
 from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
-from queue import Queue
-from time import monotonic, sleep
 
 import pytest
-from django.db import close_old_connections, connection, connections, transaction
+from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 
 from angee.base.models.locks import StaleRevisionError
@@ -14,6 +11,7 @@ from angee.decisions.testing.models import Decision
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
+from tests.lock_waits import submit, wait_for_lock
 from tests.test_workflows_review import answer, questions, start_review
 from tests.test_workflows_review import review as review
 
@@ -21,44 +19,6 @@ pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
-
-
-def submit(pool, call):
-    """Give each worker its own connection and expose its native lock-wait identity.
-
-    The worker runs in a copy of the caller's context, so the test's attribution
-    boundary and actor reach its captured writes the way a framework thread pool
-    carries them (``copy_context().run``); the boundary records the worker's own
-    changeset row in the worker's connection.
-    """
-    started = Queue()
-
-    def invoke():
-        close_old_connections()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT pg_backend_pid()")
-                started.put(cursor.fetchone()[0])
-            return call()
-        finally:
-            connections.close_all()
-
-    return pool.submit(copy_context().run, invoke), started.get(timeout=10)
-
-
-def wait_for_lock(pid, future):
-    """Prove the contender reached a PostgreSQL lock before the holder commits."""
-    deadline = monotonic() + 10
-    while monotonic() < deadline:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT pg_stat_clear_snapshot()")
-            cursor.execute("SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s", [pid])
-            if cursor.fetchone() == ("Lock",):
-                return
-        if future.done():
-            pytest.fail(f"The contender finished before reaching its row lock: {future.result()!r}")
-        sleep(0.01)
-    pytest.fail(f"PostgreSQL backend {pid} did not reach a row-lock wait.")
 
 
 @pytest.mark.parametrize("winner", ["answer", "cancel"])

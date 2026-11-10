@@ -30,7 +30,9 @@ class ResourcesConfig(AppConfig):
     def ready(self) -> None:
         super().ready()
         from angee.resources.kinds import check_entry_kind_registry
+        from angee.resources.mixins import check_resource_load_mixins
         from angee.resources.sources import check_source_registry
 
         checks.register(check_entry_kind_registry, checks.Tags.models)
+        checks.register(check_resource_load_mixins, checks.Tags.models)
         checks.register(check_source_registry, checks.Tags.models)

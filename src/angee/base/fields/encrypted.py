@@ -122,6 +122,7 @@ class EncryptedField(models.TextField):
         prepared = super().get_db_prep_save(value, connection=connection)
         if prepared is None:
             return None
+        # Django accepts SQL expression values as well as prepared scalar field values.
         if hasattr(prepared, "as_sql"):
             raise FieldError(
                 "EncryptedField stores only plaintext scalar assignments; "

@@ -11,7 +11,7 @@ from django.test import override_settings
 from django.test.utils import isolate_apps
 
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_ownership, check_sealed_permissions
+from angee.base.checks import check_database_routers, check_ownership, check_sealed_permissions
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.hooks import check_hook, check_hooks
@@ -132,6 +132,8 @@ def test_hook_check_imports_every_declared_path() -> None:
 
 
 def test_hook_check_accepts_unset_optional_hook_and_declared_list_order() -> None:
+    assert check_hook("ANGEE_TEST_UNSET_HOOK") == []
+    assert check_hooks(("ANGEE_TEST_UNSET_HOOK",)) == []
     with override_settings(
         ANGEE_TEST_SINGLE_HOOK="",
         ANGEE_TEST_HOOKS=["builtins.sorted", "builtins.len"],
@@ -205,6 +207,28 @@ def test_native_rebac_database_check_and_base_checks_are_registered() -> None:
 
     assert sum(check is check_settings for check in registry.registered_checks) == 1
     assert checks.Tags.models in check_settings.tags
+    assert sum(check is check_database_routers for check in registry.registered_checks) == 1
+
+
+def test_a_database_router_is_refused() -> None:
+    """Angee runs on one database: any configured router fails the system check."""
+
+    class ReplicaRouter:
+        """A router that would move reads off the default database."""
+
+    assert check_database_routers() == []
+    with override_settings(DATABASE_ROUTERS=[ReplicaRouter()]):
+        [error] = check_database_routers()
+    assert error.id == "angee.E050"
+    assert "DATABASE_ROUTERS" in error.msg
+
+
+@pytest.mark.parametrize("aliases", [(), ("other",), ("default", "other")])
+def test_database_configuration_requires_only_default(settings, aliases) -> None:
+    settings.DATABASES = {alias: {"ENGINE": "django.db.backends.sqlite3"} for alias in aliases}
+    [error] = check_database_routers()
+    assert error.id == "angee.E050"
+    assert "DATABASES" in error.msg
 
 
 @pytest.mark.parametrize("ordering", ["first", "last", "override", "inherited", "plain"])

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.http import HttpRequest
+from django.test.utils import CaptureQueriesContext
 
+from angee.base.testing.queries import statement_startswith
 from angee.iam import identity as identity_module
 from angee.iam.identity import (
     user_display_label,
+    user_display_labels,
     user_from_public_id,
     user_principal,
     user_public_id,
@@ -76,3 +80,30 @@ def test_user_principal_rejects_encoded_relay_id() -> None:
 
     with pytest.raises(ValueError, match="User principal"):
         user_principal(encoded_id)
+
+
+@pytest.mark.django_db
+def test_user_display_labels_resolve_mixed_principal_and_public_ids_in_one_batch() -> None:
+    """Primary keys from role grants and public ids from input share one user read."""
+
+    users = [
+        get_user_model().objects.create_user(
+            username=f"batch-{index}", email=f"batch-{index}@example.com", first_name="Batch", last_name=str(index),
+        )
+        for index in range(3)
+    ]
+    public_id = str(getattr(users[2], "sqid", users[2].pk))
+    ids = [users[0].pk, str(users[1].pk), public_id, "usr_unknown", users[0].pk + 10_000]
+
+    with CaptureQueriesContext(connection) as captured:
+        labels = user_display_labels(ids)
+
+    assert sum(statement_startswith(query["sql"], "SELECT") for query in captured.captured_queries) == 1
+
+    assert labels == {
+        users[0].pk: "Batch 0",
+        str(users[1].pk): "Batch 1",
+        public_id: "Batch 2",
+        "usr_unknown": None,
+        users[0].pk + 10_000: None,
+    }

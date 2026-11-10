@@ -45,13 +45,9 @@ from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.relationships import write_relationships
 
-from angee.agents import grants as grants_module
+from angee.agents import models as agent_models
 from angee.agents import provisioning
-from angee.agents.grants import (
-    TOOL_GRANT_RESOURCE_TYPE,
-    sync_builtin_tool_catalogue,
-    tool_grant_ref,
-)
+from angee.agents.grants import TOOL_GRANT_RESOURCE_TYPE, tool_grant_ref
 from angee.agents.models import ToolRole
 from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.testing.models import (
@@ -68,11 +64,10 @@ from angee.agents_runtime_pydantic.toolsets import (
     AngeeToolset,
     ToolGrantAccess,
     _accessible_tool_grant_ids,
-    _assert_in_process_compatible,
 )
 from angee.base.models.audit import AuditMixin
-from angee.mcp.graphql import _CompiledTool
-from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
+from angee.mcp.graphql import ACTOR_EXECUTION_META, _CompiledTool, require_actor_tool
+from angee.mcp.tool_tags import RESOURCE_READER_TOOL_TAG
 
 User = get_user_model()
 
@@ -88,7 +83,7 @@ class AgentToolWriteProbe(AuditMixin, models.Model):
 
 
 def _registered_server(*functions: tuple[Any, bool]) -> FastMCP:
-    """Return a FastMCP registry whose functions declare read/write posture."""
+    """Return a FastMCP registry whose actor-only functions declare read/write posture."""
 
     server = FastMCP(name="agent-tooling-test")
     for function, read_only in functions:
@@ -96,6 +91,7 @@ def _registered_server(*functions: tuple[Any, bool]) -> FastMCP:
             Tool.from_function(
                 function,
                 annotations=ToolAnnotations(readOnlyHint=read_only),
+                meta=ACTOR_EXECUTION_META,
             )
         )
     return server
@@ -347,6 +343,29 @@ def test_tool_grant_identity_is_the_catalogue_primary_key(composed_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
+def test_builtin_server_manager_adopts_refuses_and_requires_one_row(composed_tables: None) -> None:
+    """The manager adopts an authored builtin, refuses a foreign name, and never picks among two."""
+
+    del composed_tables
+    with system_context(reason="test builtin server manager"):
+        with pytest.raises(ImproperlyConfigured, match="found 0"):
+            MCPServer.objects.builtin()
+        external = MCPServer.objects.create(name="angee", config={})
+        with pytest.raises(ImproperlyConfigured, match="external server"):
+            MCPServer.objects.builtin(create=True)
+        assert MCPServer.system_queryset().count() == 1
+
+        external.delete()
+        authored = MCPServer.objects.create(name="Authored builtin", config={"builtin": "angee"})
+        assert MCPServer.objects.builtin(create=True).pk == authored.pk
+        assert MCPServer.system_queryset().count() == 1
+
+        MCPServer.objects.create(name="Second builtin", config={"builtin": "angee"})
+        with pytest.raises(ImproperlyConfigured, match="found 2"):
+            MCPServer.objects.builtin(create=True)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_m2m_grant_write_is_discarded_with_rolled_back_edit(composed_tables: None) -> None:
     """The on-commit mirror cannot outlive a rolled-back Agent.mcp_tools edit."""
 
@@ -431,10 +450,10 @@ def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
     registry.add_tool(
         Tool.from_function(write_records, annotations=ToolAnnotations(readOnlyHint=False))
     )
-    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
+    monkeypatch.setattr(agent_models, "mcp_server", lambda: registry)
 
-    assert sync_builtin_tool_catalogue() == 2
-    assert sync_builtin_tool_catalogue() == 2
+    assert MCPTool.objects.sync_builtin() == 2
+    assert MCPTool.objects.sync_builtin() == 2
     with system_context(reason="test builtin catalogue verify"):
         rows = list(MCPTool.objects.filter(server=server).order_by("name"))
     assert [row.name for row in rows] == ["query_records", "write_records"]
@@ -496,7 +515,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     registry = FastMCP(name="production-reader-path")
     register_resource_tools(registry)
-    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
+    monkeypatch.setattr(agent_models, "mcp_server", lambda: registry)
     monkeypatch.setattr(toolsets_module, "mcp_server", lambda: registry)
 
     async def execute_probe(
@@ -519,7 +538,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
 
     monkeypatch.setattr(mcp_graphql, "execute_under_actor", execute_probe)
 
-    sync_builtin_tool_catalogue()
+    MCPTool.objects.sync_builtin()
     assert "query_probes" not in async_to_sync(
         AngeeToolset(
             session,
@@ -528,8 +547,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
         ).get_tools
     )(_native_context())
 
-    result = provisioning.provision_agent(agent.sqid)
-    assert result.ok is True
+    assert provisioning.provision_agent(agent) == "Provisioned in process."
     native = AngeeToolset(
         session,
         ToolGrantAccess(agent.principal_subject()),
@@ -553,11 +571,11 @@ def test_tool_role_anchor_is_tableless() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_native_tool_error_mapping_ceiling_and_context_constraint(
+def test_native_tool_error_mapping_and_ceiling(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Direct Tool.run calls retry safely, bound output, and reject request-only context."""
+    """Direct Tool.run calls retry safely and bound their output."""
 
     del composed_tables
     owner = User.objects.create_user(username="native-errors-owner")
@@ -615,15 +633,34 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
             "typed_echo", {"value": "not-an-int"}, _native_context(), advertised["typed_echo"]
         )
 
+
+def test_builtin_tools_declare_actor_execution_and_missing_meta_fails_closed() -> None:
+    """In-process admission reads the native Tool.meta declaration, never the callable."""
+
     def request_bound(context: Context) -> str:
         return str(context)
 
-    request_tool = Tool.from_function(
-        request_bound,
-        annotations=ToolAnnotations(readOnlyHint=True),
+    def plain_read() -> str:
+        return "read"
+
+    read_hint = ToolAnnotations(readOnlyHint=True)
+    for undeclared in (
+        Tool.from_function(request_bound, annotations=read_hint),
+        Tool.from_function(plain_read, annotations=read_hint),
+        Tool.from_function(plain_read, annotations=read_hint, meta={"angee": {"execution_context": "request"}}),
+    ):
+        with pytest.raises(ImproperlyConfigured, match="actor-only execution"):
+            require_actor_tool(undeclared)
+
+    assert require_actor_tool(Tool.from_function(plain_read, annotations=read_hint, meta=ACTOR_EXECUTION_META))
+    write = Tool.from_function(
+        plain_read,
+        annotations=ToolAnnotations(readOnlyHint=False),
+        meta=ACTOR_EXECUTION_META,
     )
-    with pytest.raises(Exception, match="request-scoped FastMCP Context"):
-        _assert_in_process_compatible(request_tool)
+    assert require_actor_tool(write) is False
+    with pytest.raises(ImproperlyConfigured, match="readOnlyHint"):
+        require_actor_tool(Tool.from_function(plain_read, meta=ACTOR_EXECUTION_META))
 
 
 @pytest.mark.django_db(transaction=True)

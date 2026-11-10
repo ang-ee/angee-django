@@ -10,9 +10,9 @@ from angee.workflows.awaits import AwaitRun
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
+from tests.lock_waits import submit, wait_for_lock
 from tests.test_workflows_children import age_runs
 from tests.test_workflows_children import child_graph as child_graph
-from tests.test_workflows_review_concurrency import submit, wait_for_lock
 from tests.workflow_steps import Echo
 
 pytestmark = [

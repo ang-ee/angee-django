@@ -12,13 +12,13 @@ from typing import Any
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db.models import CharField, Q, QuerySet, Value
+from django.db.models import CharField, QuerySet, Value
 from django.db.models.functions import Coalesce, Concat, NullIf, Trim
 from django.http import HttpRequest
 from rebac import system_context
 from rebac.resources import model_resource_type
 
-from angee.base.models.identity import instance_from_public_id, public_id_for
+from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
 
 
 def group_subject_type() -> str:
@@ -74,11 +74,7 @@ def _label_memo(request: HttpRequest | None) -> dict[Any, str | None] | None:
 
     if not isinstance(request, HttpRequest):
         return None
-    memo: dict[Any, str | None] | None = getattr(request, "_iam_user_label_memo", None)
-    if memo is None:
-        memo = {}
-        setattr(request, "_iam_user_label_memo", memo)
-    return memo
+    return request.__dict__.setdefault("_iam_user_label_memo", {})
 
 
 def user_display_labels(
@@ -111,34 +107,13 @@ def user_display_labels(
     if not missing:
         return labels
 
+    # Role grants carry primary keys and public input carries public ids. The
+    # model owns both encodings: turn primary keys into public ids, then decode
+    # and read the whole mixed set in one batch.
     user_model = get_user_model()
-    pk = user_model._meta.pk
-    public_lookup = getattr(user_model, "public_id_lookup", None)
-    lookup = Q()
-    if pk is not None:
-        pk_values = []
-        for user_id in missing:
-            try:
-                pk_values.append(pk.to_python(user_id))
-            except TypeError, ValueError, ValidationError:
-                continue
-        if pk_values:
-            lookup |= Q(**{f"{pk.name}__in": pk_values})
-    if callable(public_lookup):
-        for user_id in missing:
-            try:
-                lookup |= Q(**public_lookup(str(user_id)))
-            except TypeError, ValueError:
-                continue
-
-    fetched: dict[str, str] = {}
-    users = user_label_queryset().filter(lookup) if lookup else []
-    for user in users:
-        label = user_label(user)
-        fetched[str(user.pk)] = label
-        public_id = getattr(user, "sqid", None)
-        if public_id:
-            fetched[str(public_id)] = label
+    public_ids = {str(user_id): _public_user_id(user_model, user_id) for user_id in missing}
+    users = instances_from_public_ids(user_model, public_ids.values(), queryset=user_label_queryset())
+    fetched = {key: user_label(users[value]) for key, value in public_ids.items() if value in users}
 
     for user_id in missing:
         fetched_label = fetched.get(str(user_id))
@@ -170,31 +145,24 @@ def user_display_label(user_id: Any, *, request: HttpRequest | None = None) -> s
 
 
 def user_principal(principal_id: str) -> Any:
-    """Return the user addressed by a role-grant principal id."""
+    """Return the user addressed by a role-grant principal id: a primary key or a public id."""
 
     user_model = get_user_model()
-    lookups: list[dict[str, Any]] = []
-    pk = user_model._meta.pk
-    if pk is not None:
-        lookups.append({pk.name: principal_id})
-    public_lookup = getattr(user_model, "public_id_lookup", None)
-    if callable(public_lookup):
-        lookups.append(public_lookup(principal_id))
-
-    tried: set[tuple[tuple[str, Any], ...]] = set()
     with system_context(reason="iam.identity.principal"):
-        for lookup in lookups:
-            key = tuple(sorted(lookup.items()))
-            if key in tried:
-                continue
-            tried.add(key)
-            try:
-                user = user_model._default_manager.filter(**lookup).first()
-            except TypeError, ValueError:
-                continue
-            if user is not None:
-                return user
-    raise ValueError(f"User principal {principal_id!r} was not found.")
+        user = instance_from_public_id(user_model, _public_user_id(user_model, principal_id))
+    if user is None:
+        raise ValueError(f"User principal {principal_id!r} was not found.")
+    return user
+
+
+def _public_user_id(user_model: type[Any], user_id: Any) -> str:
+    """Return the public id a primary-key value encodes, or the value itself when it is a public id."""
+
+    try:
+        pk = user_model._meta.pk.to_python(user_id)
+    except TypeError, ValueError, ValidationError:
+        return str(user_id)
+    return public_id_for(user_model, pk)
 
 
 def user_from_public_id(user_id: Any) -> Any:

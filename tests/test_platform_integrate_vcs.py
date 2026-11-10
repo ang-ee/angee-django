@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from rebac import system_context
 
 import tests.test_marketplace_graphql  # noqa: F401 -- register the source model graph before database setup
+from angee.base.testing.queries import statement_startswith
 from angee.integrate_vcs.backend import RepoDescriptor, VCSBackend, source_path, tree_entries
 from angee.platform.discovery import facts_from_distribution, installed_entry_points
 from angee.platform_integrate_vcs import catalog
@@ -161,7 +162,8 @@ def test_native_identity_collisions_write_neither_catalogue_nor_timestamp(catalo
     before = snapshot()
     with CaptureQueriesContext(connection) as queries, pytest.raises(ImproperlyConfigured):
         source.refresh()
-    assert not [query for query in queries if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+    assert not [query for query in queries
+                if statement_startswith(query["sql"].lstrip().upper(), ("INSERT", "UPDATE", "DELETE"))
                 and any(f'"{model._meta.db_table}"' in query["sql"] for model in (Addon, Source))]
     assert snapshot() == before
 

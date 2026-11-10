@@ -61,6 +61,7 @@ def exception_text(error: BaseException, *, diagnostic: bool = False) -> str:
         seen.add(id(current))
         if not isinstance(current, ValidationError):
             message = str(current)
+        # Django ValidationError has error_dict only for field-keyed errors.
         elif hasattr(current, "error_dict"):
             message = "; ".join(
                 f"{field}: {' '.join(messages)}" if field != NON_FIELD_ERRORS else " ".join(messages)
@@ -86,11 +87,11 @@ class DomainError(Exception):
     Subclasses may carry detail for logs; detail is never projected to the wire.
     """
 
-    code: str
+    code: str = ""
 
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
-        code = getattr(cls, "code", None)
+        code = cls.code
         if not isinstance(code, str) or not code.strip():
             raise TypeError("DomainError subclasses require a non-empty string code.")
 

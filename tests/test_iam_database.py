@@ -77,7 +77,7 @@ config.compose_provision(context)
 assert calls == []
 settings.ANGEE_BOOTSTRAP_ADMIN_PASSWORD = 'explicit-secret'
 config.compose_provision(context)
-# The command writes through the default manager: the router places the admin.
+# The command writes through the default manager on the one database.
 assert calls == [(('bootstrap_admin',), {})]
 '''
     result = subprocess.run(

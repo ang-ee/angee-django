@@ -88,11 +88,12 @@ class GraphQLDocumentRead:
         """
 
         assert self.statements <= statements, (
-            f"GraphQL document issued {self.statements} SQL statements; ceiling {statements}"
+            f"GraphQL document issued {self.statements} SQL statements; ceiling {statements}. "
+            "Ratchet downward when cost falls; never raise to admit a regression."
         )
         assert self.sql_bytes <= sql_kb * 1024, (
             f"GraphQL document SQL is {self.sql_bytes} bytes ({math.ceil(self.sql_bytes / 1024)} KB); "
-            f"ceiling {sql_kb} KB"
+            f"ceiling {sql_kb} KB. Ratchet downward when cost falls; never raise to admit a regression."
         )
 
 

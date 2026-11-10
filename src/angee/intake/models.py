@@ -45,6 +45,7 @@ from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
+    from angee.iam.models import User
     from angee.messaging.models import Message
     from angee.projects.models import Project, Task
     from angee.work.models import Queue
@@ -182,7 +183,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         if not body:
             raise ValidationError({"body": "A manual need requires a body."})
         try:
-            importance_value = NeedImportance(getattr(importance, "value", importance))
+            importance_value = NeedImportance(importance)
         except ValueError as error:
             raise ValidationError({"importance": "Choose normal or important."}) from error
 
@@ -220,7 +221,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             # actor on the instance rather than wrapping the whole save in the
             # queryset insertion scope: that scope would also pin the nested write
             # and defeat the instance-local elevation.
-            need.with_actor(actor).save(force_insert=True, using=self.db)
+            need.with_actor(actor).save(force_insert=True)
             return need
 
     def capture_from_message(
@@ -254,7 +255,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             mapped = dict(channel.mapped_task_values(locked_message) if values is None else values)
             claimed_name = mapped.pop("claimed_name", "")
             submission = locked_message.webform_submission()
-            task = self._create_triage_task(
+            task = apps.get_model("projects", "Task").work.capture_triage(
                 queue=queue,
                 title=mapped.pop("title", self._message_title(locked_message)),
                 note=mapped.pop("note", str(locked_message.preview or "")),
@@ -295,42 +296,6 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             self.model.system_queryset().filter(pk=need.pk).update(access_decision=need.access_decision)
             return need
 
-    def _create_triage_task(
-        self,
-        *,
-        queue: Queue,
-        title: str,
-        note: str,
-        project: Project | None = None,
-        created_by_id: Any = None,
-        values: dict[str, Any] | None = None,
-    ) -> Task:
-        """Create one task in ``queue``'s system triage stage."""
-
-        stage_model = apps.get_model("work", "Stage")
-        triage = stage_model._base_manager.filter(queue_id=queue.pk, category="triage").first()
-        if triage is None:
-            raise ValidationError({"queue": "The intake queue has no triage stage."})
-        task_model = apps.get_model("projects", "Task")
-        title_limit = task_model.title.field.max_length
-        assert title_limit is not None
-        normalized_title = " ".join(str(title or "").split())[:title_limit]
-        task = task_model(
-            queue=queue,
-            stage=triage,
-            project=project,
-            title=normalized_title or "Captured need",
-            note=str(note or ""),
-            created_by_id=created_by_id,
-            updated_by_id=created_by_id,
-            owner=None,
-            **(values or {}),
-        )
-        with task._work_verb_write():
-            task.full_clean(validate_unique=False, validate_constraints=False)
-            task.sudo(reason="intake.need.create_triage_task").save(ownerless=True)
-        return task
-
     @staticmethod
     def _message_title(message: Message) -> str:
         """Return a stable task title from the message preview or thread title."""
@@ -338,8 +303,8 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         preview = str(message.preview or "").strip()
         if preview:
             return preview
-        thread = getattr(message, "thread", None)
-        title = getattr(getattr(thread, "title", None), "text", "")
+        thread = message.thread
+        title = thread.title.text if thread is not None and thread.title is not None else ""
         return str(title or "Captured message")
 
     @staticmethod
@@ -500,7 +465,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
 
         if decision_id is not None:
             with system_context(reason="intake.need.replace_access_question"):
-                apps.get_model("decisions", "Decision").objects.withdraw(decision_id, actor=actor)
+                apps.get_model("decisions", "Decision").objects.get(pk=decision_id).withdraw(actor=actor)
 
     def _new_access_decision(self) -> Any:
         """Ask one question assigned to the target's current sharers."""
@@ -786,10 +751,10 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         )
 
     @transaction.atomic
-    def admit_requester(self, user: models.Model) -> Any:
+    def admit_requester(self, user: User | None) -> Any:
         """Assign, approve, and follow one person through the existing decision owner."""
 
-        if getattr(user, "kind", None) != "person":
+        if user is None or not user.is_person:
             raise ValidationError({"user": "Choose a person account."})
         with system_context(reason="intake.need.admit_requester.party"):
             party = apps.get_model("parties", "Party").objects.for_user(user)
@@ -891,7 +856,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             if (
                 action == NeedAccessAction.INTAKE_APPROVE
                 and user is not None
-                and getattr(user, "kind", None) == "person"
+                and user.is_person
             ):
                 with system_context(reason="intake.need.follow_approved_requester"):
                     if locked.target.thread_reader_allowed(user):
@@ -920,8 +885,8 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             if locked.task is not None:
                 task = locked.task
             else:
-                title = locked.body or getattr(locked.source_message, "preview", "")
-                task = type(self).objects._create_triage_task(
+                title = locked.body or (locked.source_message.preview if locked.source_message is not None else "")
+                task = apps.get_model("projects", "Task").work.capture_triage(
                     queue=queue,
                     project=locked.project,
                     title=title,
@@ -981,7 +946,8 @@ def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expres
     """Whether the first Need's party is the viewer's person (MTI child), regardless of later Needs.
 
     It compares the actor with itself only, so it reveals nothing about anyone else's requests;
-    an actor without a user matches nothing. REBAC's broader requester relation
+    no viewer, including system context, or a viewer without a user matches nothing.
+    This is viewer-identity policy, not a relation read. REBAC's broader requester relation
     can include later approved requests; this filter only attributes the first.
     """
 

@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from rebac import app_settings, current_actor, is_anonymous_actor, to_subject_ref
+from rebac import RebacMixin, app_settings, current_actor, is_anonymous_actor, to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
@@ -22,12 +22,13 @@ from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.ownership import OwnerMixin
 from angee.base.querysets import AngeeQuerySet
+from angee.decisions.mixins import DecisionTargetMixin
 
 SCOPE_MEMBER_RELATION = "direct_member"
 """Direct membership relation on the local ``scopedemo/scope`` test resource."""
 
 
-class ProposalTarget(OwnerMixin, AngeeDataModel):
+class ProposalTarget(DecisionTargetMixin, OwnerMixin, AngeeDataModel):
     """A declared decision-method owner without an update timestamp."""
 
     sqid_prefix = "ptg_"
@@ -219,3 +220,11 @@ class SharedDoc(AngeeDataModel):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/shared_doc"
+
+
+class NativeAttachmentTarget(RebacMixin):
+    """A plain REBAC library row, so file-attachment locks are covered without an Angee base."""
+
+    class Meta:
+        app_label = "scopedemo"
+        rebac_resource_type = "scopedemo/native_attachment_target"

@@ -29,6 +29,7 @@ from rebac import (
 )
 from strawberry import auto
 
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
@@ -228,7 +229,7 @@ def test_nested_insert_writes_parent_and_lines_atomically(composed_tables):
 
 
 def test_nested_insert_does_not_return_an_unreadable_created_row(composed_tables):
-    """Create authority does not grant read authority over the persisted payload."""
+    """Create authority grants neither read nor write, yet the creation admits its nested lines."""
 
     actor = create_user("unreadable-author")
     result = execute_schema(
@@ -251,6 +252,8 @@ def test_nested_insert_does_not_return_an_unreadable_created_row(composed_tables
     with system_context(reason="test.lines.unreadable_create.verify"):
         document = Document.objects.get(title="Unreadable document")
         assert list(document.lines.values_list("label", flat=True)) == ["Private line"]
+    document.with_actor(actor)
+    assert not document.has_access("write")
 
 
 def test_nested_insert_rolls_back_parent_on_line_failure(composed_tables):
@@ -495,7 +498,7 @@ def test_save_fetches_kept_lines_without_per_row_growth(composed_tables):
         return sum(
             1
             for query in captured.captured_queries
-            if query["sql"].lstrip().upper().startswith("SELECT") and table in query["sql"]
+            if statement_startswith(query["sql"].lstrip().upper(), "SELECT") and table in query["sql"]
         )
 
     # A per-row fetch (the old N+1) would make the 5-line save cost strictly more
@@ -657,6 +660,29 @@ def test_lines_writable_relation_requires_a_public_id_decode():
             aggregatable=["id"],
             writable=["title", "note"],
             lines=unguarded,
+            id_column="sqid",
+        )
+
+
+def test_lines_writable_non_column_fails_the_build():
+    """A declared line field the parent cannot write (no concrete column) fails at build, not at first write."""
+
+    computed = HasuraLines(
+        field="lines",
+        model=DocumentLine,
+        node=DocumentLineType,
+        writable=("label", "quantity", "position", "sqid"),
+    )
+    with pytest.raises(ImproperlyConfigured, match="DocumentLine.sqid is not a writable line column"):
+        hasura_model_resource(
+            DocumentType,
+            model=Document,
+            name="documents_computed",
+            filterable=["id", "title"],
+            sortable=["title"],
+            aggregatable=["id"],
+            writable=["title", "note"],
+            lines=computed,
             id_column="sqid",
         )
 
@@ -1031,7 +1057,7 @@ def test_writes_delegate_prepared_values_and_reload_after_owner_lock(composed_ta
     observed = []
 
     def lock(instance, members=None):
-        observed.append((instance.title, instance._state.db))
+        observed.append(instance.title)
         locked = original(instance, members)
         with system_context(reason="simulate current data after owner wait"):
             Document.objects.filter(pk=instance.pk).update(note="Current after wait")
@@ -1045,7 +1071,7 @@ def test_writes_delegate_prepared_values_and_reload_after_owner_lock(composed_ta
         else:
             backend.save(None, doc.public_id, {"title": "After"}, None)
     doc.refresh_from_db()
-    assert observed == [("After", doc._state.db)]
+    assert observed == ["After"]
     assert (doc.title, doc.note) == ("After", "Current after wait")
 
 

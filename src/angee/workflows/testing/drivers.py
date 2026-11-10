@@ -13,7 +13,7 @@ from django.apps import apps
 from django.conf import settings
 from rebac import system_context
 
-from angee.graphql.publishing import change_published
+from angee.base.signals import change_published
 from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks
 from angee.workflows.runner import runner
@@ -126,9 +126,7 @@ def start_run(workflow: Any, *, actor: Any, **kwargs: Any) -> Any:
 
 def decide(decision: Any, *, actor: Any, chosen: Sequence[str]) -> Any:
     """Submit the caller's observed revision through the real decisions owner."""
-    return type(decision).objects.decide(
-        decision.pk, actor=actor, revision=decision.revision, chosen=chosen,
-    )
+    return decision.decide(actor=actor, revision=decision.revision, chosen=chosen)
 
 
 def run_until(run: Any, *, node: str | None = None, max_steps: int = 100) -> Any:

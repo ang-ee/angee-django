@@ -45,14 +45,13 @@ from angee.integrate.signals import discovery_finished
 from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import StreamPage
 from angee.jobs.enqueue import celery_app
-from angee.messaging import delivery
+from angee.messaging import constants, delivery
 from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.events import message_ingested
 from angee.messaging.managers import DeliveryReconciliationBusy
 from angee.posts import mcp_tools
 from angee.posts.backends import RECONCILIATION_SKEW_MARGIN, FeedBackend, FeedChannelBackend, ParsedPost, RecordRefusal
-from angee.posts.ingest import land_posts
 from angee.posts.models import validate_reply_hold
 from angee.provenance.context import changeset_model
 
@@ -107,7 +106,7 @@ class DeliveryFixtures(TransactionTestCase):
 
     def comment(self):
         with system_context(reason="comment fixtures"):
-            return land_posts(self.feed, [self.post("root"), self.post("comment", parent="root")],
+            return Message.posts.land(self.feed, [self.post("root"), self.post("comment", parent="root")],
                               owner_id=self.operator.pk)[1]
 
     def outbound(self, **values):
@@ -287,13 +286,13 @@ class DeliveryContracts(DeliveryFixtures):
         row = self.outbound()
         self.backend.deliver.side_effect = IntegrationError(transient=True, retry_after=None)
         with system_context(reason="delivery retries"):
-            for attempt in range(1, delivery.MAX_DELIVERY_ATTEMPTS + 1):
+            for attempt in range(1, constants.MAX_DELIVERY_ATTEMPTS + 1):
                 Message.objects.filter(pk=row.pk).update(scheduled_at=None, delivery_lease_until=None)
                 row.deliver()
                 self.run_delivery(row)
                 row.refresh_from_db()
                 self.assertEqual(row.local_metadata["delivery_attempts"], attempt)
-                if attempt < delivery.MAX_DELIVERY_ATTEMPTS:
+                if attempt < constants.MAX_DELIVERY_ATTEMPTS:
                     self.assertEqual(row.status, "queued")
                     self.assertGreater(row.scheduled_at, timezone.now())
             self.assertEqual(row.status, "failed")
@@ -411,7 +410,7 @@ class DeliveryContracts(DeliveryFixtures):
     def test_comment_overlay_preserves_the_original_posts_thread_url(self):
         with system_context(reason="public URL fixture"):
             root = replace(self.post("url-root"), subject_url="https://example.test/post")
-            _, comment = land_posts(self.feed, [root, self.post("url-comment", parent="url-root")],
+            _, comment = Message.posts.land(self.feed, [root, self.post("url-comment", parent="url-root")],
                                     owner_id=self.operator.pk)
             comment.thread.refresh_from_db()
             self.assertEqual(comment.thread.subject_url, root.subject_url)
@@ -581,7 +580,7 @@ class DeliveryContracts(DeliveryFixtures):
         post_save.connect(observe, sender=thread_model)
         try:
             with system_context(reason="ingest counting query shape"), CaptureQueriesContext(connection) as inserted:
-                land_posts(self.feed, [self.post("another-comment", parent="root")], owner_id=self.operator.pk)
+                Message.posts.land(self.feed, [self.post("another-comment", parent="root")], owner_id=self.operator.pk)
         finally:
             post_save.disconnect(observe, sender=thread_model)
         self.assertEqual(saved, [])
@@ -955,7 +954,7 @@ class DeliveryContracts(DeliveryFixtures):
                 result = schema.execute_sync(document, context_value=context)
             self.assertIsNone(result.errors, result.errors)
         with system_context(reason="larger message list fixture"):
-            land_posts(self.feed, [self.post(f"more-{index}", parent="root") for index in range(8)],
+            Message.posts.land(self.feed, [self.post(f"more-{index}", parent="root") for index in range(8)],
                        owner_id=self.operator.pk)
         with actor_context(self.agent), CaptureQueriesContext(connection) as large:
             result = schema.execute_sync(document, context_value=context)
@@ -1155,7 +1154,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.comment()
         provider = self.use_provider()
         with system_context(reason="nested comments under a shared anchor"):
-            first_comment, second_comment = land_posts(
+            first_comment, second_comment = Message.posts.land(
                 self.feed, [self.post("nested-first", parent="comment"), self.post("nested-other", parent="comment")],
                 owner_id=self.operator.pk,
             )
@@ -1185,7 +1184,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
             provider.lookup_error = IntegrationError(retry_after=timedelta(seconds=1))
             row.refresh_from_db()
             revision = row.revision
-            for attempt in range(1, delivery.MAX_RECONCILE_ATTEMPTS + 1):
+            for attempt in range(1, constants.MAX_RECONCILE_ATTEMPTS + 1):
                 at = timezone.now()
                 Message.objects.filter(pk=row.pk).update(delivery_lease_until=at, scheduled_at=at)
                 with patch("django.utils.timezone.now", return_value=at):
@@ -1194,9 +1193,9 @@ class FeedDeliveryContracts(DeliveryFixtures):
                 self.assertEqual(row.revision, revision)
                 self.assertEqual(row.delivery_reconcile_attempts, attempt)
                 self.assertEqual(row.status, "uncertain")
-                if attempt < delivery.MAX_RECONCILE_ATTEMPTS:
+                if attempt < constants.MAX_RECONCILE_ATTEMPTS:
                     self.assertEqual(
-                        row.scheduled_at, at + delivery.RECONCILE_BACKOFF * 2 ** (attempt - 1),
+                        row.scheduled_at, at + constants.RECONCILE_BACKOFF * 2 ** (attempt - 1),
                     )
                     self.assertEqual(Message.objects.release_held_messages(now=at), 0)
             self.assertTrue(row.delivery_operator_only)
@@ -1446,7 +1445,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         provider = self.use_provider()
         for retry in (False, True):
             with self.subTest(retry=retry), system_context(reason="trashed operator fixture"):
-                comment = land_posts(self.feed, [self.post(f"operator-{retry}", parent="root")],
+                comment = Message.posts.land(self.feed, [self.post(f"operator-{retry}", parent="root")],
                                      owner_id=self.operator.pk)[0]
             with actor_context(self.agent):
                 row = comment.reply_to_comment(body=f"Reply {retry}", actor=self.agent)
@@ -1587,7 +1586,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         with system_context(reason="stream ingests a reply the operator trashed"):
             claimed = Message.objects.claim_delivery(row.pk, token=row.external_id)
             accepted = provider.deliver(claimed)
-            landed = land_posts(self.feed, [ParsedPost(ParsedMessage(
+            landed = Message.posts.land(self.feed, [ParsedPost(ParsedMessage(
                 external_id=accepted.provider_id, platform="youtube", direction="outbound",
                 sender=ParsedHandle(platform="youtube", value="publisher"), in_reply_to="comment",
                 sent_at=timezone.now(), body=ParsedPart(text="Thanks!"),
@@ -1608,7 +1607,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.comment()
         provider = self.use_provider()
         with system_context(reason="nested comments under a shared anchor"):
-            first_comment, second_comment = land_posts(
+            first_comment, second_comment = Message.posts.land(
                 self.feed, [self.post("nested-first", parent="comment"), self.post("nested-other", parent="comment")],
                 owner_id=self.operator.pk,
             )
@@ -1662,7 +1661,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         with system_context(reason="stream beats lost-settlement recovery"):
             claimed = Message.objects.claim_delivery(row.pk, token=row.external_id)
             accepted = provider.deliver(claimed)
-            landed = land_posts(self.feed, [ParsedPost(ParsedMessage(
+            landed = Message.posts.land(self.feed, [ParsedPost(ParsedMessage(
                 external_id=accepted.provider_id, platform="youtube", direction="outbound",
                 sender=ParsedHandle(platform="youtube", value="publisher"), in_reply_to="comment",
                 sent_at=timezone.now(), body=ParsedPart(text="Thanks!"),
@@ -1718,7 +1717,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.assertEqual(self.broker.call_args.kwargs["queue"], "prefork")
         router = Router(routes=[MapRoute({"messaging.*": {"queue": "whatsapp"}})],
                         queues=celery_app.amqp.queues, app=celery_app)
-        route = router.route({"queue": "prefork"}, delivery.DELIVER_MESSAGE_TASK, kwargs={})
+        route = router.route({"queue": "prefork"}, constants.DELIVER_MESSAGE_TASK, kwargs={})
         self.assertEqual(route["queue"].name, "prefork")
 
     def test_lost_reconcile_claims_use_the_same_attempt_cap_as_settled_failures(self):
@@ -1727,7 +1726,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         provider.publish_error = DeliveryUncertain("Acknowledgement lost.")
         self.run_delivery(row)
         with system_context(reason="repeated recovery worker loss"):
-            for attempt in range(1, delivery.MAX_RECONCILE_ATTEMPTS + 1):
+            for attempt in range(1, constants.MAX_RECONCILE_ATTEMPTS + 1):
                 claimed = Message.objects.claim_delivery(row.pk, token=row.external_id, reconcile=True)
                 self.assertIsNotNone(claimed)
                 self.assertEqual(claimed.delivery_reconcile_attempts, attempt)

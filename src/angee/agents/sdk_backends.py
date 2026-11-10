@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, ClassVar
 
 from django.utils.module_loading import import_string
+from pydantic import BaseModel
+from pydantic_ai.embeddings import EmbeddingModel
 from pydantic_ai.models import Model
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
@@ -43,14 +45,25 @@ class SDKInferenceBackend(InferenceBackend):
     def model(self, handle: str, *, credential: Any | None = None) -> AbstractAsyncContextManager[Model]:
         """Resolve credential policy now; own SDK lifetime in the calling async loop."""
 
+        return self._bind_model(handle, self._build_model, credential=credential)
+
+    def _bind_model[ModelT: (Model, EmbeddingModel)](
+        self,
+        handle: str,
+        build: Callable[[str, Any], ModelT],
+        *,
+        credential: Any | None = None,
+    ) -> AbstractAsyncContextManager[ModelT]:
+        """Own one SDK client for either native chat or embedding adapters."""
+
         client_class = self._async_client_class()
         kwargs = self._async_client_kwargs(credential=credential)
         handle = self._provider_model(handle)
 
         @asynccontextmanager
-        async def binding() -> AsyncIterator[Model]:
+        async def binding() -> AsyncIterator[ModelT]:
             async with client_class(**kwargs) as client:
-                yield self._build_model(handle, client)
+                yield build(handle, client)
 
         return binding()
 
@@ -94,9 +107,7 @@ class SDKInferenceBackend(InferenceBackend):
             if not self.requires_credential:
                 return {"api_key": "not-required"}
             raise ValueError(f"{self.label} inference requires an attached credential.")
-        ensure_fresh = getattr(credential, "ensure_fresh", None)
-        if callable(ensure_fresh):
-            ensure_fresh()
+        credential.ensure_fresh()
         secret = str(credential.secret_value() or "")
         if not secret:
             raise ValueError(f"{self.label} inference credential has no secret.")
@@ -172,7 +183,7 @@ class SDKInferenceBackend(InferenceBackend):
     def _config_value(self, key: str, *, default: Any = None) -> Any:
         """Return one provider config value."""
 
-        config = getattr(self.provider, "config", None)
+        config = self.provider.config
         if isinstance(config, Mapping) and key in config:
             return config[key]
         return default
@@ -221,7 +232,6 @@ class SDKInferenceBackend(InferenceBackend):
     def _sdk_json(cls, value: Any) -> Any:
         """Return SDK-owned JSON data without walking arbitrary Python objects."""
 
-        model_dump = getattr(value, "model_dump", None)
-        if callable(model_dump):
-            return model_dump(mode="json")
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
         return value

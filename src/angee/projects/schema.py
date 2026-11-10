@@ -163,7 +163,6 @@ class TaskHasuraWriteBackend(AngeeHasuraWriteBackend):
         if not model.ORDERING_FIELDS.intersection(fields):
             return super().update(info, pk, data, expected_revision=expected_revision)
         rows = cast(TaskOrderingQuerySet[TaskModel], self.write_target_queryset())
-        rows._for_write = True
         instance = instance_for_id(model, pk, queryset=rows)
         if instance is None:
             return super().update(info, pk, data, expected_revision=expected_revision)
@@ -171,7 +170,7 @@ class TaskHasuraWriteBackend(AngeeHasuraWriteBackend):
             key: value for key, value in data.items() if key in {"project", "parent"}
         })
         with model.ordering_write(
-            using=rows.db, rows=rows.filter(pk=instance.pk),
+            rows=rows.filter(pk=instance.pk),
             project_ids=(() if "project_id" not in destinations else (destinations["project_id"],)),
             parent_ids=(() if "parent_id" not in destinations else (destinations["parent_id"],)),
         ):

@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import MethodType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any
 from urllib import parse
 
@@ -24,7 +24,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.signed_cookies import SessionStore
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
-from django.db import connection
+from django.db import connection, transaction
 from django.test import override_settings
 from django.utils import timezone
 from jwt.algorithms import RSAAlgorithm
@@ -38,13 +38,12 @@ from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
 from angee.iam_integrate_oidc import schema as oidc_schema
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
-from angee.iam_integrate_oidc.models import OAuthClientOidc
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.iam_integrate_oidc.providers import GoogleType
 from angee.integrate import schema as integrate_schema
 from angee.integrate.connect import complete_account_connect
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import _PinnedBackend
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS, _PinnedBackend
 from angee.integrate.models import AccountStatus, CredentialStatus
 from angee.integrate.oauth import client as oauth_protocol
 from angee.integrate.oauth import discovery as oauth_discovery
@@ -76,12 +75,12 @@ def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.M
         discovery_url="https://issuer.example/.well-known/openid-configuration",
     )
 
-    def get_json(url: str, *, headers: dict[str, str] | None = None, error_code: str | None = None) -> dict[str, Any]:
-        del headers, error_code
+    def get_json(url: str, *, headers: dict[str, str] | None = None, allow_private: bool = False) -> dict[str, Any]:
+        del headers, allow_private
         calls.append(url)
         return {"authorization_endpoint": "https://issuer.example/oauth/authorize"}
 
-    monkeypatch.setattr(oauth_discovery, "_get_json", get_json)
+    monkeypatch.setattr(oauth_discovery, "oauth_get_json", get_json)
 
     url = OAuthClientOidcProtocol(oidc).authorize_url(
         state="state-token",
@@ -114,8 +113,8 @@ def test_ensure_endpoints_caches_document_by_discovery_url(monkeypatch: pytest.M
         cache_sets.append((key, timeout))
         cached_documents[key] = value
 
-    def get_json(url: str, *, headers: dict[str, str] | None = None, error_code: str | None = None) -> dict[str, Any]:
-        del headers, error_code
+    def get_json(url: str, *, headers: dict[str, str] | None = None, allow_private: bool = False) -> dict[str, Any]:
+        del headers, allow_private
         fetches.append(url)
         return {
             "issuer": "https://cached.example",
@@ -127,7 +126,7 @@ def test_ensure_endpoints_caches_document_by_discovery_url(monkeypatch: pytest.M
 
     monkeypatch.setattr(oauth_discovery.cache, "get", cache_get)
     monkeypatch.setattr(oauth_discovery.cache, "set", cache_set)
-    monkeypatch.setattr(oauth_discovery, "_get_json", get_json)
+    monkeypatch.setattr(oauth_discovery, "oauth_get_json", get_json)
 
     protocol = OAuthClientOidcProtocol(oidc)
     first = protocol.ensure_endpoints()
@@ -140,29 +139,50 @@ def test_ensure_endpoints_caches_document_by_discovery_url(monkeypatch: pytest.M
     assert cache_sets[0][1] == 3600
 
 
+@pytest.mark.parametrize(("result", "status"), [([], 400), (ValueError("invalid JSON"), 400),
+                                                 (httpx2.ConnectError("unavailable"), 503)])
+def test_discovery_rejects_invalid_documents_without_caching(monkeypatch, result, status):
+    cached = []
+
+    def fetch(url, **kwargs):
+        assert kwargs["allow_private"] is True
+        assert kwargs["headers"] == oauth_protocol.OUTBOUND_HEADERS
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(oauth_discovery.cache, "get", lambda key: None)
+    monkeypatch.setattr(oauth_discovery.cache, "set", lambda *args, **kwargs: cached.append(args))
+    monkeypatch.setattr(oauth_protocol, "HttpClient", lambda: SimpleNamespace(get_json=fetch))
+    with pytest.raises(OAuthFlowError) as refused:
+        oauth_discovery.discovery_document("https://invalid-document.example/discovery")
+    assert (refused.value.code, refused.value.http_status) == (DISCOVERY_FAILED, status)
+    assert not cached
+
+
 def test_outbound_requests_send_honest_user_agent() -> None:
     """Outbound requests send an honest, non-browser User-Agent.
 
     Not the HTTP client's default (Anthropic's edge 403s ``python-httpx``/``Python-urllib``)
     and not a spoofed browser/curl UA (Anthropic 429s those) — an honest client UA passes.
-    The GET helper (discovery/userinfo) and the Authlib token POST both carry it.
+    The userinfo GET and the Authlib token POST both carry it.
     """
 
     seen: list[str | None] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.headers.get("user-agent"))
+        assert request.headers["Accept"] == "application/json"
+        if request.method == "GET":
+            assert request.headers["Authorization"] == "Bearer access-token"
+            return httpx2.Response(200, json={"sub": "profile"})
         return httpx2.Response(200, json={"access_token": "access-token"})
 
     transport = httpx2.MockTransport(handler)
 
-    oauth_protocol._get_json(
-        "https://idp.example/.well-known/openid-configuration",
-        error_code=DISCOVERY_FAILED,
-        _transport=transport,
-    )
     protocol = OAuthClientProtocol(_stub_oauth_client())
     protocol._transport = transport
+    assert protocol.fetch_userinfo("access-token") == {"sub": "profile"}
     protocol.exchange_code(code="abc", redirect_uri="https://app.example/callback")
 
     assert seen == [oauth_protocol.USER_AGENT, oauth_protocol.USER_AGENT]
@@ -699,35 +719,53 @@ def test_jwks_client_is_cached_per_uri(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_jwks_fetch_uses_pinned_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """PyJWT owns key parsing, while Angee owns the JWKS HTTP transport."""
 
-    requests: list[tuple[str, dict[str, str], bool, int]] = []
+    requests: list[httpx2.Request] = []
 
-    class FakeHttpClient:
-        def get(
-            self,
-            url: str,
-            *,
-            headers: dict[str, str],
-            allow_private: bool,
-            timeout: int,
-            **kwargs: object,
-        ) -> httpx2.Response:
-            del kwargs
-            requests.append((url, headers, allow_private, timeout))
-            return httpx2.Response(200, json={"keys": []})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(200, json={"keys": []})
 
-    monkeypatch.setattr(oidc_protocol, "HttpClient", FakeHttpClient)
+    def transport(*, allow_private: bool) -> httpx2.BaseTransport:
+        assert allow_private is True
+        return httpx2.MockTransport(handler)
 
+    monkeypatch.setattr(oauth_protocol.HttpClient, "transport_factory", staticmethod(transport))
     data = oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks").fetch_data()
 
     assert data == {"keys": []}
-    assert requests == [
-        (
-            "https://issuer.example/jwks",
-            {"Accept": "application/json", "User-Agent": oidc_protocol.USER_AGENT},
-            True,
-            oidc_protocol.HTTP_TIMEOUT_SECONDS,
-        )
-    ]
+    [request] = requests
+    assert str(request.url) == "https://issuer.example/jwks"
+    assert request.headers["Accept"] == "application/json"
+    assert request.headers["User-Agent"] == oauth_protocol.USER_AGENT
+    assert request.extensions["timeout"] == dict.fromkeys(("connect", "read", "write", "pool"), HTTP_TIMEOUT_SECONDS)
+
+
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        ("transport", httpx2.ConnectError),
+        ("http", httpx2.HTTPStatusError),
+        ("json", ValueError),
+    ],
+)
+def test_jwks_fetch_maps_oauth_get_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    error: type[Exception],
+) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if failure == "transport":
+            raise httpx2.ConnectError("unavailable", request=request)
+        return httpx2.Response(503 if failure == "http" else 200, text="not json")
+
+    monkeypatch.setattr(
+        oauth_protocol.HttpClient,
+        "transport_factory",
+        staticmethod(lambda **kw: httpx2.MockTransport(handler)),
+    )
+    with pytest.raises(oidc_protocol.PyJWKClientConnectionError) as refused:
+        oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks").fetch_data()
+    assert isinstance(refused.value.__cause__, error)
 
 
 def test_pinned_jwks_set_is_parsed_and_cached_by_pyjwt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -737,13 +775,15 @@ def test_pinned_jwks_set_is_parsed_and_cached_by_pyjwt(monkeypatch: pytest.Monke
     public_jwk = {**RSAAlgorithm.to_jwk(public_key, as_dict=True), "kid": "signing-key", "use": "sig"}
     fetches: list[str] = []
 
-    class FakeHttpClient:
-        def get(self, url: str, **kwargs: object) -> httpx2.Response:
-            del kwargs
-            fetches.append(url)
-            return httpx2.Response(200, json={"keys": [public_jwk]})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        fetches.append(str(request.url))
+        return httpx2.Response(200, json={"keys": [public_jwk]})
 
-    monkeypatch.setattr(oidc_protocol, "HttpClient", FakeHttpClient)
+    monkeypatch.setattr(
+        oauth_protocol.HttpClient,
+        "transport_factory",
+        staticmethod(lambda **kw: httpx2.MockTransport(handler)),
+    )
     client = oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks")
 
     first = client.get_jwk_set()
@@ -1360,7 +1400,7 @@ def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
     if deferred:
         credential = Credential._base_manager.only("pk").get(pk=credential.pk)
 
-    with pytest.raises(ValidationError) as exc_info:
+    with transaction.atomic(), pytest.raises(ValidationError) as exc_info:
         Credential.objects.prepare_disconnect(credential)
 
     assert exc_info.value.code == "only_sign_in_method"
@@ -1404,7 +1444,8 @@ def test_credential_disconnect_preserves_other_sign_in_methods(composed_tables: 
                 external_account=other_account,
             )
 
-    credential.check_disconnect()
+    with transaction.atomic():
+        credential.check_disconnect()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1425,7 +1466,7 @@ def test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relati
     credential = Credential.objects.upsert_for_user(
         user, client, "oauth", {"access_token": "token"}, external_account=account
     )
-    with system_context(reason="test oidc cached sign-in facts"):
+    with system_context(reason="test oidc cached sign-in facts"), transaction.atomic():
         cached = Credential._base_manager.select_related("user", "oauth_client").get(pk=credential.pk)
         if changed_field == "password":
             assert cached.user.has_usable_password() is previous
@@ -1909,9 +1950,6 @@ def _stub_login_oauth_client(*, oauth_client: OAuthClient | None = None, **overr
     for key, value in defaults.items():
         setattr(client, key, value)
     client.oauth_client = client
-    client.fill_extension_fields_from_discovery = MethodType(
-        OAuthClientOidc.fill_extension_fields_from_discovery, client
-    )
     return client
 
 
@@ -2069,7 +2107,7 @@ def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override
         assert str(request.url) == endpoint
         return httpx2.Response(200, json={"sub": "seed-subject"})
 
-    monkeypatch.setattr(oauth_discovery, "_get_json", discover)
+    monkeypatch.setattr(oauth_discovery, "oauth_get_json", discover)
     monkeypatch.setattr(oauth_discovery.cache, "get", lambda key: None)
     protocol = OAuthClientProtocol(client)
     protocol._transport = httpx2.MockTransport(profile)
@@ -2166,7 +2204,7 @@ def test_oauth_helpers_map_refused_endpoint_to_transient_flow_error(operation: s
             if operation == "revoke":
                 OAuthClientProtocol(_stub_oauth_client(revoke_endpoint=endpoint)).revoke_token("synthetic-token")
             else:
-                oauth_protocol._get_json(endpoint, error_code=DISCOVERY_FAILED)
+                oauth_discovery.discovery_document(endpoint)
     assert raised.value.http_status == 503 and raised.value.transient
     assert raised.value.code == (TOKEN_EXCHANGE_FAILED if operation == "revoke" else DISCOVERY_FAILED)
 
@@ -2344,7 +2382,7 @@ def test_disconnect_does_not_count_unusable_oidc_alternatives(composed_tables: N
             type(other_client).objects.filter(pk=other_client.pk).update(is_enabled=False)
         else:
             type(other).objects.filter(pk=other.pk).update(status=unusable)
-    with pytest.raises(ValidationError) as caught:
+    with transaction.atomic(), pytest.raises(ValidationError) as caught:
         credential.check_disconnect()
     assert caught.value.code == "only_sign_in_method"
 

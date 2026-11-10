@@ -679,3 +679,20 @@ def test_stream_retains_native_response_until_context_exit(monkeypatch: pytest.M
     except ValueError:
         assert fail
     assert response.is_closed and closed
+
+
+def test_json_get_uses_shared_headers_and_preserves_http_and_decode_errors() -> None:
+    seen = []
+
+    def reply(request):
+        seen.append(request)
+        return httpx2.Response(200, json={"ready": True})
+
+    assert HttpClient().get_json(URL, transport=httpx2.MockTransport(reply)) == {"ready": True}
+    assert seen[0].headers["Accept"] == "application/json"
+    with pytest.raises(httpx2.HTTPStatusError):
+        HttpClient().get_json(URL, transport=httpx2.MockTransport(lambda request: httpx2.Response(503)))
+    with pytest.raises(ValueError):
+        HttpClient().get_json(
+            URL, transport=httpx2.MockTransport(lambda request: httpx2.Response(200, text="bad json")),
+        )

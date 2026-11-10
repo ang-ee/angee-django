@@ -9,7 +9,7 @@ from rebac import actor_context, system_context
 from angee.integrate.discovery import ConnectionDiscovery
 from tests.conftest import Credential, Integration, create_platform_admin
 from tests.integrate_fixtures import ConnectionBridge
-from tests.test_decisions_concurrency import submit, wait_for_lock
+from tests.lock_waits import submit, wait_for_lock
 from tests.test_integrate_discovery import bridge as bridge
 from tests.test_integrate_discovery import connection_settings as connection_settings
 from tests.test_integrate_discovery import sent_tasks as sent_tasks

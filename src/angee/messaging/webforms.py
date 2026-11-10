@@ -37,6 +37,14 @@ def default_webform_schema() -> dict[str, Any]:
     return {"type": "object", "properties": {}}
 
 
+class WebformUnavailable(LookupError):
+    """The observed public form is no longer published when the submission lands."""
+
+
+class WebformChanged(ValueError):
+    """The form schema or bounds changed after the submission's answers were validated."""
+
+
 @dataclass(frozen=True)
 class WebformField:
     """One validated scalar property in a public form spec."""

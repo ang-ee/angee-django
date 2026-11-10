@@ -1,16 +1,98 @@
-"""Foundation permission fixtures requiring pytest and pytest-django."""
+"""Foundation registry and permission fixtures requiring pytest and pytest-django."""
 
+import sys
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.management import call_command
+from django.db.models.fields.related_descriptors import ReverseManyToOneDescriptor, ReverseOneToOneDescriptor
 from django.db.models.signals import post_migrate
 from pytest_django.plugin import DjangoDbBlocker
 
+from angee.base.permissions import SCHEMA_BINDING
 from angee.base.testing.permissions import composed_permissions as composed_permissions
+
+
+@contextmanager
+def installed_app_registry_restored() -> Iterator[None]:
+    """Return Django's installed app registry to its state before the block.
+
+    Django cannot unregister a model, so a model class a test creates on an installed
+    app label would stay in ``apps.all_models`` for every later test in the process,
+    where system checks, the deletion collector and resource-type lookups meet it in
+    file order. A model from a module already imported when the block began was
+    created by the block and is unregistered, with its auto-created through models; a
+    module first imported in the block keeps its models registered, as its import does.
+    Installed app configs the block adds, replaces or removes are put back, as
+    are reverse descriptors installed on surviving models by removed relations.
+    """
+
+    registered = {label: dict(entries) for label, entries in apps.all_models.items()}
+    descriptors = {
+        model: {
+            name: value for name, value in vars(model).items()
+            if isinstance(value, ReverseManyToOneDescriptor | ReverseOneToOneDescriptor)
+        }
+        for entries in registered.values() for model in entries.values()
+    }
+    configs = dict(apps.app_configs)
+    imported = set(sys.modules)
+    try:
+        yield
+    finally:
+        removed = set()
+        restored = apps.app_configs != configs
+        if restored:
+            apps.app_configs.clear()
+            apps.app_configs.update(configs)
+        for label, entries in apps.all_models.items():
+            kept = registered.get(label, {}) | {
+                name: model
+                for name, model in entries.items()
+                if model.__module__ in sys.modules and model.__module__ not in imported
+            }
+            if entries != kept:
+                removed.update(set(entries.values()) - set(kept.values()))
+                entries.clear()
+                entries.update(kept)
+                restored = True
+        for entries in apps.all_models.values():
+            for model in entries.values():
+                for name, value in tuple(vars(model).items()):
+                    if isinstance(value, ReverseOneToOneDescriptor):
+                        related_model = value.related.related_model
+                    elif isinstance(value, ReverseManyToOneDescriptor):
+                        related_model = value.rel.related_model
+                    else:
+                        continue
+                    if related_model in removed:
+                        previous = descriptors.get(model, {})
+                        if name in previous:
+                            setattr(model, name, previous[name])
+                        else:
+                            delattr(model, name)
+        if restored:
+            apps.clear_cache()
+
+
+@pytest.fixture(autouse=True)
+def installed_app_registry() -> Iterator[None]:
+    """Give every test the installed app registry it started with."""
+
+    with installed_app_registry_restored():
+        yield
+
+
+@pytest.fixture
+def monkeypatch(installed_app_registry: None) -> Iterator[pytest.MonkeyPatch]:
+    """Undo native monkeypatches before the installed model registry is restored."""
+
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 @pytest.fixture(scope="session")
@@ -47,10 +129,9 @@ def django_db_setup(
 @pytest.fixture(autouse=True)
 def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Restore generated permission paths and source annotations after each test."""
-    from angee.base.permissions import _SCHEMA_BINDING
 
     for config in apps.get_app_configs():
-        for key in ("rebac_schema", _SCHEMA_BINDING):
+        for key in ("rebac_schema", SCHEMA_BINDING):
             existed = key in config.__dict__
             monkeypatch.setitem(config.__dict__, key, config.__dict__.get(key))
             if not existed:

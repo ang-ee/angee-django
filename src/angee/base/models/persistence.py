@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from django.db import models
 from rebac.managers import RebacQuerySet
@@ -15,26 +15,29 @@ from angee.base.querysets import row_lock_paths
 class PersistenceMixin(models.Model):
     """Model-owned persistence reads and shared cooperative lifecycle terminals."""
 
+    owned_relations: ClassVar[tuple[str, ...]] = ()
+    """Reverse foreign-key collections whose rows are parts of this record."""
+
     class Meta:
         abstract = True
 
     @classmethod
     @contextmanager
-    def initialize_rows(cls, rows: Sequence[models.Model], *, using: str) -> Iterator[bool]:
+    def initialize_rows(cls, rows: Sequence[models.Model]) -> Iterator[bool]:
         """Bracket final derived creation values; observers may defer intermediate writes.
 
         The terminal lifecycle has no observer. A cooperative capability yields
         true while it owns one final observation after successful initialization.
         """
 
-        del rows, using
+        del rows
         yield False
 
     @classmethod
-    def retained_reference_exists(cls, record: models.Model, lookup: Mapping[str, Any]) -> bool:
+    def retained_reference_exists(cls, lookup: Mapping[str, Any]) -> bool:
         """Whether an owned retained representation still names this target."""
 
-        del record, lookup
+        del lookup
         return False
 
     def prepare_lock_subject(self, values: Mapping[str, Any]) -> Self:
@@ -55,17 +58,15 @@ class PersistenceMixin(models.Model):
             else:
                 columns[field.attname] = self.__dict__.get(field.attname, models.DEFERRED)
         candidate = type(self)(**columns)
-        candidate._state.db = self._state.db
         candidate._state.adding = self._state.adding
         return candidate
 
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
-        """Lock and reload this subject through its row-bound base manager."""
+        """Lock and reload this subject through its base manager."""
 
         del members
         model = type(self)
-        manager = model._base_manager.db_manager(self._state.db, hints={"instance": self})
-        return manager.all().select_for_update(of=row_lock_paths(model)).get(pk=self.pk)
+        return model._base_manager.select_for_update(of=row_lock_paths(model)).get(pk=self.pk)
 
     @classmethod
     def system_queryset(

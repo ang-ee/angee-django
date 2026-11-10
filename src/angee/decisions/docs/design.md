@@ -64,8 +64,8 @@ How the ontology maps to this addon.
   that concrete record. Concern links remain canonical; application locks and
   writes through the named model's permission owner. Omission uses the canonical
   model. The card uses the action model's field metadata.
-  A model declares callable proposal methods once in its class-level
-  `decision_methods` tuple. Ask-time validation requires a declared method with
+  A model inherits `decisions.mixins.DecisionTargetMixin` and declares callable
+  proposal methods once in its `decision_methods` tuple. Ask-time validation requires a declared method with
   arguments supplied by the proposal, rejects `delete`, and checks declared keyword
   `arguments`. Field values, readable foreign-key identities and editability are
   validated when asking; state and server-owned fields cannot be written, and
@@ -84,7 +84,7 @@ How the ontology maps to this addon.
   `context` and `proposal` currently share that row visibility. Restricting them
   to assignees, requesters and administrators requires native field permissions,
   nullable GraphQL fields and redaction of the proposal-derived `verdict_label`.
-- **Answering:** `Decision.objects.decide(decision, chosen keys, actor)` is the one entry, for humans and agents
+- **Answering:** `decision.decide(actor=actor, chosen=keys)` is the one entry, for humans and agents
   alike, with optional `values={record_id: {field: value}}`. It records those values once in `verdict_values`
   alongside the verdict; it applies nothing itself. The asker applies `choose` from the stored value exactly
   as `set`, through `RecordActions.resolve(..., values=decision.verdict_values[record_id])`, and applies the

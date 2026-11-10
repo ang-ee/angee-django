@@ -81,8 +81,7 @@ test("a historical statement without a changeset retains its source tooltip with
   const mark = await screen.findByLabelText("Source: Reference");
   expect(screen.queryByRole("button", { name: "Source: Reference" })).toBeNull();
   fireEvent.mouseEnter(mark.parentElement!);
-  fireEvent.mouseMove(mark.parentElement!);
-  expect(await screen.findByText("Imported source")).toBeTruthy();
+  expect(screen.getByText("Imported source")).toBeTruthy();
   expect(warn.mock.calls.flat().join("\n")).not.toContain("example.DocumentStatement");
 });
 

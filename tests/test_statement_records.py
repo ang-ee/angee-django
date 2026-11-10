@@ -5,11 +5,17 @@ from __future__ import annotations
 import pytest
 from django.apps import apps
 from django.db import models
+from django.test.utils import isolate_apps
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.models.base import AngeeModel
 from angee.provenance.evidence import FactAuthority
 from angee.provenance.statements import (
+    Aspect,
     SourceKind,
+    StatementField,
+    StatementRecords,
+    StatementsMixin,
 )
 from tests.conftest import create_platform_admin, create_user
 from tests.extcontrib.models import Claimed, ClaimedBilling, ClaimedSource, ClaimedStatementQuerySet
@@ -125,3 +131,24 @@ def test_a_declaration_names_its_model_and_copies_money_without_its_currency() -
     assert (amount.max_digits, amount.decimal_places, amount.null) == (12, 2, True)
     assert not getattr(amount, "angee_currency_field", None)
     assert not [error for error in generated.check() if error.id.startswith("angee.E01")]
+
+
+@isolate_apps("tests")
+def test_statement_copy_dispatches_to_the_field_owner() -> None:
+    class ProjectedField(models.CharField, StatementField):
+        def for_statement(self, fields):
+            assert "label" in fields
+            return models.TextField()
+
+    class ProjectedSubject(StatementsMixin, AngeeModel):
+        label = ProjectedField(max_length=40)
+        statements = StatementRecords(aspects={"identity": Aspect(fields=("label",))})
+
+        class Meta:
+            app_label = "tests"
+
+    field = ProjectedSubject.statements.model._meta.get_field("label")
+    assert type(field) is models.TextField
+    assert field.null and field.blank
+    assert not field.has_default()
+    assert isinstance(ProjectedSubject._meta.get_field("label"), ProjectedField)

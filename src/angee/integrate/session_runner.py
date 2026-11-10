@@ -12,13 +12,12 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.locks import task_lock, task_locks_are_cross_process
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import PairingState, SessionLoggedOut
-from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session_process import BridgeSessionProcess, SessionProcessError
-from angee.integrate.sync import bridge_progress_context
-from angee.jobs.locks import task_lock, task_locks_are_cross_process
+from angee.integrate.sync import progress_bridge_context
 from angee.provenance.context import changeset
 
 logger = logging.getLogger(__name__)
@@ -81,11 +80,11 @@ def run_bridge_session_job(
                         logger.info("Live session process for %s %s stopped with its host.", model_label, pk)
                         return {"ok": True, "skipped": True, "reason": "host-stopping"}
                     logger.error("Live session process for %s %s exited with code %s.", model_label, pk, error.exitcode)
-                    with bridge_advisory_lock(bridge) as session_acquired:
+                    with bridge.sync_lock() as session_acquired:
                         if session_acquired:
                             bridge.record_live_session_failure(error, now=timezone.now())
                     return {"ok": False, "process_error": True, "exitcode": error.exitcode}
-        with bridge_advisory_lock(bridge) as acquired:
+        with bridge.sync_lock() as acquired:
             if not acquired:
                 return {"ok": True, "skipped": True, "reason": "session-already-running"}
             # A queued start may outlive an operator stop or a terminal outcome.
@@ -106,10 +105,9 @@ def run_bridge_session_job(
                 # The implementation changed while the task acquired its lock.
                 # Let reconciliation route the next start through the host.
                 return {"ok": True, "skipped": True, "reason": "implementation-changed"}
-            with bridge_progress_context(bridge) as reporter:
+            with progress_bridge_context(bridge):
                 session = impl.session_class_resolved()(
                     bridge,
-                    reporter=reporter,
                     stop_event=stop_event,
                     on_shutdown=on_shutdown,
                     on_stalled_shutdown=on_stalled_shutdown,
@@ -129,7 +127,7 @@ def run_bridge_session_job(
                 if session.outcome_error is not None:
                     bridge.record_live_session_failure(session.outcome_error, now=timezone.now())
                     return {"ok": False, "session_error": True, "state": state}
-                reporter.report(bridge.SyncStage.IDLE, details={"pairing": {"state": state}})
+                bridge.report_progress(bridge.SyncStage.IDLE, details={"pairing": {"state": state}})
         return {"ok": True, "state": state, "items": session.landed}
 
 

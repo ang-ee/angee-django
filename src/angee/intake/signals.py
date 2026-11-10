@@ -38,13 +38,6 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
     if instance.channel_id is None:
         return
     try:
-        apps.get_model("messaging", "Channel")
-        apps.get_model("intake", "Need")
-    except LookupError:
-        # Source-only test graphs may install addon declarations without emitted
-        # concrete runtime models. The global messaging seam must remain inert.
-        return
-    try:
         instance.transport_channel(reason="intake.capture.channel").capture_ingested_message(instance)
     except (DomainError, ValidationError, PermissionDenied) as error:
         logger.warning(

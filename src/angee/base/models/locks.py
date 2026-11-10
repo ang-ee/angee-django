@@ -30,6 +30,7 @@ class ImmutableFieldsMixin(models.Model):
     """
 
     immutable_fields: ClassVar[tuple[str, ...]] = ()
+    _allowed_immutable_fields: frozenset[str] | set[str] = frozenset()
 
     class Meta:
         """Django options for the shared write-once field guard."""
@@ -39,14 +40,14 @@ class ImmutableFieldsMixin(models.Model):
     def allow_immutable_save(self, *field_names: str) -> None:
         """Allow the next save to change named immutable attnames."""
 
-        allowed = set(getattr(self, "_allowed_immutable_fields", set()))
+        allowed = set(self._allowed_immutable_fields)
         allowed.update(field_names)
         self._allowed_immutable_fields = allowed
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist after comparing immutable facts with the committed row."""
 
-        allowed = set(getattr(self, "_allowed_immutable_fields", set()))
+        allowed = set(self._allowed_immutable_fields)
         try:
             if self.pk is not None and not self._state.adding:
                 declared = dict.fromkeys(
@@ -184,11 +185,11 @@ class RowLockMixin(models.Model):
     resource loads under ``system_context``) own system rows and are not
     checked. The default manager composes ``RowLockQuerySet``; the base manager
     and native collector retain the same invariant. An elevation that only
-    authorizes a user's write still checks:
-    editable lines write their children elevated under the parent's write
-    permission, so :class:`~angee.graphql.data.hasura.HasuraLines` calls
+    authorizes a user's write still checks: a parent writes its owned lines
+    elevated under its own write permission, so
+    :meth:`~angee.base.models.base.AngeeModel.replace_lines` calls
     :meth:`validate_row_lock` and :meth:`validate_row_delete` itself before each
-    child write. Child nodes project the same fact as ``locked_fields``.
+    line write. Child nodes project the same fact as ``locked_fields``.
     """
 
     _angee_base: ClassVar[models.Manager[Self]] = _RowLockBaseManager()
@@ -369,8 +370,7 @@ class OptimisticLockMixin(PersistenceMixin, models.Model):
         owner = self._meta.get_field(counter).model
         if not issubclass(owner, PersistenceMixin):
             raise ImproperlyConfigured(f"{owner._meta.label} must own system queries for its revision counter.")
-        manager = owner._base_manager.db_manager(hints={"instance": self})
-        using = kwargs.get("using") or manager.db
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         rows = owner.system_queryset().using(using).filter(pk=self._get_pk_val(owner._meta))
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:

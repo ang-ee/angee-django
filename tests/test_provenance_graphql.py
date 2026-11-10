@@ -14,9 +14,18 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    MissingActorError,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
@@ -33,7 +42,7 @@ from angee.messaging.testing.models import Channel
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
 from angee.provenance.context import changeset
-from angee.provenance.evidence import EvidenceReference
+from angee.provenance.evidence import EvidenceReference, readable_records
 from angee.provenance.statements import (
     SourceKind,
     StatementLinkMixin,
@@ -322,6 +331,46 @@ def test_history_redacts_the_fields_the_actor_cannot_read_on_the_record(gated_ti
     assert _changes(shown["entries"][0])["title"] == ("Stored secret", "Edited secret")
 
 
+@pytest.mark.parametrize("system", [False, True])
+def test_actorless_history_redactions_follow_ambient_scope(system: bool) -> None:
+    """History uses the same actorless relation rule as other record readers."""
+    owner = create_user("history-ambient-owner")
+    _vault, page = _titled_page(owner)
+    history = provenance_schema.RecordHistory(page, actor=None)
+    versions = history._versions(list(history.changesets().values_list("pk", flat=True)))
+
+    if system:
+        with system_context(reason="tests.history.ambient_redactions"):
+            redactions = history._redactions(versions, {})
+        assert redactions
+        assert all("title" not in fields for fields in redactions.values())
+    else:
+        # Native strict-mode relation reads fail closed by refusing an absent actor.
+        with pytest.raises(MissingActorError):
+            history._redactions(versions, {})
+
+
+@pytest.mark.parametrize("system", [False, True])
+def test_actorless_history_resolvers_follow_ambient_scope(system: bool) -> None:
+    owner = create_user("history-resolver-owner")
+    with actor_context(owner), changeset(fresh=True):
+        party = Party.objects.create(display_name="Ambient party")
+    query = provenance_schema.HistoryQuery()
+    kwargs = {"model": "parties.Party", "id": public_id_of(party)}
+    if system:
+        with system_context(reason="tests.history.ambient_resolvers"):
+            history = query.history(**kwargs)
+            assert history is not None and history.entries
+            provenance = query.field_provenance(**kwargs)
+            assert provenance and "display_name" in {field.field for field in provenance}
+            with pytest.raises(PermissionDenied):
+                readable_records([EvidenceReference.of(party)], [None])
+    else:
+        for resolve in (query.history, query.field_provenance):
+            with pytest.raises(MissingActorError):
+                resolve(**kwargs)
+
+
 def test_history_carries_the_statements_a_changeset_asserted_for_the_record() -> None:
     person = create_user("statement-person")
     with actor_context(person), changeset(fresh=True, change_reason="Create party"):
@@ -411,6 +460,17 @@ def test_history_projects_a_readable_statement_link_and_evidence_inline() -> Non
         "label": "Source party",
         "pointer": "/display_name",
     }]
+
+    reader = provenance_schema.RecordHistory(party, actor=None)
+    statements = reader._statement_versions(list(reader.changesets().values_list("pk", flat=True)))
+    with pytest.raises(MissingActorError):
+        reader._prime_statement_references(statements)
+    with system_context(reason="tests.history.ambient_statement_links"):
+        history_page = reader.page(25, 0)
+    imported_entry = next(entry for entry in history_page.entries if entry.change_reason == "Import identity")
+    projected = imported_entry.statements[0]
+    assert projected.source is not None and projected.source.id == public_id_of(link)
+    assert [evidence.id for evidence in projected.evidence] == [public_id_of(party)]
 
 
 @pytest.mark.parametrize("row_count", [1, 25])

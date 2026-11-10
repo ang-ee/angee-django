@@ -10,11 +10,12 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connection, models
+from django.db.models import prefetch_related_objects
 from django.db.models.deletion import ProtectedError
 from django.db.models.signals import pre_delete
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from django.utils.module_loading import import_string
-from rebac import ObjectRef, generic_target, system_context
+from rebac import MissingActorError, ObjectRef, generic_target, system_context
 from rebac.resources import model_resource_type
 
 from angee.base.fields.relations import RetainedGenericRelation
@@ -524,6 +525,21 @@ def test_concrete_child_of_a_loaded_parent_costs_one_query(record_ref_tables):
         assert found is not None and found.detail == "Child detail"
         assert found._state.db == parent._state.db
         assert len(queries) == 1
+
+
+def test_record_targets_without_an_actor_read_through_the_ambient_scope(record_ref_tables: None) -> None:
+    """An actorless hint reads its targets unscoped under system context and fails closed outside it."""
+
+    del record_ref_tables
+    with system_context(reason="test.record_targets.ambient"):
+        target = RecordRefTypedTarget.objects.create(name="typed")
+    edge = RecordBinding(content_type=ContentType.objects.get_for_model(RecordRefTypedTarget), object_id=target.pk)
+
+    with system_context(reason="test.record_targets.ambient"):
+        prefetch_related_objects([edge], RecordBinding.record_targets_prefetch(None, to_attr="system_target"))
+    assert edge.system_target == target
+    with pytest.raises(MissingActorError):
+        prefetch_related_objects([edge], RecordBinding.record_targets_prefetch(None, to_attr="actorless_target"))
 
 
 def test_record_targets_read_pointer_ids_in_the_target_key_type() -> None:

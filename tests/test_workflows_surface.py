@@ -7,7 +7,6 @@ import importlib.util
 import inspect
 import pkgutil
 from dataclasses import fields
-from typing import get_args
 
 from django.apps import apps
 from django.db import models
@@ -50,8 +49,8 @@ EXPECTED_VERBS = {
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
         "answered_decisions cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
-        "extend_deadline fenced for_map graph_rows item_counts nodes settle terminal_runs to_ready to_running "
-        "to_waiting undispatched"
+        "extend_deadline fail_attempt fenced for_map graph_rows item_counts nodes settle terminal_runs to_ready "
+        "to_running to_succeeded to_waiting undispatched"
     ),
     "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
     "workflows.Trigger.manager": "admit disable drain enable enable_preview lock_grants reconcile_grants revoke_grant",
@@ -60,21 +59,33 @@ EXPECTED_VERBS = {
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": (
-        "cancel cancel_abandoned cancel_on_commit prune reap_interrupted reopen reprocess start"
+        "cancel cancel_abandoned prune reap_interrupted reprocess start"
     ),
-    "workflows.WorkflowRun.queryset": "about blocking for_subject hold hold_owned retention_candidates working_on",
-    "decisions.Decision.manager": "ask decide withdraw",
+    "workflows.WorkflowRun.queryset": (
+        "about about_filter blocking for_subject hold hold_owned retention_candidates working_on"
+    ),
+    "decisions.Decision.manager": "ask",
     "decisions.Decision.queryset": (
-        "attention_expression for_records open open_expression open_for waiting_on"
+        "attention_expression for_records for_records_filter open open_expression open_for waiting_on"
     ),
 }
+
+EXPECTED_ROW_VERBS = {
+    "workflows.WorkflowRun": "advance cancel_on_commit fail_advance reopen",
+    "workflows.StepRun": "reap redispatch wake",
+    "decisions.Decision": "decide withdraw",
+}
+"""Transitions each row owns, rather than its manager."""
 
 EXPECTED_TYPES = {
     "awaits": "AwaitRun AwaitRunConfig AwaitRunInput",
     "context": "StepContext",
     "maps": "Map MapInput MapItem",
     "decision_steps": "AskDecision DecisionConfig DecisionStep",
-    "steps": "Ask Done EmptyOutput Fail NextPage RetryPolicy Retryable Step StepMode Superseded Wait",
+    "steps": (
+        "Ask AttemptRecord Done EmptyOutput Fail NextPage RetryPolicy Retryable Settlement Step StepMode Superseded "
+        "Wait"
+    ),
 }
 
 EXPECTED_RUNNER = tuple(
@@ -134,6 +145,9 @@ def test_workflows_public_surface() -> None:
                 if names := _public_verbs(cls, label, base):
                     verbs[f"{label}.{model.__name__}.{owner}"] = names
     assert verbs == {owner: tuple(names.split()) for owner, names in EXPECTED_VERBS.items()}
+    for label, names in EXPECTED_ROW_VERBS.items():
+        model = apps.get_model(label)
+        assert all(callable(getattr(model, name, None)) for name in names.split()), label
 
     types = {}
     runner = []
@@ -145,7 +159,7 @@ def test_workflows_public_surface() -> None:
             name for name, member in vars(module).items()
             if name.isidentifier() and not name.startswith("_")
             and inspect.isclass(member) and member.__module__ == module.__name__
-            and (module_info.name in EXPECTED_TYPES or issubclass(member, (Step, *get_args(Settlement.__value__))))
+            and (module_info.name in EXPECTED_TYPES or issubclass(member, (Step, Settlement)))
         ))
         if public_types:
             types[module_info.name] = public_types
@@ -161,14 +175,9 @@ def test_workflows_public_surface() -> None:
                 for verb in _public_verbs(cls, "workflows", object)
             )
     assert types == {module: tuple(names.split()) for module, names in EXPECTED_TYPES.items()}
-    assert tuple(member.__name__ for member in get_args(Settlement.__value__)) == (
-        "Done", "Wait", "NextPage", "Fail", "Ask",
-    )
-    assert all(
-        {"check", "admit", "transition"} <= set(dir(member))
-        and "kind" not in member.__dataclass_fields__
-        for member in get_args(Settlement.__value__)
-    )
+    settlements = [member for member in Settlement.__subclasses__() if member.__module__ == Settlement.__module__]
+    assert tuple(member.__name__ for member in settlements) == ("Done", "Wait", "NextPage", "Fail", "Ask")
+    assert all("kind" not in member.__dataclass_fields__ for member in settlements)
     assert tuple(sorted(runner)) == EXPECTED_RUNNER
 
     settings = {}

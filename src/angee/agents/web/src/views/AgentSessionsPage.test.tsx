@@ -10,7 +10,7 @@ import {
 } from "@angee/app/testing";
 
 import type { AgentRosterItem } from "../documents";
-import type { AgentChatProps } from "../chat-context";
+import type { AgentChatProps } from "./AgentChat";
 import agents from "../index";
 
 const routerMocks = vi.hoisted(() => ({
@@ -93,7 +93,6 @@ function agent(
     id,
     name,
     runtime_status: "RUNNING",
-    runtime_class: "CLAUDE_CODE",
     is_template: false,
     updated_at: "2026-06-26T00:00:00Z",
     model: { name: "claude-opus" },

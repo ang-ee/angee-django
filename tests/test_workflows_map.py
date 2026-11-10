@@ -11,9 +11,10 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models.identity import public_id_of
+from angee.base.refs import RecordRef, record_view_refs
+from angee.base.testing.queries import statement_startswith
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows import schema as workflow_schema
 from angee.workflows.decision_steps import DecisionStep
@@ -89,23 +90,23 @@ def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(e
     item = body_rows(run).first()
     assert "run" not in item._state.fields_cache
     with CaptureQueriesContext(connection) as captured:
-        concerns = item.change_related_records()
-    expected = {ChangeRelatedRecord(run._meta.label, run.sqid)} | {
-        ChangeRelatedRecord(model._meta.label, model.public_id_from_pk(child.pk))
+        concerns = [(ref.model_label, ref.public_id) for ref in item.change_related_records()]
+    expected = {(run._meta.label, run.sqid)} | {
+        (model._meta.label, model.public_id_from_pk(child.pk))
         for model in (MtiParent, MtiChild) for child in children
     }
     assert set(concerns) == expected and len(concerns) == len(expected)
-    selects = [query["sql"] for query in captured if query["sql"].startswith("SELECT")]
+    selects = [query["sql"] for query in captured if statement_startswith(query["sql"], "SELECT")]
     assert len(selects) == 2, captured.captured_queries
-    assert any(sql.startswith("SELECT DISTINCT") and '"content_type_id"' in sql for sql in selects)
+    assert any(statement_startswith(sql, "SELECT DISTINCT") and '"content_type_id"' in sql for sql in selects)
     assert not any(f'FROM "{run._meta.db_table}"' in sql for sql in selects)
     assert "run" not in item._state.fields_cache
-    from angee.base.refs import RecordRef
-
     with CaptureQueriesContext(connection) as captured:
-        leaf_concerns = ChangeRelatedRecord.for_records(*(RecordRef.from_instance(child) for child in children))
+        leaf_concerns = record_view_refs(*(RecordRef.from_instance(child) for child in children))
     assert len(captured) == 0
-    assert set(leaf_concerns) == {concern for concern in expected if concern.model == MtiChild._meta.label}
+    assert {(ref.model_label, ref.public_id) for ref in leaf_concerns} == {
+        concern for concern in expected if concern[0] == MtiChild._meta.label
+    }
 
 
 def test_map_item_is_the_typed_exclusive_result_contract():

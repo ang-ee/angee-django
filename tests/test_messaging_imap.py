@@ -37,6 +37,7 @@ from angee.messaging_integrate_imap.backend import (
     ImapError,
     ImapSamplePreviewRequest,
 )
+from angee.messaging_integrate_imap.models import ImapChannelSampling
 from angee.messaging_integrate_imap.parser import (
     fallback_message,
     html_to_text,
@@ -787,6 +788,8 @@ class _BridgeStub:
         self.config = {"host": "192.0.2.10", **(config or {})}
         self.credential = credential
         self._state = SimpleNamespace(adding=False, db="default")
+
+    imap_delivery_boundary = ImapChannelSampling.imap_delivery_boundary
 
     def fresh_credential(self) -> Any:
         """Supply the integration credential contract without a database."""
@@ -1713,8 +1716,8 @@ def test_expired_imap_budget_does_not_connect_or_advance(monkeypatch: pytest.Mon
     backend = _backend(monkeypatch, account)
     monkeypatch.setattr(imap_backend, "monotonic", lambda: 10.0)
     reports: list[tuple[str, dict[str, Any]]] = []
-    reporter = SimpleNamespace(report=lambda stage, **values: reports.append((stage, values)))
-    monkeypatch.setattr(imap_backend, "current_bridge_progress", lambda: reporter)
+    bridge = SimpleNamespace(report_progress=lambda stage, **values: reports.append((stage, values)))
+    monkeypatch.setattr(imap_backend, "current_progress_bridge", lambda: bridge)
     stream = SimpleNamespace(partition="INBOX", generation=1, cursor={"uidvalidity": 100, "last_uid": 0})
 
     assert backend.streams(deadline=10) == ()
@@ -2096,7 +2099,7 @@ def test_new_mail_boundary_preserves_existing_exclusion(composed_tables: None, m
         }
         channel.save(update_fields=["config"])
         current_stream(channel, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 1})
-        boundary = backend.prepare_new_mail_boundary()
+        boundary = channel.select_imap_new_mail_boundary(backend.prepare_new_mail_boundary(), backend)
         assert not boundary.changed
         assert boundary.cursors == {"INBOX": {"uidvalidity": 100, "last_uid": 1}}
         channel.refresh_from_db()

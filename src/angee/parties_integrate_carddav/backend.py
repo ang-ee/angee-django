@@ -633,7 +633,7 @@ def _render_vcard(
             ),
         )
     if "organization" in changed:
-        units = list(getattr(getattr(card, "org", None), "value", []) or [""])
+        units = list(card.getChildValue("org", []) or [""])
         units[0] = contact.organization
         set_value("org", units if any(units) else None)
     for field, prop in (("birthday", "bday"), ("anniversary", "anniversary")):
@@ -720,7 +720,7 @@ def _retain_lines[T](
         for name, lines in card.contents.items()
         if not name.startswith("x-")
         for line in lines
-        if getattr(line, "group", None)
+        if line.group
     }
     for name in [name for name in card.contents if name.startswith("x-ab")]:
         if remaining := [line for line in card.contents[name] if (line.group or "").lower() not in gone]:
@@ -794,9 +794,9 @@ def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedContact:
     PHOTO bytes travel separately and never enter the retained wire template.
     """
 
-    name = getattr(getattr(card, "n", None), "value", None)
-    org_values = getattr(getattr(card, "org", None), "value", None) or []
-    photo = _parse_photo(getattr(card, "photo", None))
+    name = card.getChildValue("n", vobject.vcard.Name())
+    org_values = card.getChildValue("org") or []
+    photo = _parse_photo(next(iter(card.contents.get("photo", ())), None))
     if card.contents.pop("photo", None):
         raw = card.serialize().replace("\r\n", "\n").strip()
     return ParsedContact(
@@ -804,11 +804,11 @@ def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedContact:
         etag=etag,
         href=href,
         display_name=_prop(card, "fn"),
-        name_prefix=str(getattr(name, "prefix", "") or ""),
-        given_name=str(getattr(name, "given", "") or ""),
-        additional_name=str(getattr(name, "additional", "") or ""),
-        family_name=str(getattr(name, "family", "") or ""),
-        name_suffix=str(getattr(name, "suffix", "") or ""),
+        name_prefix=str(name.prefix or ""),
+        given_name=str(name.given or ""),
+        additional_name=str(name.additional or ""),
+        family_name=str(name.family or ""),
+        name_suffix=str(name.suffix or ""),
         nickname=_prop(card, "nickname"),
         notes=_prop(card, "note"),
         # vCard ORG is structured "Org;Unit;…" — the first part is the org, the
@@ -830,8 +830,7 @@ def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedContact:
 def _prop(card: Any, prop: str) -> str:
     """Return a single-valued vCard property's text, or ``""``."""
 
-    component = getattr(card, prop, None)
-    return str(component.value) if component is not None and component.value else ""
+    return str(card.getChildValue(prop) or "")
 
 
 def _labelled(component: Any) -> tuple[str, str, bool]:
@@ -841,7 +840,7 @@ def _labelled(component: Any) -> tuple[str, str, bool]:
     is set by ``TYPE=PREF`` (vCard 3.0) or a ``PREF`` parameter (vCard 4.0).
     """
 
-    params = component.params if hasattr(component, "params") else {}
+    params = component.params
     types = [str(item).lower() for item in params.get("TYPE", [])]
     label = next((item for item in types if item != "pref"), "")
     is_preferred = "pref" in types or bool(params.get("PREF"))
@@ -885,7 +884,7 @@ def _parse_photo(component: Any) -> ParsedPhoto | None:
 
     if component is None:
         return None
-    params = component.params if hasattr(component, "params") else {}
+    params = component.params
     mime = _photo_mime(params)
     value = component.value
     if isinstance(value, bytes):
@@ -941,14 +940,14 @@ def _address(component: Any) -> ParsedAddress:
     """Return a :class:`ParsedAddress` from an ADR component."""
 
     value = component.value
-    types = component.params.get("TYPE", []) if hasattr(component, "params") else []
+    types = component.params.get("TYPE", [])
     return ParsedAddress(
         label=str(types[0]).lower() if types else "",
-        po_box=str(getattr(value, "box", "") or ""),
-        extended=str(getattr(value, "extended", "") or ""),
-        street=str(getattr(value, "street", "") or ""),
-        city=str(getattr(value, "city", "") or ""),
-        region=str(getattr(value, "region", "") or ""),
-        postal_code=str(getattr(value, "code", "") or ""),
-        country=str(getattr(value, "country", "") or ""),
+        po_box=str(value.box or ""),
+        extended=str(value.extended or ""),
+        street=str(value.street or ""),
+        city=str(value.city or ""),
+        region=str(value.region or ""),
+        postal_code=str(value.code or ""),
+        country=str(value.country or ""),
     )

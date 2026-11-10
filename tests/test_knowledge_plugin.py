@@ -1,27 +1,10 @@
-"""Tests that the ``knowledge_graph_pgvector`` plugin composes the knowledge addon.
-
-The whole point of the plugin skeleton is **extensibility without editing the
-knowledge addon**: a semantic backend plugs in through three declared seams — the
-retrieval-backend registry, a GraphQL projection/query, and an MCP tool. These
-tests compose the plugin's ``public`` schema bucket *on top of* knowledge's (the
-way the composer merges per bucket across addons) and assert each seam holds:
-
-- the ``pgvector`` backend resolves from the vault-owned ``ImplClassField``
-  registry (declared by the plugin's autoconfig dotted-key);
-- ``related_pages`` appears on knowledge's ``PageType``;
-- the plugin's ``semantic_search`` MCP tool compiles against the merged schema.
-
-No file under ``src/angee/knowledge/`` is touched — the plugin imports only the
-declared knowledge contracts (the schema types, the model registry, the backend
-base). The merged schema is built standalone (no DB needed), like
-:mod:`tests.test_knowledge_mcp`.
-"""
+"""The pgvector addon composes knowledge's registry, schema and MCP contracts."""
 
 from __future__ import annotations
 
 import asyncio
 import importlib
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from django.apps import apps
@@ -31,7 +14,9 @@ from graphql import GraphQLObjectType
 from rebac import actor_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.knowledge.retrieval import LexicalRetrievalBackend
+from angee.graphql.testing.documents import execute_schema, result_data
+from angee.knowledge.retrieval import RetrievalBackend, RetrievalHit, RetrievalResult
+from angee.knowledge_graph_pgvector.constants import RECONCILE_TASK
 from angee.knowledge_graph_pgvector.retrieval import PgvectorRetrievalBackend
 from angee.mcp.graphql import DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT
 from tests.conftest import Page, SchemaAddon, Vault, create_user, vault_for
@@ -41,202 +26,105 @@ plugin_schema = importlib.import_module("angee.knowledge_graph_pgvector.schema")
 plugin_mcp_tools = importlib.import_module("angee.knowledge_graph_pgvector.mcp_tools")
 plugin_autoconfig = importlib.import_module("angee.knowledge_graph_pgvector.autoconfig")
 
-_PGVECTOR_PROVIDER_PATH = "angee.knowledge_graph_pgvector.retrieval.PgvectorRetrievalBackend"
-
-
-def _bucket_parts(schemas: dict[str, Any]) -> dict[str, tuple[object, ...]]:
-    """Return one addon's ``public`` bucket as normalized schema-part tuples."""
-
-    return {key: tuple(schemas["public"].get(key, ())) for key in SCHEMA_PART_KEYS}
-
 
 def _merged_schemas() -> GraphQLSchemas:
-    """Compose the plugin's ``public`` bucket on top of knowledge's, addon-merged.
-
-    Two ``SchemaAddon`` stand-ins run the real per-bucket ``SchemaParts.merge`` the
-    composer uses, so ``PageType`` (knowledge) and the plugin's ``related_pages``
-    extension + ``semantic_search`` query land in one schema — proving the merge
-    seam without standing up full discovery.
-    """
-
     return GraphQLSchemas(
         [
-            SchemaAddon({"public": _bucket_parts(knowledge_schema.schemas)}),
-            SchemaAddon({"public": _bucket_parts(plugin_schema.schemas)}),
+            SchemaAddon({"public": {key: tuple(module.schemas["public"].get(key, ())) for key in SCHEMA_PART_KEYS}})
+            for module in (knowledge_schema, plugin_schema)
         ]
     )
 
 
-# --- Seam 1: retrieval-backend registry ----------------------------------------
-
-
-def test_autoconfig_declares_namespaced_provider_key() -> None:
-    """The plugin contributes its impl via the autoconfig dotted-key deep-merge.
-
-    The key is namespaced to the plugin (``...RETRIEVAL_CLASSES.pgvector``) so the
-    composer merges one entry into knowledge's registry dict without a collision or
-    an edit to the knowledge addon.
-    """
-
-    assert plugin_autoconfig.SETTINGS == {
-        "ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES.pgvector": _PGVECTOR_PROVIDER_PATH,
-    }
-
-
-def test_pgvector_provider_resolves_from_registry(settings: Any) -> None:
-    """Once merged, the vault's ``ImplClassField`` resolves ``pgvector`` to the impl.
-
-    Mirrors the composer's deep-merge by adding the namespaced key to the registry
-    setting, then resolving through the vault-owned field — the same path
-    knowledge's ``search_pages`` resolver takes. The stub provider subclasses the
-    lexical default, so it inherits a working search until embeddings exist.
-    """
-
-    settings.ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
-        **settings.ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES,
-        "pgvector": _PGVECTOR_PROVIDER_PATH,
-    }
-    vault_model = apps.get_model("knowledge", "Vault")
-    field = vault_model._meta.get_field("retrieval_class")
-
+def test_pgvector_provider_and_reconciler_resolve_from_declared_settings():
+    field = apps.get_model("knowledge", "Vault")._meta.get_field("retrieval_class")
     assert field.resolve_class("pgvector") is PgvectorRetrievalBackend
-    assert issubclass(PgvectorRetrievalBackend, LexicalRetrievalBackend)
-    assert PgvectorRetrievalBackend.key == "pgvector"
+    assert issubclass(PgvectorRetrievalBackend, RetrievalBackend)
+    schedule = plugin_autoconfig.SETTINGS["CELERY_BEAT_SCHEDULE:append"][RECONCILE_TASK]
+    assert schedule["task"] == RECONCILE_TASK
+    assert schedule["schedule"] > 0
 
 
-class GroupedSearchPlugin(PgvectorRetrievalBackend):
-    """Replace the fixture's default backend through its native registry key."""
-
+class GroupedSearchPlugin(RetrievalBackend):
     key = "lexical"
 
 
-def test_grouped_and_bound_search_dispatch_to_plugin_contract(
-    composed_tables: None, settings: Any, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """One grouped plugin override serves both vault-bound and cross-vault search."""
-
+def test_grouped_and_bound_search_dispatch_to_hit_contract(composed_tables, settings, monkeypatch):
     settings.ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
         **settings.ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES,
         "lexical": "tests.test_knowledge_plugin.GroupedSearchPlugin",
     }
     owner = create_user("plugin-search-owner")
-    first = vault_for(owner, name="First")
-    second = vault_for(owner, name="Second")
+    first, second = vault_for(owner, name="First"), vault_for(owner, name="Second")
     with actor_context(owner):
-        page = Page.objects.create_in(first, title="No lexical match", kind=Page.PageKind.FOLDER)
-    calls: list[tuple[list[Any], str, int]] = []
+        page = Page.objects.create_in(first, title="Evidence", kind="folder")
+    hit = RetrievalHit(page=page, rank=1)
+    calls = []
 
-    def search_many(cls: Any, vaults: Any, query: str, *, first: int = 20) -> list[Any]:
+    def search_many(cls, vaults, query, *, first=20):
         calls.append(([vault.pk for vault in vaults], query, first))
-        return [page]
+        return RetrievalResult(hits=[hit])
 
     monkeypatch.setattr(GroupedSearchPlugin, "search_many", classmethod(search_many))
     with actor_context(owner):
-        assert list(first.retrieval.search("semantic needle", first=3)) == [page]
-        assert Vault.objects.search_pages("semantic needle", first=7) == [page]
-    assert calls == [([first.pk], "semantic needle", 3), ([first.pk, second.pk], "semantic needle", 7)]
+        assert first.retrieval.search("query", first=3).hits == [hit]
+        assert Vault.objects.search_pages("query", first=7) == [page]
+    assert calls == [([first.pk], "query", 3), ([first.pk, second.pk], "query", 7)]
 
 
-# --- Seam 2: GraphQL projection + query ------------------------------------------
-
-
-def test_related_pages_extends_pagetype_and_adds_semantic_search() -> None:
-    """The plugin adds ``related_pages`` to ``PageType`` and a ``semantic_search`` query.
-
-    Both land in the merged schema with no edit to knowledge — the projection seam
-    (``type_extensions``) and the root-operation seam (``query``) the composer
-    merges per bucket.
-    """
-
-    gc = _merged_schemas().graphql_schema("public")
-
-    page_type = cast(GraphQLObjectType, gc.type_map["PageType"])
-    assert "related_pages" in page_type.fields
-    assert "PageType" in str(page_type.fields["related_pages"].type)
-
-    assert gc.query_type is not None
-    assert "semantic_search" in gc.query_type.fields
-    # The plugin's query coexists with knowledge's own search field (no collision).
-    assert "search_pages" in gc.query_type.fields
-
-
-# --- Seam 3: MCP tool ------------------------------------------------------------
+def test_related_pages_and_vault_model_extend_the_knowledge_schema():
+    schema = _merged_schemas().graphql_schema("public")
+    assert "related_pages" not in cast(GraphQLObjectType, schema.type_map["PageType"]).fields
+    assert "embedding_model" in cast(GraphQLObjectType, schema.type_map["VaultType"]).fields
+    assert {"extraction_model", "graph_entity_kinds"} <= cast(
+        GraphQLObjectType, schema.type_map["VaultType"]
+    ).fields.keys()
+    assert {"search_pages", "search_passages", "related_pages"} <= schema.query_type.fields.keys()
+    assert "semantic_search" not in schema.query_type.fields
 
 
 @pytest.fixture
-def plugin_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point ``GraphQLSchemas.from_discovery`` at the merged knowledge+plugin bucket.
-
-    The MCP compiler resolves each spec against ``from_discovery().graphql_schema``;
-    pinning it to the merged bucket compiles the plugin's ``semantic_search`` over
-    the query it just contributed, without standing up full discovery.
-    """
-
+def plugin_discovery(monkeypatch):
     schemas = _merged_schemas()
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
 
 
-def _registered_tools() -> dict[str, Any]:
-    """Compile and register the plugin's specs, returning the tool-name → tool map.
-
-    Calling ``register`` runs the compiler's ``_compile``/``_validate``, so a spec
-    that drifts from the schema raises here (the contract check).
-    """
-
+@pytest.mark.usefixtures("plugin_discovery")
+def test_related_pages_tool_compiles_with_bounded_inputs():
     server = FastMCP(name="test-knowledge-pgvector")
     plugin_mcp_tools.register(server)
-    # fastmcp 3.x dropped the private _tool_manager; list_tools() (async) returns
-    # the registered _CompiledTool objects, which still carry .document/.parameters.
-    return {tool.name: tool for tool in asyncio.run(server.list_tools())}
-
-
-@pytest.mark.usefixtures("plugin_discovery")
-def test_semantic_search_tool_compiles() -> None:
-    """The plugin's ``semantic_search`` tool compiles against the merged schema."""
-
-    tools = _registered_tools()
-    assert set(tools) == {"semantic_search"}
-
-    tool = tools["semantic_search"]
-    assert tool.annotations is not None and tool.annotations.readOnlyHint is True
-    assert set(tool.parameters["properties"]) == {"vault", "query", "first"}
-    assert tool.parameters["required"] == ["vault", "query"]  # first has a schema default
-    assert tool.document == (
-        "query ($first: Int! = 10, $vault: ID!, $query: String!) "
-        "{ semantic_search(first: $first, vault: $vault, query: $query) { id title kind } }"
-    )
-    # A list operation projects its rows under ``result``.
-    assert set(tool.output_schema["properties"]) == {"result"}
-    assert tool._variables({"vault": "vault-id", "query": "needle"})["first"] == DEFAULT_QUERY_LIMIT
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    assert set(tools) == {"related_pages"}
+    tool = tools["related_pages"]
+    assert tool.annotations.readOnlyHint is True
+    assert set(tool.parameters["properties"]) == {"page", "first"}
+    assert tool.parameters["required"] == ["page"]
+    assert "related_pages(first: $first, page: $page)" in tool.document
+    assert tool._variables({"page": "page-id"})["first"] == DEFAULT_QUERY_LIMIT
     with pytest.raises(ToolError, match="must not exceed"):
-        tool._variables({"vault": "vault-id", "query": "needle", "first": MAX_QUERY_LIMIT + 1})
+        tool._variables({"page": "page-id", "first": MAX_QUERY_LIMIT + 1})
 
 
-# --- The composition contract: the manifest wires the three seams ----------------
+def test_related_pages_resolver_refuses_an_unreadable_source(composed_tables, monkeypatch):
+    owner, outsider = create_user("related-owner"), create_user("related-outsider")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Private source")
+    monkeypatch.setattr(PgvectorRetrievalBackend, "related_to", classmethod(lambda cls, *args, **kwargs: []))
+    schema = _merged_schemas().build("public")
+    document = "query ($page: ID!) { related_pages(page: $page) { id title } }"
+    assert execute_schema(schema, document, {"page": str(page.sqid)}, user=outsider).errors
+    assert result_data(execute_schema(schema, document, {"page": str(page.sqid)}, user=owner))["related_pages"] == []
 
 
-def test_manifest_wires_the_seams() -> None:
-    """The plugin's manifest + inferred seams resolve to real contributions.
-
-    Proves the addon is composable without installing the app and without an
-    ``apps.py``: ``schemas``/``mcp_tools`` are inferred from the addon's
-    ``schema.py``/``mcp_tools.py``, their dotted refs resolve to the contributions,
-    and the manifest depends on both owners.
-    """
-
-    from django.apps import AppConfig
+def test_manifest_and_native_config_wire_addon_contributions():
     from django_compose.components import enabled_apps
 
-    import angee.knowledge_graph_pgvector as plugin_pkg
-
-    config = AppConfig("angee.knowledge_graph_pgvector", plugin_pkg)
-    dependencies = enabled_apps((config.name,), group="angee.addons").dependencies[config.name]
-    assert dependencies == ("angee.knowledge", "angee.mcp")
     from angee.graphql.schema import schema_parts_for
     from angee.mcp.server import tool_registrar
 
+    config = apps.get_app_config("knowledge_graph_pgvector")
+    dependencies = enabled_apps((config.name,), group="angee.addons").dependencies[config.name]
+    assert {"angee.knowledge", "angee.mcp", "angee.agents", "angee.jobs"} <= set(dependencies)
     assert "public" in schema_parts_for(config)
     assert tool_registrar(config) is plugin_mcp_tools.register
-    # The dotted refs resolve to the contributions composed above.
-    assert plugin_schema.schemas["public"]["query"]
-    assert callable(plugin_mcp_tools.register)

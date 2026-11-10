@@ -10,8 +10,8 @@ from django.db import models
 from django.db.models.functions import Cast
 from rebac import SubjectRef, resolve_subjects
 
-from angee.provenance.contrib.angee.history import record_history
-from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, timeline_subject
+from angee.provenance.contrib.angee.history import HistoryDocumentMixin, record_history
+from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind
 
 
 class ChangeKind(TimelineKind):
@@ -22,7 +22,11 @@ class ChangeKind(TimelineKind):
     at = models.F("occurred_at")
 
     def eligible(self, model: type[models.Model]) -> bool:
-        return record_history(model) is not None and timeline_subject(model)
+        return issubclass(model, HistoryDocumentMixin) and model.timeline_subject and record_history(model) is not None
+
+    def occurs(self, record: Any) -> bool:
+        model = apps.get_model("provenance", "Changeset")
+        return model._base_manager.filter(model.objects.closed_for_record_filter(record)).exists()
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         model = apps.get_model("provenance", "Changeset")

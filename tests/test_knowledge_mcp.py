@@ -32,6 +32,7 @@ _EXPECTED_TOOLS = {
     "list_vaults",
     "read_page",
     "search_pages",
+    "search_passages",
     "patch_page_section",
     "replace_page_text",
     "append_to_page",
@@ -123,6 +124,17 @@ def test_search_pages_passes_named_arguments() -> None:
     )
     # A list operation projects its rows under ``result``.
     assert set(tool.output_schema["properties"]) == {"result"}
+
+
+@pytest.mark.usefixtures("knowledge_discovery")
+def test_search_passages_projects_ranked_evidence() -> None:
+    tool = _registered_tools()["search_passages"]
+    assert tool.annotations.readOnlyHint is True
+    assert tool.parameters["required"] == ["query"]
+    assert set(tool.parameters["properties"]) == {"vault", "query", "first"}
+    fields = tool.output_schema["properties"]["hits"]["items"]["properties"]
+    assert set(fields) == {"page", "heading_path", "start", "end", "text", "rank", "score"}
+    assert "page { id title kind }" in tool.document
 
 
 @pytest.mark.usefixtures("knowledge_discovery")

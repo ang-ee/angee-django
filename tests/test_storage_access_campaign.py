@@ -1,6 +1,7 @@
 """Parent redaction, bearer revocation, canonical attachment and file audiences."""
 
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from django.core import signing
@@ -16,12 +17,13 @@ from rebac.models import active_relationship_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.identity import public_subject_ref
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
 from angee.storage.models import FileAttachmentManager, FileVisibility
-from angee.storage.uploads import DOWNLOAD_TOKEN_SALT
+from angee.storage.uploads import DOWNLOAD_TOKEN_MAX_AGE, DOWNLOAD_TOKEN_SALT, DOWNLOAD_TOKEN_WINDOW
 from tests.conftest import (
     Drive,
     File,
@@ -39,6 +41,34 @@ from tests.test_storage import PNG_BYTES, _proxy_upload
 from tests.test_storage import drive as drive
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+def test_download_urls_are_window_aligned_and_expire_from_the_window_start(drive: Any, monkeypatch) -> None:
+    row = _proxy_upload(drive, PNG_BYTES)
+    start = 1_800_000_000 // DOWNLOAD_TOKEN_WINDOW * DOWNLOAD_TOKEN_WINDOW
+    with actor_context(drive.alice):
+        monkeypatch.setattr("time.time", lambda: start + 1)
+        first = row.download_url()
+        monkeypatch.setattr("time.time", lambda: start + DOWNLOAD_TOKEN_WINDOW - 1)
+        assert row.download_url() == first
+        token = parse_qs(urlsplit(first).query)["token"][0]
+        assert File.objects.for_download_token(token).pk == row.pk
+        monkeypatch.setattr("time.time", lambda: start + DOWNLOAD_TOKEN_WINDOW)
+        assert row.download_url() != first
+        monkeypatch.setattr("time.time", lambda: start + DOWNLOAD_TOKEN_MAX_AGE)
+        assert File.objects.for_download_token(token).pk == row.pk
+        monkeypatch.setattr("time.time", lambda: start + DOWNLOAD_TOKEN_MAX_AGE + 1)
+        with pytest.raises(exceptions.UploadDenied, match="expired"):
+            File.objects.for_download_token(token)
+
+
+def test_download_url_changes_for_new_content_inside_one_window(drive: Any, monkeypatch) -> None:
+    row = _proxy_upload(drive, PNG_BYTES)
+    monkeypatch.setattr("time.time", lambda: 1_800_000_001)
+    with actor_context(drive.alice):
+        first = row.download_url()
+        row.content_hash = "f" * 64
+        assert row.download_url() != first
 
 
 @pytest.mark.parametrize("schema_name", ["public", "console"])
@@ -295,7 +325,7 @@ def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
             listed = list(FileAttachment.objects.for_record(target).values_list("pk", flat=True))
         assert listed == [attachment.pk]
         table = connection.ops.quote_name(FileAttachment._meta.db_table)
-        assert sum(query["sql"].startswith(f"SELECT {table}.") for query in queries) == 1
+        assert sum(statement_startswith(query["sql"], f"SELECT {table}.") for query in queries) == 1
         # Edges delete under the actor through the scoped manager: file write is required.
         with pytest.raises(PermissionDenied):
             FileAttachment.objects.filter(pk=attachment.pk).delete()

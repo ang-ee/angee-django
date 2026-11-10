@@ -18,7 +18,7 @@ from angee.graphql.related_counts import RelatedCount, check_related_counts, cou
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import Backend, Drive, File, Page, addon_schema, create_user, vault_for
 
-pytestmark = pytest.mark.django_db(transaction=True, reset_sequences=True)
+pytestmark = pytest.mark.django_db(transaction=True)
 
 QUERY = """query($model: String!, $id: ID!, $groups: [String!]!) {
   related_counts(model: $model, id: $id, groups: $groups) { group count }
@@ -56,7 +56,7 @@ def referenced(composed_tables, decision_counts):
     owner, outsider = create_user("count-owner"), create_user("count-outsider")
     vault = vault_for(owner)
     with actor_context(owner):
-        page = Page.objects.create_in(vault, title="Counts")
+        page = Page.objects.create_in(vault, pk=vault.pk, title="Counts")
     decisions = [
         seed_decision(actor=owner, assignees=(owner,), reference=record, requester=None) for record in (vault, page)
     ]

@@ -4,7 +4,7 @@
 // (composed at build time onto the runtime via the manifest `previews` field) —
 // no module-global registry, no import side-effect.
 
-export { PreviewPane, type PreviewPaneProps } from "./PreviewPane";
+export { PreviewPane, usePreviewUrl, type PreviewPaneProps } from "./PreviewPane";
 export { PreviewSkeleton, type PreviewSkeletonProps } from "./PreviewSkeleton";
 export {
   builtinPreviewProviders,

@@ -16,8 +16,12 @@ domain adapters own protocol parsing and ingest policy.
 
 Manual requests and scheduled polls share `Bridge.mark_sync_queued` admission.
 A live sync lock or retained workflow run keeps its progress and declines a new
-task. A stale syncing marker without either owner remains recoverable. Callers
-use `queue_bridge_sync`'s result to report whether they queued work.
+task; a declined scheduled poll still claims its interval
+(`Bridge.admit_due_sync`). A stale syncing marker without either owner remains
+recoverable. Callers use `Bridge.request_sync`'s result to report whether they
+queued work.
+`Integration.request_sync` requests every bridge capability of one integration
+and counts the syncs it queued.
 
 Event feeds are append-only and compose their domain's idempotent ingest verb.
 They create no replica links. Their unlinked failures belong to the stream's
@@ -31,18 +35,21 @@ their protected `applied_base`, a snapshot in the link's own native history.
 Observation never advances that base. Remote-only changes apply locally;
 local-only changes may write back with a remote version fence. Divergent edits
 and remote deletion against a local edit require an explicit choice. Identical
-edits converge. Adapters revalidate
-their local projection under domain locks before applying.
+edits converge. Adapters revalidate their local projection under domain locks
+before applying.
 
 A conditional write returns authoritative source evidence and version, retained
 with the local projection so the driver recognizes its next pull echo. The link
 checks its complete retained reflection precondition beside the transport's
 remote-version fence. Neither makes the two systems atomic.
 Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
+The stream declaration alone owns `mapping_version`. The driver stamps it at
+promotion, write-back reflection and quarantine; `RecordChange`, `LocalChange`
+and `ApplyResult` carry no version copies. Adapters return only the evidence
+apply learned.
 
-Each applied record retains the observe row and the application-evidence row
-(commit 8 review ruling); a record delivered again unchanged retains only its
-observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
+Each applied record retains the observe row and the application-evidence row;
+a record delivered again unchanged retains only its observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
 the snapshots from generation changes, when retained links follow the new epoch.
 The Streams tab's link history drill-down is the provenance
 [History timeline](../provenance/README.md#history-surface) for the link: one
@@ -56,14 +63,24 @@ The adapter's `StreamDefinition` declaration owns every stream policy knob.
 Its `authoritative` flag marks the source as the system of record for
 what the stream states (`SyncStream.authoritative`, read by statement survivorship);
 changing it re-derives the linked subjects through `SyncStreamManager.set_authoritative`.
-Direction or snapshot changes open a new baseline generation and retain links,
-policy and failures. Adapter-private deletion policy remains in stream `config`.
+Direction, snapshot or newer mapping-version declarations open a new baseline
+generation and retain links, policy and failures. Adapter-private deletion policy
+remains in stream `config`.
 A changed declaration reaches an existing stream when a drain opens it:
 [`open_stream`](streams.py) always reconciles the stream with its declaration, on
 the generic sync and on a workflow cycle alike. What reaches it is limited to the
 declaration's facts: `authoritative` flips and re-derives, a changed `direction` or
-`snapshot` opens a new baseline generation (a full re-read of that stream), and a
-changed `kind` is refused. `cursor`, `reconcile_interval`, `absence_threshold`,
+`snapshot` or increased `mapping_version` opens a new baseline generation (a full
+re-read of that stream), and a changed `kind` is refused. The generation records
+its active mapping version, so reopening the same declaration preserves progress.
+A lower declaration preserves the cursor and generation but updates that active
+version: rollback output must retain its actual mapping. Returning to the newer
+declaration starts a baseline to revisit any output the rollback wrote. Adapters
+declare the version once in `StreamDefinition`; the driver stamps all evidence. An unknown
+stored version is seeded from the minimum applied link version, or the declared
+version for a stream without applied links; never-applied observations and
+quarantines do not lower it. Only a newer declaration starts a baseline.
+`cursor`, `reconcile_interval`, `absence_threshold`,
 `tombstone_retention` and `config` seed the first generation only; changing them in
 a declaration never changes an existing stream.
 A declared snapshot with no reconciliation interval closes after its baseline;
@@ -73,7 +90,7 @@ Several inbound problems can coexist. For one record link, new source or mapping
 evidence closes older versions of the same non-conflict problem while retaining
 their history. Stream-level event failures remain independent.
 Semantic failures use bounded backoff;
-conflicts await an explicit remote/local choice. Due replica failures re-read
+conflicts await an explicit remote/local choice (`RecordLink.resolve_conflict`). Due replica failures re-read
 identity through `BridgeImpl.read_keys`; unsupported identity reads fall back to
 a baseline with the reason retained in failure details. Refused writes retry
 through the outbox. A due refusal with no remaining local candidate closes.
@@ -124,14 +141,17 @@ through `OAuthClientProtocol.confidential_client_secret()`; public clients are
 refused before secret storage is accessed; confidential clients without a secret
 are refused too. `OAuthClient.is_public_client` owns that classification.
 
-`OAuthClient.configuration_state` is the readiness rule used by the picker,
-connect and the operation-local [registration snapshot](oauth/registrations.py).
-The snapshot reads public configuration fields, never client secrets. OIDC
+`OAuthClient.configuration_state` is the readiness rule;
+`OAuthClientQuerySet.ready_registrations` applies it to each slug's preferred
+registration for the picker, connect and the operation-local
+[registration snapshot](oauth/registrations.py), which the console projections
+pass to `Integration.is_oauth_connectable`. Readiness reads public
+configuration fields, never client secrets. OIDC
 metadata discovery resolves OAuth endpoints independently of connection
 discovery. Host
 settings are applied through `oauth_clients` after resources load.
 `Credential.is_reconnect_required` uses status, failed refresh and expiry.
-Refreshability is derived by its kind handler from the current client and grant
+`Credential.refreshable` derives refreshability from the current client and grant
 material; it is never stored as a copy of client policy. Ordinary access-token
 expiry with a refresh grant does not ask for new consent.
 

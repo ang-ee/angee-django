@@ -22,14 +22,14 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/resources/<tier>/NNN_agents.agent.yaml` + `pyproject.toml [tool.angee.resources]` | the agent row and its catalogue dependencies | `examples/src/example/notes/resources/demo/095_agents.agent.yaml`, `[[tool.angee.resources.demo]]` in `notes/pyproject.toml` |
-| `src/angee/agents/models.py` | `Agent` (`principal_subject`, `runtime_backend`, `provision_blocker`, `mcp_config`), `Skill`, `MCPServer`, `MCPTool`, `InferenceProvider`, `InferenceModel` (`usable`, `require_usable`, `infer`), `AgentSession`, `AgentTurn` | docstrings |
+| `src/angee/agents/models.py` | `Agent` (`principal_subject`, `runtime_backend`, `provision_blocker`, `mcp_config`), `Skill`, `MCPServer`, `MCPTool`, `InferenceProvider`, `InferenceModel` (`usable`, `require_usable`, `infer`, `embed`, `record_usage`), `AgentSession`, `AgentTurn` | docstrings |
 | `src/angee/agents/runtimes.py`; `agents_runtime_pydantic/runtime.py` | `AgentRuntime`, `NoRuntime`, `OpenCodeRuntime`, `ClaudeCodeRuntime`, `operator_secret_ref`; `PydanticAIRuntime` | docstrings |
-| `src/angee/agents/backends.py`, `sdk_backends.py`; vendor `agents_integrate_*/backend.py` | `InferenceBackend`, `ManualInferenceBackend`; `SDKInferenceBackend`; `AnthropicInferenceBackend` (`agents_integrate_anthropic/backend.py`) | module docstring |
+| `src/angee/agents/backends.py`, `sdk_backends.py`; vendor `agents_integrate_*/backend.py` | `InferenceBackend` (`chat`, `embed`, `embedding_model`, `TransientInferenceError`), `ManualInferenceBackend`; `SDKInferenceBackend`; `AnthropicInferenceBackend` (`agents_integrate_anthropic/backend.py`) | module docstring |
 | `src/angee/agents/autoconfig.py`; runtime/vendor `autoconfig.py` | `ANGEE_INFERENCE_BACKEND_CLASSES`, `ANGEE_AGENT_RUNTIME_CLASSES`, `ANGEE_INFERENCE_APPROVED_DEPLOYMENTS`, `ANGEE_MCP_ACTOR_VERIFIER`, `ANGEE_AGENT_CHAT_TOKEN_TTL` (`SETTINGS`); contributed keys (`SETTINGS` in `agents_runtime_pydantic/autoconfig.py`, `agents_integrate_anthropic/autoconfig.py`) | comments |
-| `src/angee/agents/grants.py`, `permissions.zed`; `agents_runtime_pydantic/toolsets.py` | `tool_grant_ref`, `sync_builtin_tool_catalogue`; `agents/agent`, `agents/toolrole`, `agents/tool_grant` definitions; `ToolGrantAccess`, `toolsets_for_session` | zed comments |
-| `src/angee/agents/skills.py`; `models.py` | `parse_skill_meta`; `SkillManager.sync_from_source` | docstrings |
+| `src/angee/agents/models.py`; `grants.py`, `permissions.zed`; `agents_runtime_pydantic/toolsets.py` | `MCPServerManager.builtin`, `MCPToolManager.sync_builtin`, `MCPToolManager.authorization_ids`; `tool_grant_ref`, `sync_resource_reader_grants`; `agents/agent`, `agents/toolrole`, `agents/tool_grant` definitions; `ToolGrantAccess`, `toolsets_for_session` | docstrings, zed comments |
+| `src/angee/agents/models.py` | `Skill.parse_manifest`; `SkillManager.sync_from_source` | docstrings |
 | `src/angee/agents/runners.py`, `sessions.py`, `tasks.py`, `acp_server.py`, `protocol.py` | `SessionRunner`, `TurnOutcome`; `run_next_turn`; `run_session`; ACP mappings; `ACP_PATH` | docstrings |
-| `src/angee/agents/provisioning.py` | `provision_agent`, `adopt_agent`, `replace_agent`, `reprovision_agent`, `deprovision_agent` | module docstring |
+| `src/angee/agents/provisioning.py` | `provision_agent`, `adopt_agent`, `replace_agent`, `reprovision_agent`, `deprovision_agent`, `ProvisioningError` | module docstring |
 | `src/angee/agents/testing/` | concrete `Agent`, `InferenceProvider`, `InferenceModel`, `Skill`, … (`models.py`); `FakeRunner`, `runner` fixture (`drivers.py`) | the `tests/test_agents.py` module docstring |
 
 ## Reuse first
@@ -37,7 +37,7 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 - An `Agent` row (resource or console) before any code: instructions, model, workspace template, runtime, servers, skills are data.
 - `Agent.principal_subject()` + `actor_context` for anything done *as* the agent; `agent.owner` only manages the definition.
 - `InferenceModel.infer` / `objects.usable(actor, role, uses=)` / `require_usable` for one-shot inference from domain code; never a vendor client.
-- `angee.iam.service_users.sync_service_user` — already called by `Agent.save` (`models.py`); `deactivate_service_user` on delete (`deactivate_agent_service_user` in `signals.py`).
+- `ServiceUserMixin` (`src/angee/iam/models.py`) — `Agent` composes it: `Agent.save` calls `sync_service_user()`; delete receivers call `deactivate_service_user()` (`deactivate_agent_service_user` in `signals.py`).
 - `integrate.Credential` and `integrate_vcs.Source`/`Template` for secrets, skill sources and workspace templates.
 - `workflows_agents` steps `start_conversation`/`close_conversation` (`src/angee/workflows_agents/steps.py`) when a workflow needs a turn.
 - Upstream: pydantic-ai (`Model`, toolsets, `UsageLimits`), `agent-client-protocol` SDK, FastMCP — [Stack](../../../../../docs/stack.md#backend): the pydantic-ai-slim, agent-client-protocol and FastMCP rows.
@@ -102,14 +102,15 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
    classification, vendor addons SDK and transport policy ([Stack](../../../../../docs/stack.md#backend), pydantic-ai row).
 
 6. **Attach tools and skills.** `mcp_servers`/`mcp_tools` select catalogue rows; the built-in `agents.mcp_angee` server is
-   synced from the registered FastMCP tools (`sync_builtin_tool_catalogue` in `grants.py`), and a tool is usable only through an `agents/tool_grant`
+   synced from the registered FastMCP tools (`MCPToolManager.sync_builtin` in `models.py`), and a tool is usable only through an `agents/tool_grant`
    tuple (`use`, re-checked per call by `ToolGrantAccess`). Skills are `Skill` rows discovered from an `integrate_vcs.Source`
    with `source_kind="skill"` (`SkillManager.sync_from_source`, SKILL.md frontmatter) and selected through `Agent.skills`;
    the operator mounts them. **Owner rule:** `angee.mcp` owns registration (`tool_registrar` in `src/angee/mcp/server.py`), agents the
    catalogue and grants; tool bodies are authored with [mcp-tools](../../../mcp/skills/mcp-tools/SKILL.md).
 
 7. **Provision through the verbs.** `provision_agent`, `adopt_agent`, `replace_agent`, `reprovision_agent`, `deprovision_agent`
-   are the GraphQL actions; `Agent.provision_blocker()` says why one may not start; `lifecycle` moves through
+   take a saved `Agent`, return the outcome message and raise `ProvisioningError` on refusal; the GraphQL actions resolve
+   the agent and format `ActionResult`. `Agent.provision_blocker()` says why one may not start; `lifecycle` moves through
    `StateTransitions`; secrets reach containers as `operator_secret_ref` placeholders, never values. **Owner rule:** the
    operator daemon owns instances, `provisioning.py` the orchestration (module docstring); stack operations are `angee-runtime`.
 
@@ -170,7 +171,7 @@ credential is set; a `FakeRunner` turn settles `completed` with every captured a
 
 <!--
 Docs: docs/glossary.md #backend (Backend class, Implementation, Agent entries); docs/backend/guidelines.md #rules (implementation-registry bullets), #direct-record-access; docs/stack.md #backend (pydantic-ai, anthropic, FastMCP rows); docs/checks.md #source-addon-test-models, #browser-verification; AGENTS.md.
-Code: src/angee/agents/{pyproject.toml, autoconfig.py, apps.py, models.py, runtimes.py, backends.py, sdk_backends.py, skills.py, runners.py, sessions.py, tasks.py, protocol.py, acp_server.py, grants.py, mcp_verifier.py, provisioning.py (def list + docstring), resources.py, deployments.py, context.py (def list), permissions.zed, signals.py, testing/models.py, testing/drivers.py (def list)}; src/angee/agents_runtime_pydantic/{pyproject.toml, autoconfig.py, runtime.py, toolsets.py}; src/angee/agents_integrate_anthropic/{autoconfig.py, backend.py}; src/angee/workflows_agents/steps.py; src/angee/mcp/server.py; src/angee/iam/service_users.py; examples/src/example/notes/{pyproject.toml, resources/demo/095_agents.agent.yaml, mcp_tools.py}; tests/{test_agents.py, test_agents_runtime_pydantic.py, test_agents_acp.py, test_agent_sessions.py, test_agent_tooling.py}.
+Code: src/angee/agents/{pyproject.toml, autoconfig.py, apps.py, models.py, runtimes.py, backends.py, sdk_backends.py, runners.py, sessions.py, tasks.py, protocol.py, acp_server.py, grants.py, mcp_verifier.py, provisioning.py (def list + docstring), resources.py, context.py (def list), permissions.zed, signals.py, testing/models.py, testing/drivers.py (def list)}; src/angee/agents_runtime_pydantic/{pyproject.toml, autoconfig.py, runtime.py, toolsets.py}; src/angee/agents_integrate_anthropic/{autoconfig.py, backend.py}; src/angee/workflows_agents/steps.py; src/angee/mcp/server.py; src/angee/iam/models.py (ServiceUserMixin); examples/src/example/notes/{pyproject.toml, resources/demo/095_agents.agent.yaml, mcp_tools.py}; tests/{test_agents.py, test_agents_runtime_pydantic.py, test_agents_acp.py, test_agent_sessions.py, test_agent_tooling.py}.
 Doc gaps: src/angee/agents has no README; the Agent/runtime/backend contracts are documented only in docstrings and the stack rows. Tool authoring is owned by the mcp-tools guide (src/angee/mcp/skills/mcp-tools/SKILL.md), linked by path only.
 Mismatches: none found between docstrings and the cited code.
 -->
