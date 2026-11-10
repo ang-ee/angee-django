@@ -31,7 +31,7 @@ from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
 from angee.base.pagination import valid_page_size
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import relation_read_queryset, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
@@ -473,13 +473,12 @@ class RecordHistory:
             snapshots[statement_model.statement_subject_model].setdefault((version.subject_id, None), None)
 
         result: dict[tuple[type[models.Model], Any, Any | None], frozenset[str]] = {}
+        source = require_rebac_queryset(self.model)
+        if self.actor is not None:
+            source = source.with_actor(self.actor)
         for model, items in snapshots.items():
             keys = {pk for pk, _changeset_id in items}
-            readable = (
-                require_rebac_queryset(model, actor=self.actor).with_action("read").filter(pk__in=keys)
-                if self.actor is not None
-                else model._base_manager.none()
-            )
+            readable = relation_read_queryset(model, source).filter(pk__in=keys)
             current = {row.pk: row for row in readable}
             missing = keys - current.keys()
             retained = set(model._base_manager.filter(pk__in=missing).values_list("pk", flat=True))

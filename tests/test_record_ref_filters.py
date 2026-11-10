@@ -17,7 +17,7 @@ from angee.graphql.relations import actor_scoped_relation_expression, with_recor
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.knowledge import schema as knowledge_schema
-from tests.conftest import Page, SchemaAddon, Vault, addon_schema, create_user, vault_for
+from tests.conftest import Page, SchemaAddon, addon_schema, create_user, vault_for
 from tests.tables import model_tables
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -182,7 +182,8 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
 
         @classmethod
         def declared_target_models(cls, **kwargs):
-            return {Vault._meta.label_lower: Vault}
+            # Old edges remain readable even after write admission is withdrawn.
+            return {}
 
         class Meta:
             app_label = "auth"
@@ -195,12 +196,34 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
                 content_type=ContentType.objects.get_for_model(record), object_id=str(record.pk),
             )
         with actor_context(owner):
+            guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
             with CaptureQueriesContext(connection) as queries:
-                guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
+                sql = str(guarded.query)
+                guarded.query.get_compiler(connection=connection).as_sql()
             assert len(queries) == 0
             assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False]
-            sql = str(guarded.query)
             assert "varchar(63)" in sql and ("CAST(" in sql or "::varchar(63)" in sql)
         with actor_context(other):
             rebound = with_record_reference_access(guarded)
             assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True]
+
+
+def test_record_reference_empty_declaration_is_query_free():
+    """An empty schema probe resolves no target types or permission scopes."""
+    with CaptureQueriesContext(connection) as queries:
+        guarded = with_record_reference_access(DecisionRecord.objects.none())
+    assert len(queries) == 0
+    assert guarded.query.is_empty()
+
+
+def test_record_reference_compilation_is_query_free(referenced_decisions):
+    """Repeated compilation keeps represented types and actor-bound results intact."""
+    owner, _outsider, _records, decisions = referenced_decisions
+    guarded = with_record_reference_access(DecisionRecord.objects.with_actor(owner)).order_by("pk")
+    with CaptureQueriesContext(connection) as queries:
+        str(guarded.query)
+        guarded.query.get_compiler(connection=connection).as_sql()
+    assert len(queries) == 0
+    assert list(guarded.values_list("pk", "_angee_record_readable")) == [
+        (row.pk, True) for row in sorted(decisions, key=lambda row: row.pk)
+    ]

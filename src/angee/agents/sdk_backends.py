@@ -182,7 +182,7 @@ class SDKInferenceBackend(InferenceBackend):
     def _config_value(self, key: str, *, default: Any = None) -> Any:
         """Return one provider config value."""
 
-        config = getattr(self.provider, "config", None)
+        config = self.provider.config
         if isinstance(config, Mapping) and key in config:
             return config[key]
         return default

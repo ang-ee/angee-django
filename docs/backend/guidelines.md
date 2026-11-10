@@ -537,6 +537,13 @@ Use these owners instead of maintaining another contract in an addon:
   on the target wherever it appears (the bucket only gates registration), so
   reference a field type that some bucket lacks and that bucket's build fails
   loudly rather than leaking.
+- **Resource extension axes are explicit.** Model donors declare each supported
+  filter, sort, aggregate, group, insert and update axis through its
+  `hasura_*able_fields` declaration, collected by
+  [`declared_hasura_resource_fields`](../../src/angee/graphql/data/hasura.py).
+  Readable fields never imply query or write axes. Resource owners compose these
+  declarations as [projects](../../src/angee/projects/schema.py) and
+  [tags](../../src/angee/tags/schema.py) do; they do not infer them from type fields.
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
 - **Derived columns have two drift classes and two owners.** Signals own instance
@@ -819,11 +826,12 @@ data through REBAC, never a queryset bypass.
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
-  callers continue under the original actor, never the elevated one. A read
-  through a model's unscoped `_base_manager` (its `Meta.base_manager_name`, the
-  manager Django's relation descriptors use) is an owner-level bypass: owner
-  code takes it for structural work it owns, such as locks, existence checks and
-  counters, with no audit row, and never returns its rows as an actor's read.
+  callers continue under the original actor, never the elevated one.
+- **Structural reads use Django's `_base_manager`, including in consumers.**
+  It is the model's unscoped read manager (`Meta.base_manager_name`), with no
+  REBAC scope and no audit row. Use it for membership predicates, existence
+  probes and owner-internal lookups, including locks and counters; never use it
+  to return rows to a viewer. Viewer-facing reads retain their actor scope.
 - **System work reads an actor-bound row's relations through
   `<related>.system_context(reason=...)`.** Since REBAC 0.31 a related manager
   keeps its source instance's actor even inside `system_context`. That actor comes

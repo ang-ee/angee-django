@@ -15,12 +15,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
+
+if TYPE_CHECKING:
+    from angee.integrate_vcs.models import VcsBridge
 
 HTTP_TIMEOUT_SECONDS = 15
 DEFAULT_API_BASE = "https://api.github.com"
@@ -154,10 +157,10 @@ class GitHubBackend(VCSBackend):
 
         return self._descriptor(self._get(f"/repos/{name}"))
 
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
+    def verify_webhook(self, vcs_bridge: VcsBridge, request: Any) -> bool:
         """Verify an inbound push webhook's HMAC-SHA256 signature against the secret."""
 
-        secret = str(getattr(vcs_bridge, "webhook_secret", "") or "")
+        secret = str(vcs_bridge.webhook_secret or "")
         signature = _request_header(request, WEBHOOK_SIGNATURE_HEADER)
         if not secret or not signature:
             return False
