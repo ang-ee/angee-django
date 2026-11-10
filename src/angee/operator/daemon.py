@@ -191,15 +191,15 @@ class OperatorDaemon:
     def from_settings(cls) -> OperatorDaemon:
         """Resolve the browser proxy endpoint separately from the internal daemon URL."""
 
-        endpoint_url = cls._setting("ANGEE_OPERATOR_GRAPHQL_ENDPOINT")
-        base_url = cls._setting("ANGEE_OPERATOR_URL")
+        endpoint_url = cls._nonempty(settings.ANGEE_OPERATOR_GRAPHQL_ENDPOINT)
+        base_url = cls._nonempty(settings.ANGEE_OPERATOR_URL)
         return cls(
             endpoint=cls._with_graphql_path(endpoint_url or base_url or _DEFAULT_BASE),
             server_base=cls._server_base(endpoint_url, base_url),
-            admin_bearer=cls._setting("ANGEE_OPERATOR_TOKEN"),
+            admin_bearer=cls._nonempty(settings.ANGEE_OPERATOR_TOKEN),
             scope=tuple(str(item) for item in settings.ANGEE_OPERATOR_TOKEN_SCOPE),
             ttl=str(settings.ANGEE_OPERATOR_TOKEN_TTL),
-            restart_job=cls._setting("ANGEE_OPERATOR_RESTART_JOB"),
+            restart_job=cls._nonempty(settings.ANGEE_OPERATOR_RESTART_JOB),
         )
 
     def mint_token(self, actor: str) -> ConnectionToken | None:
@@ -276,7 +276,8 @@ class OperatorDaemon:
     def run_job(self, name: str, *, inputs: dict[str, str], chained_restart: bool = False) -> dict[str, Any]:
         """Start a native job operation and return the daemon's durable record."""
         result = self._request(
-            "POST", f"{self._base()}/jobs/{quote(name, safe='')}/run",
+            "POST",
+            f"{self._base()}/jobs/{quote(name, safe='')}/run",
             {"inputs": inputs, "chained_restart": chained_restart},
         )
         if not isinstance(result, dict):
@@ -335,7 +336,8 @@ class OperatorDaemon:
         services = {
             str(ref["name"])
             for ref in data.get("mounted_by") or ()
-            if isinstance(ref, dict) and OperatorInstanceKind.decode(ref.get("kind")) == OperatorInstanceKind.SERVICE
+            if isinstance(ref, dict)
+            and OperatorInstanceKind.decode(ref.get("kind")) == OperatorInstanceKind.SERVICE
             and ref.get("name")
         }
         inputs = data.get("inputs")
@@ -511,11 +513,10 @@ class OperatorDaemon:
         return f"{_TOKEN_CACHE_PREFIX}{canonical_json_sha256(material)}"
 
     @staticmethod
-    def _setting(name: str) -> str | None:
-        """Return the named Django setting as a non-empty string, or ``None``."""
+    def _nonempty(value: str | None) -> str | None:
+        """Normalize a configured optional string before passing it to the daemon."""
 
-        raw = getattr(settings, name, None)
-        if raw is not None and (text := str(raw).strip()):
+        if value is not None and (text := value.strip()):
             return text
         return None
 

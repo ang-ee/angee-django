@@ -61,14 +61,12 @@ from rebac import (
     GenericTarget,
     NoActorResolvedError,
     PermissionDenied,
-    SubjectRef,
     current_actor,
     generic_target,
     require_permission,
     system_context,
     to_object_ref,
     to_subject_ref,
-    user_subject_type,
 )
 from rebac.backends import backend as rebac_backend
 from rebac.field_backing import resolve_field_backing
@@ -86,7 +84,7 @@ from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQue
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet, TrashMixin, TrashQuerySet
-from angee.base.permissions import DirectRecordAccess, actor_user_id
+from angee.base.permissions import DirectRecordAccess, actor_user_id, user_subject_ref
 from angee.base.querysets import row_lock_paths
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
@@ -303,7 +301,7 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
         """
 
         slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
-        everyone = DirectRecordAccess(relation="viewer", subject=SubjectRef.of(user_subject_type(), "*"))
+        everyone = DirectRecordAccess(relation="viewer", subject=user_subject_ref(user_id="*"))
         with system_context(reason="storage.drive.image_drive"):
             drive = self.model.system_queryset().filter(slug=slug).first()
             if drive is None:

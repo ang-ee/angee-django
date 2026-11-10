@@ -37,7 +37,6 @@ from angee.base.exceptions import DomainError
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.models.identity import instance_from_public_id
 from angee.base.permissions import actor_user_id
-from angee.base.permissions import user_subject_ref as user_subject_ref
 from angee.base.refs import generic_pointer_model
 
 if TYPE_CHECKING:

@@ -713,7 +713,7 @@ class Dashboard(
     immutable_fields = ("is_baseline",)
     sqid_prefix = "dsh_"
     rebac_grantable = {"viewer": "share", "editor": "share"}
-    history_relations = ("widgets",)
+    owned_relations = ("widgets",)
 
     class DashboardScope(models.TextChoices):
         PERSONAL = "personal", "Personal"

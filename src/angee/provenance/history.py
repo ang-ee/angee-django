@@ -19,6 +19,7 @@ from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
 from simple_history.utils import get_change_reason_from_object, get_history_manager_for_model
 
+from angee.provenance.bases import ChangesetHistory as ChangesetHistory
 from angee.provenance.context import changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
 
@@ -32,21 +33,6 @@ def _copy_history_metadata(source: models.Model, target: models.Model) -> None:
     for name in ("_history_date", "_history_user", "_change_reason"):
         if hasattr(source, name):
             setattr(target, name, getattr(source, name))
-
-
-class ChangesetHistory(models.Model):
-    """The writing changeset's foreign key, shared by generated history models and retained statements."""
-
-    changeset = models.ForeignKey(
-        changeset_model_label(),
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="+",
-    )
-
-    class Meta:
-        abstract = True
 
 
 class ModelHistoricalQuerySet[T: models.Model](HistoricalQuerySet[T]):
@@ -168,6 +154,8 @@ class ModelHistory(HistoricalRecords):
         kwargs.setdefault("historical_queryset", ModelHistoricalQuerySet)
         kwargs.setdefault("bases", (ChangesetHistory,))
         super().__init__(*args, **kwargs)
+        if not any(issubclass(base, ChangesetHistory) for base in self.bases):
+            self.bases = tuple(base for base in self.bases if base is not models.Model) + (ChangesetHistory,)
 
     def contribute_to_class(self, cls: Any, name: str) -> None:
         super().contribute_to_class(cls, name)
@@ -432,7 +420,7 @@ class ModelHistory(HistoricalRecords):
 
     def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:
         extra = super().get_extra_fields(model, fields)
-        extra["_provenance_history"] = classproperty(lambda cls: self)
+        extra["provenance_history"] = classproperty(lambda cls: self)
         if model._meta.apps is not apps:
             if self.user_id_field is None and self.user_model is None:
                 user = get_user_model()

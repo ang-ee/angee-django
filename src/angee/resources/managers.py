@@ -91,7 +91,10 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
             prefix, separator, _encoded = public_id.partition("_")
             if separator:
                 identity = SqidField(
-                    real_field_name="id", prefix=f"{prefix}_", min_length=sqid.min_length, alphabet=sqid.alphabet,
+                    real_field_name="id",
+                    prefix=f"{prefix}_",
+                    min_length=sqid.min_length,
+                    alphabet=sqid.alphabet,
                 )
                 value = identity.public_id_to_value(public_id)
                 if value is not None:
@@ -110,7 +113,8 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
         label = model_label.lower()
         index = installed_components("angee.addons")
         owners = [
-            config.name for config in apps.get_app_configs()
+            config.name
+            for config in apps.get_app_configs()
             if label in {retired.lower() for retired in retired_models_for(config, index=index)}
         ]
         return self.seeded_target_keys(model_label, source_addons=owners) if owners else set()
@@ -206,7 +210,13 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         return ledger
 
     def bind_instance(
-        self, *, addon: Any, xref: str, instance: models.Model, source: str, replace: bool = False,
+        self,
+        *,
+        addon: Any,
+        xref: str,
+        instance: models.Model,
+        source: str,
+        replace: bool = False,
     ) -> None:
         """Ledger an owner-created installation identity; only ``replace`` retargets a bound xref."""
 
@@ -253,7 +263,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
 
         selected_addons = tuple(addons)
         entries, row_groups, grant_groups, kind_declarations = self._groups_for(
-            selected_addons, tiers=tiers,
+            selected_addons,
+            tiers=tiers,
         )
         self._check_xref_collisions(row_groups)
         self._import_groups(
@@ -267,7 +278,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         return ValidationResult(
             checked_files=len(entries),
             checked_rows=(
-                sum(len(group.dataset) for group in row_groups) + sum(len(group.rows) for group in grant_groups)
+                sum(len(group.dataset) for group in row_groups)
+                + sum(len(group.rows) for group in grant_groups)
                 + sum(len(rows) for rows in kind_declarations.values())
             ),
         )
@@ -287,7 +299,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
 
         selected_addons = tuple(addons)
         entries, row_groups, grant_groups, kind_declarations = self._groups_for(
-            selected_addons, tiers=active_tiers,
+            selected_addons,
+            tiers=active_tiers,
         )
         self._check_xref_collisions(row_groups)
         return self._import_groups(
@@ -547,9 +560,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                 groups.extend(entry.read_groups())
             else:
                 declarations[entry.kind].extend(resolve_impl_class(ResourceEntryKind, entry.kind).read(entry))
-        return entries, tuple(groups), tuple(grant_groups), {
-            kind: tuple(rows) for kind, rows in declarations.items()
-        }
+        return entries, tuple(groups), tuple(grant_groups), {kind: tuple(rows) for kind, rows in declarations.items()}
 
     def _entries_for(
         self,
@@ -590,8 +601,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     def _excluded_entry_keys(self) -> frozenset[EntryKey]:
         """Return project-excluded resource entry keys from settings."""
 
-        # Native Django hosts can load resources without composed project exclusions.
-        raw = getattr(settings, "ANGEE_RESOURCE_EXCLUDED_ENTRIES", ())
+        raw = settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES
         if raw is None:
             return frozenset()
         if isinstance(raw, str) or not isinstance(raw, Iterable):

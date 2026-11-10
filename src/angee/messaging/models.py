@@ -44,6 +44,7 @@ from django.views.decorators.debug import sensitive_variables
 from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
+    SubjectRef,
     current_actor,
     system_context,
     to_subject_ref,
@@ -756,28 +757,30 @@ class Thread(
 
         return self.host_broadcasts_changes or not self.is_record_attached()
 
-    def grant_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
-        """Grant an existing user direct ``reader`` access through the declared share surface."""
+    @staticmethod
+    def _reader_subject(*, user: models.Model | None, user_id: Any) -> SubjectRef:
+        """Resolve an existing user before changing direct reader access."""
 
         if user is None and user_id is not None:
             user = get_user_model()._base_manager.get(pk=user_id)
+        return user_subject_ref(user=user, user_id=user_id)
+
+    def grant_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
+        """Grant an existing user direct ``reader`` access through the declared share surface."""
 
         self._grant_declared_record_access(
             Thread.record_access_permission,
             "reader",
-            user_subject_ref(user=user, user_id=user_id),
+            self._reader_subject(user=user, user_id=user_id),
         )
 
     def revoke_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
         """Revoke an existing user's direct ``reader`` access (mirror of :meth:`grant_reader`)."""
 
-        if user is None and user_id is not None:
-            user = get_user_model()._base_manager.get(pk=user_id)
-
         self._revoke_declared_record_access(
             Thread.record_access_permission,
             "reader",
-            user_subject_ref(user=user, user_id=user_id),
+            self._reader_subject(user=user, user_id=user_id),
         )
 
 

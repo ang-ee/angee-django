@@ -24,7 +24,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.signed_cookies import SessionStore
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
-from django.db import connection
+from django.db import connection, transaction
 from django.test import override_settings
 from django.utils import timezone
 from jwt.algorithms import RSAAlgorithm
@@ -43,7 +43,7 @@ from angee.iam_integrate_oidc.providers import GoogleType
 from angee.integrate import schema as integrate_schema
 from angee.integrate.connect import complete_account_connect
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import _PinnedBackend
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS, _PinnedBackend
 from angee.integrate.models import AccountStatus, CredentialStatus
 from angee.integrate.oauth import client as oauth_protocol
 from angee.integrate.oauth import discovery as oauth_discovery
@@ -719,35 +719,53 @@ def test_jwks_client_is_cached_per_uri(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_jwks_fetch_uses_pinned_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """PyJWT owns key parsing, while Angee owns the JWKS HTTP transport."""
 
-    requests: list[tuple[str, dict[str, str], bool, int]] = []
+    requests: list[httpx2.Request] = []
 
-    class FakeHttpClient:
-        def get(
-            self,
-            url: str,
-            *,
-            headers: dict[str, str],
-            allow_private: bool,
-            timeout: int,
-            **kwargs: object,
-        ) -> httpx2.Response:
-            del kwargs
-            requests.append((url, headers, allow_private, timeout))
-            return httpx2.Response(200, json={"keys": []})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(200, json={"keys": []})
 
-    monkeypatch.setattr(oidc_protocol, "HttpClient", FakeHttpClient)
+    def transport(*, allow_private: bool) -> httpx2.BaseTransport:
+        assert allow_private is True
+        return httpx2.MockTransport(handler)
 
+    monkeypatch.setattr(oauth_protocol.HttpClient, "transport_factory", staticmethod(transport))
     data = oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks").fetch_data()
 
     assert data == {"keys": []}
-    assert requests == [
-        (
-            "https://issuer.example/jwks",
-            {"Accept": "application/json", "User-Agent": oidc_protocol.USER_AGENT},
-            True,
-            oidc_protocol.HTTP_TIMEOUT_SECONDS,
-        )
-    ]
+    [request] = requests
+    assert str(request.url) == "https://issuer.example/jwks"
+    assert request.headers["Accept"] == "application/json"
+    assert request.headers["User-Agent"] == oauth_protocol.USER_AGENT
+    assert request.extensions["timeout"] == dict.fromkeys(("connect", "read", "write", "pool"), HTTP_TIMEOUT_SECONDS)
+
+
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        ("transport", httpx2.ConnectError),
+        ("http", httpx2.HTTPStatusError),
+        ("json", ValueError),
+    ],
+)
+def test_jwks_fetch_maps_oauth_get_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    error: type[Exception],
+) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if failure == "transport":
+            raise httpx2.ConnectError("unavailable", request=request)
+        return httpx2.Response(503 if failure == "http" else 200, text="not json")
+
+    monkeypatch.setattr(
+        oauth_protocol.HttpClient,
+        "transport_factory",
+        staticmethod(lambda **kw: httpx2.MockTransport(handler)),
+    )
+    with pytest.raises(oidc_protocol.PyJWKClientConnectionError) as refused:
+        oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks").fetch_data()
+    assert isinstance(refused.value.__cause__, error)
 
 
 def test_pinned_jwks_set_is_parsed_and_cached_by_pyjwt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -757,13 +775,15 @@ def test_pinned_jwks_set_is_parsed_and_cached_by_pyjwt(monkeypatch: pytest.Monke
     public_jwk = {**RSAAlgorithm.to_jwk(public_key, as_dict=True), "kid": "signing-key", "use": "sig"}
     fetches: list[str] = []
 
-    class FakeHttpClient:
-        def get(self, url: str, **kwargs: object) -> httpx2.Response:
-            del kwargs
-            fetches.append(url)
-            return httpx2.Response(200, json={"keys": [public_jwk]})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        fetches.append(str(request.url))
+        return httpx2.Response(200, json={"keys": [public_jwk]})
 
-    monkeypatch.setattr(oidc_protocol, "HttpClient", FakeHttpClient)
+    monkeypatch.setattr(
+        oauth_protocol.HttpClient,
+        "transport_factory",
+        staticmethod(lambda **kw: httpx2.MockTransport(handler)),
+    )
     client = oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks")
 
     first = client.get_jwk_set()
@@ -1380,7 +1400,7 @@ def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
     if deferred:
         credential = Credential._base_manager.only("pk").get(pk=credential.pk)
 
-    with pytest.raises(ValidationError) as exc_info:
+    with transaction.atomic(), pytest.raises(ValidationError) as exc_info:
         Credential.objects.prepare_disconnect(credential)
 
     assert exc_info.value.code == "only_sign_in_method"
@@ -1424,7 +1444,8 @@ def test_credential_disconnect_preserves_other_sign_in_methods(composed_tables: 
                 external_account=other_account,
             )
 
-    credential.check_disconnect()
+    with transaction.atomic():
+        credential.check_disconnect()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1445,7 +1466,7 @@ def test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relati
     credential = Credential.objects.upsert_for_user(
         user, client, "oauth", {"access_token": "token"}, external_account=account
     )
-    with system_context(reason="test oidc cached sign-in facts"):
+    with system_context(reason="test oidc cached sign-in facts"), transaction.atomic():
         cached = Credential._base_manager.select_related("user", "oauth_client").get(pk=credential.pk)
         if changed_field == "password":
             assert cached.user.has_usable_password() is previous
@@ -2361,7 +2382,7 @@ def test_disconnect_does_not_count_unusable_oidc_alternatives(composed_tables: N
             type(other_client).objects.filter(pk=other_client.pk).update(is_enabled=False)
         else:
             type(other).objects.filter(pk=other.pk).update(status=unusable)
-    with pytest.raises(ValidationError) as caught:
+    with transaction.atomic(), pytest.raises(ValidationError) as caught:
         credential.check_disconnect()
     assert caught.value.code == "only_sign_in_method"
 

@@ -64,8 +64,8 @@ How the ontology maps to this addon.
   that concrete record. Concern links remain canonical; application locks and
   writes through the named model's permission owner. Omission uses the canonical
   model. The card uses the action model's field metadata.
-  A model declares callable proposal methods once in its class-level
-  `decision_methods` tuple. Ask-time validation requires a declared method with
+  A model inherits `decisions.mixins.DecisionTargetMixin` and declares callable
+  proposal methods once in its `decision_methods` tuple. Ask-time validation requires a declared method with
   arguments supplied by the proposal, rejects `delete`, and checks declared keyword
   `arguments`. Field values, readable foreign-key identities and editability are
   validated when asking; state and server-owned fields cannot be written, and

@@ -5,25 +5,19 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from itertools import batched
-from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from django.db import NotSupportedError, connections, models, transaction
 from simple_history.exceptions import NotHistoricalModelError
 from simple_history.utils import get_history_manager_for_model
 
+from angee.provenance.bases import ChangesetHistory
 from angee.provenance.context import current_changeset, write_group
 
 if TYPE_CHECKING:
     from angee.provenance.history import ModelHistory
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
-
-
-@runtime_checkable
-class _CapturedHistory(Protocol):
-    """The capture declaration installed on generated rows by ModelHistory."""
-
-    _provenance_history: ModelHistory | None = None
 
 
 def model_history(model: type[models.Model]) -> ModelHistory | None:
@@ -34,7 +28,7 @@ def model_history(model: type[models.Model]) -> ModelHistory | None:
         manager = get_history_manager_for_model(concrete)
     except NotHistoricalModelError:
         return None
-    return manager.model._provenance_history if isinstance(manager.model, _CapturedHistory) else None
+    return manager.model.provenance_history if issubclass(manager.model, ChangesetHistory) else None
 
 
 class HistoryQuerySet(models.QuerySet[_ModelT]):

@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, ClassVar, Protocol, runtime_checkable
+from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
@@ -135,23 +135,3 @@ def _forget_kinds(*, setting: str, **_: Any) -> None:
 def actor_label(user: Any) -> str:
     """A selected user's display label, empty when no actor is recorded."""
     return str(user) if user is not None else ""
-
-
-
-
-@runtime_checkable
-class TimelineSubject(Protocol):
-    """Optional model declaration controlling admission to its own timeline."""
-
-    timeline_subject: ClassVar[bool] = True
-
-
-def timeline_subject(model: type[models.Model]) -> bool:
-    """Whether a model's rows have a timeline of their own.
-
-    A record declares ``timeline_subject = False`` when its rows are bookkeeping read
-    through another record (a sync link's history is evidence on its target), so no kind
-    admits them to the chronology.
-    """
-
-    return bool(model.timeline_subject if isinstance(model, TimelineSubject) else TimelineSubject.timeline_subject)

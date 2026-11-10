@@ -10,6 +10,93 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Source retirement: `ChangesetQuerySet.history_written_only_by(record, predicate)`
+  shares document history selection with `touching_filter`, requires a creation
+  snapshot and refuses unmatched or unattributed writes. The reference owner adds
+  `owned_reference_parts` and `has_live_references`; Statement declares retained
+  authorship/current-state policy. `PersistenceMixin.owned_relations` declares
+  document parts once for history and live-reference retirement. Stored relationship
+  exclusions compose `named_in_relationships(exclude=...)`.
+  Creation undo uses the same live-reference owner without an authorship exclusion.
+- Stream apply contract: `ApplyResult.mapping_version` is removed. The driver
+  stamps the stream declaration's `mapping_version` at promotion and quarantine;
+  `RecordChange` and `LocalChange` carry no version copies. A lower declaration
+  updates the active stream mapping without resetting progress; a later increase
+  replays rollback output. Mapping changes fence already-extracted pages. Notion
+  and the framework's adapter fixtures use this contract.
+- Integration branding: the existing public vendor projection carries slug and
+  display name together. Unnamed integration and inbox channel labels fall back
+  to that branding; stable labels and connection selection compose the same
+  owner. GraphQL annotates the branding instead of prefetching a protected Vendor.
+  Fallback branding is cached per instance, including reads by `__str__`;
+  the Vendor catalogue remains admin-only. Record-reference guards explicitly
+  allow one bounded represented-content-type read per compile, included in
+  statement budgets; declaration and optimizer probes remain query-free.
+- Reader scopes: `base.permissions.reader_queryset(source, actor)` pins a given
+  actor and otherwise follows ambient scope. It accepts a model or preserves an
+  existing queryset's subtype and filters. Relation reads, record-target
+  prefetches, sender-name projections, party/circle reads, history, statement
+  endpoints and evidence display compose it; same-model source querysets used
+  only for reader selection are removed. Evidence admission still requires an
+  explicit actor.
+- Query checks: `angee.base.testing.queries` classifies captured SQL by its outer
+  statement, including CTE-prefixed reads and writes; `angee-base[testing]`
+  declares `sqlparse>=0.6,<0.7`. Its shared `capture_planner_memory` measures
+  parameterized statements with PostgreSQL 17's `EXPLAIN (MEMORY)`. Timeline,
+  inbox parts, and composed member person/projects reads now gate planner
+  allocation; document gates sum the separately planned SELECT allocations.
+  SQLite statement/text ceilings remain. Inbox SQL also bounds every message-table
+  permission CTE body: one on PostgreSQL, five distinct permission stages on SQLite.
+- OIDC: JWKS fetches compose `integrate.oauth.client.oauth_get_json`, sharing
+  discovery/userinfo headers and private-provider policy. Transport, status and
+  JSON failures map to `PyJWKClientConnectionError`; PyJWT retains key parsing
+  and JWK-set caching.
+  Direct disconnect-guard tests now hold the caller-owned transaction through
+  admission, matching production, and run in PostgreSQL CI so user locks are exercised.
+- Statements: `StatementsMixin.statements` declares the subject-bound statement
+  descriptor contract for donors; `StatementRecords` installs the concrete accessor.
+- `StateTransitionsMixin.transition_fields` replaces `_transition_fields` as the
+  public set of companion field names, defaulting to `frozenset()`.
+  `save_state` writes them with the guarded state and resets the collection even
+  when its concurrency check or save fails. Callers assign/read the attribute
+  directly and reset it with `frozenset()`, never `hasattr`/`delattr`.
+- IAM authentication checks Django's configured `get_user_model()` so composed
+  and swapped user models share the active-person login contract.
+- Jobs consumes provenance's optional `ANGEE_CELERY_TASK_CLASS` setting; without
+  provenance's scalar default it uses Celery's native `DjangoTask`.
+- Declaration owners: `decisions.mixins.DecisionTargetMixin.decision_methods`
+  defaults to `()`; declarers inherit it. Party identity review contributes its
+  opt-in through `workflows_parties`, keeping parties independent of decisions.
+  `HistoryDocumentMixin.timeline_subject` defaults to `True` and controls
+  provenance timeline admission.
+  `ChangesetHistory.provenance_history` defaults to `None` until the native
+  history factory binds its capture declaration; `ModelHistory` composes it
+  alongside custom history bases. `ImplBase.key` retains its `""` default;
+  `StorageBackend.key` explicitly defaults to `""` for registry-only native
+  backends, while nonempty keys must match their registry entry.
+- `StatementField` is an explicit Django field base with a `for_statement`
+  default returning the copied field. Custom adapters inherit it; ordinary
+  fields are unchanged. Document-save backends extend `AngeeHasuraWriteBackend`.
+- `base.addons.addon_contribution` reads ordered iterables, mappings and callable
+  exports with typed return variants. Mapping factories can require a callable;
+  callable exports are returned without invocation. ASGI protocols, GraphQL
+  schemas and MCP registrars share this owner; malformed present exports still
+  fail, and absent exports contribute nothing.
+- Autoconfig owns optional settings defaults. Bare settings modules using these
+  capabilities must explicitly declare `ANGEE_BUILTIN_MCP_URL`,
+  `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, `ANGEE_CHANGESET_MODEL`,
+  `ANGEE_ADDON_INSTALLER_BACKEND`, `ANGEE_OPENCODE_OAUTH_ENABLED`, and the
+  operator's `ANGEE_OPERATOR_GRAPHQL_ENDPOINT`, `ANGEE_OPERATOR_URL`,
+  `ANGEE_OPERATOR_TOKEN` and `ANGEE_OPERATOR_RESTART_JOB`; readers no longer
+  invent missing-setting defaults.
+  Money declares `ANGEE_MONEY_REFERENCE_CURRENCY=None`; conversion still requires
+  a project-selected currency. Named hooks are optional: an absent setting means
+  inactive because its declaring addon may not be installed, and the shared hook
+  resolver then contributes no callable. Live implementation registries and
+  transition policies remain required inputs; empty registries and `None` policy
+  overlays express inactivity. The optional provenance typing plugin leaves its
+  declared types unchanged when no storage binding is configured. Retained
+  migration fields may outlive retired settings.
 - Base: `AngeeModel` declares `change_read_resource`, `change_related_records`
   and `change_batch_targets`; adapters dispatch through these contracts.
   `AngeeQuerySetMixin` and `SCHEMA_BINDING` replace their underscored names.
@@ -20,9 +107,10 @@ live in code docstrings.
   reads are unscoped. `prefetched_objects` reads Django's materialized ordinary
   relation cache without evaluation (`None` is a miss, `[]` an empty hit).
   `base.permissions.user_subject_ref` is the canonical inverse of `actor_user_id`;
-  bare user keys no longer trigger a database read. Messaging's historical import
-  remains an alias; thread reader grants and revocations still require an existing
-  user explicitly. `retained_reference_exists(cls, lookup)` drops the unused
+  bare user keys no longer trigger a database read. Thread reader grants and
+  revocations share one existing-user lookup; the unused messaging alias is removed.
+  Proposal responders and storage's wildcard share compose the canonical owner.
+  `retained_reference_exists(cls, lookup)` drops the unused
   `record` argument; overrides and callers must use the lookup-only signature.
 - Base writes: immutable changed values retain their identity; mutable values
   are copied before observers run. `bulk_updated` carries only `instances` and
@@ -117,9 +205,11 @@ live in code docstrings.
   mapping revision; a real increase opens one baseline generation, preserving
   links and resetting the cursor. `SyncStream.mapping_version` is nullable with
   no default: an unknown version is initialized under the integration lock from
-  the minimum `RecordLink.mapping_version`, or the declared version when there
-  are no links. Deploying streams whose links are already current preserves
-  progress and closed snapshots; an older link triggers exactly one replay.
+  the minimum applied `RecordLink.mapping_version` (`applied_at IS NOT NULL`), or
+  the declared version when there are no applied links. Never-applied observations,
+  quarantines and pinned links do not lower the seed. Deploying streams whose
+  applied links are already current preserves progress and closed snapshots; an
+  older applied link triggers exactly one replay.
   Projects adding this column must generate a nullable `AddField` with no default
   so existing streams start unknown. Hosts retaining the earlier column addition
   need `AlterField` to `PositiveIntegerField(null=True, blank=True)`, removing
@@ -388,7 +478,18 @@ live in code docstrings.
 
 ## Unreleased — django-zed-rebac 0.32
 
-- The base addon requires `django-zed-rebac>=0.32.0,<0.33` (GraphQL its
+- In 0.32.2, frozen permission id sets compile with Django's compact subquery
+  aliases, including recursive role helpers. This removes the repeated full-table
+  names introduced in 0.32.0 while preserving id-set sharing and statement counts.
+  SQL-text and planner-memory ceilings follow the measured reduction; content-hash
+  id-set names remain.
+
+- In 0.32.1, cross-row validation retains queryset-level bypass authority instead
+  of losing it during save admission. Instance sudo audit deduplication follows
+  transaction/savepoint rollback, so a rolled-back audit cannot suppress the next
+  committed bypass entry.
+
+- The base addon requires `django-zed-rebac>=0.32.2,<0.33` (GraphQL its
   `strawberry-django` extra, the dev group its `caveats` extra); the engine now
   requires `django-cte>=5.0.1,<5.1` (locked at the tested 5.0.1).
 - Equal permission id sets across embedded SELECT scopes share one outer

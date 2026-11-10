@@ -11,12 +11,12 @@ from django.db import connection, models, transaction
 from django.db.models import OuterRef
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import MissingActorError, SubjectRef, system_context
+from rebac import MissingActorError, SubjectRef, actor_context, system_context
 from rebac.managers import TrackedQuerySet
 
 from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.base import AngeeModel
-from angee.base.permissions import relation_read_queryset, require_rebac_queryset
+from angee.base.permissions import reader_queryset, relation_read_queryset, require_rebac_queryset
 from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
 from tests.conftest import Drive, File, Integration
 from tests.tables import model_tables
@@ -274,6 +274,22 @@ def test_an_explicit_none_reader_fails_closed_where_an_omitted_one_reads_ambient
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("system_query_tables")
+def test_optional_reader_pins_an_actor_and_otherwise_uses_ambient_scope() -> None:
+    actor = SubjectRef.of("auth/user", "1")
+    other = SubjectRef.of("auth/user", "2")
+    SystemQueryThing.system_queryset().create(name="private")
+    with system_context(reason="test.reader_queryset"):
+        assert reader_queryset(SystemQueryThing, None).count() == 1
+        assert reader_queryset(SystemQueryThing, actor).actor() == actor
+    with actor_context(other):
+        assert reader_queryset(SystemQueryThing, actor).actor() == actor
+        assert reader_queryset(SystemQueryThing, None).count() == 1
+    with pytest.raises(MissingActorError):
+        reader_queryset(SystemQueryThing, None).count()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
 def test_a_relation_read_reads_as_its_source_reads() -> None:
     """``relation_read_queryset``: the source's actor, else the ambient scope; an emptied source reads nothing."""
 
@@ -311,3 +327,14 @@ def test_lock_subject_preparation_keeps_foreign_key_values_and_caches_separate(r
     untouched = row.prepare_lock_subject({})
     assert untouched.vendor_id == original.pk
     assert not field.is_cached(untouched)
+
+
+def test_reader_queryset_preserves_custom_queryset_and_filters():
+    actor = SubjectRef.of("auth/user", "1")
+    source = GuardedSystemQueryThing.objects.filter(name="retained")
+    scoped = reader_queryset(source, actor)
+    assert isinstance(scoped, GuardedSystemQuerySet)
+    assert scoped.actor() == actor
+    assert scoped.query.where == source.query.where
+    with pytest.raises(TypeError, match="name is guarded"):
+        scoped.update(name="refused")

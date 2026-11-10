@@ -30,9 +30,7 @@ def test_strictness_is_only_storage_policy(settings, monkeypatch):
     assert current_changeset(required=True) is None
 
 
-def test_generic_context_has_no_host_default_model(settings):
+def test_bare_settings_must_declare_the_storage_binding(settings):
     del settings.ANGEE_CHANGESET_MODEL
-    assert changeset_model_label() == ""
-    assert current_changeset() is None
-    with pytest.raises(ChangesetRequired):
-        current_changeset(required=True)
+    with pytest.raises(AttributeError):
+        changeset_model_label()

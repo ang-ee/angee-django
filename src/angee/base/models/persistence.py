@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from django.db import models
 from rebac.managers import RebacQuerySet
@@ -14,6 +14,9 @@ from angee.base.querysets import row_lock_paths
 
 class PersistenceMixin(models.Model):
     """Model-owned persistence reads and shared cooperative lifecycle terminals."""
+
+    owned_relations: ClassVar[tuple[str, ...]] = ()
+    """Reverse foreign-key collections whose rows are parts of this record."""
 
     class Meta:
         abstract = True

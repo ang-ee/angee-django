@@ -403,7 +403,6 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                     node.last_edited_time.isoformat(),
                     target=target,
                     projection=self._projection(target),
-                    mapping_version=self.mapping_version,
                     mapped_payload=mapped,
                     dependency_digest=canonical_json_sha256([mapped["parent"], resolved_links]),
                     tombstone=node.is_trashed,
@@ -448,7 +447,6 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                     target=target,
                     mapped_payload=self._projection(target),
                     dependency_digest=record.dependency_digest,
-                    mapping_version=record.mapping_version,
                 )
             mapped = record.mapped_payload
             parent = pages.with_actor(owner).get(pk=mapped["parent"], vault=vault) if mapped["parent"] else None
@@ -475,7 +473,6 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                 target=target,
                 mapped_payload=mapped,
                 dependency_digest=record.dependency_digest,
-                mapping_version=record.mapping_version,
             )
 
     def source_url(self, link: Any) -> str:

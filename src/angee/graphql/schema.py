@@ -9,7 +9,8 @@ import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
-from typing import Any, ClassVar, Protocol, cast, runtime_checkable
+from importlib import import_module
+from typing import Any, ClassVar, cast
 
 import strawberry
 from django.apps import AppConfig, apps
@@ -35,7 +36,7 @@ from strawberry.types.scalar import ScalarDefinition
 from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
-from angee.base.addons import addon_facts, is_angee_addon, optional_addon_module
+from angee.base.addons import addon_contribution, addon_facts, is_angee_addon, optional_addon_module
 from angee.base.exceptions import DomainError, classify_error, validation_error
 from angee.base.models.locks import StaleRevisionError
 from angee.base.permissions import require_rebac_queryset
@@ -108,8 +109,7 @@ class AngeeSchema(strawberry.Schema):
 
         return [
             *super().get_extensions(sync=sync),
-            *(import_string(path)(sync=sync)() for path in
-              settings.ANGEE_GRAPHQL_EXTENSION_FACTORIES),
+            *(import_string(path)(sync=sync)() for path in settings.ANGEE_GRAPHQL_EXTENSION_FACTORIES),
         ]
 
     @lru_cache
@@ -626,15 +626,15 @@ class GraphQLSchemas:
 
 
 def schema_parts_for(
-    app_config: AppConfig, *, index: InstalledComponents | None = None,
+    app_config: AppConfig,
+    *,
+    index: InstalledComponents | None = None,
 ) -> dict[str, SchemaParts]:
     """Return normalized GraphQL schema parts declared by one addon."""
 
     raw_schemas = _raw_schemas(app_config, index=installed_components("angee.addons") if index is None else index)
     if raw_schemas is None:
         return {}
-    if not isinstance(raw_schemas, Mapping):
-        raise ImproperlyConfigured(f"{app_config.name}.schemas must resolve to a mapping")
 
     parts: dict[str, SchemaParts] = {}
     for raw_name, raw_entry in raw_schemas.items():
@@ -645,14 +645,7 @@ def schema_parts_for(
     return parts
 
 
-@runtime_checkable
-class _SchemaModule(Protocol):
-    """The optional conventional schema declaration; present values must be mappings."""
-
-    schemas: Mapping[str, Mapping[str, object]] | None = None
-
-
-def _raw_schemas(app_config: AppConfig, *, index: InstalledComponents) -> object:
+def _raw_schemas(app_config: AppConfig, *, index: InstalledComponents) -> Mapping[str, Any] | None:
     """Return the raw schema declaration object for one addon, when present."""
 
     if not is_angee_addon(app_config, index=index):
@@ -664,17 +657,18 @@ def _raw_schemas(app_config: AppConfig, *, index: InstalledComponents) -> object
             raise ImproperlyConfigured(f"{app_config.name}.graphql.schema must be a dotted reference")
         path = reference if reference.startswith(f"{app_config.name}.") else f"{app_config.name}.{reference}"
         try:
-            schemas = import_string(path)
+            module_path, name = path.rsplit(".", 1)
+            module = import_module(module_path)
+            if not hasattr(module, name):
+                raise ImportError(f"{path} is not exported")
+            return addon_contribution(module, name, kind="mapping", allow_callable=False)
         except ImportError as error:
             raise ImproperlyConfigured(f"{app_config.name}.graphql.schema references {path!r}") from error
     else:
-        module = optional_addon_module(app_config, "schema", index=index)
-        if not isinstance(module, _SchemaModule):
+        conventional = optional_addon_module(app_config, "schema", index=index)
+        if conventional is None:
             return None
-        schemas = module.schemas
-    if schemas is None:
-        raise ImproperlyConfigured(f"{app_config.name}.schemas must resolve to a mapping")
-    return schemas
+        return addon_contribution(conventional, "schemas", kind="mapping", allow_callable=False)
 
 
 def _schema_part_values(

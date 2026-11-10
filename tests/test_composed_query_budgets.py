@@ -8,12 +8,28 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from django.db import connection
+
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
-def test_composed_addon_query_budgets(tmp_path: Path) -> None:
+@pytest.mark.parametrize("postgresql", [False, True], ids=["sqlite", "postgresql"])
+def test_composed_addon_query_budgets(tmp_path: Path, postgresql: bool) -> None:
     """Keep actual HTTP/model query regressions in the normal pytest gate."""
 
+    if postgresql and connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL planner budget")
+    labels = (
+        ("tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests.test_member_reads_planner_memory",)
+        if postgresql
+        else (
+            "example.notes.tests.test_query_budgets",
+            "angee.projects.tests.test_query_budgets",
+            "tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests."
+            "test_console_reads_stay_within_their_fixed_ceilings",
+        )
+    )
     root = Path(__file__).resolve().parents[1]
     report = tmp_path / "query-budgets.json"
     env = dict(os.environ)
@@ -26,12 +42,8 @@ def test_composed_addon_query_budgets(tmp_path: Path) -> None:
             str(tmp_path / "runtime"),
             "--action",
             "tests",
-            "--test-label",
-            "example.notes.tests.test_query_budgets",
-            "--test-label",
-            "angee.projects.tests.test_query_budgets",
-            "--test-label",
-            "tests.native_graphql_document_budgets",
+            *(["--test-postgresql"] if postgresql else []),
+            *(argument for label in labels for argument in ("--test-label", label)),
             "--output",
             str(report),
         ],
@@ -43,4 +55,4 @@ def test_composed_addon_query_budgets(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, f"composed query budgets failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "postgresql" if postgresql else "sqlite"}

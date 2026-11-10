@@ -31,7 +31,12 @@ from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.identity import PublicIdentity, SqidMixin, public_id_of
 from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.locks import RowLockMixin
-from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
+from angee.base.models.merge_references import (
+    MergeContractMixin,
+    has_live_references,
+    named_in_relationships,
+    references,
+)
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.transitions import StateTransitionsMixin
 from angee.base.permissions import DirectRecordAccess, declared_grants, declared_rebac_definition, instance_actor
@@ -128,15 +133,18 @@ class AngeeModel(
                 position = None
             if isinstance(position, FractionalRankField):
                 moving = [
-                    by_public_id[pid] for pid, values in desired
-                    if pid is not None and values.get(position.name) is not None
+                    by_public_id[pid]
+                    for pid, values in desired
+                    if pid is not None
+                    and values.get(position.name) is not None
                     and position.to_python(values[position.name]) != getattr(by_public_id[pid], position.attname)
                 ]
                 if moving:
                     # Immediate uniqueness forbids cyclic swaps: stage the moving
                     # lines on free ranks, then save their exact final values below.
                     temporary = position.get_temporary_ranks(
-                        moving, (values.get(position.name) for _pid, values in desired),
+                        moving,
+                        (values.get(position.name) for _pid, values in desired),
                     )
                     staged = [copy(line) for line in moving]
                     for line, rank in zip(staged, temporary, strict=True):
@@ -213,14 +221,7 @@ class AngeeModel(
         merge identity but do not prevent removal of its reverted creation.
         """
 
-        live_references = (
-            reference
-            for reference in references(type(self))
-            if reference.blocks_target_delete(type(self))
-        )
-        if named_in_relationships(self) or any(
-            reference.rows(self).exists() for reference in live_references
-        ):
+        if has_live_references(self):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()
 
@@ -466,7 +467,8 @@ class AngeeModel(
         return self._stored_record_access(selected)
 
     def _declared_record_access(
-        self, relations: Sequence[str] | None,
+        self,
+        relations: Sequence[str] | None,
     ) -> tuple[Mapping[str, str], tuple[str, ...]]:
         """The model's share declaration and the requested subset of its relations."""
 

@@ -20,7 +20,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
 | File or module | Owns | Reference |
 |---|---|---|
-| `<addon>/models.py` | `HistoryMixin` composition, captured manager, `history_revert_permission`, `history_relations`, `statements` declaration | `TagManager`, `Tag` in `src/angee/tags/models.py`, `StatementSubject` in `tests/statement_models.py` |
+| `<addon>/models.py` | `HistoryMixin` composition, captured manager, `history_revert_permission`, `owned_relations`, `statements` declaration | `TagManager`, `Tag` in `src/angee/tags/models.py`, `StatementSubject` in `tests/statement_models.py` |
 | `<addon>/pyproject.toml` | `[project].dependencies = [..., "angee-provenance>=3,<4"]` | `src/angee/tags/pyproject.toml` |
 | `src/angee/provenance/contrib/angee/history.py` | `HistoryMixin`, `ModelHistory`, `HistoryDocumentMixin`, `record_history` | docstrings |
 | `src/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager`, `AngeeHistoryUnscopedManager`, `AngeeHistoryMergeableUnscopedManager`; `AngeeHistoryQuerySet` | docstrings |
@@ -67,8 +67,8 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
    ```
 
    Without a custom queryset the mixin's defaults already bind `objects` and `_angee_base` (`HistoryMixin` in `contrib/angee/history.py`).
-   Vary only `history_revert_permission` (default `write`) and `history_relations` for owned reverse-FK document parts
-   (`Project.history_relations` in `src/angee/projects/models.py`). **Owner rule:** the mixin owns capture, redaction-safe snapshots, revert
+   Vary only `history_revert_permission` (default `write`) and `owned_relations` for owned reverse-FK document parts
+   (`Project.owned_relations` in `src/angee/projects/models.py`). **Owner rule:** the mixin owns capture, redaction-safe snapshots, revert
    admission and the table inventory; a model names only what varies ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives)).
 
 3. **Let migrations follow the swappable storage.** Django's `makemigrations` on the built runtime owns the history tables;
@@ -179,7 +179,7 @@ statement tables.
 - A queryset update writing only excluded columns records no version; an MTI child save records the child's history only ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives), "`HistoryMixin` excludes `GeneratedField`").
 - One changeset row per writing thread and actor: a pool thread needs `copy_context().run` or a `process=True` boundary ([README: Boundaries](../../README.md#boundaries)).
 - Management commands need the server launcher and provenance's `ANGEE_SERVER_COMMAND_CONTEXT` contribution; re-render an obsolete entrypoint ([README: Boundaries](../../README.md#boundaries)).
-- `history_relations` are document parts with their own capture and read gates, not arbitrary references (`HistoryMixin.history_relations` in `contrib/angee/history.py`).
+- `owned_relations` are document parts with their own capture and read gates, not arbitrary references (`PersistenceMixin.owned_relations` in `angee.base.models.persistence`).
 - Revert refuses any later touch of a row and reuses trash for created subjects; without `TrashMixin` retained references block removal ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives)).
 - A seed load, merge, revert, MCP tool call or bridge session is a distinct logical write with its own `fresh=True` boundary nested inside the entrypoint's; a write that is not a distinct unit stays under the entrypoint boundary ([README: Boundaries](../../README.md#boundaries) "Separate logical writes").
 

@@ -253,7 +253,7 @@ class OpenCodeRuntime(AgentRuntime):
     WARNING: using a Claude Pro/Max (Personal Plans) OAuth token in OpenCode is against
     Anthropic's terms and risks account suspension — OpenCode removed built-in support in
     1.3.0. Prefer a static API-key credential. OAuth stays disabled until the operator
-    sets :attr:`oauth_enabled_setting` *and* builds the opencode image with the auth plugin
+    sets ``ANGEE_OPENCODE_OAUTH_ENABLED`` *and* builds the opencode image with the auth plugin
     (see ``OPENCODE_ANTHROPIC_AUTH_PLUGIN`` in the service Dockerfile); enabling it without
     the plugin would silently drop Anthropic from the model list.
     """
@@ -271,7 +271,6 @@ class OpenCodeRuntime(AgentRuntime):
     # OAuth needs a community Anthropic plugin in the opencode image. Allowing OAuth without
     # it would silently drop Anthropic from the model list (the original bug), so OAuth is
     # gated on an operator opt-in that pairs with building the image with the plugin.
-    oauth_enabled_setting: ClassVar[str] = "ANGEE_OPENCODE_OAUTH_ENABLED"
 
     def supports_credential(self, credential: Any) -> bool:
         """Allow OAuth only when opted in (plugin bundled) and the token can be refreshed.
@@ -283,8 +282,7 @@ class OpenCodeRuntime(AgentRuntime):
         """
 
         if credential.kind == CredentialKind.OAUTH:
-            # The runtime declares the setting name; this is a dynamic settings lookup.
-            if not bool(getattr(settings, self.oauth_enabled_setting, False)):
+            if not settings.ANGEE_OPENCODE_OAUTH_ENABLED:
                 return False
             return bool(credential.reveal().get("refresh_token"))
         return super().supports_credential(credential)

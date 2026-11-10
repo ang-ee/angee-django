@@ -1,4 +1,5 @@
 """Django field owning trusted implementation-key selection and row accessors."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -86,7 +87,10 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         return errors
 
     def contribute_to_class(
-        self, cls: type[models.Model], name: str, private_only: bool = False,
+        self,
+        cls: type[models.Model],
+        name: str,
+        private_only: bool = False,
     ) -> None:
         """Bind a native get_<field>_impl accessor while Django builds the model."""
         super().contribute_to_class(cls, name, private_only=private_only)
@@ -131,7 +135,11 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         if self.base_class is None:
             # Migration-state fields retain their serialized setting, even after
             # the active base and its setting have changed or been retired.
-            keys = tuple(sorted(impl_registry(self.registry_setting)))
+            try:
+                keys = tuple(sorted(impl_registry(self.registry_setting)))
+            except AttributeError:
+                # Django's retained migration state outlives retired addon settings.
+                keys = ()
             if not keys:
                 default = self._historical_default
                 keys = (default if isinstance(default, str) and default else "historical",)
@@ -140,7 +148,10 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
 
 
 def _resolve_bound_implementation[T: RegistryBase](
-    instance: models.Model, *, field: ImplClassField[T], default: str | None = None,
+    instance: models.Model,
+    *,
+    field: ImplClassField[T],
+    default: str | None = None,
 ) -> type[T]:
     return field.resolve_for(instance, default=default)
 

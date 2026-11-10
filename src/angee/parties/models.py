@@ -55,7 +55,7 @@ from angee.base.models.identity import public_id_of
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin
-from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
@@ -103,6 +103,8 @@ class Party(
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
     rebac_grantable = {"reader": "write", "identity_reader": "write"}
+
+    owned_relations = ("addresses", "relationships")
 
     sqid_prefix = "pty_"
     history = ModelHistory(inherit=True, excluded_fields=("handle_count",))
@@ -336,8 +338,6 @@ class Party(
         if dirty:
             self.save(update_fields=[*dirty, "updated_at"])
 
-    decision_methods = ("apply_identity",)
-
     def apply_identity(
         self,
         *,
@@ -499,8 +499,7 @@ class Party(
         """
 
         def hint() -> models.Prefetch:
-            parties = type(self).objects.all()
-            return (parties.with_actor(actor) if (actor := self.actor()) else parties).circle_members_prefetch()
+            return reader_queryset(type(self).objects.all(), self.actor()).circle_members_prefetch()
 
         memberships = prefetched(self, VISIBLE_CIRCLE_MEMBERS, hint)
         return list(dict.fromkeys(membership.circle.name for membership in memberships))

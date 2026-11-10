@@ -39,6 +39,7 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
+from django.db.models.functions import JSONObject
 from django.utils import timezone
 from django_compose.models import Composable
 from rebac import (
@@ -958,7 +959,11 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         return deleted > 0
 
     def prepare_disconnect(self, credential: Any) -> None:
-        """Validate a disconnect and schedule remote revocation after commit."""
+        """Validate a disconnect and schedule remote revocation after commit.
+
+        The caller holds one transaction through this preparation and deletion,
+        preserving any locks taken by the credential's disconnect guard.
+        """
 
         credential.check_disconnect()
         # Revoking the source grant also releases the resource-specific material
@@ -1207,7 +1212,10 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
 
     def check_disconnect(self) -> None:
-        """Validate explicit disconnect; contributions raise a coded ``ValidationError``."""
+        """Validate inside the caller's disconnect transaction, held through deletion.
+
+        Contributions may lock admission facts and raise a coded ``ValidationError``.
+        """
 
     def revoke_remote(self) -> None:
         """Revoke this credential's OAuth token when its provider supports it."""
@@ -2026,7 +2034,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
     @classmethod
     def oauth_projection_expressions(cls) -> dict[str, Any]:
-        """Read the vendor hint and nearest concrete selector as elevated scalars."""
+        """Project public vendor branding and the nearest concrete selector.
+
+        Branding carries only the slug and display name; it grants no access to
+        the admin-only Vendor catalogue. One subquery carries both brand fields.
+        """
 
         vendor = (
             apps.get_model("integrate", "Vendor")
@@ -2051,24 +2063,34 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 )
             )
         return {
-            "_connection_vendor_slug": Subquery(vendor.values("slug")[:1]),
+            "_connection_vendor_branding": Subquery(
+                vendor.values(branding=JSONObject(slug="slug", display_name="display_name"))[:1],
+            ),
             "_connection_impl_key": models.Case(*selectors, default=models.Value(""), output_field=models.CharField()),
         }
 
-    def connection_vendor_slug(self) -> str:
-        """Read branding used by connection selection without requiring Vendor read."""
+    def connection_vendor_branding(self) -> dict[str, str]:
+        """Read public connection branding without requiring Vendor read.
 
-        if "_connection_vendor_slug" in self.__dict__:
-            return str(self.__dict__["_connection_vendor_slug"] or "")
+        GraphQL supplies the projection; other callers cache both fields after
+        one elevated read per instance without loading the protected related object.
+        """
+
+        if "_connection_vendor_branding" in self.__dict__:
+            return cast(dict[str, str], self.__dict__["_connection_vendor_branding"])
         vendor = apps.get_model("integrate", "Vendor")
-        return str(
-            vendor.objects.sudo(reason="integrate.connection.vendor")
-            .values_list(
-                "slug",
-                flat=True,
-            )
+        branding = (
+            vendor.objects.sudo(reason="integrate.connection.public_vendor")
+            .values("slug", "display_name")
             .get(pk=self.vendor_id)
         )
+        self.__dict__["_connection_vendor_branding"] = branding
+        return cast(dict[str, str], branding)
+
+    def connection_vendor_slug(self) -> str:
+        """Read the public branding slug used by connection selection."""
+
+        return self.connection_vendor_branding()["slug"]
 
     def is_oauth_connectable(self, *, ready_slugs: Collection[str] | None = None) -> bool:
         """Use registration readiness without constructing a runtime or loading secrets.
@@ -2441,7 +2463,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def __str__(self) -> str:
         """Return a stable vendor-qualified integration label."""
 
-        return f"{self.vendor.slug}:{self.public_id}"
+        return f"{self.connection_vendor_slug()}:{self.public_id}"
 
     def prepare_patch(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         """Apply connection/state/ownership verbs before ordinary native field updates.
@@ -2501,7 +2523,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         if self.display_name:
             return str(self.display_name)
-        return f"{self.vendor} ({self.lifecycle})"
+        branding = self.connection_vendor_branding()
+        return f"{branding['display_name'] or branding['slug']} ({self.lifecycle})"
 
     @property
     def record_display_label(self) -> str:
@@ -2518,7 +2541,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def connect(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
         """Mark this integration connected, optionally attaching connection rows."""
 
-        self._transition_fields = self._set_connection_fields(credential=credential, account=account)
+        self.transition_fields = self._set_connection_fields(credential=credential, account=account)
 
     def _set_connection_fields(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> set[str]:
         """Attach connection rows and reset health, returning the fields changed."""
@@ -2610,7 +2633,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         """Disconnect this integration without changing its runtime health."""
 
         self.discovery_retry_at = None
-        self._transition_fields = {"discovery_retry_at"}
+        self.transition_fields = {"discovery_retry_at"}
 
     def set_lifecycle(self, lifecycle: IntegrationLifecycle | str) -> None:
         """Move to one declared lifecycle state using this model's transition methods."""
@@ -4230,8 +4253,11 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         snapshot changes start a new baseline generation with the persisted policy.
         A newer mapping version also starts one baseline: its persisted version
         makes repeated opens idempotent and revisits already-applied identities.
+        A lower declaration preserves progress but becomes the active mapping,
+        so a rollback never stamps old output with a newer version. Returning to
+        the newer declaration then replays any output the rollback may have written.
         An unknown version is seeded from the oldest applied link mapping, or
-        the declaration when no links exist, so deployment alone never replays
+        the declaration when no applied links exist, so deployment alone never replays
         records already applied at the declared version.
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
@@ -4258,7 +4284,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
             if stream.mapping_version is None:
-                applied_version = stream.links.aggregate(version=models.Min("mapping_version"))["version"]
+                applied_version = stream.links.filter(applied_at__isnull=False).aggregate(
+                    version=models.Min("mapping_version"),
+                )["version"]
                 stream.mapping_version = applied_version if applied_version is not None else definition.mapping_version
                 stream.save(update_fields=["mapping_version", "updated_at"])
             if (
@@ -4270,8 +4298,11 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                     stream,
                     direction=definition.direction,
                     snapshot=definition.snapshot,
-                    mapping_version=max(stream.mapping_version, definition.mapping_version),
+                    mapping_version=definition.mapping_version,
                 )
+            elif stream.mapping_version != definition.mapping_version:
+                stream.mapping_version = definition.mapping_version
+                stream.save(update_fields=["mapping_version", "updated_at"])
             change_authority = stream.authoritative != definition.authoritative
         return self.set_authoritative(stream, definition.authoritative) if change_authority else stream
 
@@ -4424,7 +4455,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     """
     generation = models.PositiveIntegerField(default=1)
     mapping_version = models.PositiveIntegerField(null=True, blank=True)
-    """Highest opened mapping version; unknown until seeded by :meth:`SyncStreamManager.current`."""
+    """Active declared mapping version; unknown until seeded by :meth:`SyncStreamManager.current`."""
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
     cursor = models.JSONField(default=dict, blank=True)
@@ -4449,7 +4480,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     def operation_fence(self) -> tuple[Any, ...]:
         """Return all mutable stream facts that external work must fence."""
 
-        return self.state, self.phase, self.cursor, self.reconcile_state, self.resync_required
+        return self.state, self.phase, self.cursor, self.reconcile_state, self.resync_required, self.mapping_version
 
     def accepts_pull(self) -> bool:
         """Whether this generation accepts another inbound page."""

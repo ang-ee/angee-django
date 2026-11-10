@@ -477,11 +477,19 @@ Use these owners instead of maintaining another contract in an addon:
   config parsing rejects non-empty values without a model; model-row validation
   still leaves undeclared legacy config alone. Generated choice metadata stays
   deterministic.
+- Autoconfig-declared settings are read directly; their defaults belong only to
+  the owning addon's autoconfig. Bare Django settings modules must declare the
+  capability inputs they use, including explicit empty values for disabled
+  capabilities. Module contribution readers compose
+  [`addon_contribution`](../../src/angee/base/addons.py) instead of probing
+  module attributes through runtime Protocols.
 - **Hooks are declared callable settings, separate from keyed registries.**
   The owning addon registers native Django checks for its specific callable
   settings. [`angee.base.hooks`](../../src/angee/base/hooks.py) supplies shared import and
   validation with `check_hooks`, `resolve_hook` and ordered `resolve_hooks`.
-  Checks import providers without executing them. There is no second list of
+  An absent optional provider contributes no hook; this is resolved at the shared
+  hook owner, without inventing capability settings in callers. Checks import
+  declared providers without executing them. There is no second list of
   hook-setting names; each capability owns its validation and invocation.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.
@@ -1105,10 +1113,12 @@ operational identities; statement querysets use `applied()` for winning value
 assertions. Source-copy identity remains reversible pair evidence and never
 chooses a transport or moves channel occurrences.
 
-[`HistoryMixin.history_relations`](../../src/angee/provenance/contrib/angee/history.py) declares owned
+[`PersistenceMixin.owned_relations`](../../src/angee/base/models/persistence.py) declares owned
 reverse-FK collections, such as dashboard widgets or project milestones. These
 rows keep their own history and read gates; document history groups their deltas
-with record identity. `history_tables()` is the one concrete-table inventory.
+with record identity. Live-reference retirement uses those same owned collections
+and preserves outside callers of any part. `history_tables()` is the one
+concrete-table inventory.
 `ChangesetQuerySet.touching(record)` and its inverse `records_touched()` own
 document membership, including MTI, pairs and generated statements. Projections
 consume these scopes instead of rediscovering documents from history rows.
@@ -1213,15 +1223,15 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `transaction.on_commit(...)` or a post-commit phase.
   Save guards use `get_transition_save_field(instance)` to read the active save
   field's attname, or `None`, through the public contract.
+  Transition bodies assign companion field names to
+  `StateTransitionsMixin.transition_fields`; `save_state` writes them with the
+  state and resets the collection even on failure. Never delete this attribute.
   Guards follow Django's final concrete fields, including inherited and deferred
   columns. See [seeded transition state](#seeded-transition-state) for initialization.
   Reload committed state through `AngeeModel.refresh_from_db`, or copy loaded
   values from the owner's persisted copy of the same row through
   `StateTransitions.copy_persisted_state`; reload authorization stays private.
   Recovery writes outside the graph use `force_state` with a concrete reason.
-  Compose a custom final save through `persist(instance, *, update_fields)`;
-  the success hook must explicitly forward it to `save_state`, which retains the
-  concurrency guard and transaction.
 - **Give a model an opaque public id by mixing in `SqidMixin` and declaring
   `sqid_prefix = "abc_"`** — the one fact that varies per model. The shared
   `angee.base.fields.SqidField` reads that prefix in `contribute_to_class`; don't
@@ -1764,6 +1774,11 @@ reader's scope. A hidden target yields null identity fields; its model and ID
 must also stay unavailable through resource filters and aggregate counts. Addon
 resources declare their record-reference filter axes through the shared Hasura
 resource owner instead of reimplementing this projection.
+The [record-reference guard owner](../../src/angee/graphql/relations.py) keeps
+declarations and optimizer probes query-free. A used guard may read its represented
+content types in one bounded statement per compile, counted by statement budgets,
+as Django's `GenericRelation` resolves content types while compiling. Compile-time
+reads and permission answers are not cached across compilations.
 
 **Polymorphic edges authorize their target in the schema.** Back one relation
 per target type with the edge's `GenericForeignKey`, contributed by the app
@@ -1954,9 +1969,9 @@ bridge advisory lock as polling and delivery settlement.
   on its next pull. The link checks its complete retained reflection precondition;
   that does not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
-  payload, mapping version and dependency digest in `ApplyResult`; the driver
-  alone promotes the primary link and pins the history row written for that
-  application. Observation saves the source on the link without changing that
+  payload and dependency digest in `ApplyResult`; the driver takes the declared
+  mapping version from the stream, promotes the primary link and pins the history
+  row written for that application. Observation saves the source on the link without changing that
   protected pointer. History is the observation log; inbound state retains
   simultaneous and closed failures, and refused writes retain link outbox state.
   Unlinked event failures belong to the stream's `inbound` state. Mapping or

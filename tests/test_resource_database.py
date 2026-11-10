@@ -34,6 +34,7 @@ write_addon_distribution(package, 'fixture_resources', capabilities={'resources'
 ]}}, metadata_root=root)
 sys.path.insert(0, str(root))
 from django.conf import settings
+from angee.resources.autoconfig import SETTINGS as RESOURCE_SETTINGS
 settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac',
                     'angee.base', 'angee.resources', 'angee.resources.testing', 'fixture_resources'],
@@ -41,6 +42,7 @@ settings.configure(
     ANGEE_RESOURCE_SOURCE_CLASSES={'path': 'angee.resources.sources.PathSource',
                                   'url': 'angee.resources.sources.UrlSource'},
     ANGEE_RESOURCE_ENTRY_KIND_CLASSES={}, REBAC_LOCAL_BACKEND_STORAGE='registry',
+    ANGEE_RESOURCE_EXCLUDED_ENTRIES=RESOURCE_SETTINGS['ANGEE_RESOURCE_EXCLUDED_ENTRIES'],
     DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}},
 )
 import django

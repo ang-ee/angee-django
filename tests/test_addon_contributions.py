@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.base.addons import addon_facts
+from angee.base.addons import addon_contribution, addon_facts
 from angee.graphql.schema import schema_parts_for
 from angee.mcp.server import tool_registrar
 from angee.web.build import WebRuntime
@@ -61,10 +62,13 @@ def test_broken_present_module_preserves_internal_import_error(tmp_path: Path, m
 
 
 def test_web_codegen_reads_native_package_metadata(tmp_path: Path) -> None:
-    config = make_addon(path=tmp_path, web={
-        "package": "@example/operator",
-        "codegen": {"schema": "operator", "sdl": "schema.graphql", "documents": "documents.ts"},
-    })
+    config = make_addon(
+        path=tmp_path,
+        web={
+            "package": "@example/operator",
+            "codegen": {"schema": "operator", "sdl": "schema.graphql", "documents": "documents.ts"},
+        },
+    )
     projection = WebRuntime((config,), dependencies={config.name: ()})
     assert projection.manifest["codegen"][0]["package"] == "@example/operator"
     assert projection.manifest["codegen"][0]["types"] is False
@@ -99,10 +103,41 @@ def test_present_null_export_is_invalid(tmp_path: Path, capability: str, explici
 
 @pytest.mark.parametrize("reference", [None, 3, [], {}])
 def test_explicit_graphql_reference_rejects_non_string_values(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reference: object,
 ) -> None:
     config = make_addon(path=tmp_path)
     # TOML cannot represent null: inject the projected capability value instead.
     monkeypatch.setattr("angee.graphql.schema.addon_facts", lambda *args, **kwargs: {"schema": reference})
     with pytest.raises(ImproperlyConfigured, match="graphql.schema must be a dotted reference"):
         schema_parts_for(config)
+
+
+def test_contributions_preserve_mapping_values_and_defer_registrar_invocation():
+    module = ModuleType("contributor")
+    calls = []
+
+    def register(server):
+        calls.append(server)
+
+    module.register = register
+    module.schemas = {"public": {"query": [object()]}}
+    assert addon_contribution(module, "register", kind="callable") is register
+    assert calls == []
+    assert addon_contribution(module, "schemas", kind="mapping", allow_callable=False) is module.schemas
+    module.protocols = lambda: {"websocket": register}
+    assert addon_contribution(module, "protocols", kind="mapping", allow_callable="required") == {
+        "websocket": register,
+    }
+    assert addon_contribution(module, "missing") == []
+    assert addon_contribution(module, "missing", kind="mapping") == {}
+    assert addon_contribution(module, "missing", kind="callable") is None
+
+
+@pytest.mark.parametrize("value", [None, [], "websocket", {"websocket"}])
+def test_mapping_factory_contributions_reject_invalid_results(value):
+    module = ModuleType("contributor")
+    module.protocols = lambda: value
+    with pytest.raises(ImproperlyConfigured, match="must resolve to a mapping"):
+        addon_contribution(module, "protocols", kind="mapping", allow_callable="required")

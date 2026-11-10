@@ -2,8 +2,11 @@
 
 SQL guards resolve scopes lazily at compilation throughout this module. This
 keeps declarations and optimizer probes query-free, and avoids copying complete
-permission graphs for unused aliases. Compilation may read represented content
-types and permission witnesses; neither those reads nor their answers are cached.
+permission graphs for unused aliases. A used record-reference read guard resolves
+its represented content types in one bounded statement per compile, counted by
+statement budgets, as Django's GenericRelation resolves content types while
+compiling. Permission scopes may also read their witnesses. Neither these reads
+nor their answers are cached across compilations.
 """
 
 from __future__ import annotations

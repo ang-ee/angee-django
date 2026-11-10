@@ -1231,3 +1231,26 @@ def test_native_implementation_declared_key_must_match_the_registry() -> None:
 
     with pytest.raises(ImproperlyConfigured, match="with key 'declared'"):
         resolve_impl_class(StorageBackend, "different")
+
+
+@pytest.mark.parametrize("name", [
+    "ANGEE_MCP_ACTOR_VERIFIER", "ANGEE_PROFILING_PERMISSION", "ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER",
+])
+def test_optional_cross_addon_hooks_are_inactive_when_unset(settings, name):
+    from django.conf import settings as django_settings
+
+    from angee.base.hooks import check_hook, check_hooks
+    from angee.mcp.verifier import _verifier
+    from angee.server.profiling import profiling_permitted
+
+    if hasattr(django_settings, name):
+        delattr(settings, name)
+    assert not hasattr(django_settings, name)
+    assert resolve_hook(name) is None
+    assert resolve_hooks(name) == ()
+    assert check_hook(name) == []
+    assert check_hooks((name,)) == []
+    if name == "ANGEE_MCP_ACTOR_VERIFIER":
+        assert _verifier() is None
+    elif name == "ANGEE_PROFILING_PERMISSION":
+        assert not profiling_permitted(object())

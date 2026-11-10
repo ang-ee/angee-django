@@ -61,9 +61,7 @@ def persist_after_review(instance: Any, source: Any, target: Any) -> None:
     instance.outer_save_field = get_transition_save_field(instance)
     try:
         if instance.force_review:
-            instance.review_transitions.force_state(
-                instance, instance.State.DONE, reason="nested test"
-            )
+            instance.review_transitions.force_state(instance, instance.State.DONE, reason="nested test")
         else:
             instance.persist_review()
     except (ValueError, TransitionNotAllowed) as error:
@@ -136,7 +134,7 @@ class TransitionTask(AngeeModel):
         """Move a running row to done and save touched fields."""
 
         self.note = "persisted"
-        self._transition_fields = {"note"}
+        self.transition_fields = {"note"}
 
     @transition(state, source=State.RUNNING, target=State.DONE, on_success=persist_success)
     def persist_with_body_write(self) -> None:
@@ -148,7 +146,7 @@ class TransitionTask(AngeeModel):
             type(self).objects.filter(pk=self.pk).update(ready=False)
             self.refresh_from_db(fields=["note"])
             self.note = "persisted"
-            self._transition_fields = {"note"}
+            self.transition_fields = {"note"}
             transaction.on_commit(
                 lambda: self.commit_states.append(type(self).objects.get(pk=self.pk).state),
             )
@@ -176,6 +174,7 @@ def test_transition_host_requires_state_transitions_mixin() -> None:
     """A concrete host must compose the owner of guarded reload authorization."""
 
     with pytest.raises(ImproperlyConfigured, match=r"tests.PlainTransitionTask.*StateTransitionsMixin"):
+
         class PlainTransitionTask(models.Model):
             state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
             state_transitions = StateTransitions(state, {})
@@ -200,6 +199,7 @@ def test_composition_missing_declared_state_field_names_host_and_declaration() -
         ImproperlyConfigured,
         match=r"tests.test_transitions.*MissingStateTask.state_transitions.*'state'",
     ):
+
         class MissingStateTask(StateSource):
             state = None
 
@@ -217,7 +217,8 @@ def transition_task_table() -> Iterator[None]:
 
 @pytest.mark.django_db(transaction=True)
 def test_deferred_transition_refreshes_state_and_locks_before_saving(
-    transition_task_table: None, monkeypatch: pytest.MonkeyPatch,
+    transition_task_table: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Deferred source state, the hook lock and commit callbacks retain their ordering."""
 
@@ -266,7 +267,7 @@ def test_transition_body_and_hook_share_one_commit(transition_task_table: None, 
     assert get_transition_save_field(task) is None
     assert task.body_save_field is None
     assert task.save_contexts == [None, "state"]
-    assert not task._transition_fields
+    assert not task.transition_fields
     assert task.commit_states == ([] if fail_hook else [TransitionTask.State.DONE])
     stored = TransitionTask.objects.get(pk=task.pk)
     assert stored.ready is fail_hook
@@ -322,7 +323,7 @@ def test_caught_hook_failure_leaves_outer_atomic_usable(transition_task_table: N
 
     assert task.commit_states == []
     assert get_transition_save_field(task) is None
-    assert not task._transition_fields
+    assert not task.transition_fields
     assert TransitionTask.objects.get(pk=task.pk).note == "outer survived"
 
 
@@ -335,7 +336,7 @@ def test_transition_body_rolls_back_after_concurrent_state_change(transition_tas
     with pytest.raises(TransitionNotAllowed, match="concurrent transition"):
         task.persist_with_body_write()
     assert get_transition_save_field(task) is None
-    assert not task._transition_fields
+    assert not task.transition_fields
     assert task.commit_states == []
     stored = TransitionTask.objects.get(pk=task.pk)
     assert stored.ready is True
@@ -358,9 +359,7 @@ def test_nested_transition_restores_outer_save_context(
     task.save()
     if fail_nested:
         if force_review:
-            TransitionTask.objects.filter(pk=task.pk).update(
-                review_state=TransitionTask.State.DONE
-            )
+            TransitionTask.objects.filter(pk=task.pk).update(review_state=TransitionTask.State.DONE)
         else:
             task.hook_error = ValueError("nested hook failed after saving")
 
@@ -397,11 +396,13 @@ def test_unsaved_force_state_has_no_save_context() -> None:
     """An unsaved force changes memory without entering a transition save."""
 
     task = TransitionTask()
+    task.transition_fields = {"note"}
     assert get_transition_save_field(task) is None
 
     task.state_transitions.force_state(task, TransitionTask.State.ARCHIVED, reason="unsaved test")
 
     assert task.state == TransitionTask.State.ARCHIVED
+    assert task.transition_fields == frozenset()
     assert get_transition_save_field(task) is None
     assert not hasattr(task, "save_contexts")
 
@@ -455,12 +456,15 @@ def test_on_success_fires_with_instance_source_and_target(transition_task_table:
 
 @pytest.mark.django_db(transaction=True)
 def test_save_state_persists_transition_and_touched_fields(transition_task_table: None) -> None:
-    """The shared save hook writes the guarded state plus method-touched fields."""
+    """Companion fields have an empty default and are consumed by the state save."""
 
     task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
+    assert task.transition_fields == frozenset()
 
     task.persist_done()
 
+    assert task.transition_fields == frozenset()
+    assert TransitionTask().transition_fields == frozenset()
     task.refresh_from_db()
     assert task.state == TransitionTask.State.DONE
     assert task.note == "persisted"
@@ -484,6 +488,7 @@ def test_save_state_loses_a_concurrent_transition_race(transition_task_table: No
     with pytest.raises(TransitionNotAllowed):
         task.persist_done()
 
+    assert task.transition_fields == frozenset()
     task.refresh_from_db()
     assert task.state == TransitionTask.State.DONE
     assert task.note == ""
@@ -509,10 +514,11 @@ def test_force_state_bypasses_graph_and_persists_with_save_state_guard(transitio
     task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
     task = TransitionTask.objects.get(pk=task.pk)
     task.note = "forced"
-    task._transition_fields = {"note"}
+    task.transition_fields = {"note"}
 
     task.state_transitions.force_state(task, TransitionTask.State.ARCHIVED, reason="test force")
 
+    assert task.transition_fields == frozenset()
     assert task.save_contexts == ["state"]
     task.refresh_from_db()
     assert task.state == TransitionTask.State.ARCHIVED
@@ -525,7 +531,7 @@ def test_force_state_reuses_the_concurrency_guard(transition_task_table: None) -
 
     task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
     TransitionTask.objects.filter(pk=task.pk).update(state=TransitionTask.State.DONE)
-    task._transition_fields = set()
+    task.transition_fields = set()
 
     with pytest.raises(TransitionNotAllowed, match="concurrent transition"):
         task.state_transitions.force_state(task, TransitionTask.State.ARCHIVED, reason="test stale force")
@@ -557,7 +563,11 @@ def test_direct_assignment_rejected_on_guarded_fields(transition_task_table: Non
     ],
 )
 def test_composed_models_guard_inherited_state_after_loading(
-    model: type[models.Model], field_name: str, initial: Any, target: Any, from_db: bool,
+    model: type[models.Model],
+    field_name: str,
+    initial: Any,
+    target: Any,
+    from_db: bool,
 ) -> None:
     """Abstract declarations guard concrete copies and inherited MTI columns."""
 
@@ -565,7 +575,8 @@ def test_composed_models_guard_inherited_state_after_loading(
     if from_db:
         fields = model._meta.concrete_fields
         instance = model.from_db(
-            "default", [field.attname for field in fields],
+            "default",
+            [field.attname for field in fields],
             [getattr(instance, field.attname) for field in fields],
         )
         assert not instance._state.adding
@@ -667,9 +678,14 @@ def test_copy_persisted_state_rejects_a_different_or_unsaved_row(invalid_source:
     if invalid_source != "unsaved":
         source = model.from_db("default", ["id", "state"], [source.pk, source.state])
 
-    with pytest.raises((TypeError, ValueError), match={
-        "model": "same concrete model", "pk": "same primary key", "unsaved": "persisted source row",
-    }[invalid_source]):
+    with pytest.raises(
+        (TypeError, ValueError),
+        match={
+            "model": "same concrete model",
+            "pk": "same primary key",
+            "unsaved": "persisted source row",
+        }[invalid_source],
+    ):
         StateTransitions.copy_persisted_state(instance, source, ("state",))
 
     assert instance.state == TransitionTask.State.DRAFT
@@ -678,7 +694,8 @@ def test_copy_persisted_state_rejects_a_different_or_unsaved_row(invalid_source:
 
 @pytest.mark.django_db(transaction=True)
 def test_copy_persisted_state_rejects_deferred_values_before_copying(
-    transition_task_table: None, django_assert_num_queries: Any,
+    transition_task_table: None,
+    django_assert_num_queries: Any,
 ) -> None:
     """Copying uses loaded values only and cannot partially apply a deferred source."""
 
@@ -766,7 +783,8 @@ def policy_task_table() -> Iterator[None]:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_policy_absent_uses_declared_graph(policy_task_table: None) -> None:
+@override_settings(**{POLICY_SETTING: None})
+def test_policy_unset_uses_declared_graph(policy_task_table: None) -> None:
     """With no overlay set, declared edges run and the policy edge stays disabled."""
 
     task = PolicyTask.objects.create()
@@ -868,8 +886,6 @@ def test_policy_marker_requires_a_policy_setting() -> None:
             @transition(state, source=State.POSTED, target=State.DRAFT, policy="posted->draft")
             def reopen(self) -> None:
                 """A policy edge with no ``policy_setting`` to govern it."""
-
-
 
 
 @isolate_apps()
@@ -985,6 +1001,7 @@ def test_donor_guards_refuse_competing_declarations() -> None:
             app_label = "tests"
 
     with pytest.raises(ImproperlyConfigured, match="competing transition guards"):
+
         class Conflicting(First, Second, Source):
             class Meta:
                 app_label = "tests"
@@ -997,6 +1014,7 @@ def test_wrapped_transition_keeps_declaration_and_bound_signature() -> None:
         @wraps(method)
         def wrapped(*args, **kwargs):
             return method(*args, **kwargs)
+
         return wrapped
 
     class WrappedTask(AngeeModel):

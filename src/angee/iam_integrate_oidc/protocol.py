@@ -18,8 +18,7 @@ from django.conf import settings
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError, PyJWTError
 
-from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
-from angee.integrate.oauth.client import USER_AGENT, OAuthClientProtocol
+from angee.integrate.oauth.client import OAuthClientProtocol, oauth_get_json
 from angee.integrate.oauth.errors import (
     INVALID_ID_TOKEN,
     MISSING_ENDPOINT,
@@ -120,13 +119,7 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
 
 
 class _PinnedPyJWKClient(PyJWKClient):
-    """PyJWT JWKS parser whose fetches use Angee's pinned HTTP owner.
-
-    Fetches pass ``allow_private=True``: self-hosted and dev IdPs commonly
-    serve ``jwks_uri`` on private addresses, and the URL is writable only
-    through the admin-gated OAuth client surface — the same posture as the
-    CardDAV backend's self-hosted servers.
-    """
+    """PyJWT JWKS parser whose fetches compose the shared OAuth GET policy."""
 
     def __init__(self, uri: str) -> None:
         """Bind one JWKS URI with PyJWT's JWK-set TTL cache enabled."""
@@ -135,32 +128,19 @@ class _PinnedPyJWKClient(PyJWKClient):
             uri,
             cache_jwk_set=True,
             lifespan=_jwks_ttl_seconds(),
-            headers={"User-Agent": USER_AGENT},
-            timeout=HTTP_TIMEOUT_SECONDS,
         )
 
     def fetch_data(self) -> Any:
-        """Fetch the JWKS document through ``integrate.http.HttpClient``.
+        """Fetch the JWKS document through ``oauth_get_json``.
 
         Only the transport is replaced: PyJWT's ``get_jwk_set`` validates,
         parses and caches the payload this returns.
         """
 
         try:
-            response = HttpClient().get(
-                self.uri,
-                headers={"Accept": "application/json", "User-Agent": USER_AGENT},
-                allow_private=True,
-                timeout=HTTP_TIMEOUT_SECONDS,
-            )
-            if not response.is_success:
-                raise PyJWKClientConnectionError(f"Fail to fetch data from the url, status: {response.status_code}")
-            jwk_set = response.json()
-        except PyJWKClientConnectionError:
-            raise
+            return oauth_get_json(self.uri)
         except Exception as exc:
-            raise PyJWKClientConnectionError(f'Fail to fetch data from the url, err: "{exc}"') from exc
-        return jwk_set
+            raise PyJWKClientConnectionError("Failed to fetch the JWKS document.") from exc
 
 
 @cache
