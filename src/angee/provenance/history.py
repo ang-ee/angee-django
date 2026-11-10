@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from itertools import batched
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
-from django.db import connections, models, router, transaction
+from django.db import models, router, transaction
+from django.db.models import Exists, OuterRef
 from django.db.models.base import ModelBase
 from django.utils import timezone
 from django.utils.functional import classproperty
@@ -321,30 +321,34 @@ class ModelHistory(HistoricalRecords):
                     )
         return captured
 
+    def recorded(self, model: type[models.Model]) -> Exists:
+        """Whether the outer row (``OuterRef("pk")``) has any stored version yet.
+
+        A tracked write carries this test on the read it already makes of the
+        rows it is about to change (:meth:`HistoryQuerySet.update`).
+        """
+
+        manager = get_history_manager_for_model(model)
+        return Exists(manager.filter(**{model._meta.pk.attname: OuterRef("pk")}))
+
     def record_baselines(self, model: type[models.Model], keys: Sequence[Any]) -> None:
-        """Snapshot the stored state of rows that have no history yet, before a tracked write changes them.
+        """Snapshot the stored state of ``keys``, rows with no history yet, before a tracked write changes them.
 
         A row written before its model kept history (or whose history was
         pruned) has no version a revert could restore. Its first tracked write
         records the stored state first, in a system changeset of its own, never
         the write's. A baseline is a ``~`` snapshot, not a creation: reverting it
         is refused for want of a predecessor, so no revert removes a row that
-        predates its history. One existence query per database batch serves the
-        whole write; there is no backfill.
+        predates its history. A queryset update finds these rows on its own key
+        read (:meth:`recorded`); an instance save, which reads nothing first,
+        probes its one row. There is no backfill.
         """
 
-        manager = get_history_manager_for_model(model)
-        key = model._meta.pk.attname
-        size = connections[manager.db].ops.bulk_batch_size([model._meta.pk], keys) or len(keys) or 1
-        known: set[Any] = set()
-        for chunk in batched(keys, size):
-            known.update(manager.filter(**{f"{key}__in": chunk}).values_list(key, flat=True).distinct())
-        missing = [pk for pk in keys if pk not in known]
-        if not missing:
+        if not keys:
             return
         with changeset(fresh=True, activity="system", change_reason="history.baseline"), write_group() as group:
             pending = set(group.seen)
-            self.bulk_history_create(model, missing, "~")
+            self.bulk_history_create(model, keys, "~")
             # The baseline is not the native capture the following write still owes.
             group.seen.intersection_update(pending)
 
@@ -501,8 +505,10 @@ class HistoryMixin(models.Model):
                 history = model_history(type(self))
                 if history is not None and history.capture_enabled:
                     current_changeset(required=True, record=True)
-                    if not self._state.adding:
-                        history.record_baselines(type(self)._meta.concrete_model or type(self), [self.pk])
+                    model = type(self)._meta.concrete_model or type(self)
+                    versions = get_history_manager_for_model(model).filter(**{model._meta.pk.attname: self.pk})
+                    if not self._state.adding and not versions.exists():
+                        history.record_baselines(model, [self.pk])
             super().save_base(raw, force_insert, force_update, alias, update_fields)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:

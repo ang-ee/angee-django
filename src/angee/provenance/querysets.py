@@ -50,6 +50,16 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
 
         return list(self.order_by().values_list("pk", flat=True))
 
+    def capture_unrecorded(self, history: ModelHistory, model: type[models.Model]) -> tuple[list[Any], list[Any]]:
+        """Freeze the keys this write will change, and those with no history yet, in one locked read.
+
+        It reads what :meth:`capture_keys` reads and carries
+        :meth:`ModelHistory.recorded`, so the baseline test costs no statement.
+        """
+
+        flagged = dict(self.annotate(_recorded=history.recorded(model)).order_by().values_list("pk", "_recorded"))
+        return list(flagged), [pk for pk, recorded in flagged.items() if not recorded]
+
     def capture_batches(self, keys: Sequence[Any]) -> Iterator[Self]:
         """Use the database's native batch size for ordinary Django querysets.
 
@@ -76,11 +86,11 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
         self._for_write = True
         selection = self.capture_queryset()
         with transaction.atomic(using=self.db):
-            keys = list(dict.fromkeys(selection.capture_keys()))
+            keys, unrecorded = selection.capture_unrecorded(history, history_model)
             if not keys:
                 return 0
             current_changeset(required=True, record=True)
-            history.record_baselines(history_model, keys)
+            history.record_baselines(history_model, unrecorded)
             with transaction.atomic(using=self.db, savepoint=False), write_group():
                 count = sum(super(HistoryQuerySet, rows).update(**kwargs) for rows in self.capture_batches(keys))
                 history.bulk_history_create(history_model, keys, "~")
