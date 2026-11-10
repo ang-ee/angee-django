@@ -8304,6 +8304,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "usePreviewUrl",
+    "source": "packages/ui/src/preview/PreviewPane.tsx",
+    "kind": "surface",
+    "owner": "@angee/ui:PreviewPane",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "usePreviews",
     "source": "packages/ui/src/runtime/runtime.ts",
     "kind": "surface",

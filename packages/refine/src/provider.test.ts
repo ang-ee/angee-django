@@ -917,7 +917,7 @@ describe("Angee Hasura provider defaults", () => {
     expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalledWith(
       "Angee live subscription failed; the next subscriber will reconnect.",
-      expect.objectContaining({ changesRoot: "noteChanged" }),
+      expect.objectContaining({ model: "notes.Note", subscription: "noteChanged" }),
       expect.any(Error),
     );
   });
