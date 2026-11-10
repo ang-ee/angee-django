@@ -88,8 +88,11 @@ def test_timeline_read_planner_memory(review, settings, viewer, record_property)
     record_property("sql_bytes", len(sql.encode()))
     record_property("planner_memory_used_kib", plan["Planning"]["Memory Used"])
     record_property("planner_memory_allocated_kib", memory)
-    # PG18: 61,687 SQL bytes, 24,367 KiB used / 24,576 KiB allocated, for either actor.
-    assert 0 < memory <= 25 * 1024, f"Timeline planner allocated {memory} KiB; ceiling 25 MiB"
+    # PG18 with shared id sets: 34,681 SQL bytes, 10,406 KiB used / 16,384 KiB allocated for either actor.
+    assert 0 < memory <= 17 * 1024, (
+        f"Timeline planner allocated {memory} KiB; ceiling 17 MiB. "
+        "Ratchet downward when cost falls; never raise to admit a regression."
+    )
 
 
 @pytest.mark.parametrize("readable", [False, True])
