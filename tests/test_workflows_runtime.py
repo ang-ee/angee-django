@@ -1024,13 +1024,11 @@ def test_start_permission_does_not_grant_workflow_editing(execution):
         WorkflowRun.objects.reprocess(other_run, actor=actor)
 
 
-@pytest.mark.parametrize("storage", ["denormalized", "registry"])
-def test_starter_cannot_read_another_starters_engine_rows(execution, settings, storage):
+def test_starter_cannot_read_another_starters_engine_rows(execution):
     """Identity and publication visibility do not expose another user's execution."""
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     call_command("rebac", "sync", verbosity=0)
     admin, _ = execution
-    with system_context(reason="test workflow storage administrator"):
+    with system_context(reason="test workflow starter administrator"):
         grant_role(actor=admin, role="angee/role:admin")
     first, second = create_user("first_starter"), create_user("second_starter")
     workflow = load_workflow(document("entry"), key="private_runs", actor=admin)

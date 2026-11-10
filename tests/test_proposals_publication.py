@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -29,20 +28,18 @@ from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
 from tests.composed_host import run_composed_tests
 
 
-@pytest.mark.parametrize("case", ("RegistryPublicationTests", "DenormalizedPublicationTests"))
-def test_publication_contracts(tmp_path: Path, case: str) -> None:
+def test_publication_contracts(tmp_path: Path) -> None:
     """Use the existing isolated host so schema tests bind real composed models."""
-    run_composed_tests(tmp_path, f"tests.test_proposals_publication.{case}", app="angee.proposals")
+    run_composed_tests(tmp_path, "tests.test_proposals_publication.PublicationTests", app="angee.proposals")
 
 
-class PublicationCases(TransactionTestCase):
-    """Shared cases; invoked only by the isolated composed host."""
+class PublicationTests(TransactionTestCase):
+    """D26 publication cases; invoked only by the isolated composed host."""
 
     __test__ = False
-    storage = "registry"
 
     def setUp(self) -> None:
-        settings = override_settings(REBAC_LOCAL_BACKEND_STORAGE=self.storage, REBAC_SUPERUSER_BYPASS=False)
+        settings = override_settings(REBAC_SUPERUSER_BYPASS=False)
         settings.enable()
         self.addCleanup(settings.disable)
         call_command("rebac", "sync", verbosity=0)
@@ -344,13 +341,3 @@ class PublicationCases(TransactionTestCase):
                 self.assertIn("hidden asker", payload["error"])
                 self.assertEqual(self.Message._base_manager.count(), before)
                 self.assertEqual(payload["error_code"], "HIDDEN_ASKER_IN_THREAD")
-
-
-class RegistryPublicationTests(PublicationCases):
-    """D26 under the composed host's FK-backed relationship store."""
-
-
-class DenormalizedPublicationTests(PublicationCases):
-    """The same D26 behavior under the alternate relationship store."""
-
-    storage = "denormalized"

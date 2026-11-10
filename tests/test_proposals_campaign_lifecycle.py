@@ -21,7 +21,6 @@ from tests.conftest import Drive
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
-from tests.proposals_campaign import campaign_store as campaign_store
 from tests.proposals_campaign import proposal_delete_schema as proposal_delete_schema
 from tests.proposals_models import Proposal, Round, Topic
 from tests.t3_campaign import relationship_snapshot

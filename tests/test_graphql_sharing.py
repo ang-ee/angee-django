@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.test import override_settings
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -54,7 +53,6 @@ def test_grant_subject_rejects_missing_malformed_and_wildcard_subjects() -> None
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("project_access_schema")
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
 def test_record_access_mutations_are_atomic_and_delegate_subject_policy() -> None:
     """The mutation preflights all targets and delegates tuple validity to REBAC."""
 

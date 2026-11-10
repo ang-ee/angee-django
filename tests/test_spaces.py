@@ -14,7 +14,6 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
-from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
@@ -128,20 +127,18 @@ def _schema() -> Any:
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("rebac_storage", ("denormalized", "registry"))
-def test_group_create_ignores_roster_backings_unused_by_create(spaces_tables: None, rebac_storage: str) -> None:
+def test_group_create_ignores_roster_backings_unused_by_create(spaces_tables: None) -> None:
     """The authenticated create arm needs none of the filtered reverse roster paths."""
 
     del spaces_tables
     actor = create_user("spaces-unused-roster")
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=rebac_storage):
-        call_command("rebac", "sync", verbosity=0)
-        result = execute_schema(
-            _schema(),
-            'mutation { insert_space_groups_one(object: {name: "No roster"}) { id } }',
-            user=actor,
-        )
-        public_id = result_data(result)["insert_space_groups_one"]["id"]
+    call_command("rebac", "sync", verbosity=0)
+    result = execute_schema(
+        _schema(),
+        'mutation { insert_space_groups_one(object: {name: "No roster"}) { id } }',
+        user=actor,
+    )
+    public_id = result_data(result)["insert_space_groups_one"]["id"]
     group = Group._base_manager.get(sqid=public_id)
     assert group.created_by_id == actor.pk
     assert not Membership._base_manager.filter(group=group).exists()
@@ -305,14 +302,12 @@ def test_membership_crud_and_pair_uniqueness(spaces_tables: None) -> None:
         assert Membership.objects.count() == 0
 
 
-@pytest.mark.parametrize("storage", ["denormalized", "registry"])
 def test_membership_lifecycle_filters_live_roles(
-    spaces_tables: None, settings: Any, storage: str,
+    spaces_tables: None,
 ) -> None:
     """Pending, dismissed and unrelated roles deny in direct and queryset checks."""
 
     del spaces_tables
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     user, person = _person_for("spaces-member")
     other_user, other_person = _person_for("spaces-other-member")
 
@@ -750,12 +745,10 @@ def _vault_scope_pks(actor: Any, action: str) -> tuple[set[Any], list[str]]:
     return pks, [query["sql"] for query in queries]
 
 
-@pytest.mark.parametrize("storage", ["denormalized", "registry"])
-def test_team_vault_follows_the_roster_and_compiles_to_sql(spaces_tables: None, settings: Any, storage: str) -> None:
+def test_team_vault_follows_the_roster_and_compiles_to_sql(spaces_tables: None) -> None:
     """A team's vault: the roster reads, moderators and owners write, viewers and outsiders see nothing."""
 
     del spaces_tables
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     owner, owner_person = _person_for("spaces-vault-owner")
     moderator, moderator_person = _person_for("spaces-vault-moderator")
     member, member_person = _person_for("spaces-vault-member")

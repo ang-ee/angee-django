@@ -3,7 +3,6 @@
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
@@ -20,14 +19,8 @@ from tests.test_productivity_write_behavior import Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema
 
 
-@pytest.fixture(params=["denormalized", "registry"])
-def team_storage(request):
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
-        yield
-
-
 @pytest.fixture
-def team_case(team_storage, project_access_schema):
+def team_case(project_access_schema):
     users = {}
     with system_context(reason="test.work.team.setup"):
         team = Group.objects.create(name="Roster", slug="roster", visibility="public")

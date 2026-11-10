@@ -24,11 +24,10 @@ from tests.money_models import Currency, CurrencyRate
 from tests.test_dashboards import DashboardTarget
 
 
-@pytest.fixture(params=("denormalized", "registry"))
-def public_policy(request, db, settings):
+@pytest.fixture
+def public_policy(db, settings):
     """Use the adopters' real policies without a composed host or schema sync."""
 
-    settings.REBAC_LOCAL_BACKEND_STORAGE = request.param
     settings.REBAC_SUPERUSER_BYPASS = False
     settings.REBAC_UNIVERSAL_ADMIN_ROLE = None
     reset_backend()

@@ -1,4 +1,10 @@
-"""Tests for IAM permission-hub GraphQL surfaces."""
+"""Tests for IAM permission-hub GraphQL surfaces.
+
+IAM reads the active relationship model directly, so its grant, read and
+revocation cases here run under both local relationship stores. This is the
+suite's one cross-storage contract; every other module runs Angee's configured
+``registry`` store.
+"""
 
 from __future__ import annotations
 
@@ -521,36 +527,33 @@ def test_iam_overview_privileged_grants_on_registry_relationship_storage(
 ) -> None:
     """Privileged-grant filtering works on the FK-backed registry relationship store.
 
-    Composed projects default to ``REBAC_LOCAL_BACKEND_STORAGE = "registry"``
-    (``angee`` autoconfig), where the denormalized relationship field names
-    exist only through the storage mode's queryset kwargs translation — a filter
-    built from Q objects bypasses it and fails live while the bare test settings
-    (denormalized store) stay green.
+    The denormalized relationship field names exist there only through the
+    storage mode's queryset kwargs translation; a filter built from Q objects
+    bypasses it.
     """
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry"):
-        admin = _platform_admin("hub-registry-admin")
-        auditor = User.objects.create_user(
-            username="hub-registry-auditor",
-            email="registry-auditor@example.com",
-        )
-        grant(actor=auditor, role="angee/role:auditor")
+    admin = _platform_admin("hub-registry-admin")
+    auditor = User.objects.create_user(
+        username="hub-registry-auditor",
+        email="registry-auditor@example.com",
+    )
+    grant(actor=auditor, role="angee/role:auditor")
 
-        overview = _data(
-            _execute(
-                _schema("console"),
-                """
-                query {
-                  iam_overview(peek_limit: 5) {
-                    grant_count
-                    privileged_grant_count
-                    privileged_grants { role }
-                  }
-                }
-                """,
-                user=admin,
-            )
-        )["iam_overview"]
+    overview = _data(
+        _execute(
+            _schema("console"),
+            """
+            query {
+              iam_overview(peek_limit: 5) {
+                grant_count
+                privileged_grant_count
+                privileged_grants { role }
+              }
+            }
+            """,
+            user=admin,
+        )
+    )["iam_overview"]
 
     assert overview["grant_count"] == 2
     assert overview["privileged_grant_count"] == 1

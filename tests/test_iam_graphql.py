@@ -2159,13 +2159,7 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
     assert not hasattr(request, "view_as")
 
 
-@pytest.mark.parametrize("storage", ["denormalized", "registry"])
-def test_viewable_people_admission_is_batched_before_limit(
-    composed_tables: None,
-    settings: Any,
-    storage: str,
-) -> None:
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
+def test_viewable_people_admission_is_batched_before_limit(composed_tables: None) -> None:
     admin = _platform_admin("picker-query-admin")
     User._base_manager.bulk_create([User(username=f"picker-person-{index:02}", password="!") for index in range(25)])
     for username, flags in (

@@ -10,7 +10,6 @@ import strawberry_django
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError
-from django.test import override_settings
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -99,31 +98,29 @@ _SHARED_SCHEMA = strawberry.Schema(query=_SHARED_RESOURCE.query, mutation=_SHARE
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("rebac_storage", ("denormalized", "registry"))
 @pytest.mark.parametrize("allowed", (True, False), ids=("allowed", "denied"))
-def test_hasura_prepared_factory_creates_one_companion_or_neither_row(rebac_storage: str, allowed: bool) -> None:
+def test_hasura_prepared_factory_creates_one_companion_or_neither_row(allowed: bool) -> None:
     """A readable relation reaches the insert gate, which authorizes the aggregate."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=rebac_storage):
-        call_command("rebac", "sync", verbosity=0)
-        actor = create_platform_admin("factory-admin") if allowed else create_user("factory-reader")
-        with system_context(reason="factory test scope"):
-            scope = Scope.objects.create(name="Factory scope")
-        write_relationships([RelationshipTuple(to_object_ref(scope), "direct_member", to_subject_ref(actor))])
+    call_command("rebac", "sync", verbosity=0)
+    actor = create_platform_admin("factory-admin") if allowed else create_user("factory-reader")
+    with system_context(reason="factory test scope"):
+        scope = Scope.objects.create(name="Factory scope")
+    write_relationships([RelationshipTuple(to_object_ref(scope), "direct_member", to_subject_ref(actor))])
 
-        result = execute_schema(_FACTORY_SCHEMA, _FACTORY_INSERT, {"scope": scope.public_id}, user=actor)
+    result = execute_schema(_FACTORY_SCHEMA, _FACTORY_INSERT, {"scope": scope.public_id}, user=actor)
 
-        if allowed:
-            public_id = result_data(result)["insert_factory_docs_one"]["id"]
-            document = FactoryDoc._base_manager.get(sqid=public_id)
-            assert document.scope_id == scope.pk
-            assert FactoryCompanion.objects.count() == 1
-            assert FactoryCompanion.objects.get().document_id == document.pk
-        else:
-            assert result.errors
-            assert isinstance(result.errors[0].original_error, PermissionDenied)
-            assert FactoryDoc._base_manager.count() == 0
-            assert FactoryCompanion.objects.count() == 0
+    if allowed:
+        public_id = result_data(result)["insert_factory_docs_one"]["id"]
+        document = FactoryDoc._base_manager.get(sqid=public_id)
+        assert document.scope_id == scope.pk
+        assert FactoryCompanion.objects.count() == 1
+        assert FactoryCompanion.objects.get().document_id == document.pk
+    else:
+        assert result.errors
+        assert isinstance(result.errors[0].original_error, PermissionDenied)
+        assert FactoryDoc._base_manager.count() == 0
+        assert FactoryCompanion.objects.count() == 0
 
 
 @pytest.mark.django_db
@@ -176,60 +173,56 @@ def test_hasura_rejected_relation_reports_its_field_without_disclosing_the_targe
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("rebac_storage", ("denormalized", "registry"))
-def test_hasura_create_unknown_relation_denies_even_in_exclusion(rebac_storage: str) -> None:
+def test_hasura_create_unknown_relation_denies_even_in_exclusion() -> None:
     """Insert-dependent siblings cannot be mistaken for an empty exclusion arm."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=rebac_storage):
-        call_command("rebac", "sync", verbosity=0)
-        actor = create_user("projection-actor")
-        with system_context(reason="projection parent seed"):
-            parent = ProjectionDoc.objects.create(title="Parent")
-        result = execute_schema(
-            _PROJECTION_SCHEMA,
-            """
-            mutation($parent: ID!) {
-              insert_projection_docs_one(object: {title: "Denied", parent: $parent}) { id }
-            }
-            """,
-            {"parent": parent.public_id},
-            user=actor,
-        )
+    call_command("rebac", "sync", verbosity=0)
+    actor = create_user("projection-actor")
+    with system_context(reason="projection parent seed"):
+        parent = ProjectionDoc.objects.create(title="Parent")
+    result = execute_schema(
+        _PROJECTION_SCHEMA,
+        """
+        mutation($parent: ID!) {
+          insert_projection_docs_one(object: {title: "Denied", parent: $parent}) { id }
+        }
+        """,
+        {"parent": parent.public_id},
+        user=actor,
+    )
 
-        assert result.errors
-        assert isinstance(result.errors[0].original_error, PermissionDenied)
-        assert ProjectionDoc._base_manager.count() == 1
-        assert not ProjectionDoc._base_manager.filter(title="Denied").exists()
+    assert result.errors
+    assert isinstance(result.errors[0].original_error, PermissionDenied)
+    assert ProjectionDoc._base_manager.count() == 1
+    assert not ProjectionDoc._base_manager.filter(title="Denied").exists()
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("rebac_storage", ("denormalized", "registry"))
 @pytest.mark.parametrize("eligible", (True, False), ids=("shared", "private"))
-def test_hasura_create_uses_filtered_constant(rebac_storage: str, eligible: bool) -> None:
+def test_hasura_create_uses_filtered_constant(eligible: bool) -> None:
     """The create gate and persisted read agree without a wildcard tuple."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=rebac_storage):
-        call_command("rebac", "sync", verbosity=0)
-        actor = create_user("shared-create-actor")
-        result = execute_schema(
-            _SHARED_SCHEMA,
-            """
-            mutation($shared: Boolean!) {
-              insert_shared_docs_one(object: {title: "Shared candidate", is_shared: $shared}) { id }
-            }
-            """,
-            {"shared": eligible},
-            user=actor,
-        )
-        relationships = active_relationship_model().objects.filter(resource_type="scopedemo/shared_doc")
-        if eligible:
-            public_id = result_data(result)["insert_shared_docs_one"]["id"]
-            document = SharedDoc.objects.as_user(actor).get(sqid=public_id)
-            assert document.is_shared is True
-            assert SharedDoc._base_manager.count() == 1
-            assert not relationships.exists()
-        else:
-            assert result.errors
-            assert isinstance(result.errors[0].original_error, PermissionDenied)
-            assert SharedDoc._base_manager.count() == 0
-            assert not relationships.exists()
+    call_command("rebac", "sync", verbosity=0)
+    actor = create_user("shared-create-actor")
+    result = execute_schema(
+        _SHARED_SCHEMA,
+        """
+        mutation($shared: Boolean!) {
+          insert_shared_docs_one(object: {title: "Shared candidate", is_shared: $shared}) { id }
+        }
+        """,
+        {"shared": eligible},
+        user=actor,
+    )
+    relationships = active_relationship_model().objects.filter(resource_type="scopedemo/shared_doc")
+    if eligible:
+        public_id = result_data(result)["insert_shared_docs_one"]["id"]
+        document = SharedDoc.objects.as_user(actor).get(sqid=public_id)
+        assert document.is_shared is True
+        assert SharedDoc._base_manager.count() == 1
+        assert not relationships.exists()
+    else:
+        assert result.errors
+        assert isinstance(result.errors[0].original_error, PermissionDenied)
+        assert SharedDoc._base_manager.count() == 0
+        assert not relationships.exists()

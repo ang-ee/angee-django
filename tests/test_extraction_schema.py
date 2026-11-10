@@ -4,7 +4,6 @@ from dataclasses import replace
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.test import override_settings
 from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
 
 from angee.extraction import schema as evidence_schema
@@ -33,7 +32,6 @@ def test_evidence_resources_expose_reads_without_generic_mutations(schema):
         assert {name, f"{name}_by_pk", f"{name}_aggregate"} <= set(schema._schema.query_type.fields)
 
 
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
 def test_evidence_reader_cannot_expand_access_to_source_files(schema, evidence):
     retain, values = evidence
     row = retain(pages=(PageCarrier(source_position=0, page_position=0),))
@@ -81,7 +79,6 @@ def test_evidence_reader_cannot_expand_access_to_source_files(schema, evidence):
     assert detail == {"extraction_by_pk": {"id": row.sqid}}
 
 
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
 def test_message_part_identity_requires_current_part_read(schema, evidence, part_tree):
     retain, values = evidence
     message, parts = part_tree

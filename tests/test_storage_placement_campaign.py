@@ -8,7 +8,6 @@ from rebac import actor_context, system_context
 
 from angee.projects.testing.models import Project, ProjectBinding
 from tests.conftest import Drive, File, Folder, create_user
-from tests.storage_campaign import relationship_storage as relationship_storage
 from tests.test_project_access import project_access_schema as project_access_schema
 from tests.test_storage import PNG_BYTES, PNG_SHA256
 from tests.test_storage import drive as drive

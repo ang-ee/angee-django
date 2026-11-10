@@ -5,7 +5,6 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, actor_context, system_context, to_subject_ref
-from rebac.backends import reset_backend
 from rebac.errors import PermissionDenied
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
@@ -27,16 +26,8 @@ def _non_audit_writes(queries):
     ]
 
 
-@pytest.fixture(params=["denormalized", "registry"])
-def relationship_store(request, settings):
-    settings.REBAC_LOCAL_BACKEND_STORAGE = request.param
-    reset_backend()
-    yield
-    reset_backend()
-
-
 @pytest.fixture
-def grant_case(relationship_store, subject_tables):  # noqa: F811 -- imported shared fixture
+def grant_case(subject_tables):  # noqa: F811 -- imported shared fixture
     owner = create_user("grant-owner")
     recipient = create_user("grant-recipient")
     with actor_context(owner):

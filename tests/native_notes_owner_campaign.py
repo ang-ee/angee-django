@@ -7,10 +7,8 @@ from tests.notes_ownership_cases import NotesOwnershipTests
 
 
 class NotesOwnerCampaign(TransactionTestCase):
-    storage = "registry"
-
     def setUp(self):
-        setting = override_settings(REBAC_LOCAL_BACKEND_STORAGE=self.storage, REBAC_SUPERUSER_BYPASS=False)
+        setting = override_settings(REBAC_SUPERUSER_BYPASS=False)
         setting.enable()
         self.addCleanup(setting.disable)
         NotesOwnershipTests.setUp(self)
@@ -63,7 +61,3 @@ class NotesOwnerCampaign(TransactionTestCase):
         self.assertTrue(history.is_starred)
         self.assertEqual(history.body, "Edited")
         self.assertFalse(history._meta.get_field("is_starred").null)
-
-
-class NotesOwnerDenormalizedCampaign(NotesOwnerCampaign):
-    storage = "denormalized"

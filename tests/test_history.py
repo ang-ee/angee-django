@@ -19,11 +19,10 @@ class OwnedRowProxy(OwnedRow):
         app_label = "scopedemo"
 
 
-@pytest.fixture(params=("registry", "denormalized"))
-def history_permissions(db, settings, request):
+@pytest.fixture
+def history_permissions(db):
     """Use the existing persistence probe with a deliberately unreadable title."""
 
-    settings.REBAC_LOCAL_BACKEND_STORAGE = request.param
     install_schema(
         parse_zed("""
         definition auth/user {}

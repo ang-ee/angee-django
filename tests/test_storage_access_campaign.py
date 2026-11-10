@@ -35,7 +35,6 @@ from tests.conftest import (
     vault_for,
 )
 from tests.mtidemo.models import MtiChild, MtiChildProxy, MtiParent
-from tests.storage_campaign import relationship_storage as relationship_storage
 from tests.test_storage import PNG_BYTES, _proxy_upload
 from tests.test_storage import drive as drive
 

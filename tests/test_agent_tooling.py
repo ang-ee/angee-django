@@ -412,17 +412,13 @@ def test_tool_grants_enumerate_the_canonical_catalogue(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("storage", ("denormalized", "registry"))
 def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
-    settings: Any,
-    storage: str,
 ) -> None:
     """Live code projects to MCPTool rows and one sync-owned reader role grant set."""
 
     del composed_tables
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     owner = User.objects.create_user(username="catalogue-sync-owner")
     with system_context(reason="test builtin catalogue setup"):
         agent = Agent.objects.create(name="Catalogue Sync", owner=owner)

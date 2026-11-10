@@ -195,13 +195,8 @@ def test_reconcile_prunes_old_iam_company_rows_after_schema_removal(
     assert SchemaDefinition.objects.filter(resource_type="auth/user").exists()
 
 
-@pytest.mark.parametrize("storage_mode", ("denormalized", "registry"))
 @schema_changes()
-def test_reconcile_directly_purges_stale_relations_from_active_store(
-    db,
-    settings,
-    storage_mode: str,
-) -> None:
+def test_reconcile_directly_purges_stale_relations_from_active_store(db) -> None:
     """A renamed field-backed relation cannot block direct stale-tuple cleanup."""
 
     from django.apps import apps
@@ -212,8 +207,6 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         active_relationship_model,
     )
 
-
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage_mode
     package = apps.get_app_config("nexus").name
     definition = _managed(package, "nexus/tie")
     stale_backed = _managed_relation_for_definition(

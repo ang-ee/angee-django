@@ -16,12 +16,10 @@ from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessC
 
 
 class IntakeCampaign(IntakeAccessCase):
-    """Existing Need/account composition; only test identities and store vary."""
-
-    storage = "registry"
+    """Existing Need/account composition; only test identities vary."""
 
     def setUp(self):
-        setting = override_settings(REBAC_LOCAL_BACKEND_STORAGE=self.storage, REBAC_SUPERUSER_BYPASS=False)
+        setting = override_settings(REBAC_SUPERUSER_BYPASS=False)
         setting.enable()
         self.addCleanup(setting.disable)
         super().setUp()
@@ -175,18 +173,13 @@ class IntakeCampaign(IntakeAccessCase):
         with actor_context(self.reader), self.assertRaises(PermissionDenied):
             first.task.with_actor(self.reader).message_post("Unusable comment arm")
 
-class IntakeDenormalizedCampaign(IntakeCampaign):
-    storage = "denormalized"
-
-
 class CaptureCampaign(TransactionTestCase):
     """Reuse the native capture fixture's setup and webform constructor."""
 
-    storage = "registry"
     webform = ChannelIntakeCaptureTests.webform
 
     def setUp(self):
-        setting = override_settings(REBAC_LOCAL_BACKEND_STORAGE=self.storage, REBAC_SUPERUSER_BYPASS=False)
+        setting = override_settings(REBAC_SUPERUSER_BYPASS=False)
         setting.enable()
         self.addCleanup(setting.disable)
         ChannelIntakeCaptureTests.setUp(self)
@@ -345,7 +338,3 @@ class CaptureCampaign(TransactionTestCase):
                 need = self.Need._base_manager.get(source_message=message)
             self.assertEqual(need.party_id, party.pk if confirmed else None)
         self.assertEqual(self.Need._base_manager.count(), 2)
-
-
-class CaptureDenormalizedCampaign(CaptureCampaign):
-    storage = "denormalized"

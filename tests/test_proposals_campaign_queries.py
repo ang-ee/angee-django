@@ -19,7 +19,6 @@ from angee.projects.testing.models import Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
 from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
-from tests.proposals_campaign import campaign_store as campaign_store
 from tests.proposals_models import Proposal, Round
 from tests.test_project_access import project_access_schema as project_access_schema
 

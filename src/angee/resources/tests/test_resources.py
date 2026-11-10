@@ -2128,10 +2128,7 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
         assert hooks == [True, True]
 
 
-@pytest.mark.parametrize("storage", ["denormalized", "registry"])
-def test_unchanged_grant_batches_use_one_native_key_read(
-    composed_tables: None, tmp_path: Path, settings: Any, storage: str,
-) -> None:
+def test_unchanged_grant_batches_use_one_native_key_read(composed_tables: None, tmp_path: Path) -> None:
     """Reloading many grants skips every tuple without per-row reads or writes."""
 
     from django.contrib.auth import get_user_model
@@ -2140,7 +2137,6 @@ def test_unchanged_grant_batches_use_one_native_key_read(
 
     from angee.base.identity import public_subject_ref
 
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     user = get_user_model().objects.create_user(username="grant-batch-reader")
     subject = to_subject_ref(user)
     entry = ResourceEntry.from_declaration(addon(tmp_path), "install", {"path": "grants.yaml", "kind": "grants"})

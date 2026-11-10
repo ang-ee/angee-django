@@ -9,7 +9,6 @@ import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import connection
-from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
@@ -35,19 +34,11 @@ from tests.proposals_models import Answer, Proposal, Round, Topic
 from tests.test_project_access import project_access_schema as project_access_schema
 
 
-@pytest.fixture(params=("denormalized", "registry"))
-def rebac_storage(request: pytest.FixtureRequest) -> Any:
-    """Exercise the same hierarchy through both local storage shapes."""
-
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
-        yield request.param
-
-
 @pytest.fixture
-def proposal_schema(rebac_storage: str, project_access_schema: Any) -> None:
-    """Select storage before synchronizing the composed proposal schema."""
+def proposal_schema(project_access_schema: Any) -> None:
+    """Synchronize the composed proposal schema."""
 
-    del rebac_storage, project_access_schema
+    del project_access_schema
 
 
 def _grant(resource: Any, relation: str, subject: Any) -> None:

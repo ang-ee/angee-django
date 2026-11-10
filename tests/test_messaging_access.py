@@ -10,7 +10,6 @@ from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import override_settings
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -94,9 +93,9 @@ def test_channel_annotator_tags_readable_conversations_only(messaging_access_sch
         TagAssignment.objects.attach("messaging/message", direct.sqid, [tag.sqid])
 
 
-@pytest.fixture(params=("denormalized", "registry"))
-def messaging_access_schema(request: pytest.FixtureRequest, tmp_path: Path, transactional_db: None) -> Any:
-    """Synchronize messaging's field-backed access chain in either local store."""
+@pytest.fixture
+def messaging_access_schema(tmp_path: Path, transactional_db: None) -> Any:
+    """Synchronize messaging's field-backed access chain."""
 
     configs = list(apps.get_app_configs())
     originals = {config: getattr(config, "rebac_schema", None) for config in configs}
@@ -104,9 +103,8 @@ def messaging_access_schema(request: pytest.FixtureRequest, tmp_path: Path, tran
     runtime = tmp_path / "messaging-access-runtime"
     emit_permissions(configs, runtime, sources=sources)
     try:
-        with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
-            call_command("rebac", "sync", verbosity=0)
-            yield request.param
+        call_command("rebac", "sync", verbosity=0)
+        yield
     finally:
         for config, original in originals.items():
             if original is None:
@@ -165,7 +163,7 @@ def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_acce
         for name in ("ThreadFollower", "ThreadNotification", "Part", "Reaction"):
             model = apps.get_model("messaging", name)
             sql = model.objects.with_actor(reader).scoped().query.sql_with_params()[0]
-            assert "SELECT" in sql, (messaging_access_schema, name)
+            assert "SELECT" in sql, name
 
 
 @pytest.mark.django_db(transaction=True)

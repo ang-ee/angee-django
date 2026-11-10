@@ -51,6 +51,4 @@ def load_statement_sources(addon_label: str) -> None:
             ),
         ),
     ):
-        for storage in ("denormalized", "registry"):
-            with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
-                resources.objects.load_addons((addon,), tiers=("install",))
+        resources.objects.load_addons((addon,), tiers=("install",))

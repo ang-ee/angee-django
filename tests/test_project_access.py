@@ -11,7 +11,6 @@ import strawberry_django
 from django.apps import apps
 from django.core.management import call_command
 from django.db import connection, transaction
-from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLEnumType, GraphQLObjectType, get_named_type
 from rebac import (
@@ -58,58 +57,56 @@ _TASK_PERMISSIONS_RESOURCE = hasura_model_resource(
 )
 
 
-@pytest.mark.parametrize("storage", ("denormalized", "registry"))
-def test_task_permissions_are_typed_actor_scoped_and_batched(project_access_schema: Any, storage: str) -> None:
+def test_task_permissions_are_typed_actor_scoped_and_batched(project_access_schema: Any) -> None:
     """Three permission answers remain one list projection at 1, 10 and 50 rows."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
-        call_command("rebac", "sync", verbosity=0)
-        schema = GraphQLSchemas(
-            [
-                SchemaAddon({"public": {"query": (_TASK_PERMISSIONS_RESOURCE.query,)}}),
-            ]
-        ).build("public")
-        graphql_type = schema._schema.get_type("TaskPermissionsType")
-        assert isinstance(graphql_type, GraphQLObjectType)
-        enum = get_named_type(graphql_type.fields["permissions"].type)
-        assert isinstance(enum, GraphQLEnumType)
-        assert set(enum.values) == {"write", "share", "delete"}
-        owner = create_user("permission-owner")
-        assignee = create_user("permission-assignee")
-        reader = create_user("permission-reader")
-        with system_context(reason="tests.projects.permissions.seed"):
-            project = Project.objects.create(title="Permission project", owner=owner)
-            # A hierarchy row derives its path on save, so the batch inserts one by one.
-            for _ in range(50):
-                Task.objects.create(project=project, owner=owner, assignee=assignee)
-            write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(reader))])
-        document = """
-            query Permissions($limit: Int!) {
-              permission_tasks(order_by: [{id: asc}], limit: $limit) { id permissions }
-            }
-        """
-        for actor, expected in (
-            (owner, ["delete", "share", "write"]),
-            (assignee, ["write"]),
-            (reader, []),
-        ):
-            result_data(execute_schema(schema, document, {"limit": 1}, user=actor))
-            counts = []
-            for limit in (1, 10, 50):
-                with (
-                    patch(
-                        "angee.graphql.capabilities.permission_annotations",
-                        side_effect=AssertionError("Per-row permission fallback"),
-                    ),
-                    CaptureQueriesContext(connection) as queries,
-                ):
-                    rows = result_data(execute_schema(schema, document, {"limit": limit}, user=actor))[
-                        "permission_tasks"
-                    ]
-                assert len(rows) == limit
-                assert all(row["permissions"] == expected for row in rows)
-                counts.append(len(queries))
-            assert counts[0] == counts[1] == counts[2], counts
+    call_command("rebac", "sync", verbosity=0)
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon({"public": {"query": (_TASK_PERMISSIONS_RESOURCE.query,)}}),
+        ]
+    ).build("public")
+    graphql_type = schema._schema.get_type("TaskPermissionsType")
+    assert isinstance(graphql_type, GraphQLObjectType)
+    enum = get_named_type(graphql_type.fields["permissions"].type)
+    assert isinstance(enum, GraphQLEnumType)
+    assert set(enum.values) == {"write", "share", "delete"}
+    owner = create_user("permission-owner")
+    assignee = create_user("permission-assignee")
+    reader = create_user("permission-reader")
+    with system_context(reason="tests.projects.permissions.seed"):
+        project = Project.objects.create(title="Permission project", owner=owner)
+        # A hierarchy row derives its path on save, so the batch inserts one by one.
+        for _ in range(50):
+            Task.objects.create(project=project, owner=owner, assignee=assignee)
+        write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(reader))])
+    document = """
+        query Permissions($limit: Int!) {
+          permission_tasks(order_by: [{id: asc}], limit: $limit) { id permissions }
+        }
+    """
+    for actor, expected in (
+        (owner, ["delete", "share", "write"]),
+        (assignee, ["write"]),
+        (reader, []),
+    ):
+        result_data(execute_schema(schema, document, {"limit": 1}, user=actor))
+        counts = []
+        for limit in (1, 10, 50):
+            with (
+                patch(
+                    "angee.graphql.capabilities.permission_annotations",
+                    side_effect=AssertionError("Per-row permission fallback"),
+                ),
+                CaptureQueriesContext(connection) as queries,
+            ):
+                rows = result_data(execute_schema(schema, document, {"limit": limit}, user=actor))[
+                    "permission_tasks"
+                ]
+            assert len(rows) == limit
+            assert all(row["permissions"] == expected for row in rows)
+            counts.append(len(queries))
+        assert counts[0] == counts[1] == counts[2], counts
 
 
 def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
@@ -132,26 +129,24 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
 
 
-@pytest.mark.parametrize("storage", ("denormalized", "registry"))
-def test_task_chatter_inherits_live_record_read(project_access_schema: Any, storage: str) -> None:
+def test_task_chatter_inherits_live_record_read(project_access_schema: Any) -> None:
     """The task's read gate grants chatter read and revokes it when narrowed."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
-        call_command("rebac", "sync", verbosity=0)
-        user = apps.get_model("iam", "User").objects.create_user(username="task-chatter-reader")
-        with system_context(reason="tests.projects.task_chatter"):
-            project = Project.objects.create(title="Thread project")
-            task = Task.objects.create(project=project)
-            attachment = ThreadAttachment.objects.ensure_for_record(task)
-            write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(user))])
-        thread = attachment.thread
-        assert thread.with_actor(user).has_access("read")
-        assert Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
-        assert not thread.with_actor(user).has_access("write")
-        with system_context(reason="tests.projects.task_narrow"):
-            task.set_visibility("restricted")
-        assert not thread.with_actor(user).has_access("read")
-        assert not Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
+    call_command("rebac", "sync", verbosity=0)
+    user = apps.get_model("iam", "User").objects.create_user(username="task-chatter-reader")
+    with system_context(reason="tests.projects.task_chatter"):
+        project = Project.objects.create(title="Thread project")
+        task = Task.objects.create(project=project)
+        attachment = ThreadAttachment.objects.ensure_for_record(task)
+        write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(user))])
+    thread = attachment.thread
+    assert thread.with_actor(user).has_access("read")
+    assert Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
+    assert not thread.with_actor(user).has_access("write")
+    with system_context(reason="tests.projects.task_narrow"):
+        task.set_visibility("restricted")
+    assert not thread.with_actor(user).has_access("read")
+    assert not Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
 
 
 @pytest.fixture
@@ -175,50 +170,47 @@ def project_access_schema(tmp_path: Path, transactional_db: None) -> Any:
                 config.rebac_schema = original
 
 
-@pytest.mark.parametrize("storage", ("denormalized", "registry"))
-def test_bound_vault_requires_share_to_bind_another_project(project_access_schema: Any, storage: str) -> None:
+def test_bound_vault_requires_share_to_bind_another_project(project_access_schema: Any) -> None:
     """A source project writer cannot expose its vault to another project's readers."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
-        call_command("rebac", "sync", verbosity=0)
-        manager = create_user("vault-project-manager")
-        owner = create_user("vault-owner")
-        writer = create_user("vault-project-writer")
-        reader = create_user("vault-destination-reader")
-        admin = create_platform_admin("vault-administrator")
-        with system_context(reason="tests.projects.vault_binding"):
-            team = Group.objects.create(name="Project team", slug="vault-project-team")
-            Membership.objects.create(
-                group=team,
-                party=Person.objects.for_user(writer),
-                role="moderator",
-                is_confirmed=True,
-            )
-            source = Project.objects.create(title="Source", owner=manager, team=team)
-            destination = Project.objects.create(title="Destination", owner=writer)
-            vault = Vault.objects.create(name="Bound vault", owner=owner)
-            ProjectBinding.objects.bind(project=source, target=vault)
-            write_relationships([RelationshipTuple(to_object_ref(destination), "reader", to_subject_ref(reader))])
-        assert source.with_actor(writer).has_access("write")
-        assert not source.has_access("share")
-        assert vault.with_actor(writer).has_access("write")
-        assert not vault.has_access("share")
-        # The binding's own `create` requires share on the vault: the edge gate refuses.
-        with actor_context(writer), pytest.raises(PermissionDenied):
-            ProjectBinding.objects.bind(project=destination, target=vault)
-        assert not vault.with_actor(reader).has_access("read")
-        assert not ProjectBinding._base_manager.filter(project=destination).exists()
-        for sharer in (owner, manager, admin):
-            assert vault.with_actor(sharer).has_access("share")
-            assert Vault.objects.with_actor(sharer).with_action("share").filter(pk=vault.pk).exists()
-        with actor_context(manager):
-            ProjectBinding.objects.unbind(project=source, target=vault)
-        assert not vault.with_actor(manager).has_access("share")
-        assert vault.with_actor(owner).has_access("share")
+    call_command("rebac", "sync", verbosity=0)
+    manager = create_user("vault-project-manager")
+    owner = create_user("vault-owner")
+    writer = create_user("vault-project-writer")
+    reader = create_user("vault-destination-reader")
+    admin = create_platform_admin("vault-administrator")
+    with system_context(reason="tests.projects.vault_binding"):
+        team = Group.objects.create(name="Project team", slug="vault-project-team")
+        Membership.objects.create(
+            group=team,
+            party=Person.objects.for_user(writer),
+            role="moderator",
+            is_confirmed=True,
+        )
+        source = Project.objects.create(title="Source", owner=manager, team=team)
+        destination = Project.objects.create(title="Destination", owner=writer)
+        vault = Vault.objects.create(name="Bound vault", owner=owner)
+        ProjectBinding.objects.bind(project=source, target=vault)
+        write_relationships([RelationshipTuple(to_object_ref(destination), "reader", to_subject_ref(reader))])
+    assert source.with_actor(writer).has_access("write")
+    assert not source.has_access("share")
+    assert vault.with_actor(writer).has_access("write")
+    assert not vault.has_access("share")
+    # The binding's own `create` requires share on the vault: the edge gate refuses.
+    with actor_context(writer), pytest.raises(PermissionDenied):
+        ProjectBinding.objects.bind(project=destination, target=vault)
+    assert not vault.with_actor(reader).has_access("read")
+    assert not ProjectBinding._base_manager.filter(project=destination).exists()
+    for sharer in (owner, manager, admin):
+        assert vault.with_actor(sharer).has_access("share")
+        assert Vault.objects.with_actor(sharer).with_action("share").filter(pk=vault.pk).exists()
+    with actor_context(manager):
+        ProjectBinding.objects.unbind(project=source, target=vault)
+    assert not vault.with_actor(manager).has_access("share")
+    assert vault.with_actor(owner).has_access("share")
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
 def test_project_binding_grants_and_revokes_thread_message_access(
     project_access_schema: Any,
 ) -> None:
@@ -306,7 +298,6 @@ def test_project_binding_grants_and_revokes_thread_message_access(
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
 def test_binding_edits_and_deletes_require_authority(project_access_schema: Any) -> None:
     """Binding persistence cannot move or revoke access around either side's policy owner."""
 
@@ -346,7 +337,6 @@ def test_binding_edits_and_deletes_require_authority(project_access_schema: Any)
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
 def test_project_drive_access_reaches_folders_and_files(project_access_schema: Any) -> None:
     """A drive binding supplies the native access chain for every contained row."""
 

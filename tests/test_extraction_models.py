@@ -15,7 +15,6 @@ from django.core.exceptions import FieldDoesNotExist, PermissionDenied, Validati
 from django.db import close_old_connections, connection, connections, transaction
 from django.db.models import CharField
 from django.db.models.deletion import PROTECT
-from django.test import override_settings
 from rebac import actor_context, generic_target, system_context
 
 from angee.base.fields.state import StateField
@@ -85,7 +84,7 @@ SCHEMA = {
 
 @pytest.fixture
 def evidence(drive, monkeypatch):
-    """Retain real storage-backed evidence with a registry-selected profile."""
+    """Retain real storage-backed evidence."""
 
     monkeypatch.setattr(File, "rebac_grantable", AbstractFile.rebac_grantable)
     content = b"Note\nFirst line\nSecond line"
@@ -608,7 +607,6 @@ def test_read_only_target_access_cannot_retain_or_advance_lineage(evidence, exis
         assert ExtractionLineage.objects.get(pk=base.lineage_id).head_id == base.pk
 
 
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
 def test_actor_scoped_carrier_reads_do_not_join_guarded_sources_around_an_elevated_base_copy(evidence):
     """The reader's carrier and page reads stay in its scope; retaining over its base copies the base as system work."""
     retain, values = evidence

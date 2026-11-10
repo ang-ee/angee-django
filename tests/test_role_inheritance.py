@@ -12,15 +12,13 @@ from rebac.types import RelationshipFilter
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("storage", ("denormalized", "registry"))
 @pytest.mark.parametrize("kind", ("person", "service"))
-def test_role_arrows_preserve_transitive_membership_and_revocation(settings, storage: str, kind: str) -> None:
+def test_role_arrows_preserve_transitive_membership_and_revocation(kind: str) -> None:
     """Plain role subjects grant inherited reach without granting direct membership."""
 
-    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     call_command("rebac", "sync", verbosity=0)
     with system_context(reason="test role inheritance"):
-        user = get_user_model().objects.create_user(username=f"role-{storage}-{kind}", kind=kind)
+        user = get_user_model().objects.create_user(username=f"role-{kind}", kind=kind)
         subject = to_subject_ref(user)
         child = ObjectRef("storage/role", "child")
         parent = ObjectRef("storage/role", "parent")

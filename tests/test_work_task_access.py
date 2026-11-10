@@ -113,10 +113,6 @@ class TaskAccessTests(WorkCase):
                         )
 
 
-class TaskAccessDenormalizedTests(TaskAccessTests):
-    storage = "denormalized"
-
-
 class PublicQueueTests(WorkCase):
     def test_public_creation_and_withheld_outsider(self):
         """Requires the spaces owner's public visibility filtered constant."""
@@ -227,10 +223,6 @@ class DuplicateLinkTests(WorkCase):
 
 def test_work_task_access(tmp_path: Path):
     run_composed_tests(tmp_path, "tests.test_work_task_access.TaskAccessTests", app="angee.intake")
-
-
-def test_work_task_access_denormalized(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_work_task_access.TaskAccessDenormalizedTests", app="angee.intake")
 
 
 def test_public_queue_creation(tmp_path: Path):

@@ -14,7 +14,6 @@ from tests.conftest import create_user
 from tests.spaces_campaign_helpers import ROLES
 from tests.spaces_campaign_helpers import roster as roster
 from tests.spaces_campaign_helpers import spaces_console as spaces_console
-from tests.spaces_campaign_helpers import spaces_storage as spaces_storage
 from tests.test_productivity_write_behavior import Queue
 from tests.test_spaces import spaces_tables as spaces_tables
 
