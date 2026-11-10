@@ -16,13 +16,14 @@ from pydantic_ai.messages import BinaryContent, ModelMessagesTypeAdapter
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
-from rebac import SubjectRef, actor_context, user_subject_type
+from rebac import actor_context
 
 from angee.agents.context import render_view_context
 from angee.agents.models import normalize_inference_usage
 from angee.agents.runners import SessionRunner, SessionUpdateSink, TurnOutcome
 from angee.agents_runtime_pydantic.acp import approval_requests, updates_for_event
 from angee.agents_runtime_pydantic.toolsets import toolsets_for_session
+from angee.base.permissions import user_subject_ref
 
 _BINARY_CONTENT_OMITTED = "[Binary tool content omitted from persisted history; use a bounded file handle.]"
 """Replay-safe placeholder until the storage-handle follow-on lands."""
@@ -56,7 +57,7 @@ class PydanticAISessionRunner(SessionRunner):
         if deferred is None:
             context = ""
             if turn.created_by_id is not None:
-                with actor_context(SubjectRef.of(user_subject_type(), str(turn.created_by_id))):
+                with actor_context(user_subject_ref(user_id=turn.created_by_id)):
                     context = render_view_context(dict(turn.context))
             # Native user content persists in all_messages(); instructions apply only to this run.
             prompt = [context, str(turn.prompt)] if context else str(turn.prompt)

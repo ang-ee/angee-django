@@ -196,33 +196,43 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
                 content_type=ContentType.objects.get_for_model(record), object_id=str(record.pk),
             )
         with actor_context(owner):
-            guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
             with CaptureQueriesContext(connection) as queries:
-                sql = str(guarded.query)
-                guarded.query.get_compiler(connection=connection).as_sql()
+                guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
             assert len(queries) == 0
+            sql = str(guarded.query)
+            guarded.query.get_compiler(connection=connection).as_sql()
             assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False]
             assert "varchar(63)" in sql and ("CAST(" in sql or "::varchar(63)" in sql)
+            assert list(guarded.values("_angee_record_readable").annotate(
+                total=models.Count("pk"),
+            ).order_by("_angee_record_readable")) == [
+                {"_angee_record_readable": False, "total": 1},
+                {"_angee_record_readable": True, "total": 1},
+            ]
         with actor_context(other):
             rebound = with_record_reference_access(guarded)
             assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True]
 
 
-def test_record_reference_empty_declaration_is_query_free():
-    """An empty schema probe resolves no target types or permission scopes."""
+@pytest.mark.parametrize("empty", [False, True])
+def test_record_reference_declaration_is_query_free(empty):
+    """Schema and optimizer probes resolve no target types or permission scopes."""
     with CaptureQueriesContext(connection) as queries:
-        guarded = with_record_reference_access(DecisionRecord.objects.none())
+        rows = DecisionRecord.objects.none() if empty else DecisionRecord.objects.all()
+        guarded = with_record_reference_access(rows)
+        guarded.filter(_angee_record_readable=True).query.clone()
+        assert actor_scoped_relation_expression(guarded, "decision__kind") is not None
     assert len(queries) == 0
-    assert guarded.query.is_empty()
+    assert guarded.query.is_empty() is empty
 
 
-def test_record_reference_compilation_is_query_free(referenced_decisions):
-    """Repeated compilation keeps represented types and actor-bound results intact."""
+def test_unused_record_reference_guard_compiles_without_reads(referenced_decisions):
+    """An unused annotation never scans represented types or resolves permissions."""
     owner, _outsider, _records, decisions = referenced_decisions
-    guarded = with_record_reference_access(DecisionRecord.objects.with_actor(owner)).order_by("pk")
     with CaptureQueriesContext(connection) as queries:
-        str(guarded.query)
-        guarded.query.get_compiler(connection=connection).as_sql()
+        guarded = with_record_reference_access(DecisionRecord.objects.with_actor(owner)).order_by("pk")
+        str(guarded.values("pk").query)
+        guarded.values("pk").query.get_compiler(connection=connection).as_sql()
     assert len(queries) == 0
     assert list(guarded.values_list("pk", "_angee_record_readable")) == [
         (row.pk, True) for row in sorted(decisions, key=lambda row: row.pk)

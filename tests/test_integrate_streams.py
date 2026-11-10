@@ -33,6 +33,7 @@ from angee.integrate.states import (
     StreamDirection,
     StreamKind,
     StreamPhase,
+    StreamState,
     SyncFailureKind,
     SyncFailureStatus,
 )
@@ -523,7 +524,7 @@ def test_new_mapping_declaration_replays_applied_rows_once(stream_bridge: Channe
             target = AppliedRecord.objects.filter(key="person:1").first()
             records = () if stream.cursor else (RecordChange(
                 "person:1", {"name": "Ada"}, "unchanged-source", mapped_payload={"name": "Ada"},
-                target=target, projection=target.payload if target else None, mapping_version=stream.mapping_version,
+                target=target, projection=target.payload if target else None, mapping_version=self.mapping_version,
             ),)
             return StreamPage(records, {"done": True})
 
@@ -566,6 +567,40 @@ def test_new_mapping_declaration_replays_applied_rows_once(stream_bridge: Channe
     assert reset.mapping_version == 2
     adapter.mapping_version = 2
     assert open_stream(stream_bridge, "records", "", adapter).pk == reset.pk
+
+
+@pytest.mark.parametrize("snapshot", [False, True])
+@pytest.mark.parametrize("applied_versions", [(), (4, 4), (4, 3), (5, 5)])
+def test_deploy_seeds_unknown_stream_mapping_before_deciding_to_replay(
+    stream_bridge: Channel, snapshot: bool, applied_versions: tuple[int, ...],
+) -> None:
+    """Existing progress survives deployment unless at least one applied link is older."""
+
+    definition = StreamDefinition("records", kind=StreamKind.RECORD_REPLICA, snapshot=snapshot, mapping_version=4)
+    fields = definition.stream_fields()
+    del fields["mapping_version"]  # The new nullable column on a pre-existing stream.
+    initial = SyncStream.objects.create(integration_id=stream_bridge.pk, **fields)
+    assert initial.mapping_version is None
+    records = tuple(RecordChange(
+        f"person:{index}", {"name": f"Person {index}"}, "unchanged-source", mapping_version=version,
+        mapped_payload={"name": f"Person {index}"},
+    ) for index, version in enumerate(applied_versions))
+    advance_stream(initial, MemoryAdapter(pages=[StreamPage(records, {"done": True})]))
+    initial.refresh_from_db()
+    assert initial.mapping_version is None and initial.phase == StreamPhase.DELTA
+    if snapshot:
+        assert initial.state == StreamState.CLOSED
+
+    current = SyncStream.objects.current(stream_bridge, definition)
+    should_replay = bool(applied_versions and min(applied_versions) < definition.mapping_version)
+    assert current.generation == initial.generation + int(should_replay)
+    assert current.mapping_version == max(min(applied_versions, default=4), 4)
+    assert current.cursor == ({} if should_replay else {"done": True})
+    assert current.phase == (StreamPhase.BASELINE if should_replay else StreamPhase.DELTA)
+    assert current.state == (StreamState.OPEN if should_replay else initial.state)
+    assert SyncStream.objects.current(stream_bridge, definition).pk == current.pk
+    assert SyncStream.objects.count() == 1 + int(should_replay)
+    assert set(RecordLink.objects.values_list("stream_id", flat=True)) == ({current.pk} if records else set())
 
 
 @pytest.mark.parametrize(("remote_version", "snapshots"), [("v1", 1), ("v2", 2)])

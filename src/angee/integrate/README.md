@@ -70,8 +70,11 @@ declaration's facts: `authoritative` flips and re-derives, a changed `direction`
 re-read of that stream), and a changed `kind` is refused. The generation records
 its mapping version, so reopening
 the same declaration preserves progress; an older declaration cannot lower it.
-Adapters declare the version in `StreamDefinition` and use it in their record and
-applied evidence. `cursor`, `reconcile_interval`, `absence_threshold`,
+Adapters declare the version in `StreamDefinition` and use the declared version
+in their record and applied evidence, including after a rollback. An unknown
+stored version is seeded from the minimum applied link version, or the declared
+version for a stream without links; only a newer declaration starts a baseline.
+`cursor`, `reconcile_interval`, `absence_threshold`,
 `tombstone_retention` and `config` seed the first generation only; changing them in
 a declaration never changes an existing stream.
 A declared snapshot with no reconciliation interval closes after its baseline;

@@ -46,7 +46,7 @@ from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import TimestampMixin, update_fields_with_auto_now
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import instance_actor, require_rebac_queryset
+from angee.base.permissions import instance_actor, relation_read_queryset, require_rebac_queryset
 from angee.base.prefetch import ReaderMemo
 from angee.base.querysets import by_key, query_batch_size
 from angee.base.validators import validate_value
@@ -121,11 +121,14 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
         The scopes are applied eagerly (``scoped()``): a lazily scoped queryset
         embedded as a subquery compiles without the actor's scope. Nullable member
         columns belong to other aspects and do not withhold those rows.
+        Without an explicit reader, ambient system scope reads unscoped and an
+        absent actor outside that scope fails closed.
         """
 
-        if actor is None:
-            return self.none()
-        subjects = require_rebac_queryset(self.model.statement_subject_model, actor=actor).with_action("read")
+        source = require_rebac_queryset(self.model.statement_subject_model)
+        if actor is not None:
+            source = source.with_actor(actor)
+        subjects = relation_read_queryset(self.model.statement_subject_model, source)
         rows = self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
         member_names = sorted({name for aspect in self.model.statement_aspects.values() for name in aspect.members})
         for name in member_names:
@@ -135,7 +138,7 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
             related = field.remote_field.model
             if model_resource_type(related) is None:
                 continue
-            members = require_rebac_queryset(related, actor=actor).with_action("read").scoped()
+            members = relation_read_queryset(related, source).scoped()
             rows = rows.filter(
                 Q(**{f"{field.attname}__isnull": True})
                 | Q(**{f"{field.attname}__in": models.Subquery(members.values(field.target_field.name))})
@@ -252,11 +255,10 @@ def _readable_statement_reads(
     }
     readable_sources: dict[tuple[type[models.Model], str, str], models.Model] = {}
     for (model, id_attr), sources in sources_by_model.items():
-        visible = (
-            require_rebac_queryset(model, actor=actor)
-            .with_action("read")
-            .filter(**{f"{id_attr}__in": sources})
-        )
+        reader_source = require_rebac_queryset(model)
+        if actor is not None:
+            reader_source = reader_source.with_actor(actor)
+        visible = relation_read_queryset(model, reader_source).filter(**{f"{id_attr}__in": sources})
         readable_sources.update({
             (model, id_attr, str(getattr(row, id_attr))): row for row in visible
         })

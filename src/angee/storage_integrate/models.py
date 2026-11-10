@@ -94,7 +94,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         *,
         name: str,
         root: Path,
-        mode: MountMode | str,
+        mode: MountMode,
         backend_class: str,
         already_mounted_message: str,
         slug_default: str,
@@ -110,16 +110,11 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
         display_name = str(name).strip()
         if not display_name:
             raise ValidationError({"name": "A mount name is required."})
-        try:
-            mount_mode = MountMode(mode)
-        except ValueError as error:
-            raise ValidationError({"mode": f"Unsupported mount mode: {mode}"}) from error
-
         backend_model = apps.get_model("storage", "Backend")
         drive_model = apps.get_model("storage", "Drive")
         mount_config = {"root": str(root)}
         storage_backend_spec: tuple[str, dict[str, Any]] | None = None
-        if mount_mode == MountMode.REFERENCE:
+        if mode == MountMode.REFERENCE:
             source = self.model(backend_class=backend_class, config=mount_config)
             storage_backend_spec = source.backend.storage_backend_spec()
 
@@ -163,7 +158,7 @@ class MountManager[MountT: Mount](_MountManagerBase[MountT]):
                 display_name=display_name,
                 backend_class=backend_class,
                 drive_id=drive.pk,
-                mode=mount_mode,
+                mode=mode,
                 lifecycle=IntegrationLifecycle.DISCONNECTED,
                 config=mount_config,
                 created_by_id=user.pk,

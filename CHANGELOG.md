@@ -19,6 +19,11 @@ live in code docstrings.
   of the outer page filter. Actorless runtime reads fail closed; explicit system
   reads are unscoped. `prefetched_objects` reads Django's materialized ordinary
   relation cache without evaluation (`None` is a miss, `[]` an empty hit).
+  `base.permissions.user_subject_ref` is the canonical inverse of `actor_user_id`;
+  bare user keys no longer trigger a database read. Messaging's historical import
+  remains an alias; thread reader grants and revocations still require an existing
+  user explicitly. `retained_reference_exists(cls, lookup)` drops the unused
+  `record` argument; overrides and callers must use the lookup-only signature.
 - Base writes: immutable changed values retain their identity; mutable values
   are copied before observers run. `bulk_updated` carries only `instances` and
   `update_fields`, without `using`. The public `send_bulk_update` delivers that
@@ -45,6 +50,9 @@ live in code docstrings.
   `UNLOADED`. Command and resource-load attribution no longer select a database;
   bulk history capture no longer partitions rows by database. Member timeline
   reads have statement and SQL-size budgets.
+  History, field provenance, statement links and evidence display now share
+  ambient read policy: system scope without an actor can read, while strict
+  actorless access fails closed. Evidence admission still requires a named reader.
 - Saved rows: `base.validators.SavedRow` is the shared Pydantic annotation used
   by `DecisionRequest.records`; `is_saved_row` exposes the same predicate to
   other callers. A row requires a primary key and `_state.adding == False`.
@@ -82,8 +90,11 @@ live in code docstrings.
   hook authors must compose. `AngeeResource.adopt_persisted_instance` copies a
   verb-persisted row, marks it saved and completes the import lifecycle for
   chatter and workflow-definition adapters. Dashboard loads revalidate parents
-  in one read. Mount provisioning parses `MountMode` exactly: case variants and
-  surrounding whitespace now fail validation. `File.purge_if_unretained` treats
+  in one read. Mount connect helpers and `MountManager.provision` now require
+  `MountMode` values; the manager no longer coerces strings.
+  `resources.E001` rejects models defining `after_resource_load` without
+  composing `ResourceLoadMixin`.
+  `File.purge_if_unretained` treats
   every reverse foreign key as retention regardless of `on_delete`, including
   a committed `messaging.Part.file` with `SET_NULL`.
 - Workflows and extraction: `workflows.transactions` owns `RETRYABLE_SQLSTATES`,
@@ -102,6 +113,21 @@ live in code docstrings.
   already-locked row, with one row lock. A fresh or declined admission claims
   the poll interval; stale queued recovery retains its claim. Declined manual
   admission still writes nothing.
+- Integrate mapping upgrades: `StreamDefinition.mapping_version` declares the
+  mapping revision; a real increase opens one baseline generation, preserving
+  links and resetting the cursor. `SyncStream.mapping_version` is nullable with
+  no default: an unknown version is initialized under the integration lock from
+  the minimum `RecordLink.mapping_version`, or the declared version when there
+  are no links. Deploying streams whose links are already current preserves
+  progress and closed snapshots; an older link triggers exactly one replay.
+  Projects adding this column must generate a nullable `AddField` with no default
+  so existing streams start unknown. Hosts retaining the earlier column addition
+  need `AlterField` to `PositiveIntegerField(null=True, blank=True)`, removing
+  `default=1`. That alteration preserves existing numeric values; it does not
+  undo an earlier migration's version-1 seed. No per-host link backfill is needed
+  for unknown versions. Already recorded versions are preserved, including on
+  rollback. Adapters stamp record evidence with their
+  declared version, independently of the stream's recorded maximum.
 - Integrate progress and OAuth: `BridgeProgressReporter`, `current_bridge_progress`
   and `LiveSession(reporter=)` / `.reporter` are removed. Nested sync code uses
   `current_progress_bridge().report_progress`; `bridge_progress_context` becomes
@@ -111,9 +137,10 @@ live in code docstrings.
   `OAuthClient.discover_endpoints` directly; the duplicate OIDC `ensure_endpoints`
   override and parameter-coercion helpers are removed (the base protocol method
   remains). `HTTP_TIMEOUT_SECONDS` is owned by `integrate.http`.
-  `HttpClient.get_json` owns JSON GET; OAuth's former public `get_json` becomes
-  private `_get_json`, translating shared HTTP/decoding failures to its coded
-  errors and requiring an object response.
+  `HttpClient.get_json` owns JSON GET. OAuth's `oauth_get_json` composes its
+  outbound headers and private-provider policy for discovery and userinfo;
+  the obsolete private helper and `USERINFO_FAILED` code are removed. Discovery
+  translates failures to its coded errors; userinfo remains best-effort.
 - GraphQL: `line_metadata` replaces `_line_metadata`; generic adapters call the
   base model's change, deletion and redaction contracts. `AngeeManager.admit_view_as`
   declares a refusing default; IAM's manager owns admission. Record-reference
@@ -121,6 +148,13 @@ live in code docstrings.
   lookup during expression construction. Relation resolvers use base's ambient
   read and ordinary-prefetch owners; actorless fallback does not reuse an
   evaluated actor-bound cache.
+  SQL relation guards resolve scopes lazily at compilation, keeping declaration
+  and optimizer probes query-free. `angee.graphql.testing.capture_broadcasts`
+  captures committed change-feed payloads through the public test seam; its
+  context must include the delivering commit.
+- Tags: readable extension fields no longer imply filter or group axes.
+  Consumers must declare `hasura_filterable_fields` and `hasura_groupable_fields`
+  explicitly for each extension field they expose on those query axes.
 - Web: imperative TanStack reads use `query` / `infiniteQuery` (react-query
   >= 5.102); `readSharedIdentity` owns the shared static identity read. ACP chat
   removes runtime dispatch props/context and the retired `@angee/agents/chat`,

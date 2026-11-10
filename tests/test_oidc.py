@@ -43,7 +43,7 @@ from angee.iam_integrate_oidc.providers import GoogleType
 from angee.integrate import schema as integrate_schema
 from angee.integrate.connect import complete_account_connect
 from angee.integrate.errors import IntegrationError
-from angee.integrate.http import HttpClient, _PinnedBackend
+from angee.integrate.http import _PinnedBackend
 from angee.integrate.models import AccountStatus, CredentialStatus
 from angee.integrate.oauth import client as oauth_protocol
 from angee.integrate.oauth import discovery as oauth_discovery
@@ -80,7 +80,7 @@ def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.M
         calls.append(url)
         return {"authorization_endpoint": "https://issuer.example/oauth/authorize"}
 
-    monkeypatch.setattr(oauth_discovery, "HttpClient", lambda: SimpleNamespace(get_json=get_json))
+    monkeypatch.setattr(oauth_discovery, "oauth_get_json", get_json)
 
     url = OAuthClientOidcProtocol(oidc).authorize_url(
         state="state-token",
@@ -126,7 +126,7 @@ def test_ensure_endpoints_caches_document_by_discovery_url(monkeypatch: pytest.M
 
     monkeypatch.setattr(oauth_discovery.cache, "get", cache_get)
     monkeypatch.setattr(oauth_discovery.cache, "set", cache_set)
-    monkeypatch.setattr(oauth_discovery, "HttpClient", lambda: SimpleNamespace(get_json=get_json))
+    monkeypatch.setattr(oauth_discovery, "oauth_get_json", get_json)
 
     protocol = OAuthClientOidcProtocol(oidc)
     first = protocol.ensure_endpoints()
@@ -153,7 +153,7 @@ def test_discovery_rejects_invalid_documents_without_caching(monkeypatch, result
 
     monkeypatch.setattr(oauth_discovery.cache, "get", lambda key: None)
     monkeypatch.setattr(oauth_discovery.cache, "set", lambda *args, **kwargs: cached.append(args))
-    monkeypatch.setattr(oauth_discovery, "HttpClient", lambda: SimpleNamespace(get_json=fetch))
+    monkeypatch.setattr(oauth_protocol, "HttpClient", lambda: SimpleNamespace(get_json=fetch))
     with pytest.raises(OAuthFlowError) as refused:
         oauth_discovery.discovery_document("https://invalid-document.example/discovery")
     assert (refused.value.code, refused.value.http_status) == (DISCOVERY_FAILED, status)
@@ -165,24 +165,24 @@ def test_outbound_requests_send_honest_user_agent() -> None:
 
     Not the HTTP client's default (Anthropic's edge 403s ``python-httpx``/``Python-urllib``)
     and not a spoofed browser/curl UA (Anthropic 429s those) — an honest client UA passes.
-    The GET helper (discovery/userinfo) and the Authlib token POST both carry it.
+    The userinfo GET and the Authlib token POST both carry it.
     """
 
     seen: list[str | None] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.headers.get("user-agent"))
+        assert request.headers["Accept"] == "application/json"
+        if request.method == "GET":
+            assert request.headers["Authorization"] == "Bearer access-token"
+            return httpx2.Response(200, json={"sub": "profile"})
         return httpx2.Response(200, json={"access_token": "access-token"})
 
     transport = httpx2.MockTransport(handler)
 
-    HttpClient().get_json(
-        "https://idp.example/.well-known/openid-configuration",
-        headers=oauth_protocol.OUTBOUND_HEADERS,
-        transport=transport,
-    )
     protocol = OAuthClientProtocol(_stub_oauth_client())
     protocol._transport = transport
+    assert protocol.fetch_userinfo("access-token") == {"sub": "profile"}
     protocol.exchange_code(code="abc", redirect_uri="https://app.example/callback")
 
     assert seen == [oauth_protocol.USER_AGENT, oauth_protocol.USER_AGENT]
@@ -2086,7 +2086,7 @@ def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override
         assert str(request.url) == endpoint
         return httpx2.Response(200, json={"sub": "seed-subject"})
 
-    monkeypatch.setattr(oauth_discovery, "HttpClient", lambda: SimpleNamespace(get_json=discover))
+    monkeypatch.setattr(oauth_discovery, "oauth_get_json", discover)
     monkeypatch.setattr(oauth_discovery.cache, "get", lambda key: None)
     protocol = OAuthClientProtocol(client)
     protocol._transport = httpx2.MockTransport(profile)

@@ -10,8 +10,7 @@ from django.conf import settings
 from django.core.cache import cache
 
 from angee.integrate.errors import RequestNotSentError
-from angee.integrate.http import HttpClient
-from angee.integrate.oauth.client import OUTBOUND_HEADERS
+from angee.integrate.oauth.client import oauth_get_json
 from angee.integrate.oauth.errors import DISCOVERY_FAILED, OAuthFlowError
 
 _DISCOVERY_CACHE_PREFIX = "angee.integrate.oauth.discovery:"
@@ -25,7 +24,7 @@ def discovery_document(discovery_url: str) -> dict[str, Any]:
     if isinstance(cached, dict):
         return cached
     try:
-        discovery = HttpClient().get_json(discovery_url, headers=OUTBOUND_HEADERS, allow_private=True)
+        discovery = oauth_get_json(discovery_url)
     except (RequestNotSentError, httpx2.TransportError) as exc:
         raise OAuthFlowError(DISCOVERY_FAILED, 503) from exc
     except Exception as exc:

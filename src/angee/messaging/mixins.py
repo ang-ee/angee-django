@@ -37,6 +37,7 @@ from angee.base.exceptions import DomainError
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.models.identity import instance_from_public_id
 from angee.base.permissions import actor_user_id
+from angee.base.permissions import user_subject_ref as user_subject_ref
 from angee.base.refs import generic_pointer_model
 
 if TYPE_CHECKING:
@@ -53,21 +54,6 @@ def _actor_user_id(instance: models.Model) -> Any | None:
 
     actor = instance.actor() if isinstance(instance, RebacMixin) else None
     return actor_user_id(actor if actor is not None else current_actor())
-
-
-def user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
-    """Return the REBAC subject ref for a user instance or a bare user id.
-
-    The user model owns its subject identity, so a bare ``user_id`` is loaded and
-    resolved through :func:`to_subject_ref` rather than assembling an authorization
-    ref by hand.
-    """
-
-    if user is not None:
-        return to_subject_ref(user)
-    if user_id is None:
-        raise ValueError("A user or user_id is required to build a subject reference.")
-    return to_subject_ref(get_user_model()._base_manager.get(pk=user_id))
 
 
 class NotificationPolicy(models.TextChoices):

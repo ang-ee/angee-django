@@ -43,6 +43,7 @@ from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from tests.conftest import SchemaAddon
+from tests.queries import statement_body
 from tests.tables import model_tables
 
 
@@ -936,9 +937,9 @@ def test_relation_in_resolves_all_operands_with_one_read(relation_grouping_case:
         else:
             count = len(condition(GroupParent.objects.with_actor(case.alice)))
     assert count == 4
-    reads = [query["sql"] for query in queries if query["sql"].startswith("SELECT")
-             and f'FROM "{GroupLabel._meta.db_table}"' in query["sql"]
-             and f'FROM "{GroupParent._meta.db_table}"' not in query["sql"]]
+    reads = [sql for query in queries for sql in (statement_body(query["sql"]),)
+             if sql.startswith("SELECT") and f'FROM "{GroupLabel._meta.db_table}"' in sql
+             and f'FROM "{GroupParent._meta.db_table}"' not in sql]
     assert len(reads) == 1
     assert " IN (" in reads[0]
 

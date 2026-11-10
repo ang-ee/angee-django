@@ -1881,7 +1881,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
         if runtime.renders_service and model is not None and self.inference_secret():
             credential = self.inference_credential_for_runtime()
             if credential is None:
-                raise ValueError("Inference auth requires a model provider backend.")
+                raise ValueError("Inference auth requires a credential.")
             structured["auth_env"] = self._service_env_lines(
                 runtime.auth_env(
                     backend=model.provider.backend, credential=credential, secret_name=self.inference_secret_name(),

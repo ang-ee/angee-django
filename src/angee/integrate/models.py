@@ -4232,6 +4232,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         snapshot changes start a new baseline generation with the persisted policy.
         A newer mapping version also starts one baseline: its persisted version
         makes repeated opens idempotent and revisits already-applied identities.
+        An unknown version is seeded from the oldest applied link mapping, or
+        the declaration when no links exist, so deployment alone never replays
+        records already applied at the declared version.
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
         flips it from inside a page.
@@ -4256,6 +4259,10 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 return self.create(integration_id=bridge.pk, **definition.stream_fields())
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
+            if stream.mapping_version is None:
+                applied_version = stream.links.aggregate(version=models.Min("mapping_version"))["version"]
+                stream.mapping_version = applied_version if applied_version is not None else definition.mapping_version
+                stream.save(update_fields=["mapping_version", "updated_at"])
             if (
                 stream.direction != definition.direction
                 or stream.snapshot != definition.snapshot
@@ -4418,8 +4425,8 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     flip is a re-derivation, never a migration.
     """
     generation = models.PositiveIntegerField(default=1)
-    mapping_version = models.PositiveIntegerField(default=1)
-    """The declared mapping this generation applies, retained across cursor resets."""
+    mapping_version = models.PositiveIntegerField(null=True, blank=True)
+    """Highest opened mapping version; unknown until seeded by :meth:`SyncStreamManager.current`."""
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
     cursor = models.JSONField(default=dict, blank=True)

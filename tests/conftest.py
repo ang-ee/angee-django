@@ -695,7 +695,7 @@ def make_mount(
     *,
     drive: Any,
     root: Path,
-    mode: MountMode | str = MountMode.REFERENCE,
+    mode: MountMode = MountMode.REFERENCE,
     config: dict[str, Any] | None = None,
     **attrs: Any,
 ) -> Mount:
