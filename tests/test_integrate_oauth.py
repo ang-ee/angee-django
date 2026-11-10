@@ -19,6 +19,7 @@ from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.implementations import impl_choices
+from angee.base.testing.queries import statement_startswith
 from angee.integrate import connect
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.oauth import state
@@ -109,7 +110,7 @@ def test_registration_snapshot_uses_readiness_and_environment_priority_without_s
             assert operation_registration_slugs() == frozenset()
     finally:
         operation.close()
-    reads = [query["sql"] for query in queries if query["sql"].startswith("SELECT")]
+    reads = [query["sql"] for query in queries if statement_startswith(query["sql"], "SELECT")]
     assert len(reads) == 1, reads
     assert "client_secret" not in reads[0]
     with system_context(reason="test configure registration"):
@@ -194,7 +195,7 @@ def test_connection_health_listing_decrypts_only_the_expired_row(monkeypatch, ro
         assert all(not credential.is_reconnect_required for credential in credentials)
     assert len(credentials) == rows
     assert decrypt.call_count == int(expired_row)
-    reads = [query for query in queries if query["sql"].startswith("SELECT")
+    reads = [query for query in queries if statement_startswith(query["sql"], "SELECT")
              and Credential._meta.db_table in query["sql"]]
     assert len(reads) == 1 + int(expired_row)
     assert len([query for query in queries if "material" in query["sql"]]) == int(expired_row)

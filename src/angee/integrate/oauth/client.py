@@ -71,6 +71,20 @@ _GRANT_URI_ARGUMENTS = frozenset({"uri", "client_id", "response_type", "redirect
 """``prepare_grant_uri``'s own arguments, which a provider's authorize extras never replace."""
 
 
+def oauth_get_json(
+    url: str, *, headers: dict[str, str] | None = None, transport: httpx2.BaseTransport | None = None,
+) -> Any:
+    """GET OAuth JSON with honest headers and support for configured private identity providers.
+
+    The shared HTTP client owns transport and decoding. Discovery and userinfo
+    retain their distinct failure policies at their callers.
+    """
+
+    return HttpClient().get_json(
+        url, headers={**OUTBOUND_HEADERS, **(headers or {})}, allow_private=True, transport=transport,
+    )
+
+
 class OAuthClientProtocol:
     """OAuth2 authorization-code + refresh protocol for one ``OAuthClient`` row."""
 
@@ -170,10 +184,9 @@ class OAuthClientProtocol:
                 userinfo_endpoint = str(self.oauth_client.userinfo_endpoint or "")
             if not userinfo_endpoint:
                 return {}
-            claims = HttpClient().get_json(
+            claims = oauth_get_json(
                 with_query(userinfo_endpoint, params or {}),
-                headers={**OUTBOUND_HEADERS, "Authorization": f"Bearer {access_token}"},
-                allow_private=True,
+                headers={"Authorization": f"Bearer {access_token}"},
                 transport=self._transport,
             )
             return claims if isinstance(claims, dict) else {}

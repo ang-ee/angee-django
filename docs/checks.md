@@ -210,6 +210,11 @@ test modules `test_<concern>.py` and tests
 
 ### GraphQL Document Budgets
 
+Classify captured SQL with [`angee.base.testing.queries`](../src/angee/base/testing/queries.py).
+Its `statement_startswith` and `is_rebac_revision_read` helpers inspect the outer
+statement after CTEs and PostgreSQL cursor declarations; `statement_body` exposes
+that body for projection assertions. Each captured entry still counts once.
+
 [`angee.graphql.testing.documents`](../src/angee/graphql/testing/documents.py) executes
 one document as one actor, as served requests do, and records the SQL Django captured
 on every configured database. The same helpers run an addon schema in the bare source

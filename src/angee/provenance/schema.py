@@ -307,7 +307,7 @@ def _history_reference(record: models.Model, *, pointer: str = "", label: str | 
 def _statement_source_reference(version: Any, actor: Any) -> HistoryReferenceType | None:
     """Prefer a readable retained link; otherwise name the readable principal."""
 
-    link = getattr(version, "_readable_statement_link", None)
+    link = version._readable_statement_link
     if link is not None:
         return _history_reference(link, label=link.statement_source_label)
     source = readable_statement_read(version, actor)[1]
@@ -321,6 +321,9 @@ class RecordHistory:
         self.record = record
         self.actor = actor
         self.model = type(record)
+        self.source = require_rebac_queryset(self.model)
+        if actor is not None:
+            self.source = self.source.with_actor(actor)
         self.scopes = record.history_scope()
         self.statement_scopes: dict[type[Statement], models.Q] = {}
         for model, scope in record.history_scopes().items():
@@ -452,7 +455,7 @@ class RecordHistory:
         readable_links: dict[tuple[type[models.Model], Any], models.Model] = {}
         for link_model, ids in links_by_model.items():
             assert issubclass(link_model, StatementLinkMixin)
-            rows = require_rebac_queryset(link_model, actor=self.actor).with_action("read").filter(pk__in=ids)
+            rows = relation_read_queryset(link_model, self.source).filter(pk__in=ids)
             if link_model.presentation_related:
                 rows = rows.select_related(*link_model.presentation_related)
             readable_links.update({(link_model, row.pk): row for row in rows})
@@ -473,12 +476,9 @@ class RecordHistory:
             snapshots[statement_model.statement_subject_model].setdefault((version.subject_id, None), None)
 
         result: dict[tuple[type[models.Model], Any, Any | None], frozenset[str]] = {}
-        source = require_rebac_queryset(self.model)
-        if self.actor is not None:
-            source = source.with_actor(self.actor)
         for model, items in snapshots.items():
             keys = {pk for pk, _changeset_id in items}
-            readable = relation_read_queryset(model, source).filter(pk__in=keys)
+            readable = relation_read_queryset(model, self.source).filter(pk__in=keys)
             current = {row.pk: row for row in readable}
             missing = keys - current.keys()
             retained = set(model._base_manager.filter(pk__in=missing).values_list("pk", flat=True))
@@ -639,15 +639,11 @@ def _validate_page(limit: int, offset: int) -> None:
 class HistoryQuery:
     @strawberry.field
     def field_provenance(self, model: str, id: PublicID) -> list[FieldProvenanceType] | None:
-        """Applied field statements through their subject and source read gates."""
+        """Applied field statements through ambient subject and source read gates."""
 
         subject_model = provenance_model(model)
         actor = current_actor()
-        queryset = (
-            require_rebac_queryset(subject_model, actor=actor).with_action("read")
-            if actor is not None
-            else subject_model._base_manager.none()
-        )
+        queryset = require_rebac_queryset(subject_model).with_action("read")
         record = instance_for_id(subject_model, id, queryset=queryset)
         if record is None:
             return None
@@ -662,16 +658,12 @@ class HistoryQuery:
         offset: int = 0,
         selected: PublicID | None = None,
     ) -> RecordHistoryType | None:
-        """A record's changesets through its read gate; hidden and unknown records read as null."""
+        """A record's changesets through its ambient read gate; hidden and unknown records read as null."""
 
         _validate_page(limit, offset)
         tracked = history_model(model)
         actor = current_actor()
-        queryset = (
-            require_rebac_queryset(tracked, actor=actor).with_action("read")
-            if actor is not None
-            else tracked._base_manager.none()
-        )
+        queryset = require_rebac_queryset(tracked).with_action("read")
         record = instance_for_id(tracked, id, queryset=queryset)
         if record is None:
             return None

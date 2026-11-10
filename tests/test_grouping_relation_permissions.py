@@ -31,6 +31,7 @@ from rebac.testing import install_schema
 from strawberry import auto
 
 from angee.base.models.base import AngeeDataModel
+from angee.base.testing.queries import statement_body, statement_startswith
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import (
     _declared_aliases,
@@ -936,9 +937,9 @@ def test_relation_in_resolves_all_operands_with_one_read(relation_grouping_case:
         else:
             count = len(condition(GroupParent.objects.with_actor(case.alice)))
     assert count == 4
-    reads = [query["sql"] for query in queries if query["sql"].startswith("SELECT")
-             and f'FROM "{GroupLabel._meta.db_table}"' in query["sql"]
-             and f'FROM "{GroupParent._meta.db_table}"' not in query["sql"]]
+    reads = [sql for query in queries for sql in (statement_body(query["sql"]),)
+             if statement_startswith(sql, "SELECT") and f'FROM "{GroupLabel._meta.db_table}"' in sql
+             and f'FROM "{GroupParent._meta.db_table}"' not in sql]
     assert len(reads) == 1
     assert " IN (" in reads[0]
 

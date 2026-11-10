@@ -47,6 +47,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin
 from angee.base.serialization import strip_null_bytes
+from angee.base.testing.queries import statement_startswith
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -243,7 +244,7 @@ def test_ingest_commits_each_message_and_does_not_lock_an_unchanged_observation(
         )
     assert replayed.pk == first.pk
     assert not any("FOR UPDATE" in query["sql"] for query in queries)
-    assert not any(query["sql"].lstrip().startswith("UPDATE") for query in queries)
+    assert not any(statement_startswith(query["sql"].lstrip(), "UPDATE") for query in queries)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2970,13 +2971,17 @@ def test_broadcasting_room_creator_socket_gated_by_membership(composed_tables: N
 
         # Following grants no access; an explicit share makes the socket live.
         room.message_subscribe(user=creator)
-        thread.grant_reader(user=creator)
+        thread.grant_reader(user_id=creator.pk)
         assert ChangeReadGate(Thread, creator_subject).filter(change) is not None
 
         # Removing the explicit share makes the socket go dark again.
         room.message_unsubscribe(user=creator)
-        thread.revoke_reader(user=creator)
+        thread.revoke_reader(user_id=creator.pk)
         assert ChangeReadGate(Thread, creator_subject).filter(change) is None
+
+        for change_reader in (thread.grant_reader, thread.revoke_reader):
+            with pytest.raises(get_user_model().DoesNotExist):
+                change_reader(user_id=-1)
 
 
 @pytest.mark.django_db(transaction=True)

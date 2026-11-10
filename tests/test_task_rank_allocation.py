@@ -11,6 +11,7 @@ from django.db import connection
 from rebac import system_context
 
 from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
+from angee.base.testing.queries import statement_body, statement_startswith
 from angee.projects.testing.models import Project, Task
 
 
@@ -28,7 +29,8 @@ def test_task_ordering_allocation_retains_explicit_ranks() -> None:
             execute: Callable[..., Any], sql: str, params: Any, many: bool, context: dict[str, Any],
         ) -> Any:
             # Observe the real contextual tail lookup rather than replacing its owner.
-            if sql.startswith("SELECT") and sql.split(" FROM ", 1)[0].endswith(' AS "sub_sort_order"'):
+            if (statement_startswith(sql, "SELECT")
+                    and statement_body(sql).split(" FROM ", 1)[0].endswith(' AS "sub_sort_order"')):
                 allocations.append(context["connection"].alias)
             return execute(sql, params, many, context)
 

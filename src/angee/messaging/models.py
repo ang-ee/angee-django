@@ -29,6 +29,7 @@ from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
@@ -59,7 +60,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import require_rebac_queryset, user_subject_ref
 from angee.base.prefetch import prefetched, prefetched_objects
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
@@ -119,9 +120,6 @@ from angee.messaging.mixins import (
 )
 from angee.messaging.mixins import (
     chatter_record as chatter_record,
-)
-from angee.messaging.mixins import (
-    user_subject_ref,
 )
 from angee.messaging.resources import MessageResource
 from angee.messaging.source_copies import SourceCopyMixin
@@ -760,7 +758,10 @@ class Thread(
         return self.host_broadcasts_changes or not self.is_record_attached()
 
     def grant_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
-        """Grant a user direct ``reader`` access through the declared share surface."""
+        """Grant an existing user direct ``reader`` access through the declared share surface."""
+
+        if user is None and user_id is not None:
+            user = get_user_model()._base_manager.get(pk=user_id)
 
         self._grant_declared_record_access(
             Thread.record_access_permission,
@@ -769,7 +770,10 @@ class Thread(
         )
 
     def revoke_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
-        """Revoke a user's direct ``reader`` access to this thread (mirror of :meth:`grant_reader`)."""
+        """Revoke an existing user's direct ``reader`` access (mirror of :meth:`grant_reader`)."""
+
+        if user is None and user_id is not None:
+            user = get_user_model()._base_manager.get(pk=user_id)
 
         self._revoke_declared_record_access(
             Thread.record_access_permission,

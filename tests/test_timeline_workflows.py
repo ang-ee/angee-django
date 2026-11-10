@@ -12,6 +12,7 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated, change_published
+from angee.base.testing.queries import statement_startswith
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql import publishing
@@ -22,7 +23,7 @@ from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
-from angee.workflows.timeline import RunKind
+from angee.workflows.timeline import RunKind, TimelineSelection
 from tests.conftest import create_user
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_timeline import read_timeline, timeline_entries
@@ -88,11 +89,26 @@ def test_timeline_read_planner_memory(review, settings, viewer, record_property)
     record_property("sql_bytes", len(sql.encode()))
     record_property("planner_memory_used_kib", plan["Planning"]["Memory Used"])
     record_property("planner_memory_allocated_kib", memory)
-    # PG18 with shared id sets: 34,681 SQL bytes, 10,406 KiB used / 16,384 KiB allocated for either actor.
+    # pgvector/pgvector:pg17 with shared id sets: 34,681 SQL bytes,
+    # 10,653 KiB used / 16,384 KiB allocated for either actor.
+    # The 17 MiB ceiling allows 1 MiB (6.25%) headroom over that measured allocation.
     assert 0 < memory <= 17 * 1024, (
         f"Timeline planner allocated {memory} KiB; ceiling 17 MiB. "
         "Ratchet downward when cost falls; never raise to admit a regression."
     )
+
+
+def test_timeline_without_open_questions_does_not_build_record_guards(review, monkeypatch):
+    """No question rows means no guarded prefetch or reference population scan."""
+    admin, _reviewers, _, question = review
+
+    def unexpected_guard(*args, **kwargs):
+        pytest.fail("A timeline with no open questions must not build a record guard")
+
+    monkeypatch.setattr("angee.workflows.timeline.with_record_reference_access", unexpected_guard)
+    with actor_context(admin):
+        entries = list(TimelineSelection([question.review_subject], admin).entries([]))
+    assert len(entries) == 1 and entries[0][1:] == ([], [])
 
 
 @pytest.mark.parametrize("readable", [False, True])
@@ -130,8 +146,8 @@ def test_run_invalidation_reuses_its_audited_scope_and_reloads_relations(executi
             assert tuple(kind.targets(row)) == (run,)
             assert tuple(kind.records(run)) == ()
     queries = [query["sql"] for query in captured]
-    assert sum(sql.startswith('INSERT INTO "rebac_permissionauditevent"') for sql in queries) == 1
-    assert sum(sql.startswith("SELECT") for sql in queries) == 2
+    assert sum(statement_startswith(sql, 'INSERT INTO "rebac_permissionauditevent"') for sql in queries) == 1
+    assert sum(statement_startswith(sql, "SELECT") for sql in queries) == 2
     assert sum(f'FROM "{run._meta.db_table}"' in sql for sql in queries) == 1
 
 

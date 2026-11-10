@@ -33,6 +33,7 @@ from rebac.evaluator import evaluator_scope
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
 
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Handle, Organization, Party, Person, Thread, ThreadFollower
@@ -253,7 +254,7 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                     assert len(captured) == 2, captured.captured_queries
                     assert (
                         sum(
-                            query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
+                            statement_startswith(query["sql"], f'SELECT "{model._meta.db_table}".')
                             for query in captured.captured_queries
                         )
                         == 1

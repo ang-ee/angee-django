@@ -6,6 +6,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
+from angee.base.testing.queries import statement_startswith
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -80,7 +81,7 @@ class TaskAudienceTests(WorkCase):
                 for query in queries
                 if "notification_policy" in query["sql"]
                 and "spaces_membership" in query["sql"]
-                and query["sql"].startswith("SELECT")
+                and statement_startswith(query["sql"], "SELECT")
             ]
             self.assertEqual(len(roster), 1)
         print(f"Work message_post queries: 6 roster members={counts[6]}, 12 roster members={counts[12]}")

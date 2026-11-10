@@ -159,10 +159,12 @@ class TimelineSelection:
         """Group selected runs with their ancestors and readable open decisions."""
 
         decisions = apps.get_model("decisions", "Decision").objects.with_actor(self.actor)
-        links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
-        questions = list(decisions.open_for(*self.records).prefetch_related(models.Prefetch(
-            "records", queryset=with_record_reference_access(links),
-        )))
+        questions = list(decisions.open_for(*self.records))
+        if questions:
+            links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
+            models.prefetch_related_objects(questions, models.Prefetch(
+                "records", queryset=with_record_reference_access(links),
+            ))
         by_run = {run.pk: run for run in runs}
         for target in self.targets:
             identity = (target.content_type.pk, target.object_id)

@@ -7,6 +7,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -190,7 +191,7 @@ def test_binding_writes_require_both_ends_and_are_role_keyed(composed_permission
             listed = set(RecordBinding.objects.for_record(record).values_list("pk", flat=True))
         assert listed == {first.pk, other_role.pk}
         table = connection.ops.quote_name(RecordBinding._meta.db_table)
-        assert sum(query["sql"].startswith(f"SELECT {table}.") for query in queries) == 1
+        assert sum(statement_startswith(query["sql"], f"SELECT {table}.") for query in queries) == 1
         with pytest.raises(PermissionDenied):
             RecordBinding.objects.unbind(page=page, target=record)
     with actor_context(writer):

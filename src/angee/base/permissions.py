@@ -316,6 +316,21 @@ def instance_actor(instance: models.Model) -> SubjectRef | None:
     return actor if actor is not None else current_actor()
 
 
+def user_subject_ref(*, user: models.Model | None = None, user_id: Any = None) -> SubjectRef:
+    """Return a user's canonical subject identity without loading a bare primary key.
+
+    A supplied row uses REBAC's native conversion. A bare key uses REBAC's user
+    subject type, the inverse of :func:`actor_user_id`. Callers requiring proof
+    that the user exists must read that row explicitly before constructing its ref.
+    """
+
+    if user is not None:
+        return to_subject_ref(user)
+    if user_id is None:
+        raise ValueError("A user or user_id is required to build a subject reference.")
+    return SubjectRef.of(_user_subject_type(), str(user_id))
+
+
 def actor_user_id(actor: Any) -> Any | None:
     """Return ``actor``'s user primary key, or ``None`` when no user backs it.
 
@@ -353,7 +368,7 @@ def subject_reaches_user(subject: models.Model | SubjectRef, user_id: Any) -> bo
     reference = to_subject_ref(subject)
     if reference.subject_id == "*":
         return True
-    user = SubjectRef.of(_user_subject_type(), str(user_id))
+    user = user_subject_ref(user_id=user_id)
     if reference == user:
         return True
     if not reference.optional_relation:

@@ -10,6 +10,7 @@ from rebac import actor_context, system_context
 
 from angee.base.models.identity import public_id_of
 from angee.base.refs import generic_pointer_target
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.testing import capture_broadcasts
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
@@ -112,7 +113,7 @@ def test_closure_writes_no_timeline_projection(composed_permissions) -> None:
                 vault_for(owner, name=f"Batch {index}")
     inserts = [
         query["sql"] for query in queries.captured_queries
-        if query["sql"].startswith("INSERT INTO \"test_timeline_event\"")
+        if statement_startswith(query["sql"], "INSERT INTO \"test_timeline_event\"")
     ]
     assert inserts == []
 

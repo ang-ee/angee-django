@@ -7,6 +7,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
 
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Party, Person, ThreadFollower
 from angee.nexus.testing.models import Cadence, Tie
@@ -68,7 +69,8 @@ def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(re
         # whose predicates carry the actor sets and the 23 arrows a filed task reaches.
         assert len(queries) == 2, queries.captured_queries
         assert sum(
-            query["sql"].startswith(f'SELECT "{model._meta.db_table}".') for query in queries.captured_queries
+            statement_startswith(query["sql"], f'SELECT "{model._meta.db_table}".')
+            for query in queries.captured_queries
         ) == 1
     before = relationship_snapshot()
     with system_context(reason="tests.t3.unfollow"):

@@ -262,7 +262,7 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
     ) -> tuple[Mapping[str, Any], ...]:
         """Return normalized setting entries from an explicit value or settings."""
 
-        raw_entries = getattr(settings, "ANGEE_INTEGRATE_OAUTH_CLIENTS", ()) if entries is None else entries
+        raw_entries = settings.ANGEE_INTEGRATE_OAUTH_CLIENTS if entries is None else entries
         if not raw_entries:
             return ()
         if isinstance(raw_entries, Mapping):
@@ -1610,10 +1610,10 @@ class IntegrationLifecycle(models.TextChoices):
     PAUSED = "paused", "Paused"
 
     @classmethod
-    def from_value(cls, value: object) -> IntegrationLifecycle:
+    def from_value(cls, value: IntegrationLifecycle | str) -> IntegrationLifecycle:
         """Return the member for one string or enum integration-lifecycle value."""
 
-        raw = str(getattr(value, "value", value)).strip()
+        raw = str(value).strip()
         member = cls.__members__.get(raw)
         if member is not None:
             return cast(IntegrationLifecycle, member)
@@ -1631,10 +1631,10 @@ class IntegrationRuntimeStatus(models.TextChoices):
     PENDING = "pending", "Pending"
 
     @classmethod
-    def from_value(cls, value: object) -> IntegrationRuntimeStatus:
+    def from_value(cls, value: IntegrationRuntimeStatus | str) -> IntegrationRuntimeStatus:
         """Return the member for one string or enum runtime-status value."""
 
-        raw = str(getattr(value, "value", value)).strip()
+        raw = str(value).strip()
         member = cls.__members__.get(raw)
         if member is not None:
             return cast(IntegrationRuntimeStatus, member)
@@ -2441,8 +2441,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def __str__(self) -> str:
         """Return a stable vendor-qualified integration label."""
 
-        vendor_slug = getattr(getattr(self, "vendor", None), "slug", "?")
-        return f"{vendor_slug}:{self.public_id}"
+        return f"{self.vendor.slug}:{self.public_id}"
 
     def prepare_patch(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         """Apply connection/state/ownership verbs before ordinary native field updates.
@@ -2502,9 +2501,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         if self.display_name:
             return str(self.display_name)
-        vendor = getattr(self, "vendor", None)
-        label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
-        return f"{label} ({self.lifecycle})"
+        return f"{self.vendor} ({self.lifecycle})"
 
     @property
     def record_display_label(self) -> str:
@@ -2904,7 +2901,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         verbatim.
         """
 
-        raw_status = str(getattr(status, "value", status)).strip()
+        raw_status = str(status).strip()
         normalized = IntegrationRuntimeStatus.from_value(status)
         reported_at = timezone.now()
         self.runtime_status = normalized
@@ -3196,7 +3193,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         identity_key: str,
         drop_identity: bool = False,
         drop_pairing_report: bool = False,
-        desired: Any | None = None,
+        desired: LiveState | str | None = None,
     ) -> None:
         """Apply durable live-session state changes and save only changed fields."""
 
@@ -3205,7 +3202,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         if drop_identity:
             state.pop(identity_key, None)
         if desired is not None:
-            state["desired"] = str(getattr(desired, "value", desired))
+            state["desired"] = str(desired)
         if state != self.subscription_state:
             self.subscription_state = state
             fields.append("subscription_state")
@@ -3228,7 +3225,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
                 row.update_live_state(identity_key=identity_key, drop_identity=True, drop_pairing_report=True)
         self.refresh_from_db()
 
-    def release_live_account(self, *, identity_key: str, desired: Any) -> None:
+    def release_live_account(self, *, identity_key: str, desired: LiveState | str) -> None:
         """Clear a void account claim without changing operator-owned lifecycle."""
 
         model = type(self)
@@ -3948,13 +3945,13 @@ class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](Ange
         kind: EventKind,
         payload: Any,
         impl_app: str = "",
-        integration: Any | None = None,
+        integration: Integration | None = None,
     ) -> None:
         """Queue one event fan-out after the current transaction commits."""
 
         kind_value = str(kind)
         body = self._event_body(payload)
-        integration_pk = getattr(integration, "pk", None)
+        integration_pk = integration.pk if integration is not None else None
         transaction.on_commit(
             lambda: self._deliver_event_body(
                 kind=kind_value, body=body, impl_app=impl_app, integration_pk=integration_pk
@@ -3967,7 +3964,7 @@ class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](Ange
         kind: EventKind,
         payload: Any,
         impl_app: str = "",
-        integration: Any | None = None,
+        integration: Integration | None = None,
     ) -> dict[str, int]:
         """Deliver one integration event to every matching enabled subscription.
 
@@ -3980,7 +3977,7 @@ class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](Ange
             kind=str(kind),
             body=self._event_body(payload),
             impl_app=impl_app,
-            integration_pk=getattr(integration, "pk", None),
+            integration_pk=integration.pk if integration is not None else None,
         )
 
     @staticmethod
@@ -4070,7 +4067,7 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel, concrete=True):
         *,
         kind: str,
         impl_app: str,
-        integration: Any | None = None,
+        integration: Integration | None = None,
         integration_pk: Any | None = None,
     ) -> bool:
         """Return whether this subscription should receive one event."""
@@ -4082,8 +4079,9 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel, concrete=True):
             return False
         if self.integration_filter_id is None:
             return True
-        expected_pk = getattr(integration, "pk", None) if integration_pk is None else integration_pk
-        return self.integration_filter_id == expected_pk
+        if integration_pk is None and integration is not None:
+            integration_pk = integration.pk
+        return self.integration_filter_id == integration_pk
 
     def deliver(self, body: bytes) -> str:
         """POST one signed event body to this subscription's pinned target; raise on non-2xx."""
@@ -4232,6 +4230,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         snapshot changes start a new baseline generation with the persisted policy.
         A newer mapping version also starts one baseline: its persisted version
         makes repeated opens idempotent and revisits already-applied identities.
+        An unknown version is seeded from the oldest applied link mapping, or
+        the declaration when no links exist, so deployment alone never replays
+        records already applied at the declared version.
         ``authoritative`` is the declaration's fact: a changed declaration flips the
         current generation through :meth:`set_authoritative`, so an adapter never
         flips it from inside a page.
@@ -4256,6 +4257,10 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 return self.create(integration_id=bridge.pk, **definition.stream_fields())
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
+            if stream.mapping_version is None:
+                applied_version = stream.links.aggregate(version=models.Min("mapping_version"))["version"]
+                stream.mapping_version = applied_version if applied_version is not None else definition.mapping_version
+                stream.save(update_fields=["mapping_version", "updated_at"])
             if (
                 stream.direction != definition.direction
                 or stream.snapshot != definition.snapshot
@@ -4418,8 +4423,8 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     flip is a re-derivation, never a migration.
     """
     generation = models.PositiveIntegerField(default=1)
-    mapping_version = models.PositiveIntegerField(default=1)
-    """The declared mapping this generation applies, retained across cursor resets."""
+    mapping_version = models.PositiveIntegerField(null=True, blank=True)
+    """Highest opened mapping version; unknown until seeded by :meth:`SyncStreamManager.current`."""
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
     cursor = models.JSONField(default=dict, blank=True)

@@ -17,6 +17,7 @@ from rebac import system_context
 
 from angee.base.lineage import concrete_child_models
 from angee.base.serialization import canonical_json_sha256
+from angee.base.testing.queries import statement_body, statement_startswith
 from angee.messaging.testing.models import Party
 from angee.provenance.context import changeset, changeset_model_label, current_changeset
 from tests.conftest import create_user
@@ -43,8 +44,8 @@ def _data_statements(captured: CaptureQueriesContext) -> list[str]:
 
     statements = []
     for query in captured:
-        sql = query["sql"]
-        if sql.startswith(("BEGIN", "COMMIT", "SAVEPOINT", "RELEASE")):
+        sql = statement_body(query["sql"])
+        if statement_startswith(sql, ("BEGIN", "COMMIT", "SAVEPOINT", "RELEASE")):
             continue
         table = re.search(r'(?:FROM|INTO|UPDATE)\s+"([^"]+)"', sql)
         statements.append(f"{sql.split(' ', 1)[0]} {table.group(1) if table else '?'}")
@@ -144,4 +145,4 @@ def test_a_request_boundary_costs_one_insert_and_one_close(composed_tables: None
     assert model._base_manager.count() == before + 1
     assert (recorded.state, recorded.outcome, recorded.touched) == ("closed", "success", [Party._meta.label_lower])
     statements = _touching(written, model)
-    assert [sql.split(" ", 1)[0] for sql in statements] == ["INSERT", "UPDATE"], statements
+    assert [statement_body(sql).split(" ", 1)[0] for sql in statements] == ["INSERT", "UPDATE"], statements

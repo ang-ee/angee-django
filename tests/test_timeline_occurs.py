@@ -9,6 +9,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.models import PermissionAuditEvent
 
+from angee.base.testing.queries import statement_startswith
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.decisions.timeline import DecisionKind
@@ -37,7 +38,7 @@ def assert_occurs(kind, record, expected, actor):
         assert kind.occurs(record) is expected
     assert len(queries) == 1, [query["sql"] for query in queries]
     sql = queries[0]["sql"]
-    assert sql.startswith("SELECT 1 ") and "LIMIT 1" in sql
+    assert statement_startswith(sql, "SELECT 1 ") and "LIMIT 1" in sql
     assert "rebac_" not in sql.lower()
 
 
@@ -109,7 +110,7 @@ def assert_attention_omitted(kind, record, actor, monkeypatch):
         assert kind.waiting_on(record, actor) is None
     assert len(queries) == 1
     sql = queries[0]["sql"]
-    assert sql.startswith("SELECT 1 ") and "LIMIT 1" in sql and "rebac_" not in sql.lower()
+    assert statement_startswith(sql, "SELECT 1 ") and "LIMIT 1" in sql and "rebac_" not in sql.lower()
     assert PermissionAuditEvent.objects.count() == before
     with override_settings(ANGEE_TIMELINE_KINDS=[f"{type(kind).__module__}.timeline_kinds"]):
         timeline = Timeline(record, actor)
@@ -180,7 +181,7 @@ def test_attention_population_writes_no_permission_audit_event(review, settings)
         assert timeline.attention() == 2
         assert Timeline(question.review_subject, reviewers[0]).attention() == 2
     assert PermissionAuditEvent.objects.count() == before
-    assert not any(query["sql"].startswith("INSERT ") for query in queries)
+    assert not any(statement_startswith(query["sql"], "INSERT ") for query in queries)
 
 
 @pytest.mark.usefixtures("activity_catalog")

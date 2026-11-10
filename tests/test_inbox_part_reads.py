@@ -1,5 +1,6 @@
 """Inbox parts read their message once: the part's contextual read, its population and its fallbacks."""
 
+import re
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -22,6 +23,7 @@ from rebac import (
 from rebac.models import SchemaOverride, SchemaPermission
 
 from angee.base.permissions import contextual_action_holds
+from angee.base.testing.queries import statement_body
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.testing.models import Channel, Fragment, Message, Part, Thread
@@ -254,19 +256,19 @@ def test_inbox_parts_compile_the_message_graph_once() -> None:
             with CaptureQueriesContext(connection) as captured:
                 assert len(list(inbox.parts.order_by("pk")[:size])) == size
             reads[size] = [query["sql"] for query in captured.captured_queries]
-        scoped = Part.objects.filter(message_id__in=Subquery(inbox.messages.order_by().values("pk")))
-        with CaptureQueriesContext(connection) as captured:
-            assert len(list(scoped.order_by("pk")[:25])) == 25
-        population = captured.captured_queries[-1]["sql"]
     one, many = reads[1][-1], reads[25][-1]
-    # Measured on SQLite through ``message->read_inbox``: 1 statement of 39,613 bytes,
-    # against 85,607 bytes for the generic part read inside the scoped eligible messages.
-    # 0.31 (9 statements, 27 KB -> 1, 39 KB): the actor sets and arrow sources 0.30 read
-    # before the statement are its predicates.
+    # REBAC 0.32's content-hash id-set names lengthen this SQLite statement to
+    # 40,565 bytes: ceil(40,565 / 1,024) = 40 KiB. Sharing cuts PostgreSQL planning
+    # memory; the PostgreSQL planner gate remains the binding budget.
     assert len(reads[1]) == len(reads[25]) == 1
     assert abs(len(one) - len(many)) <= 2
-    assert len(many) <= 39 * 1024
+    assert len(many) <= 40 * 1024
     # One actor scope: the part's read carries the message graph, and eligibility
     # joins the message without a second, separately scoped message subquery.
     assert many.count("rebac_schemageneration") <= 1
-    assert len(many) * 3 < len(population) * 2
+    body = statement_body(many)
+    [message_scope] = re.findall(r'FROM "(rebac_ids_[0-9a-f]+)"', body)
+    message_table = connection.ops.quote_name(Message._meta.db_table)
+    assert many.count(f'"{message_scope}" AS (SELECT {message_table}.') == 1
+    assert many.count(f'FROM "{message_scope}"') == 1
+    assert f"FROM {message_table}" not in body

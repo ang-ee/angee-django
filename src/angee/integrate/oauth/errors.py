@@ -19,7 +19,6 @@ MISSING_ENDPOINT = "missing_endpoint"
 TOKEN_EXCHANGE_FAILED = "token_exchange_failed"
 PROVIDER_UNAVAILABLE = "provider_unavailable"
 INVALID_ID_TOKEN = "invalid_id_token"
-USERINFO_FAILED = "userinfo_failed"
 EXTERNAL_ACCOUNT_RESOLUTION_FAILED = "external_account_resolution_failed"
 
 _PUBLIC_MESSAGES = {
@@ -30,7 +29,6 @@ _PUBLIC_MESSAGES = {
     TOKEN_EXCHANGE_FAILED: "The provider could not complete authorization.",
     PROVIDER_UNAVAILABLE: "The provider is temporarily unavailable. Try again later.",
     INVALID_ID_TOKEN: "The provider returned an invalid identity token.",
-    USERINFO_FAILED: "The provider identity could not be loaded.",
     EXTERNAL_ACCOUNT_RESOLUTION_FAILED: "The connected account could not be resolved.",
     "redirect_uri_required": "An OAuth redirect URI is required.",
     "oauth_client_not_connectable": "This connection is not available.",

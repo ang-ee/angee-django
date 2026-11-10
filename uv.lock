@@ -207,6 +207,7 @@ postgres = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "angee-base", extra = ["testing"] },
     { name = "angee-django-stubs", extra = ["compatible-mypy"] },
     { name = "angee-mypy" },
     { name = "angee-server", extra = ["profiling"] },
@@ -222,7 +223,6 @@ dev = [
     { name = "pytest-split" },
     { name = "pytest-xdist" },
     { name = "ruff" },
-    { name = "sqlparse" },
     { name = "tests-blankchoices" },
     { name = "tomlkit" },
     { name = "vulture" },
@@ -306,6 +306,7 @@ provides-extras = ["postgres"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "angee-base", extras = ["testing"], editable = "src/angee/base" },
     { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post3" },
     { name = "angee-mypy", specifier = "==2.1.0" },
     { name = "angee-server", extras = ["profiling"], editable = "src/angee/server" },
@@ -321,7 +322,6 @@ dev = [
     { name = "pytest-split", specifier = ">=0.11" },
     { name = "pytest-xdist", specifier = ">=3.6" },
     { name = "ruff", specifier = ">=0.15.12" },
-    { name = "sqlparse", specifier = ">=0.6,<0.7" },
     { name = "tests-blankchoices", editable = "tests/blankchoices" },
     { name = "tomlkit", specifier = ">=0.13" },
     { name = "vulture", specifier = ">=2.16" },
@@ -510,6 +510,7 @@ testing = [
     { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-django" },
+    { name = "sqlparse" },
     { name = "tomlkit" },
 ]
 
@@ -532,6 +533,7 @@ requires-dist = [
     { name = "referencing", specifier = ">=0.37" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
     { name = "sqids", specifier = ">=0.4.1" },
+    { name = "sqlparse", marker = "extra == 'testing'", specifier = ">=0.6,<0.7" },
     { name = "tomlkit", marker = "extra == 'testing'", specifier = ">=0.13" },
 ]
 provides-extras = ["testing"]

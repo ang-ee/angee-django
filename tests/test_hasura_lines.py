@@ -29,6 +29,7 @@ from rebac import (
 )
 from strawberry import auto
 
+from angee.base.testing.queries import statement_startswith
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
@@ -497,7 +498,7 @@ def test_save_fetches_kept_lines_without_per_row_growth(composed_tables):
         return sum(
             1
             for query in captured.captured_queries
-            if query["sql"].lstrip().upper().startswith("SELECT") and table in query["sql"]
+            if statement_startswith(query["sql"].lstrip().upper(), "SELECT") and table in query["sql"]
         )
 
     # A per-row fetch (the old N+1) would make the 5-line save cost strictly more
