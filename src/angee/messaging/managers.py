@@ -69,7 +69,6 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.ownership import OwnerQuerySet
-from angee.base.models.timestamps import auto_now_stamps
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.permissions import actor_user_id, purpose_read_holds, reader_queryset, require_rebac_queryset
@@ -78,7 +77,7 @@ from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_path
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.search import SEARCH_CONFIG, stamp_search_vector
 from angee.base.serialization import STRINGIFIED_JSON, strip_null_bytes
-from angee.base.signals import changes_muted, mute_changes, send_bulk_update
+from angee.base.signals import mute_changes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.integrate.errors import IntegrationError, doubling_backoff, safe_integration_failure
 from angee.integrate.impl import LiveBridgeImpl
@@ -1741,14 +1740,17 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                 if created:
                     self._seed_receipt(follower, attachment.thread, history_before=history_before)
                 else:
-                    updates: dict[str, Any] = {"attachment": attachment}
+                    updates: dict[str, Any] = {"attachment_id": attachment.pk}
                     if notification_policy is not None:
                         updates["notification_policy"] = notification_policy
                     if subtype_keys is not None:
                         updates["subtype_keys"] = list(subtype_keys)
-                    for field, value in updates.items():
-                        setattr(follower, field, value)
-                    follower.save(update_fields=(*updates, "updated_at"))
+                    # Each post re-subscribes its followers; only a changed follow is a write (and a version).
+                    changed = [name for name, value in updates.items() if getattr(follower, name) != value]
+                    for name in changed:
+                        setattr(follower, name, updates[name])
+                    if changed:
+                        follower.save(update_fields=(*changed, "updated_at"))
             return follower
 
     def _seed_receipt(self, follower: Any, thread: Any, *, history_before: Any | None) -> None:
@@ -1765,21 +1767,9 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         latest = queryset.order_by(*MESSAGE_ORDER.ordering()).first()
         if latest is None:
             return
-        self._write_receipt(follower, latest)
-
-    def _write_receipt(self, follower: Any, message: Any) -> None:
-        """Move ``follower``'s read receipt to ``message``, recording no history version.
-
-        History tracks the follow, not the receipt: a queryset write of the
-        excluded column records no version, and observers receive the row.
-        """
-
-        values = {"last_read_message": message, **auto_now_stamps(self.model, timezone.now())}
-        self.model._base_manager.filter(pk=follower.pk).update(**values)
-        for name, value in values.items():
-            setattr(follower, name, value)
-        if not changes_muted():
-            send_bulk_update(sender=self.model, instances=(follower,), update_fields=values)
+        follower.last_read_message = latest
+        # History tracks the follow, not the receipt: a read records no version.
+        follower.save_without_historical_record(update_fields=("last_read_message", "updated_at"))
 
     def mark_read_up_to(
         self,
@@ -1835,7 +1825,8 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             current = follower.last_read_message
             if current is not None and current.chronological_key >= target_key:
                 return 0
-            self._write_receipt(follower, target)
+            follower.last_read_message = target
+            follower.save_without_historical_record(update_fields=("last_read_message", "updated_at"))
         return 1
 
     def unread_messages(self, thread: Any, *, party: Any = None, user: Any = None, user_id: Any = None) -> Any:
@@ -2418,22 +2409,29 @@ class ReactionManager[ReactionT: Reaction](AngeeHistoryManager[ReactionT]):
         reaction)`` constraint does not already hold — so a re-sync re-landing the
         same reactions is a no-op — and every row carries the cleaned reaction
         content and the ``created_by`` attribution. Reactions keep history, whose
-        capture needs every inserted row's key, so conflicts are skipped up front.
+        capture needs every inserted row's key, so conflicts are skipped up front;
+        the messages' row locks, taken in key order, serialize concurrent landings.
         """
 
         triples = {
             (message.pk, handle.pk, self.model.clean_reaction(reaction)) for message, handle, reaction in reactions
         }
-        held = set(
-            self.model._base_manager.filter(message_id__in={message_id for message_id, _, _ in triples})
-            .values_list("message_id", "handle_id", "reaction")
-        )
-        rows = [
-            self.model(message_id=message_id, handle_id=handle_id, reaction=reaction, created_by_id=created_by_id)
-            for message_id, handle_id, reaction in sorted(triples - held)
-        ]
-        if rows:
-            self.bulk_create(rows)
+        message_ids = sorted({message_id for message_id, _, _ in triples})
+        if not message_ids:
+            return 0
+        message_model = self.model._meta.get_field("message").related_model
+        with transaction.atomic():
+            list(message_model._base_manager.filter(pk__in=message_ids).order_by("pk").only("pk").lock_if_supported(no_key=True))
+            held = set(
+                self.model._base_manager.filter(message_id__in=message_ids)
+                .values_list("message_id", "handle_id", "reaction")
+            )
+            rows = [
+                self.model(message_id=message_id, handle_id=handle_id, reaction=reaction, created_by_id=created_by_id)
+                for message_id, handle_id, reaction in sorted(triples - held)
+            ]
+            if rows:
+                self.bulk_create(rows)
         return len(rows)
 
 

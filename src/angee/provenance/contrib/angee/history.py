@@ -250,20 +250,27 @@ class ModelHistory(CaptureHistory):
             return False
 
     def authorize_revert(self, first: Any, last: Any, previous: Any, actor: Any) -> None:
-        """Admit both the current row and the snapshot's proposed relationships."""
+        """Admit both the current row and the snapshot's proposed relationships.
+
+        A denial names no row: a changeset may have touched rows the actor cannot read.
+        """
 
         snapshot = previous or last
         target = snapshot.history_object
         action = target.history_revert_permission
+        denied = PermissionDenied(f"Reverting needs {action} on every row this change touched, and one is not yours.")
         stored = type(target)._base_manager.filter(pk=target.pk).first()
         if stored is not None:
-            stored.require_access(action, actor=actor)
+            try:
+                stored.require_access(action, actor=actor)
+            except PermissionDenied:
+                raise denied from None
             if action == "write":
                 # Existing records may be writable through stored grants which
                 # an id-less proposed-relationship check cannot reproduce.
                 return
         if not self.snapshot_allows(snapshot, action, actor=actor):
-            raise PermissionDenied(f"{target._meta.label} {target.pk}: restoration requires {action} on its snapshot.")
+            raise denied
 
     def revert_order(self, first: Any, last: Any, previous: Any) -> tuple[Any, ...]:
         """Restore parents first; remove creations after reference replay, children first."""

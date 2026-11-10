@@ -33,7 +33,7 @@ from angee.base.models.base import AngeeDataModel
 from angee.base.models.merge_references import MergePolicy
 from angee.base.permissions import actor_user_id
 from angee.nexus.managers import CadenceManager, TieManager
-from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 
 
 class Tie(AngeeDataModel, concrete=True):
@@ -171,6 +171,8 @@ class Cadence(HistoryMixin, AngeeDataModel, concrete=True):
     cadence_days = models.PositiveIntegerField()
     touch_due_at = models.DateTimeField(null=True, blank=True, db_index=True, editable=False)
 
+    history = ModelHistory(inherit=True, excluded_fields=("touch_due_at",))
+
     objects = CadenceManager()
 
     class Meta:
@@ -218,7 +220,8 @@ class Cadence(HistoryMixin, AngeeDataModel, concrete=True):
         if self.touch_due_at == touch_due_at:
             return
         self.touch_due_at = touch_due_at
-        super().save(update_fields=["touch_due_at", "updated_at"])
+        # The due date is derived and excluded from history: a refresh records no version.
+        self.save_without_historical_record(update_fields=["touch_due_at", "updated_at"])
 
     def _default_user(self) -> None:
         """Bind a blank user relation to the authenticated REBAC actor."""
