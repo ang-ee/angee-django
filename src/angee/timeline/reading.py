@@ -11,7 +11,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Cast
 from django_cte import CTE, with_cte
-from rebac import to_subject_ref
+from rebac import share_id_sets, to_subject_ref
 
 from angee.base.models.identity import public_id_for
 from angee.base.pagination import KeysetOrder, keyset_signer
@@ -166,7 +166,7 @@ class Timeline:
         if self.lines is None:
             return {}
         return {row["_result_kind"]: (row["_result_count"], row["_result_waiting"])
-                for row in with_cte(self.source, self.lines, select=_totals(self.lines))}
+                for row in share_id_sets(with_cte(self.source, self.lines, select=_totals(self.lines)))}
 
     def attention(self) -> int:
         return sum(waiting for _, waiting in self.counts.values())
@@ -196,12 +196,12 @@ class Timeline:
         ))).values("_timeline_fold_type", "_timeline_fold_pk", "_timeline_kind").annotate(
             _timeline_count=models.Count("_timeline_pk", distinct=True),
         )
-        statement = with_cte(self.source, self.lines, page, select=entries.union(
+        statement = share_id_sets(with_cte(self.source, self.lines, page, select=entries.union(
             _totals(self.lines),
             _part(children, "child", kind=models.F("_timeline_kind"), pk=models.F("_timeline_fold_pk"),
                   type=models.F("_timeline_fold_type"), count=models.F("_timeline_count")),
             all=True,
-        ).order_by(*_ORDER.ordering(prefix="_result_")))
+        ).order_by(*_ORDER.ordering(prefix="_result_"))))
         selected: list[dict[str, Any]] = []
         counts: dict[str, tuple[int, int]] = {}
         children_of: dict[tuple[int, int], list[KindCount]] = {}

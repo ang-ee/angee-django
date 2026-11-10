@@ -172,14 +172,18 @@ def test_member_reading_by_grant_pays_a_fixed_rail_cost(composed_permissions: No
     assert counts["provenance.change"] >= 3 and counts["projects.task"] == 1
     assert few.data["timeline"]["entries"][0]["detail"] == "Edit 1"
     assert few.data["timeline"]["needs_me"] == few.data["timeline_attention"] == 0
-    # Structural attention removes its audit write; occurrence probes keep empty branches out.
-    few.assert_ceiling(statements=15, sql_kb=257)
     many = edit_then_read(range(2, 10))
     record_property("many_statements", many.statements)
     record_property("many_sql_bytes", many.sql_bytes)
     assert len(many.data["timeline"]["entries"]) == len(few.data["timeline"]["entries"]) + 8
-    assert many.statements == few.statements
-    many.assert_ceiling(statements=15, sql_kb=257)
+    assert many.statements == few.statements, "Timeline statement cost must stay fixed as the feed grows."
+    # Structural attention removes its audit write; occurrence probes keep empty branches out.
+    # Both statement roots share REBAC id sets (django-zed-rebac 0.32): SQLite text grows by
+    # the content-hash CTE names (measured 263.3 KiB from 256.1), while PostgreSQL planning
+    # memory falls by a third; the PostgreSQL planner gate in test_timeline_workflows.py is
+    # the binding budget, and this ceiling ratchets down with any later text reduction.
+    few.assert_ceiling(statements=15, sql_kb=264)
+    many.assert_ceiling(statements=15, sql_kb=264)
 
 
 def timeline_entries(record, actor=None, *, kind=None):

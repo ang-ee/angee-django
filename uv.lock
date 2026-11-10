@@ -222,6 +222,7 @@ dev = [
     { name = "pytest-split" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "sqlparse" },
     { name = "tests-blankchoices" },
     { name = "tomlkit" },
     { name = "vulture" },
@@ -309,7 +310,7 @@ dev = [
     { name = "angee-mypy", specifier = "==2.1.0" },
     { name = "angee-server", extras = ["profiling"], editable = "src/angee/server" },
     { name = "daphne", specifier = ">=4.0" },
-    { name = "django-zed-rebac", extras = ["caveats"], specifier = ">=0.31.5,<0.32" },
+    { name = "django-zed-rebac", extras = ["caveats"], specifier = ">=0.32.0,<0.33" },
     { name = "example-notes", editable = "examples/src/example/notes" },
     { name = "example-theme", editable = "examples/src/example/theme" },
     { name = "faker", specifier = ">=30.0" },
@@ -320,6 +321,7 @@ dev = [
     { name = "pytest-split", specifier = ">=0.11" },
     { name = "pytest-xdist", specifier = ">=3.6" },
     { name = "ruff", specifier = ">=0.15.12" },
+    { name = "sqlparse", specifier = ">=0.6,<0.7" },
     { name = "tests-blankchoices", editable = "tests/blankchoices" },
     { name = "tomlkit", specifier = ">=0.13" },
     { name = "vulture", specifier = ">=2.16" },
@@ -520,7 +522,7 @@ requires-dist = [
     { name = "django-environ", specifier = ">=0.12" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", specifier = ">=0.31.5,<0.32" },
+    { name = "django-zed-rebac", specifier = ">=0.32.0,<0.33" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "packaging", marker = "extra == 'testing'", specifier = ">=24" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
@@ -671,7 +673,7 @@ requires-dist = [
     { name = "channels", specifier = ">=4.0" },
     { name = "channels-redis", specifier = ">=4.2" },
     { name = "django-compose", specifier = ">=0.1.0.dev10,<0.2" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.31.5,<0.32" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.32.0,<0.33" },
     { name = "graphql-core", specifier = ">=3.3.1,<3.4" },
     { name = "pydantic", specifier = ">=2.14" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
@@ -2912,15 +2914,15 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.31.5"
+version = "0.32.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "django-cte" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5b/7f/bf9fdb5a85066388661be2461dda6d244c23ce2ef2a9cb0a22d7c82be097/django_zed_rebac-0.31.5.tar.gz", hash = "sha256:733b4d7f53218a1aa2fa25c0134ecbd20e4f5a17732eca3aca9231c81bfd7758", size = 643680, upload-time = "2026-11-07T21:31:40.208Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/49/62/d238fead6c09b4ff66e6cba2789aca72a7ee6e0561cf48ac5e228323a082/django_zed_rebac-0.32.0.tar.gz", hash = "sha256:150f3675b0cbc8edfea0d559e3e277b96d5ec7eba6f38094c76879646880ae86", size = 663049, upload-time = "2026-11-10T05:24:46.678Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/65/3dd2b8271e5fba772d8860617e65ffe78a673f754521ba34b83d59ad70c3/django_zed_rebac-0.31.5-py3-none-any.whl", hash = "sha256:aa8e8226b392e7a3bfb1e98d53acd0a67dc3190782597a98b5c5712d9e603cb1", size = 322428, upload-time = "2026-11-07T21:31:38.887Z" },
+    { url = "https://files.pythonhosted.org/packages/61/83/1cafc0a79492bc38e6f3a8b97e17bf9d8ae02cd8569d1a8566a5cf699f44/django_zed_rebac-0.32.0-py3-none-any.whl", hash = "sha256:7482e3441be06ad6d0968c5c5d80c6da4678e5bd58b84ac6ebbcec7f72ad0076", size = 328805, upload-time = "2026-11-10T05:24:45.282Z" },
 ]
 
 [package.optional-dependencies]

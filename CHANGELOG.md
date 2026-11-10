@@ -352,11 +352,16 @@ live in code docstrings.
   drops it and locks its prerequisite rows through their managers. The
   `record_access_revoked` signal no longer sends `using`.
 
-## Unreleased — django-zed-rebac 0.31
+## Unreleased — django-zed-rebac 0.32
 
-- The base addon requires `django-zed-rebac>=0.31.5,<0.32` (GraphQL its
+- The base addon requires `django-zed-rebac>=0.32.0,<0.33` (GraphQL its
   `strawberry-django` extra, the dev group its `caveats` extra); the engine now
-  requires `django-cte>=5,<6`.
+  requires `django-cte>=5.0.1,<5.1` (locked at the tested 5.0.1).
+- Equal permission id sets across embedded SELECT scopes share one outer
+  `WITH RECURSIVE`. The timeline opts both plain statement roots in through
+  `rebac.share_id_sets`; each read remains one statement. Differently bound
+  templates and writes retain nested definitions. Parametric embeddings use one
+  application-clock instant per outer SELECT compilation.
 - The library ships only its local backend: `rebac.Backend`, `SpiceDBBackend`,
   the `REBAC_SPICEDB_*` settings, `PermissionEvaluator.accessible()` and
   `RebacManager.raw()` are gone (`LocalBackend.accessible()` and the queryset's
