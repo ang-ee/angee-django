@@ -154,7 +154,6 @@ class RecordChange:
     remote_version: str = ""
     projection: Any = None
     target: Any = None
-    mapping_version: int = 1
     dependency_digest: str = ""
     tombstone: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -171,7 +170,6 @@ class LocalChange:
     external_key: str
     projection: Any
     target: Any = None
-    mapping_version: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +177,7 @@ class ApplyResult:
     """Applied evidence returned to the sole primary promoter: the driver.
 
     Adapters return the evidence actually applied, including dependency facts
-    learned during apply. The driver stamps the observation's declared mapping
+    learned during apply. The driver stamps the stream's declared mapping
     version; adapters must not promote the primary link themselves.
     Omitted target preserves its binding; explicit None withdraws it.
     """
@@ -315,7 +313,7 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
         source_hash=(
             record.source_hash if replica else canonical_json_sha256(["record_key", record_key]) if record_key else ""
         ),
-        mapping_version=record.mapping_version if replica else 1,
+        mapping_version=stream.mapping_version,
         details=details,
         **({"outbox": isinstance(error, RemoteRejected)} if link is not None else {}),
     )
@@ -329,13 +327,13 @@ def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:
     return PageResult(stream, reset=True)
 
 
-def _decision(record: RecordChange, *, base: Any, adopting: bool) -> ChangeKind:
+def _decision(record: RecordChange, *, base: Any, adopting: bool, mapping_version: int) -> ChangeKind:
     if adopting and base is None and record.target is not None and not record.tombstone:
         return ChangeKind.APPLY
     if record.mapped_payload is UNSET and not record.tombstone:
         raise AdapterContractError("Replica observations must include their remote mapped_payload.")
     mapping_changed = base is None or (
-        base.mapping_version != record.mapping_version or base.dependency_digest != record.dependency_digest
+        base.mapping_version != mapping_version or base.dependency_digest != record.dependency_digest
     )
     remote = None if record.tombstone else record.mapped_payload
     # The transport response is authoritative echo evidence even when mapping
@@ -358,14 +356,14 @@ def _decision(record: RecordChange, *, base: Any, adopting: bool) -> ChangeKind:
     )
 
 
-def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: str) -> None:
+def _promote(stream: Any, link: Any, record: RecordChange, outcome: ApplyResult, *, origin: str) -> None:
     manager = type(link).objects
     manager.promote(
         link,
         source_payload=record.source_payload,
         source_hash=record.source_hash,
         mapped_payload=outcome.mapped_payload,
-        mapping_version=record.mapping_version,
+        mapping_version=stream.mapping_version,
         dependency_digest=outcome.dependency_digest,
         target=outcome.target,
         remote_version=record.remote_version,
@@ -374,7 +372,7 @@ def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: s
     )
 
 
-def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult) -> None:
+def _reflect_write(stream: Any, link: Any, record: RecordChange, result: WriteBackResult) -> None:
     if not isinstance(result, WriteBackResult):
         raise AdapterContractError("write_back must return WriteBackResult.")
     type(link).objects.promote(
@@ -384,7 +382,7 @@ def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult) -> 
         mapped_payload=record.projection,
         target=record.target,
         remote_version=result.remote_version,
-        mapping_version=record.mapping_version,
+        mapping_version=stream.mapping_version,
         dependency_digest=record.dependency_digest,
         origin="local",
         tombstone=result.tombstone,
@@ -489,6 +487,7 @@ def _apply_page(
                     record,
                     base=link.applied_base,
                     adopting=adopting,
+                    mapping_version=stream.mapping_version,
                 )
                 == ChangeKind.WRITE_BACK
             ):
@@ -558,7 +557,9 @@ def _apply_page(
                         decision = (
                             ChangeKind.APPLY
                             if record.external_key in force_apply
-                            else _decision(record, base=revision, adopting=adopting)
+                            else _decision(
+                                record, base=revision, adopting=adopting, mapping_version=locked.mapping_version,
+                            )
                         )
                         if decision == ChangeKind.UNCHANGED and record.external_key in reapply:
                             decision = ChangeKind.APPLY
@@ -591,7 +592,7 @@ def _apply_page(
                             _check_write_precondition(observed, bases)
                             if isinstance(result, SemanticError):
                                 raise result
-                            _reflect_write(link, record, result)
+                            _reflect_write(locked, link, record, result)
                             locked.resolve_applied(record)
                             count += 1
                             continue
@@ -606,7 +607,7 @@ def _apply_page(
                             )
                         if outcome.mapped_payload is UNSET:
                             raise AdapterContractError("Replica ApplyResult must include its applied mapped_payload.")
-                        _promote(link, record, outcome, origin="remote")
+                        _promote(locked, link, record, outcome, origin="remote")
                     locked.resolve_applied(record)
                 applied.append(outcome)
                 count += outcome.count
@@ -703,7 +704,6 @@ def push_stream(
                 remote_version=link.remote_version,
                 projection=candidate.projection,
                 target=candidate.target,
-                mapping_version=candidate.mapping_version,
                 dependency_digest=revision.dependency_digest if revision is not None else "",
             )
             bases = link.sync_precondition
@@ -717,7 +717,7 @@ def push_stream(
                 locked_stream = type(stream).objects.lock_current(stream, fenced_to=stream)
                 locked = links.lock_if_supported().get(pk=link.pk)
                 _check_write_precondition(locked, bases)
-                _reflect_write(locked, record, result)
+                _reflect_write(locked_stream, locked, record, result)
                 # The write the remote once refused has now landed.
                 locked_stream.resolve_applied(record)
             count += 1

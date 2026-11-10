@@ -2072,19 +2072,20 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def connection_vendor_branding(self) -> dict[str, str]:
         """Read public connection branding without requiring Vendor read.
 
-        GraphQL supplies the projection; other callers fetch both fields in one
-        elevated read without loading the protected related object.
+        GraphQL supplies the projection; other callers cache both fields after
+        one elevated read per instance without loading the protected related object.
         """
 
         if "_connection_vendor_branding" in self.__dict__:
             return cast(dict[str, str], self.__dict__["_connection_vendor_branding"])
         vendor = apps.get_model("integrate", "Vendor")
-        return cast(
-            dict[str, str],
+        branding = (
             vendor.objects.sudo(reason="integrate.connection.public_vendor")
             .values("slug", "display_name")
-            .get(pk=self.vendor_id),
+            .get(pk=self.vendor_id)
         )
+        self.__dict__["_connection_vendor_branding"] = branding
+        return cast(dict[str, str], branding)
 
     def connection_vendor_slug(self) -> str:
         """Read the public branding slug used by connection selection."""
@@ -4252,6 +4253,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         snapshot changes start a new baseline generation with the persisted policy.
         A newer mapping version also starts one baseline: its persisted version
         makes repeated opens idempotent and revisits already-applied identities.
+        A lower declaration preserves progress but becomes the active mapping,
+        so a rollback never stamps old output with a newer version. Returning to
+        the newer declaration then replays any output the rollback may have written.
         An unknown version is seeded from the oldest applied link mapping, or
         the declaration when no applied links exist, so deployment alone never replays
         records already applied at the declared version.
@@ -4294,8 +4298,11 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                     stream,
                     direction=definition.direction,
                     snapshot=definition.snapshot,
-                    mapping_version=max(stream.mapping_version, definition.mapping_version),
+                    mapping_version=definition.mapping_version,
                 )
+            elif stream.mapping_version != definition.mapping_version:
+                stream.mapping_version = definition.mapping_version
+                stream.save(update_fields=["mapping_version", "updated_at"])
             change_authority = stream.authoritative != definition.authoritative
         return self.set_authoritative(stream, definition.authoritative) if change_authority else stream
 
@@ -4448,7 +4455,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     """
     generation = models.PositiveIntegerField(default=1)
     mapping_version = models.PositiveIntegerField(null=True, blank=True)
-    """Highest opened mapping version; unknown until seeded by :meth:`SyncStreamManager.current`."""
+    """Active declared mapping version; unknown until seeded by :meth:`SyncStreamManager.current`."""
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
     cursor = models.JSONField(default=dict, blank=True)
@@ -4473,7 +4480,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     def operation_fence(self) -> tuple[Any, ...]:
         """Return all mutable stream facts that external work must fence."""
 
-        return self.state, self.phase, self.cursor, self.reconcile_state, self.resync_required
+        return self.state, self.phase, self.cursor, self.reconcile_state, self.resync_required, self.mapping_version
 
     def accepts_pull(self) -> bool:
         """Whether this generation accepts another inbound page."""

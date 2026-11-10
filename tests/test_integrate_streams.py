@@ -499,7 +499,10 @@ def test_mapping_evidence_change_reapplies_unchanged_source(
     record = RecordChange("person:1", {"name": "Ada"}, "source", mapped_payload={"name": "Ada"})
     adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})])
     advance_stream(stream, adapter)
-    adapter.pages = [StreamPage((replace(record, **changed_evidence, projection={"name": "Ada"}),), {"page": 2})]
+    changed_record = {name: value for name, value in changed_evidence.items() if name != "mapping_version"}
+    if "mapping_version" in changed_evidence:
+        stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, mapping_version=2)
+    adapter.pages = [StreamPage((replace(record, **changed_record, projection={"name": "Ada"}),), {"page": 2})]
     assert advance_stream(stream, adapter).count == 1
     assert adapter.applied == ["person:1", "person:1"]
     assert applied_history().count() == 2
@@ -515,7 +518,6 @@ def test_driver_promotes_declared_mapping_without_apply_result_echo(stream_bridg
         {"name": "Ada"},
         "source",
         mapped_payload={"name": "Ada"},
-        mapping_version=7,
     )
     adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})])
     assert advance_stream(stream, adapter).count == 1
@@ -525,6 +527,31 @@ def test_driver_promotes_declared_mapping_without_apply_result_echo(stream_bridg
     assert advance_stream(stream, adapter).count == 0
     assert adapter.applied == ["person:1"]
     assert applied_history().count() == 1
+
+
+@pytest.mark.parametrize("kind", [StreamKind.RECORD_REPLICA, StreamKind.EVENT_FEED])
+def test_quarantine_stamps_stream_mapping_version(stream_bridge, kind):
+    stream = current_stream(stream_bridge, "quarantine-version", kind=kind, mapping_version=7)
+    record = RecordChange("poison", {}, "source", mapped_payload={})
+    failure = stream_driver._quarantine(stream, record, SemanticError("unmappable"), record_key="poison")
+    assert failure.mapping_version == 7
+
+
+def test_mapping_rollback_during_extraction_refuses_stale_page(stream_bridge, monkeypatch):
+    stream = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, mapping_version=2)
+    record = RecordChange("one", {"name": "Ada"}, "source", mapped_payload={"name": "Ada"})
+    adapter = MemoryAdapter(pages=[StreamPage((record,), {"done": True})])
+    extract = adapter.extract
+
+    def rollback(*args, **kwargs):
+        page = extract(*args, **kwargs)
+        current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, mapping_version=1)
+        return page
+
+    monkeypatch.setattr(adapter, "extract", rollback)
+    with pytest.raises(RuntimeError, match="Stream state changed during external work"):
+        advance_stream(stream, adapter)
+    assert not adapter.applied and not RecordLink.objects.exists()
 
 
 @pytest.mark.parametrize("snapshot", [False, True])
@@ -542,7 +569,7 @@ def test_new_mapping_declaration_replays_applied_rows_once(stream_bridge: Channe
             target = AppliedRecord.objects.filter(key="person:1").first()
             records = () if stream.cursor else (RecordChange(
                 "person:1", {"name": "Ada"}, "unchanged-source", mapped_payload={"name": "Ada"},
-                target=target, projection=target.payload if target else None, mapping_version=self.mapping_version,
+                target=target, projection=target.payload if target else None,
             ),)
             return StreamPage(records, {"done": True})
 
@@ -577,14 +604,17 @@ def test_new_mapping_declaration_replays_applied_rows_once(stream_bridge: Channe
     for version in (2, 1):
         adapter.mapping_version = version
         current = open_stream(stream_bridge, "records", "", adapter)
-        assert (current.pk, current.mapping_version, current.cursor) == (upgraded.pk, 2, {"done": True})
+        assert (current.pk, current.mapping_version, current.cursor) == (upgraded.pk, version, {"done": True})
     assert SyncStream.objects.count() == 2 and RecordLink.objects.count() == 1
 
     # An explicit later reset carries the mapping, rather than triggering another upgrade.
     reset = SyncStream.objects.bump_generation(current)
-    assert reset.mapping_version == 2
-    adapter.mapping_version = 2
+    assert reset.mapping_version == 1
     assert open_stream(stream_bridge, "records", "", adapter).pk == reset.pk
+    adapter.mapping_version = 2
+    restored = open_stream(stream_bridge, "records", "", adapter)
+    assert restored.generation == reset.generation + 1
+    assert restored.mapping_version == 2 and restored.cursor == {}
 
 
 @pytest.mark.parametrize("snapshot", [False, True])
@@ -600,13 +630,12 @@ def test_deploy_seeds_unknown_stream_mapping_before_deciding_to_replay(
 
     definition = StreamDefinition("records", kind=StreamKind.RECORD_REPLICA, snapshot=snapshot, mapping_version=4)
     fields = definition.stream_fields()
-    del fields["mapping_version"]  # The new nullable column on a pre-existing stream.
+    fields["mapping_version"] = 1  # Seed legacy application evidence before simulating deployment.
     initial = SyncStream.objects.create(integration_id=stream_bridge.pk, **fields)
-    assert initial.mapping_version is None
     records = tuple(RecordChange(
-        f"person:{index}", {"name": f"Person {index}"}, "unchanged-source", mapping_version=version,
+        f"person:{index}", {"name": f"Person {index}"}, "unchanged-source",
         mapped_payload={"name": f"Person {index}"},
-    ) for index, version in enumerate(applied_versions))
+    ) for index, _version in enumerate(applied_versions))
     if quarantined:
         records += (RecordChange("poison", {"name": "Invalid"}, "refused-source", mapped_payload={"name": "Invalid"}),)
     advance_stream(initial, MemoryAdapter(pages=[StreamPage(records, {"done": True})], semantic_key="poison"))
@@ -614,6 +643,9 @@ def test_deploy_seeds_unknown_stream_mapping_before_deciding_to_replay(
         refused = RecordLink.objects.get(stream=initial, external_key="poison")
         assert refused.applied_at is None and refused.mapping_version == 1
         assert refused.status == LinkStatus.FAILED
+    for index, version in enumerate(applied_versions):
+        RecordLink.objects.filter(stream=initial, external_key=f"person:{index}").update(mapping_version=version)
+    SyncStream.objects.filter(pk=initial.pk).update(mapping_version=None)
     initial.refresh_from_db()
     assert initial.mapping_version is None and initial.phase == StreamPhase.DELTA
     if snapshot:
@@ -622,7 +654,7 @@ def test_deploy_seeds_unknown_stream_mapping_before_deciding_to_replay(
     current = SyncStream.objects.current(stream_bridge, definition)
     should_replay = bool(applied_versions and min(applied_versions) < definition.mapping_version)
     assert current.generation == initial.generation + int(should_replay)
-    assert current.mapping_version == max(min(applied_versions, default=4), 4)
+    assert current.mapping_version == definition.mapping_version
     assert current.cursor == ({} if should_replay else {"done": True})
     assert current.phase == (StreamPhase.BASELINE if should_replay else StreamPhase.DELTA)
     assert current.state == (StreamState.OPEN if should_replay else initial.state)

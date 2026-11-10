@@ -46,24 +46,20 @@ from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
-REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
-"""The project setting naming the ISO-4217 code every :class:`CurrencyRate` is relative to."""
-
 
 def reference_currency_code() -> str:
     """Return the configured reference currency code, or fail fast.
 
-    The single owner of "which currency all rates are relative to" — read by the
-    rate manager and the addon's system check alike. Raises
+    Conversion requires a project-selected reference currency. Raises
     :class:`~django.core.exceptions.ImproperlyConfigured` naming
-    :data:`REFERENCE_CURRENCY_SETTING` when it is unset, because money ships no
+    ``ANGEE_MONEY_REFERENCE_CURRENCY`` when it is unset, because money ships no
     default (the project owns this choice).
     """
 
     code = settings.ANGEE_MONEY_REFERENCE_CURRENCY
     if not code:
         raise ImproperlyConfigured(
-            f"{REFERENCE_CURRENCY_SETTING} is required for currency conversion but is not set. "
+            "ANGEE_MONEY_REFERENCE_CURRENCY is required for currency conversion but is not set. "
             "It names the ISO-4217 code all CurrencyRate rows are relative to; money ships no "
             "default (a currency is a project fact, not a framework one)."
         )

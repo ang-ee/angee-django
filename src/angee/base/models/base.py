@@ -62,9 +62,6 @@ class AngeeModel(
 ):
     """Abstract base model for Angee source and runtime models."""
 
-    decision_methods: ClassVar[tuple[str, ...]] = ()
-    """Model methods explicitly admitted for decision proposals; empty by default."""
-
     objects: ClassVar[RebacManager[Self]] = AngeeManager()
     """Default REBAC manager with Angee queryset conveniences."""
 

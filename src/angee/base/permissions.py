@@ -6,7 +6,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
-from typing import Any
+from typing import Any, overload
 
 from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
@@ -63,15 +63,24 @@ def require_rebac_queryset[M: models.Model](model: type[M], *, actor: Any = _AMB
     return queryset.with_actor(actor) if actor is not None else queryset.none()
 
 
-def reader_queryset[M: models.Model](model: type[M], actor: Any) -> RebacQuerySet[M]:
+@overload
+def reader_queryset[Q: RebacQuerySet[Any]](source: Q, actor: Any) -> Q: ...
+
+
+@overload
+def reader_queryset[M: models.Model](source: type[M], actor: Any) -> RebacQuerySet[M]: ...
+
+
+def reader_queryset(source: type[models.Model] | RebacQuerySet[Any], actor: Any) -> RebacQuerySet[Any]:
     """Read as a pinned actor when given, otherwise through REBAC's ambient scope.
 
-    Unlike ``require_rebac_queryset(..., actor=None)``, an absent reader permits
-    ambient system work; without an ambient actor or system scope, reads fail closed.
+    An existing queryset retains its subtype and filters. Unlike
+    ``require_rebac_queryset(..., actor=None)``, an absent reader permits ambient
+    system work; without an ambient actor or system scope, reads fail closed.
     """
 
-    rows = require_rebac_queryset(model) if actor is None else require_rebac_queryset(model, actor=actor)
-    return rows.with_action("read")
+    rows = source if isinstance(source, RebacQuerySet) else require_rebac_queryset(source)
+    return (rows.with_actor(actor) if actor is not None else rows).with_action("read")
 
 
 def relation_read_queryset[M: models.Model](model: type[M], source: models.QuerySet[Any]) -> RebacQuerySet[M]:

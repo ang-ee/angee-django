@@ -15,7 +15,7 @@ from django.utils.module_loading import import_string
 def _hook_paths(setting: str) -> tuple[str, ...]:
     """Read an optional single or ordered multi-hook declaration without importing it."""
 
-    # Optional providers own their setting; an absent provider contributes no hook.
+    # Optional hooks may be declared by an addon that is not installed; absent means inactive.
     configured = getattr(settings, setting, "")
     if isinstance(configured, str):
         paths = (configured,) if configured else ()

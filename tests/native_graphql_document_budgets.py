@@ -12,11 +12,10 @@ from datetime import UTC, date, datetime, timedelta
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection
 from django.test import TransactionTestCase
 from rebac import actor_context, system_context
 
-from angee.base.testing.queries import capture_planner_memory, statement_startswith
+from angee.base.testing.queries import capture_planner_memory, statement_startswith, supports_planner_memory
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import measure_graphql_document
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
@@ -249,7 +248,7 @@ PLANNER_BUDGETS = {"person": (18, 458), "projects": (10, 140)}
 class ConsoleDocumentBudgetTests(TransactionTestCase):
     """Each console read stays within its fixed statement and SQL-size ceiling."""
 
-    # Bound identifiers must have the same SQL width regardless of preceding tests.
+    # SQL-text budgets require stable primary-key widths between test methods.
     reset_sequences = True
 
     def setUp(self):
@@ -361,8 +360,7 @@ class ConsoleDocumentBudgetTests(TransactionTestCase):
     def test_member_reads_planner_memory(self):
         """Budget every SELECT planned by the member's person and projects documents."""
 
-        if connection.vendor != "postgresql" or connection.pg_version < 170000:
-            self.skipTest("EXPLAIN MEMORY requires PostgreSQL 17 or later")
+        self.assertTrue(supports_planner_memory(), "EXPLAIN MEMORY requires PostgreSQL 17 or later")
         self.seed(self.admin, "admin")
         documents = self.documents(self.seed(self.member, "member"))
         schema = GraphQLSchemas.from_discovery().build("console")

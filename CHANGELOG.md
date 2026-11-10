@@ -14,22 +14,27 @@ live in code docstrings.
   shares document history selection with `touching_filter`, requires a creation
   snapshot and refuses unmatched or unattributed writes. The reference owner adds
   `owned_reference_parts` and `has_live_references`; Statement declares retained
-  authorship/current-state policy and PartyAspectMixin declares its owned party
-  edge. Stored relationship exclusions compose `named_in_relationships(exclude=...)`.
+  authorship/current-state policy. `PersistenceMixin.owned_relations` declares
+  document parts once for history and live-reference retirement. Stored relationship
+  exclusions compose `named_in_relationships(exclude=...)`.
   Creation undo uses the same live-reference owner without an authorship exclusion.
 - Stream apply contract: `ApplyResult.mapping_version` is removed. The driver
-  promotes `RecordChange.mapping_version`, supplied by the declared mapping,
-  so adapters no longer echo a version in every apply result. Notion and the
-  framework's adapter fixtures use this contract.
+  stamps the stream declaration's `mapping_version` at promotion and quarantine;
+  `RecordChange` and `LocalChange` carry no version copies. A lower declaration
+  updates the active stream mapping without resetting progress; a later increase
+  replays rollback output. Mapping changes fence already-extracted pages. Notion
+  and the framework's adapter fixtures use this contract.
 - Integration branding: the existing public vendor projection carries slug and
   display name together. Unnamed integration and inbox channel labels fall back
   to that branding; stable labels and connection selection compose the same
   owner. GraphQL annotates the branding instead of prefetching a protected Vendor.
-  The Vendor catalogue remains admin-only. Record-reference guards explicitly
+  Fallback branding is cached per instance, including reads by `__str__`;
+  the Vendor catalogue remains admin-only. Record-reference guards explicitly
   allow one bounded represented-content-type read per compile, included in
   statement budgets; declaration and optimizer probes remain query-free.
-- Reader scopes: `base.permissions.reader_queryset(model, actor)` pins a given
-  actor and otherwise follows ambient scope. Relation reads, record-target
+- Reader scopes: `base.permissions.reader_queryset(source, actor)` pins a given
+  actor and otherwise follows ambient scope. It accepts a model or preserves an
+  existing queryset's subtype and filters. Relation reads, record-target
   prefetches, sender-name projections, party/circle reads, history, statement
   endpoints and evidence display compose it; same-model source querysets used
   only for reader selection are removed. Evidence admission still requires an
@@ -59,19 +64,19 @@ live in code docstrings.
   and swapped user models share the active-person login contract.
 - Jobs consumes provenance's optional `ANGEE_CELERY_TASK_CLASS` setting; without
   provenance's scalar default it uses Celery's native `DjangoTask`.
-- Declaration owners: `AngeeModel.decision_methods` defaults to `()`;
+- Declaration owners: `decisions.mixins.DecisionTargetMixin.decision_methods`
+  defaults to `()`; declarers inherit it. Party identity review contributes its
+  opt-in through `workflows_parties`, keeping parties independent of decisions.
   `HistoryDocumentMixin.timeline_subject` defaults to `True` and controls
-  provenance timeline admission. The `DecisionMethods` and `TimelineSubject`
-  runtime Protocols and the `timeline.kinds.timeline_subject` reader are removed.
-  `ChangesetHistory._provenance_history` defaults to `None` until the native
+  provenance timeline admission.
+  `ChangesetHistory.provenance_history` defaults to `None` until the native
   history factory binds its capture declaration; `ModelHistory` composes it
   alongside custom history bases. `ImplBase.key` retains its `""` default;
   `StorageBackend.key` explicitly defaults to `""` for registry-only native
   backends, while nonempty keys must match their registry entry.
 - `StatementField` is an explicit Django field base with a `for_statement`
   default returning the copied field. Custom adapters inherit it; ordinary
-  fields are unchanged. Document-save backends extend
-  `AngeeHasuraWriteBackend`; the probing `LinesWriteBackend` Protocol is removed.
+  fields are unchanged. Document-save backends extend `AngeeHasuraWriteBackend`.
 - `base.addons.addon_contribution` reads ordered iterables, mappings and callable
   exports with typed return variants. Mapping factories can require a callable;
   callable exports are returned without invocation. ASGI protocols, GraphQL
@@ -85,12 +90,13 @@ live in code docstrings.
   `ANGEE_OPERATOR_TOKEN` and `ANGEE_OPERATOR_RESTART_JOB`; readers no longer
   invent missing-setting defaults.
   Money declares `ANGEE_MONEY_REFERENCE_CURRENCY=None`; conversion still requires
-  a project-selected currency. Live implementation-registry and transition-policy
-  settings are required inputs: empty registry collections and `None` policy
-  overlays express inactivity. Optional hook providers may be absent; the shared
-  hook resolver then contributes no callable. The optional provenance typing
-  plugin likewise leaves its declared types unchanged when no storage binding is
-  configured. Retained migration fields may outlive retired settings.
+  a project-selected currency. Named hooks are optional: an absent setting means
+  inactive because its declaring addon may not be installed, and the shared hook
+  resolver then contributes no callable. Live implementation registries and
+  transition policies remain required inputs; empty registries and `None` policy
+  overlays express inactivity. The optional provenance typing plugin leaves its
+  declared types unchanged when no storage binding is configured. Retained
+  migration fields may outlive retired settings.
 - Base: `AngeeModel` declares `change_read_resource`, `change_related_records`
   and `change_batch_targets`; adapters dispatch through these contracts.
   `AngeeQuerySetMixin` and `SCHEMA_BINDING` replace their underscored names.
