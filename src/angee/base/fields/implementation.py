@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from enum import Enum
 from functools import cache, partialmethod
 from typing import Any, cast
 
@@ -12,13 +13,14 @@ from django_choices_field import TextChoicesField
 
 from angee.base.fields.state import enum_member_for
 from angee.base.implementations import (
+    RegistryBase,
     check_impl_registry,
     impl_registry,
     resolve_impl_class,
 )
 
 
-class ImplClassField[T = object](TextChoicesField):
+class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     """A column naming a non-model implementation class by a short key.
 
     The base names the Django setting that maps keys to dotted import paths.
@@ -42,7 +44,7 @@ class ImplClassField[T = object](TextChoicesField):
         if base_class is not None and registry_setting:
             raise ImproperlyConfigured("ImplClassField registry_setting is only for historical migration fields.")
         self.base_class = base_class
-        self.registry_setting = getattr(base_class, "registry_setting") if base_class is not None else registry_setting
+        self.registry_setting = base_class.registry_setting if base_class is not None else registry_setting
         self.create_only = create_only
         self._historical_default = kwargs.get("default")
         kwargs.setdefault("max_length", 100)
@@ -121,7 +123,7 @@ class ImplClassField[T = object](TextChoicesField):
         member = enum_member_for(cast(Any, self.choices_enum), value)
         if member is not None:
             return str(member.value)
-        return str(getattr(value, "value", value)).strip()
+        return str(value.value if isinstance(value, Enum) else value).strip()
 
     def _build_enum(self) -> type[models.TextChoices]:
         """Return a ``TextChoices`` enum over the registered keys, in deterministic order."""
@@ -137,16 +139,16 @@ class ImplClassField[T = object](TextChoicesField):
         return impl_choices_enum(self.base_class)
 
 
-def _resolve_bound_implementation[T](
+def _resolve_bound_implementation[T: RegistryBase](
     instance: models.Model, *, field: ImplClassField[T], default: str | None = None,
 ) -> type[T]:
     return field.resolve_for(instance, default=default)
 
 
-def impl_choices_enum(base_class: type[object]) -> type[models.TextChoices]:
+def impl_choices_enum(base_class: type[RegistryBase]) -> type[models.TextChoices]:
     """Return the shared native enum for the current non-empty registry key set."""
 
-    registry_setting = getattr(base_class, "registry_setting")
+    registry_setting = base_class.registry_setting
     keys = tuple(sorted(impl_registry(registry_setting)))
     if not keys:
         raise ImproperlyConfigured(

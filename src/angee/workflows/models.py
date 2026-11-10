@@ -358,7 +358,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         """Identify an execution by its workflow and start time."""
         if self.version_id is None:
             return str(self._meta.verbose_name)
-        name = getattr(self, "_workflow_name", None)
+        name = self.__dict__.get("_workflow_name", None)
         if name is None:
             with system_context(reason="workflows.run_label"):
                 name = self.policy_version.workflow.name
@@ -859,7 +859,6 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
 class WorkflowDecision(Composable, extends="decisions.Decision"):
     """Contribute retained requesting runs to the decision owner's reference seam."""
-
 
     class Meta:
         abstract = True

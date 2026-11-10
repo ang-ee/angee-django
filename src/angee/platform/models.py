@@ -246,6 +246,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
             for entry in sorted(selection["app_entries"], key=lambda entry: entry["name"])
             if entry["name"] in target_names - loaded_names
         )
+        # django-compose publishes closure settings only in composed hosts.
         closure = getattr(settings, "COMPOSE_CLOSURE", None)
         dependencies = {} if closure is None else closure.dependencies
         loaded_roots = composed.root_app_names()
@@ -306,6 +307,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
 
         config = loaded.get(name)
         if config is not None and name not in composed.root_app_names():
+            # django-compose publishes closure settings only in composed hosts.
             closure = getattr(settings, "COMPOSE_CLOSURE", None)
             dependencies = {} if closure is None else closure.dependencies
             required_by = ", ".join(sorted(
@@ -455,6 +457,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         """
 
         index = installed_components("angee.addons") if index is None else index
+        # django-compose publishes closure settings only in composed hosts.
         closure = getattr(settings, "COMPOSE_CLOSURE", None)
         dependencies = {} if closure is None else closure.dependencies
         with transaction.atomic():
@@ -498,7 +501,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         ``INSTALLED_APPS``; overridden settings return an honest unknown state.
         """
 
-        if "INSTALLED_APPS" not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
+        if "INSTALLED_APPS" not in settings.ANGEE_PROJECT_YAML_SETTINGS:
             return None
         loaded = composed.root_app_names()
         desired = addon_installer().desired_app_names()

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from django.contrib.auth.models import _User
 
     class _ViewAsRequest(HttpRequest):
-        view_as: ViewAs
+        view_as: ViewAs | None = None
 
 logger = logging.getLogger(__name__)
 _DENIED = "View-as is not permitted."
@@ -50,11 +50,18 @@ class ViewAs:
     target: _User
     operations: list[str] = field(default_factory=list)
 
+    @staticmethod
+    def bound_to(request: HttpRequest | None) -> ViewAs | None:
+        """Read this transport's optional request binding, including outside dispatch."""
+
+        return request.__dict__.get("view_as") if request is not None else None
+
     @classmethod
     def from_request(cls, request: HttpRequest) -> ViewAs | None:
         target_id = request.headers.get("X-Angee-View-As")
         if target_id is None:
             return None
+        # Django AuthenticationMiddleware supplies user; bare HttpRequest does not.
         real_user = getattr(request, "user", None)
         if real_user is None or not real_user.is_authenticated or is_sudo():
             raise PermissionDenied(_DENIED)
@@ -97,8 +104,9 @@ class ViewAsReadOnlyExtension(SchemaExtension):
     def on_parse(self) -> Iterator[None]:
         yield
         context = self.execution_context.context
+        # Strawberry permits mapping contexts and custom objects carrying request.
         request = context.get("request") if isinstance(context, Mapping) else getattr(context, "request", None)
-        preview = getattr(request, "view_as", None)
+        preview = ViewAs.bound_to(request)
         if preview is None or self.execution_context.graphql_document is None:
             return
         try:

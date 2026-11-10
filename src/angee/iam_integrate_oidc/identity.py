@@ -231,6 +231,7 @@ class OidcIdentityResolver:
                     )
                     return user
         except ValidationError as error:
+            # Django ValidationError omits code on aggregate errors.
             if getattr(error, "code", None) == "account_already_linked":
                 raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 409) from error
             raise

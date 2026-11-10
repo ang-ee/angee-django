@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
 from itertools import batched, groupby
-from typing import Any, ClassVar, Self, cast
+from typing import Any, ClassVar, Protocol, Self, cast, runtime_checkable
 
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -102,13 +102,13 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
 
     def _clone(self, **kwargs: Any) -> Self:
         clone = super()._clone(**kwargs)
-        clone._statement_reader = getattr(self, "_statement_reader", None)
+        clone._statement_reader = self._statement_reader
         return clone
 
     def _fetch_all(self) -> None:
         fresh = self._result_cache is None
         super()._fetch_all()
-        reader = getattr(self, "_statement_reader", None)
+        reader = self._statement_reader
         if fresh and reader is not None and self._result_cache and issubclass(self._iterable_class, ModelIterable):
             prime_readable_statement_records(self._result_cache, reader)
 
@@ -681,7 +681,10 @@ class StatementSubjectQuerySet[T: models.Model](TrashQuerySet[T], AngeeHistoryQu
     """Canonical asserted rows, retaining withdrawn subjects and their identities."""
 
     def canonical(self) -> Self:
-        statement_model = getattr(self.model, "statements").model
+        manager = cast(type[StatementsMixin], self.model).statements
+        if manager is None:
+            raise ImproperlyConfigured("Canonical subjects require a StatementRecords declaration.")
+        statement_model = manager.model
         statements = statement_model._base_manager.filter(subject_id=OuterRef("pk"))
         remaining = statements.exclude(status=statement_model.StatementStatus.WITHDRAWN)
         return self.untrashed().filter(~Exists(statements) | Exists(remaining))
@@ -843,6 +846,8 @@ class Aspect:
 class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
     """Subject-owned eligibility and application hooks for typed statements."""
 
+    statements: HistoryDescriptor | None = None
+
     class Meta:
         abstract = True
 
@@ -874,7 +879,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
 
         seen = set()
         for owner in (*reversed(cls._meta.get_parent_list()), cls):
-            declaration = getattr(owner, "statements", None)
+            declaration = owner.statements if issubclass(owner, StatementsMixin) else None
             if declaration is not None and declaration.model not in seen:
                 seen.add(declaration.model)
                 yield declaration.model
@@ -905,7 +910,7 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
                 if not isinstance(subject, RebacMixin):
                     raise ImproperlyConfigured("Statement subjects require REBAC actor binding.")
                 subject.with_actor(actor)
-            yield getattr(subject, "statements")
+            yield cast(StatementsMixin, subject).statements
 
     def statements_for(self, aspect: str) -> Any:
         """Return the single table declaring this aspect; conflicting owners refuse."""
@@ -1478,6 +1483,15 @@ class StatementPair(
         self.left.apply_pair(aspect=self.pair_name, other=self.right, statement=statement)
 
 
+@runtime_checkable
+class StatementField(Protocol):
+    """Optional field-owned adaptation after simple-history copies a statement's fields."""
+
+    def for_statement(self, fields: Mapping[str, models.Field]) -> models.Field:
+        """Keep the native field by default; a specialized field owns any replacement."""
+        return cast(models.Field, self)
+
+
 class StatementRecords(HistoricalRecords):
     """Generate typed assertions with simple-history's native model generator.
 
@@ -1599,13 +1613,8 @@ class StatementRecords(HistoricalRecords):
     def copy_fields(self, model: Any) -> dict[str, models.Field]:
         fields = super().copy_fields(model)
         for name, field in list(fields.items()):
-            currency_field = getattr(field, "angee_currency_field", None)
-            if currency_field is not None and currency_field not in fields:
-                # A money column copied without its currency column states the amount
-                # alone; the subject keeps the currency binding (money's E011 check).
-                field = fields[name] = models.DecimalField(
-                    max_digits=field.max_digits, decimal_places=field.decimal_places, db_index=field.db_index
-                )
+            if isinstance(field, StatementField):
+                field = fields[name] = field.for_statement(fields)
             field.null = field.blank = True
             field.default = field.db_default = models.NOT_PROVIDED
             field.auto_created = False

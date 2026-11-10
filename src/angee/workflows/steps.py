@@ -281,7 +281,7 @@ class Step[I, O, C](ImplBase):
         super().__init_subclass__(**kwargs)
         if not isinstance(cls.mode, StepMode):
             raise ImproperlyConfigured("A step mode must be DATABASE or IO.")
-        if "timeout" not in cls.__dict__ and cls.mode != getattr(super(cls, cls), "mode"):
+        if "timeout" not in cls.__dict__ and cls.mode != cast(type[Step], super(cls, cls)).mode:
             cls.timeout = timedelta(minutes=5) if cls.mode == StepMode.IO else Step.timeout
         cls.outcomes = validate_value(dict[Outcome, str], cls.outcomes, field="outcomes")
         for base in get_original_bases(cls):

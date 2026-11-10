@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
-from typing import cast
+from typing import Protocol, cast, runtime_checkable
 
 import django
 from asgiref.typing import ASGI3Application, ASGIReceiveCallable, ASGISendCallable, Scope
@@ -38,6 +38,13 @@ if not apps.ready:
 connect_web_statement_timeout()
 
 type _Lifespan = Callable[[], AbstractAsyncContextManager[object]]
+
+
+@runtime_checkable
+class _ProtocolsModule(Protocol):
+    """Optional protocol contribution alongside the ordered ASGI contributions."""
+
+    protocols: Callable[[], Mapping[str, ASGI3Application]] | None = None
 
 
 class _Application:
@@ -62,7 +69,11 @@ class _Application:
                     raise ImproperlyConfigured(f"{config.name}: invalid HTTP mount {prefix!r}")
                 self._claim(mount_owners, prefix, config.name)
                 self.mounts[prefix] = handler
-            protocols: Mapping[str, ASGI3Application] = getattr(module, "protocols", dict)()
+            protocols: Mapping[str, ASGI3Application] = {}
+            if isinstance(module, _ProtocolsModule):
+                if not callable(module.protocols):
+                    raise ImproperlyConfigured(f"{config.name}.asgi.protocols must be callable.")
+                protocols = module.protocols()
             for protocol, handler in protocols.items():
                 self._claim(protocol_owners, protocol, config.name)
                 self.protocols[protocol] = handler

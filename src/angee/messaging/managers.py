@@ -39,6 +39,7 @@ from zoneinfo import ZoneInfo
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.search import SearchQuery
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -64,6 +65,7 @@ from rebac.resources import model_resource_type
 
 from angee.base.locks import task_locks_are_cross_process
 from angee.base.managers import AngeeManager
+from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.ownership import OwnerQuerySet
@@ -1271,7 +1273,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         # The host owns whether its record chatter streams over changes(); stamp its
         # opt-in onto the thread so broadcasts_changes() is O(1) at publish time and
         # never re-resolves the polymorphic target.
-        host_broadcasts = bool(getattr(record, "thread_broadcasts_changes", False))
+        host_broadcasts = isinstance(record, ThreadedModelMixin) and record.thread_broadcasts_changes
         if existing := self.for_record(record, role=role):
             self._reconcile_broadcast_state(existing.thread, host_broadcasts=host_broadcasts)
             return existing
@@ -1290,7 +1292,10 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         )
         # A record's chatter belongs to the record's creator, never to whoever first
         # follows or posts: ownership is standing access the record does not grant.
-        creator_id = getattr(record, "created_by_id", None) if role == self.model.AttachmentRole.CHATTER else None
+        creator_id = (
+            record.created_by_id
+            if role == self.model.AttachmentRole.CHATTER and isinstance(record, AuditMixin) else None
+        )
         owned = {"owner_id": creator_id} if creator_id is not None else {}
         with elevated, transaction.atomic():
             title_fragment = fragment_model.objects.upsert(text=title_text) if title_text else None
@@ -1701,7 +1706,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                 if resolved_user_id is None:
                     raise ValueError("A party or user is required to follow a thread.")
                 account = user if user is not None else get_user_model()._base_manager.get(pk=resolved_user_id)
-                if getattr(account, "kind", None) == "person" and not target.thread_reader_allowed(account):
+                if account.kind == "person" and not target.thread_reader_allowed(account):
                     raise PermissionDenied("Only a person with record read access may follow.")
                 party_id = self.get_party_id(user=account, create=True)
             else:
@@ -2077,7 +2082,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         preserves the first timestamp when concurrent requests acknowledge it.
         """
 
-        if actor is None or getattr(actor, "is_authenticated", True) is False:
+        if actor is None or actor.is_authenticated is False:
             raise PermissionDenied("Authentication required.")
         row = self.with_actor(actor).with_action("read_inbox").lock_if_supported().filter(pk=notification.pk).first()
         if row is None or str(row.user_id) != str(actor.pk):
@@ -2268,9 +2273,9 @@ def _resolve_user_id(*, user: Any = None, user_id: Any = None) -> Any | None:
     if user_id is not None:
         return user_id
     if user is not None:
-        if getattr(user, "is_authenticated", True) is False:
+        if isinstance(user, AnonymousUser):
             return None
-        return getattr(user, "pk", user)
+        return (user.pk if isinstance(user, models.Model) else user)
     return actor_user_id(current_actor())
 
 
@@ -2337,7 +2342,7 @@ class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
     def is_starred(self, message: Any, *, user: Any | None) -> bool:
         """Return whether ``user`` has starred ``message``."""
 
-        user_id = getattr(user, "pk", None)
+        user_id = (user.pk if user is not None else None)
         if user_id is None:
             return False
         stars = prefetched_objects(message, "stars")
@@ -2348,14 +2353,14 @@ class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
     def prefetch_for(self, user: Any | None) -> models.Prefetch:
         """Prefetch ``user``'s own stars, so :meth:`is_starred` answers a page of messages in one query."""
 
-        user_id = getattr(user, "pk", None)
+        user_id = (user.pk if user is not None else None)
         stars = self.model._base_manager.all()
         return models.Prefetch("stars", queryset=stars.filter(user_id=user_id) if user_id is not None else stars.none())
 
     def set_starred(self, message: Any, *, user: Any, starred: bool | None = None) -> bool:
         """Set or toggle ``user``'s star on ``message`` and return the new state."""
 
-        user_id = getattr(user, "pk", None)
+        user_id = (user.pk if user is not None else None)
         if user_id is None:
             raise ValueError("A user is required to star a message.")
         with transaction.atomic():
@@ -2375,7 +2380,7 @@ class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
     def unstar_all(self, *, user: Any) -> int:
         """Remove all stars owned by ``user``."""
 
-        user_id = getattr(user, "pk", None)
+        user_id = (user.pk if user is not None else None)
         if user_id is None:
             return 0
         deleted, _details = self.model._base_manager.filter(user_id=user_id).delete()
@@ -4842,7 +4847,7 @@ class MessageEdgeManager[MessageEdgeT: MessageEdge](AngeeManager[MessageEdgeT]):
         """
 
         return {
-            "fragment_id": getattr(fragment, "pk", fragment),
+            "fragment_id": (fragment.pk if isinstance(fragment, models.Model) else fragment),
             "confidence": confidence,
             "created_by_id": created_by_id,
         }
@@ -4890,8 +4895,8 @@ class MessageEdgeManager[MessageEdgeT: MessageEdge](AngeeManager[MessageEdgeT]):
         """
 
         edge, _created = self.get_or_create(
-            src_id=getattr(src, "pk", src),
-            dst_id=getattr(dst, "pk", dst),
+            src_id=(src.pk if isinstance(src, models.Model) else src),
+            dst_id=(dst.pk if isinstance(dst, models.Model) else dst),
             kind=kind,
             defaults=self._edge_fields(created_by_id=created_by_id, fragment=fragment, confidence=confidence),
         )

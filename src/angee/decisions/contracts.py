@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from inspect import signature
-from typing import Any
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -29,6 +29,13 @@ from angee.base.validators import SavedRow
 from angee.graphql.data.metadata import data_resource_contributions
 from angee.graphql.schema import schema_parts_for
 from angee.provenance.evidence import EvidenceFact, EvidenceReference
+
+
+@runtime_checkable
+class DecisionMethods(Protocol):
+    """The optional model declaration of methods a decision may invoke."""
+
+    decision_methods: ClassVar[tuple[str, ...]] = ()
 
 
 class DecisionRecordReference(EvidenceReference):
@@ -193,7 +200,8 @@ class RecordActions(BaseModel):
             resolved[name] = decoded
         if self.record:
             call = self.record.call
-            if call == "delete" or call not in getattr(model, "decision_methods", ()):
+            methods = model.decision_methods if isinstance(model, DecisionMethods) else DecisionMethods.decision_methods
+            if call == "delete" or call not in methods:
                 raise ValueError(f"Undeclared decision method: {call}.")
             bound = getattr(record, call, None)
             if not callable(bound):

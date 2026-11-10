@@ -31,7 +31,7 @@ DEFAULT_ROUNDING_MODE = "half_up"
 def rounding_constant(mode: RoundingMode | str | None = None) -> str:
     """Return the :mod:`decimal` rounding constant for one money rounding mode."""
 
-    value = DEFAULT_ROUNDING_MODE if mode is None else getattr(mode, "value", mode)
+    value = DEFAULT_ROUNDING_MODE if mode is None else mode
     text = str(value)
     if text in ROUNDING_CONSTANTS:
         return ROUNDING_CONSTANTS[text]

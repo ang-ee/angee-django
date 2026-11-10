@@ -1295,7 +1295,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
         """Move to duplicate/canceled according to the base dropped reason."""
 
         try:
-            reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
+            reason_member = self.TaskDroppedReason(reason)
         except ValueError as error:
             raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
         if self.queue_id is None:
@@ -1493,7 +1493,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
 
         self._require_work_action(expected_revision)
         try:
-            reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
+            reason_member = self.TaskDroppedReason(reason)
         except ValueError as error:
             raise ValidationError({"reason": "Choose declined or obsolete."}) from error
         if reason_member not in {
@@ -1656,7 +1656,7 @@ class TaskWork(StagedModelMixin[Stage], StateTransitionsMixin, Composable, exten
             self.queue_id = self.stage_model()._base_manager.values_list("queue_id", flat=True).get(pk=self.stage_id)
             changed.add("queue")
         if self.queue_id is None and self._state.adding:
-            user_id = actor_user_id(current_actor()) or getattr(self, "created_by_id", None)
+            user_id = actor_user_id(current_actor()) or self.created_by_id
             if user_id is not None:
                 user_model = apps.get_model(settings.AUTH_USER_MODEL)
                 with system_context(reason="work.task.personal_queue_user"):

@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 # The base MCP addon contributes NO ``ANGEE_MCP_ACTOR_VERIFIER`` default on purpose: the
 # catalogue owner (e.g. the agents addon) supplies it, and a base-level ``""`` default would
 # clobber that value in autoconfig merge order — leaving every bearer unauthenticated (401).
 # Absent any verifier, ``angee.mcp.verifier`` resolves no hook and fails closed. The authenticated actor is
 # then bracketed around each tool call by ``angee.mcp.middleware.ActorMiddleware`` and read
 # through rebac's ambient ``current_actor`` (no ``REBAC_MCP_ACTOR_RESOLVER`` override needed).
-SETTINGS = {
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_BUILTIN_MCP_URL": str,
+    },
+)
+
+SETTINGS: _Settings = {
     # Container-reachable URL for this process's built-in ``/mcp`` mount. The
     # deployment/stack owns the concrete host/port; catalogue rows refer to it with
     # ``agents.MCPServer.config = {"builtin": "angee"}``.

@@ -81,12 +81,13 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         specs: list[InferenceModelSpec] = []
         with self.client() as client:
             for model in client.models.list():
-                model_id = str(getattr(model, "id", "") or "").strip()
+                model_id = str(model.id or "").strip()
                 if not model_id:
                     continue
                 if not self._is_catalogue_model(model_id):
                     continue
                 config = {"provider_model": model_id, "source": self.key}
+                # OpenAI-compatible catalogues can omit ownership metadata in SDK-constructed models.
                 owned_by = str(getattr(model, "owned_by", "") or "").strip()
                 if owned_by:
                     config["owned_by"] = owned_by

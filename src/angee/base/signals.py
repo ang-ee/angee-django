@@ -22,7 +22,7 @@ from types import MappingProxyType
 from typing import Any
 from uuid import UUID, uuid4
 
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.db import connections, router
 from django.db.models import Model
 from django.db.models.signals import class_prepared, post_delete, post_save
@@ -85,7 +85,7 @@ def send_created_batch(
         )
 
 
-def migrated_model(*, app_config: object, using: str, app_label: str, model_name: str) -> type[Model] | None:
+def migrated_model(*, app_config: AppConfig, using: str, app_label: str, model_name: str) -> type[Model] | None:
     """Return the model a ``post_migrate`` receiver may work on now, or ``None``.
 
     Django sends ``post_migrate`` for every app on every migrate, test databases
@@ -94,7 +94,7 @@ def migrated_model(*, app_config: object, using: str, app_label: str, model_name
     model's table (not after migrating back past it).
     """
 
-    if getattr(app_config, "label", "") != app_label:
+    if app_config.label != app_label:
         return None
     try:
         model = apps.get_model(app_label, model_name)

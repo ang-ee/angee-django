@@ -114,13 +114,14 @@ def validate_channel_layer() -> None:
     so a configured ``CELERY_BROKER_URL`` means a worker process broadcasts.
     """
 
-    layer_config = getattr(settings, "CHANNEL_LAYERS", {}).get("default", {})
+    layer_config = settings.CHANNEL_LAYERS.get("default", {})
     backend = layer_config.get("BACKEND", "")
     if backend != _INMEMORY_CHANNEL_LAYER:
         return
-    if getattr(settings, "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER", False) is True:
+    if settings.ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER is True:
         return
-    if getattr(settings, "DEBUG", False) is True and not getattr(settings, "CELERY_BROKER_URL", None):
+    # Celery broker settings are optional when the jobs addon is absent.
+    if settings.DEBUG is True and not getattr(settings, "CELERY_BROKER_URL", None):
         return
     raise ImproperlyConfigured(
         "channels.layers.InMemoryChannelLayer cannot deliver GraphQL changes across processes. "

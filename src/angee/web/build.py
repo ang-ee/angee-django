@@ -235,6 +235,6 @@ class WebIntegration:
             path: source.encode('utf-8')
             for path, source in WebRuntime(
                 settings.COMPOSE_CLOSURE.app_configs, runtime_dir=Path(settings.COMPOSE_OUTPUT_DIR),
-                ui=getattr(settings, 'ANGEE_UI', None),
+                ui=settings.ANGEE_UI,
             ).render_sources().items()
         }

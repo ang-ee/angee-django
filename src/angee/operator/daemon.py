@@ -20,14 +20,12 @@ from graphql import build_client_schema, get_introspection_query, print_schema
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import HttpClient
+from angee.operator.autoconfig import DEFAULT_TOKEN_TTL
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE = "/operator"
 """Same-origin reverse-proxy base — keeps default deployments CORS-free."""
-
-_DEFAULT_TTL = "1h"
-"""Lifetime requested for a minted connection token (the daemon caps at 24h)."""
 
 _MINT_TIMEOUT = 5
 """Seconds to wait on the server-side mint before hiding the connection."""
@@ -199,8 +197,8 @@ class OperatorDaemon:
             endpoint=cls._with_graphql_path(endpoint_url or base_url or _DEFAULT_BASE),
             server_base=cls._server_base(endpoint_url, base_url),
             admin_bearer=cls._setting("ANGEE_OPERATOR_TOKEN"),
-            scope=tuple(str(item) for item in getattr(settings, "ANGEE_OPERATOR_TOKEN_SCOPE", ())),
-            ttl=str(getattr(settings, "ANGEE_OPERATOR_TOKEN_TTL", _DEFAULT_TTL)),
+            scope=tuple(str(item) for item in settings.ANGEE_OPERATOR_TOKEN_SCOPE),
+            ttl=str(settings.ANGEE_OPERATOR_TOKEN_TTL),
             restart_job=cls._setting("ANGEE_OPERATOR_RESTART_JOB"),
         )
 
@@ -404,7 +402,7 @@ class OperatorDaemon:
 
         return cast(dict[str, Any], self._request("GET", f"{self._base()}/services/{quote(name, safe='')}/endpoint"))
 
-    def mint_route_token(self, actor: str, service: str, ttl: str = _DEFAULT_TTL) -> dict[str, Any]:
+    def mint_route_token(self, actor: str, service: str, ttl: str = DEFAULT_TOKEN_TTL) -> dict[str, Any]:
         """Mint a route token scoping ``actor`` to a routed ``service`` (``POST /tokens/route``).
 
         Distinct from :meth:`mint_token` (the ``aud=operator`` GraphQL token): this is

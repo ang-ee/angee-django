@@ -28,7 +28,7 @@ def _get_view(schema_name: str) -> Any:
     schema = GraphQLSchemas.from_discovery().build(schema_name)
     return GraphQLView.as_view(
         schema=schema,
-        graphql_ide=getattr(settings, "ANGEE_GRAPHQL_IDE", None),
+        graphql_ide=settings.ANGEE_GRAPHQL_IDE,
     )
 
 
@@ -58,6 +58,7 @@ def graphql_endpoint(request: HttpRequest, schema_name: str) -> HttpResponse:
                 operation = selected.name.value if selected is not None and selected.name is not None else None
             except GraphQLError:
                 pass
+        # Django AuthenticationMiddleware supplies user; bare HttpRequest does not.
         user = getattr(request, "user", None)
         logger.warning(
             "GraphQL view-as denied: real_actor=%s target=%s schema=%s operation=%s",

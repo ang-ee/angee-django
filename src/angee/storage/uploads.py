@@ -231,6 +231,7 @@ class CappedReader:
     def close(self) -> None:
         """Close the wrapped reader when it supports closing."""
 
+        # Python io.Reader promises read, but does not require a close method.
         close = getattr(self._reader, "close", None)
         if callable(close):
             close()

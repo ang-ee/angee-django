@@ -30,6 +30,7 @@ class ImmutableFieldsMixin(models.Model):
     """
 
     immutable_fields: ClassVar[tuple[str, ...]] = ()
+    _allowed_immutable_fields: frozenset[str] | set[str] = frozenset()
 
     class Meta:
         """Django options for the shared write-once field guard."""
@@ -39,14 +40,14 @@ class ImmutableFieldsMixin(models.Model):
     def allow_immutable_save(self, *field_names: str) -> None:
         """Allow the next save to change named immutable attnames."""
 
-        allowed = set(getattr(self, "_allowed_immutable_fields", set()))
+        allowed = set(self._allowed_immutable_fields)
         allowed.update(field_names)
         self._allowed_immutable_fields = allowed
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist after comparing immutable facts with the committed row."""
 
-        allowed = set(getattr(self, "_allowed_immutable_fields", set()))
+        allowed = set(self._allowed_immutable_fields)
         try:
             if self.pk is not None and not self._state.adding:
                 declared = dict.fromkeys(

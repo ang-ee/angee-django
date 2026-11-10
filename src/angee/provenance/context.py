@@ -32,6 +32,7 @@ class ChangesetRequired(Exception):
 def changeset_model_label() -> str:
     """Return the swappable storage label; empty when attribution storage is disabled."""
 
+    # Bare Django settings omit this binding when the optional provenance storage app is absent.
     return cast(str, getattr(settings, "ANGEE_CHANGESET_MODEL", "") or "")
 
 

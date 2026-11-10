@@ -626,6 +626,7 @@ def _apply_page(
                 else:
                     fields = (
                         sorted(error.error_dict)
+                        # Django ValidationError has error_dict only for field-keyed errors.
                         if isinstance(error, ValidationError) and hasattr(error, "error_dict")
                         else ["unknown"]
                     )

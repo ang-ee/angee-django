@@ -126,7 +126,7 @@ class LocalInstallerBackend(AddonInstallerBackend):
     def _settings_path(self) -> Path:
         """Return the project ``settings.yaml`` path, or raise when none is configured."""
 
-        base_dir = getattr(settings, "BASE_DIR", None)
+        base_dir = settings.BASE_DIR
         if not base_dir:
             raise FileNotFoundError("settings.BASE_DIR is not configured; no settings.yaml to edit.")
         return Path(base_dir) / _SETTINGS_FILENAME
@@ -231,7 +231,7 @@ class AddonInstaller:
         unreadability as an authoritative empty root set.
         """
 
-        if _INSTALLED_APPS_KEY not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
+        if _INSTALLED_APPS_KEY not in settings.ANGEE_PROJECT_YAML_SETTINGS:
             return None
         snapshot = self.installed_apps_snapshot()
         return None if snapshot is None else frozenset(snapshot.names)
@@ -239,7 +239,7 @@ class AddonInstaller:
     def installed_apps_snapshot(self) -> InstalledAppsSnapshot | None:
         """Read and validate one exact editable settings document."""
 
-        if _INSTALLED_APPS_KEY not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
+        if _INSTALLED_APPS_KEY not in settings.ANGEE_PROJECT_YAML_SETTINGS:
             return None
         try:
             text = self.backend.read_settings_text()

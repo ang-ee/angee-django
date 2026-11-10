@@ -46,8 +46,8 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.related_counts import RelatedCount
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
-from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
-from angee.iam.identity import user_display_label, user_label, user_public_id
+from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch, user_relation_label
+from angee.iam.identity import user_public_id
 from angee.knowledge.models import (
     AmbiguousMatchError,
     PageQuerySet,
@@ -100,10 +100,7 @@ class VaultType(TrashedRefMixin, AngeeNode):
     def owner_label(self, info: strawberry.Info) -> str | None:
         """Return the owner's display label — no user object exposed."""
 
-        if hasattr(self, "_iam_owner_label_source"):
-            user = cast(Any, self)._iam_owner_label_source
-            return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).owner_id, request=get_request(info))
+        return user_relation_label(cast(Any, self), "owner", request=get_request(info))
 
 
 @strawberry.type

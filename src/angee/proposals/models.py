@@ -761,7 +761,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                     raise ValidationError({"party": "The shell has a different party."})
                 if track:
                     proposal.create_track()
-                if follow and getattr(user, "kind", None) == "person":
+                if follow and (user.kind if user is not None else None) == "person":
                     locked.message_subscribe(user=user)
         return proposal.with_actor(actor)
 
@@ -1263,7 +1263,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         if self.pk is None:
             raise ValidationError("A saved round is required.")
         try:
-            outcome_value = RoundOutcome(getattr(outcome, "value", outcome))
+            outcome_value = RoundOutcome(outcome)
         except ValueError as error:
             raise ValidationError({"outcome": "Choose awarded or no award."}) from error
         accepted_ids = self._selection_ids(accepted, "accepted")
@@ -2999,8 +2999,8 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
 
         super().clean()
         if self.proposal_id is not None and self.topic_id is not None:
-            proposal_round_id = getattr(self.proposal, "round_id", None)
-            topic_round_id = getattr(self.topic, "round_id", None)
+            proposal_round_id = self.proposal.round_id
+            topic_round_id = self.topic.round_id
             if proposal_round_id != topic_round_id:
                 raise ValidationError({"topic": "Answer topic must belong to the proposal's round."})
 

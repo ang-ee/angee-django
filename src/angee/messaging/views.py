@@ -117,18 +117,18 @@ def _published_webform(slug: str) -> Any:
 
 
 def _webform_policy(slug: str) -> AnonymousIngressPolicy:
-    honeypot = str(getattr(settings, "ANGEE_WEBFORM_HONEYPOT_FIELD", "_website") or "")
+    honeypot = str(settings.ANGEE_WEBFORM_HONEYPOT_FIELD or "")
     allowed_fields = set(WEBFORM_ENVELOPE_FIELDS)
     if honeypot:
         allowed_fields.add(honeypot)
     return AnonymousIngressPolicy(
-        max_body_bytes=int(getattr(settings, "ANGEE_WEBFORM_MAX_BODY_BYTES", 65_536)),
+        max_body_bytes=int(settings.ANGEE_WEBFORM_MAX_BODY_BYTES),
         allowed_fields=frozenset(allowed_fields),
         honeypot_field=honeypot or None,
         rate_limit=AnonymousIngressRateLimit(
             scope=f"messaging.public_webform.{slug}",
-            burst=int(getattr(settings, "ANGEE_WEBFORM_RATE_LIMIT_BURST", 10)),
-            window_seconds=int(getattr(settings, "ANGEE_WEBFORM_RATE_LIMIT_WINDOW", 60)),
+            burst=int(settings.ANGEE_WEBFORM_RATE_LIMIT_BURST),
+            window_seconds=int(settings.ANGEE_WEBFORM_RATE_LIMIT_WINDOW),
         ),
         token_hook=_webform_token_hook(),
     )
@@ -152,6 +152,7 @@ def _ingress_error(error: AnonymousIngressRejected) -> JsonResponse:
 
 
 def _validation_error(error: ValidationError) -> JsonResponse:
+    # Django ValidationError has message_dict only for field-keyed errors.
     if hasattr(error, "message_dict"):
         fields: Mapping[str, Any] = {
             name: [str(message) for message in messages] for name, messages in error.message_dict.items()

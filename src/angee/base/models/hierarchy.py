@@ -42,7 +42,7 @@ class _Ancestors(InstancePrefetch):
         rows = cast("HierarchyQuerySet[HierarchyMixin]", queryset).ancestors_of(instances).annotate(
             _hierarchy_ancestor_path=F("path"),
         )
-        ancestors = {getattr(row, "_hierarchy_ancestor_path"): row for row in rows}
+        ancestors = {row._hierarchy_ancestor_path: row for row in rows}
         related: list[HierarchyMixin] = []
         sources: dict[int, object] = {}
         for instance in instances:
@@ -257,6 +257,8 @@ class HierarchyMixin(PersistenceMixin):
     bulk ``UPDATE``. It owns no REBAC of its own; path maintenance runs unscoped so
     a reparent reaches descendants the acting user cannot read.
     """
+
+    _hierarchy_saved_parent_id: Any = models.DEFERRED
 
     if TYPE_CHECKING:
         # The abstract self-FK has no PK type until its concrete model exists.
@@ -603,7 +605,7 @@ class HierarchyMixin(PersistenceMixin):
             return True
         if "parent_id" not in self.__dict__:
             return False
-        if hasattr(self, "_hierarchy_saved_parent_id"):
+        if self._hierarchy_saved_parent_id is not models.DEFERRED:
             return self._hierarchy_saved_parent_id != self.parent_id
         # A deferred load (``.only(...)`` excluding ``parent``) carries no baseline,
         # so a reparent would be invisible if we compared ``parent_id`` to itself.

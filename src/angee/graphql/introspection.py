@@ -14,6 +14,7 @@ from strawberry_django.utils.typing import get_django_definition
 def surface_name(surface: object) -> str:
     """Return a readable name for a Strawberry surface."""
 
+    # Strawberry diagnostics accept classes and invalid non-class surface declarations.
     return getattr(surface, "__name__", repr(surface))
 
 
@@ -78,8 +79,8 @@ def fields_for_path(
         if is_to_many_relation(field):
             raise FieldPathError(to_many=True)
         fields.append(field)
-        remote_field = getattr(field, "remote_field", None)
-        related_model = getattr(remote_field, "model", None)
+        remote_field = field.remote_field
+        related_model = remote_field.model if remote_field is not None else None
         current_model = related_model if isinstance(related_model, type) else None
     if not fields:
         raise FieldPathError(to_many=False)
@@ -89,13 +90,13 @@ def fields_for_path(
 def is_to_many_relation(field: models.Field[Any, Any] | ForeignObjectRel) -> bool:
     """Return whether a Django field represents a to-many relation path."""
 
-    return bool(getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False))
+    return bool(field.many_to_many or field.one_to_many)
 
 
 def is_to_one_relation(field: models.Field[Any, Any] | ForeignObjectRel) -> bool:
     """Return whether ``field`` is a forward to-one relation."""
 
     return bool(
-        (getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False))
-        and getattr(field, "related_model", None) is not None
+        (field.many_to_one or field.one_to_one)
+        and field.related_model is not None
     )

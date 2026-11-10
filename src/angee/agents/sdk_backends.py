@@ -7,6 +7,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, ClassVar
 
 from django.utils.module_loading import import_string
+from pydantic import BaseModel
 from pydantic_ai.embeddings import EmbeddingModel
 from pydantic_ai.models import Model
 
@@ -231,7 +232,6 @@ class SDKInferenceBackend(InferenceBackend):
     def _sdk_json(cls, value: Any) -> Any:
         """Return SDK-owned JSON data without walking arbitrary Python objects."""
 
-        model_dump = getattr(value, "model_dump", None)
-        if callable(model_dump):
-            return model_dump(mode="json")
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
         return value

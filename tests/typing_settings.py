@@ -25,6 +25,7 @@ if os.environ.get("ANGEE_PROJECT_DIR"):
 os.environ.setdefault("DJANGO_COMPOSE_WAIT", str(composed_test_timeout))
 
 ASGI_APPLICATION: str
+ANGEE_PROJECT_YAML_SETTINGS: frozenset[str]
 ANGEE_WEB_STATEMENT_TIMEOUT: int
 ANGEE_PROFILING_ALLOW_PRODUCTION: bool
 CELERY_TASK_SOFT_TIME_LIMIT: int

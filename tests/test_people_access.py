@@ -47,9 +47,9 @@ def test_record_readers_use_effective_people_index(
     derived = SubjectRef.of("auth/user", "derived")
     service = SubjectRef.of("auth/user", "service")
     users = {
-        direct: SimpleNamespace(name="Direct", kind="person"),
-        derived: SimpleNamespace(name="Derived", kind="person"),
-        service: SimpleNamespace(name="Robot", kind="service"),
+        direct: schema.User(first_name="Direct", kind="person"),
+        derived: schema.User(first_name="Derived", kind="person"),
+        service: schema.User(first_name="Robot", kind="service"),
     }
 
     class TargetModel:
@@ -73,7 +73,6 @@ def test_record_readers_use_effective_people_index(
     monkeypatch.setattr(schema, "session_user", lambda _info: viewer)
     monkeypatch.setattr(schema, "to_subject_ref", lambda value: value)
     monkeypatch.setattr(schema, "public_subject_ref", lambda ref: ref)
-    monkeypatch.setattr(schema, "user_label", lambda user: user.name)
     resolver = next(field for field in cast(Any, schema.IAMConsoleQuery).__strawberry_definition__.fields
                     if field.python_name == "record_readers").base_resolver.wrapped_func
     rows = resolver(object(), object(), "projects/project", "project-1")

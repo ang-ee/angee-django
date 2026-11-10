@@ -22,7 +22,7 @@ from django.db import models, transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
-from rebac import PermissionDenied, current_actor
+from rebac import PermissionDenied, RebacMixin, current_actor
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry_django.utils.requests import get_request
@@ -720,7 +720,9 @@ class FollowerIdentity:
             return None
         cached_person = party._state.fields_cache.get("person")
         if "person" not in party._state.fields_cache or (
-            cached_person is not None and getattr(cached_person, "_rebac_actor", None) != current_actor()
+            cached_person is not None and (
+                not isinstance(cached_person, RebacMixin) or cached_person.actor() != current_actor()
+            )
         ):
             person = apps.get_model("parties", "Person").objects.with_actor(current_actor()).filter(pk=party.pk).first()
             party._meta.get_field("person").set_cached_value(party, person)
@@ -1011,6 +1013,7 @@ class RecordErrorPayload:
 
         code = "PERMISSION_DENIED" if isinstance(error, PermissionDenied) else invalid_code
         if isinstance(error, ValidationError):
+            # Django ValidationError omits code on aggregate errors.
             code = getattr(error, "code", None) or code
         message = " ".join(error.messages) if isinstance(error, ValidationError) else str(error)
         return cls(error=message, error_code=code)
@@ -2151,11 +2154,7 @@ def _record_message_access_cache(info: strawberry.Info | None) -> dict[Any, tupl
     request = get_request(info) if info is not None else None
     if request is None:
         return {}
-    cache = getattr(request, "_messaging_record_access", None)
-    if cache is None:
-        cache = {}
-        setattr(request, "_messaging_record_access", cache)
-    return cache
+    return request.__dict__.setdefault("_messaging_record_access", {})
 
 
 def _record_message_access(record: ThreadedModelMixin, user: Any) -> tuple[bool, bool]:
@@ -2180,7 +2179,10 @@ def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any
             record = message.threaded_record()
             cache[message.thread_id] = _record_message_access(record, user) if record is not None else (False, False)
         post_access, moderate_access = cache[message.thread_id]
-    return {"post_access": post_access, "moderate_access": moderate_access, "actor_id": getattr(user, "pk", None)}
+    return {
+        "post_access": post_access, "moderate_access": moderate_access,
+        "actor_id": user.pk if user is not None else None,
+    }
 
 
 def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
@@ -2314,7 +2316,7 @@ def _record_thread_payload(
         else 0
     )
     user = _request_user(info) if info is not None else None
-    user_id = getattr(user, "pk", None)
+    user_id = (user.pk if user is not None else None)
     suggested_recipients = [
         SuggestedRecipientType(
             user=suggestion["user"],
@@ -2390,8 +2392,9 @@ def _request_user(info: strawberry.Info | None) -> Any | None:
     if info is None:
         return None
     request = get_request(info)
+    # Django AuthenticationMiddleware supplies user; bare HttpRequest does not.
     user = getattr(request, "user", None)
-    if user is None or getattr(user, "is_authenticated", False) is False:
+    if user is None or user.is_authenticated is False:
         return None
     return user
 

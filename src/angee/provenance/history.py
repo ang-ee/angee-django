@@ -127,6 +127,7 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
     ) -> list[T]:
         """Fill upstream 3.13's constructor-loop gap for explicit deletion history types."""
 
+        # django-simple-history treats its absent enable switch as true.
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
             return []
         generated = cast(_GeneratedHistory, self.model)
@@ -134,7 +135,9 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
         for instance in objs:
             attrs = {field.attname: getattr(instance, field.attname) for field in generated.tracked_fields}
             row = self.model(
+                # django-simple-history allows an optional instance-level history-date override.
                 history_date=getattr(instance, "_history_date", default_date or timezone.now()),
+                # django-simple-history allows an optional instance-level history-user override.
                 history_user=getattr(
                     instance, "_history_user", default_user or generated.get_default_history_user(instance)
                 ),
@@ -143,6 +146,7 @@ class ModelHistoryManager[T: models.Model](HistoryManager[T]):
                 **attrs,
                 **(custom_historical_attrs or {}),
             )
+            # django-simple-history adds history_relation only when reverse history is configured.
             if hasattr(self.model, "history_relation"):
                 setattr(row, "history_relation_id", instance.pk)
             rows.append(row)
@@ -156,6 +160,7 @@ class ModelHistory(HistoricalRecords):
     def capture_enabled(self) -> bool:
         """Honor the native simple-history switch at the registered history owner."""
 
+        # django-simple-history treats its absent enable switch as true.
         return bool(getattr(settings, "SIMPLE_HISTORY_ENABLED", True))
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -357,6 +362,7 @@ class ModelHistory(HistoricalRecords):
         """Snapshot while stored values exist, inside Django's delete transaction."""
 
         super().pre_delete(instance, **kwargs)
+        # django-simple-history treats its absent enable switch as true.
         if getattr(settings, "SIMPLE_HISTORY_ENABLED", True) and not self.cascade_delete_history:
             self.create_historical_record(instance, "-", using=kwargs.get("using"))
 
@@ -418,6 +424,7 @@ class ModelHistory(HistoricalRecords):
     def get_history_user(self, instance: models.Model) -> models.Model | None:
         """Honor a native instance override before attribution storage's user."""
 
+        # django-simple-history allows an optional instance-level history-user override.
         if hasattr(instance, "_history_user"):
             return instance._history_user
         context = current_changeset()
@@ -473,6 +480,7 @@ class HistoryMixin(models.Model):
 
         alias = using or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=alias, savepoint=not raw), write_group():
+            # django-simple-history suppresses capture via an optional instance marker.
             if not raw and not hasattr(self, "skip_history_when_saving"):
                 history = model_history(type(self))
                 if history is not None and history.capture_enabled:

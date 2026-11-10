@@ -374,7 +374,6 @@ class Channel(Bridge, inherits="integrate.Integration"):
 class ChannelWebform(Composable, extends="messaging.Channel"):
     """Same-row public-form configuration and message mapping for ``messaging.Channel``."""
 
-
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "slug",
         "is_published",
@@ -898,7 +897,6 @@ class ThreadFollower(AuditMixin, AngeeDataModel, concrete=True):
     acknowledge individual inbox items, which own ``ThreadNotification.read_at``.
     """
 
-
     NotificationPolicy = NotificationPolicy
 
     sqid_prefix = "tfl_"
@@ -973,7 +971,6 @@ class MessageSubtype(AuditMixin, AngeeDataModel, concrete=True):
     opt into precise event families. ``model_label`` scopes a subtype to one
     model; an empty value is a global subtype.
     """
-
 
     # The built-in subtype catalogue this base messaging slice ships: the closed set of
     # keys the chatter write path classifies messages under. The model owns the catalogue
@@ -1552,7 +1549,7 @@ class Message(
                 .select_related("handle")
                 .order_by("pk")
             )
-        user_id = getattr(user, "pk", None)
+        user_id = (user.pk if user is not None else None)
         grouped: dict[str, list[Any]] = {}
         for reaction in reactions:
             grouped.setdefault(str(reaction.reaction), []).append(reaction)
@@ -1592,7 +1589,7 @@ class Message(
     def sender_name(self) -> str:
         """Return the actor-visible sender label, using its selected SQL value."""
 
-        annotated = getattr(self, "_sender_name", None)
+        annotated = self.__dict__.get("_sender_name", None)
         if annotated is not None:
             return str(annotated)
         actor = self.actor() or current_actor()
@@ -1611,7 +1608,7 @@ class Message(
     def thread_title(self) -> str:
         """Return the readable thread title selected by the inbox projection."""
 
-        annotated = getattr(self, "_thread_title", None)
+        annotated = self.__dict__.get("_thread_title", None)
         if annotated is not None:
             return str(annotated)
         actor = self.actor() or current_actor()
@@ -1645,7 +1642,7 @@ class Message(
     def channel_vendor_name(self) -> str:
         """Return the readable channel vendor selected by the inbox projection."""
 
-        annotated = getattr(self, "_channel_vendor_name", None)
+        annotated = self.__dict__.get("_channel_vendor_name", None)
         if annotated is not None:
             return str(annotated)
         actor = self.actor() or current_actor()
@@ -1677,7 +1674,7 @@ class Message(
         the GraphQL resolver and displays never re-derive which part is the title.
         """
 
-        annotated = getattr(self, "_title_text", None)
+        annotated = self.__dict__.get("_title_text", None)
         if annotated is not None:
             # A list-scale read annotated the title in SQL (with_title_text) —
             # Coalesce makes "" the no-title value, so None only means unannotated.
@@ -1815,7 +1812,6 @@ class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
     explicit followers; acknowledgement and the follower cursor remain independent.
     """
 
-
     class NotificationType(models.TextChoices):
         """How this notification should be delivered."""
 
@@ -1909,7 +1905,6 @@ class Fragment(AuditMixin, AngeeDataModel, concrete=True):
     own, mirroring storage's unscoped ``MimeType`` catalogue.
     """
 
-
     class FragmentKind(models.TextChoices):
         """What a fragment of text is."""
 
@@ -1975,7 +1970,6 @@ class Part(AuditMixin, AngeeDataModel, concrete=True):
     inline document (``disposition=inline`` with a filename and a document type, as
     forwarded bills arrive); inline images are ``disposition=inline`` + ``cid``.
     """
-
 
     class Disposition(models.TextChoices):
         """How a part is presented."""
@@ -2063,7 +2057,6 @@ class MessageEdge(AuditMixin, AngeeDataModel, concrete=True):
     ``fragment`` (the shared content-addressed text) and a ``confidence``; both
     direction indexes back the bulk BFS.
     """
-
 
     class EdgeKind(models.TextChoices):
         """The type of cross-message relation.
@@ -2277,7 +2270,6 @@ class Reaction(AuditMixin, AngeeDataModel, concrete=True):
 
 class MessageStar(AuditMixin, AngeeDataModel, concrete=True):
     """A user's Odoo-style star/favorite marker on a message."""
-
 
     sqid_prefix = "msr_"
     message = models.ForeignKey(

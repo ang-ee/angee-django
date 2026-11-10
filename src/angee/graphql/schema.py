@@ -9,7 +9,7 @@ import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 
 import strawberry
 from django.apps import AppConfig, apps
@@ -109,7 +109,7 @@ class AngeeSchema(strawberry.Schema):
         return [
             *super().get_extensions(sync=sync),
             *(import_string(path)(sync=sync)() for path in
-              getattr(settings, "ANGEE_GRAPHQL_EXTENSION_FACTORIES", ())),
+              settings.ANGEE_GRAPHQL_EXTENSION_FACTORIES),
         ]
 
     @lru_cache
@@ -233,6 +233,7 @@ class AngeeSchema(strawberry.Schema):
         error.message = classify_error(validation).message
         field_errors: dict[str, list[str]] = {}
         form_errors: list[str] = []
+        # Django ValidationError has error_dict only for field-keyed errors.
         if hasattr(validation, "error_dict"):
             for field, messages in validation.message_dict.items():
                 if field == NON_FIELD_ERRORS:
@@ -603,6 +604,7 @@ class GraphQLSchemas:
             if model is None:
                 continue
             for field in model._meta.get_fields():
+                # django-choices-field declares choices_enum only on its enum-backed fields.
                 choices_enum = getattr(field, "choices_enum", None)
                 if choices_enum is None:
                     continue
@@ -611,6 +613,7 @@ class GraphQLSchemas:
     def _describe_choice_enum(self, choices_enum: Any) -> None:
         """Attach Django choice member labels to the owned Strawberry enum values."""
 
+        # Strawberry attaches definitions to decorated object/enum types only.
         definition = getattr(choices_enum, "__strawberry_definition__", None)
         if definition is None:
             strawberry.enum(choices_enum)
@@ -642,6 +645,13 @@ def schema_parts_for(
     return parts
 
 
+@runtime_checkable
+class _SchemaModule(Protocol):
+    """The optional conventional schema declaration; present values must be mappings."""
+
+    schemas: Mapping[str, Mapping[str, object]] | None = None
+
+
 def _raw_schemas(app_config: AppConfig, *, index: InstalledComponents) -> object:
     """Return the raw schema declaration object for one addon, when present."""
 
@@ -659,7 +669,7 @@ def _raw_schemas(app_config: AppConfig, *, index: InstalledComponents) -> object
             raise ImproperlyConfigured(f"{app_config.name}.graphql.schema references {path!r}") from error
     else:
         module = optional_addon_module(app_config, "schema", index=index)
-        if module is None or not hasattr(module, "schemas"):
+        if not isinstance(module, _SchemaModule):
             return None
         schemas = module.schemas
     if schemas is None:

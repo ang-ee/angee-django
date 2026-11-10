@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import cache
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 from django.apps import AppConfig
@@ -79,6 +79,7 @@ def mcp_app() -> StarletteWithLifespan:
         for host in settings.ALLOWED_HOSTS
         for pattern in ((host[1:], f"*{host}") if host.startswith(".") else (host,))
     ]
+    # Native Django hosts can mount MCP without composing the internal service URL setting.
     if internal_host := urlsplit(getattr(settings, "ANGEE_BUILTIN_MCP_URL", "")).hostname:
         hosts.append(internal_host)
     return mcp_server().http_app(
@@ -115,8 +116,15 @@ def tool_registrar(app_config: AppConfig) -> ToolRegistrar | None:
     return _module_registrar(module) if module is not None else None
 
 
+@runtime_checkable
+class _ToolsModule(Protocol):
+    """Optional conventional tool registration declaration, validated before dispatch."""
+
+    register: ToolRegistrar | None = None
+
+
 def _module_registrar(module: ModuleType) -> ToolRegistrar | None:
-    if not hasattr(module, 'register'):
+    if not isinstance(module, _ToolsModule):
         return None
     registrar = module.register
     if not callable(registrar):

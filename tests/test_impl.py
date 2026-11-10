@@ -33,6 +33,10 @@ from tests.conftest import OAuthClient, VcsBridge
 from tests.tables import model_tables
 
 
+class _KeyedStorageBackend(StorageBackend):
+    key = "declared"
+
+
 class _BaseImpl(ImplBase):
     registry_setting = "ANGEE_TEST_IMPLS"
     key = "base"
@@ -1219,3 +1223,11 @@ def test_namespaced_relation_widgets_survive_config_form_projection():
     schema = config_form_spec(Config.model_json_schema(by_alias=True), owner="Config")
     assert schema["properties"]["target"]["widget"] == "demo.target"
     assert schema["properties"]["target"]["relation"] == {"resource": "demo.Target"}
+
+
+@override_settings(ANGEE_STORAGE_BACKEND_CLASSES={"different": "tests.test_impl._KeyedStorageBackend"})
+def test_native_implementation_declared_key_must_match_the_registry() -> None:
+    """Native classes may declare a key without inheriting ImplBase."""
+
+    with pytest.raises(ImproperlyConfigured, match="with key 'declared'"):
+        resolve_impl_class(StorageBackend, "different")

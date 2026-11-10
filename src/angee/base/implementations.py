@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 
 from django.conf import settings
 from django.core import checks
@@ -26,6 +26,19 @@ class ImplChoice:
     category: str
     defaults: dict[str, Any]
     config_schema: dict[str, Any] | None
+
+
+class RegistryBase(Protocol):
+    """The declared setting that owns a family of native implementation classes."""
+
+    registry_setting: ClassVar[str]
+
+
+@runtime_checkable
+class _KeyedImplementation(Protocol):
+    """Optional class key declaration, also supported on native implementation classes."""
+
+    key: ClassVar[str | None] = None
 
 
 class ImplBase:
@@ -158,14 +171,14 @@ def impl_registry(registry_setting: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in mapping.items()}
 
 
-def resolve_impl_class[T](base_class: type[T], key: str) -> type[T]:
+def resolve_impl_class[T: RegistryBase](base_class: type[T], key: str) -> type[T]:
     """Return the impl class the base's named registry binds to ``key``.
 
     The dotted path comes from composed, trusted settings and is checked against
     ``base_class`` before returning.
     """
 
-    registry_setting = getattr(base_class, "registry_setting")
+    registry_setting = base_class.registry_setting
     registry = impl_registry(registry_setting)
     try:
         dotted = registry[key]
@@ -175,10 +188,10 @@ def resolve_impl_class[T](base_class: type[T], key: str) -> type[T]:
             f"No impl for key {key!r} in settings.{registry_setting} (known: {known})."
         ) from error
     impl = import_string(dotted)
-    if not (isinstance(base_class, type) and isinstance(impl, type) and issubclass(impl, base_class)):
-        base_name = getattr(base_class, "__name__", base_class)
+    if not (isinstance(impl, type) and issubclass(impl, base_class)):
+        base_name = base_class.__name__
         raise ImproperlyConfigured(f"settings.{registry_setting}[{key!r}] = {dotted!r} is not a {base_name}.")
-    declared_key = getattr(impl, "key", None)
+    declared_key = impl.key if isinstance(impl, _KeyedImplementation) else _KeyedImplementation.key
     if declared_key is not None and declared_key != key:
         raise ImproperlyConfigured(
             f"settings.{registry_setting}[{key!r}] resolves {impl.__name__} with key {declared_key!r}."
@@ -186,7 +199,7 @@ def resolve_impl_class[T](base_class: type[T], key: str) -> type[T]:
     return impl
 
 
-def resolve_all_impl_classes[T](
+def resolve_all_impl_classes[T: RegistryBase](
     base_class: type[T],
     *,
     on_error: Callable[[Exception], None] | None = None,
@@ -202,12 +215,12 @@ def resolve_all_impl_classes[T](
     return tuple(impl for _key, impl in _impl_classes(base_class, on_error=on_error))
 
 
-def _impl_classes[T](
+def _impl_classes[T: RegistryBase](
     base_class: type[T], *, on_error: Callable[[Exception], None] | None = None,
 ) -> Iterator[tuple[str, type[T]]]:
     """Enumerate trusted keyed classes once for checks and metadata projections."""
 
-    registry_setting = getattr(base_class, "registry_setting")
+    registry_setting = base_class.registry_setting
     for key in sorted(impl_registry(registry_setting)):
         try:
             impl = resolve_impl_class(base_class, key)
@@ -235,7 +248,7 @@ def check_impl_registry(
     errors: list[checks.CheckMessage] = []
     try:
         classes = resolve_all_impl_classes(
-            base_class,
+            cast(type[RegistryBase], base_class),
             on_error=lambda error: errors.append(
                 checks.Error(
                     str(error),
@@ -255,8 +268,8 @@ def check_impl_registry(
     return errors
 
 
-def impl_choices(
-    base_class: type[object], *, include: Callable[[type[object]], bool] | None = None,
+def impl_choices[T: RegistryBase](
+    base_class: type[T], *, include: Callable[[type[object]], bool] | None = None,
 ) -> list[ImplChoice]:
     """Project pickable metadata in registry-key order, without requiring a column."""
 

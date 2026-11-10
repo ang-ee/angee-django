@@ -178,6 +178,7 @@ class PinnedTransport(httpx2.HTTPTransport):
         # before any request. Fail loudly if a future httpx2/httpcore2 renames it: a
         # silent fallback to the default backend would disable SSRF pinning (fail-open).
         pool = self._pool
+        # httpx2/httpcore2 private transport injection fails closed if the pool API changes.
         if not hasattr(pool, "_network_backend"):
             raise RuntimeError(
                 "httpx2/httpcore2 changed: ConnectionPool exposes no '_network_backend'; SSRF "
