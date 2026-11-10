@@ -62,7 +62,6 @@ settings.configure(
     SECRET_KEY='native-mcp-mount', ANGEE_MERGE_GUARDS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
     ALLOWED_HOSTS=['localhost'], CSRF_TRUSTED_ORIGINS=['http://localhost'],
     ANGEE_MCP_ACTOR_VERIFIER='native_mcp_verifier.resolve_actor',
-    **MCP_SETTINGS,
 )
 import django
 django.setup()
