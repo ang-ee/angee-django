@@ -65,7 +65,8 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
         """Capture stored state after an authorized write of frozen, locked keys.
 
         A write to columns the history excludes (a counter), with at most its
-        timestamp stamps, changes no tracked state and records no version.
+        timestamp stamps, changes no tracked state and records no version. A key
+        with no history yet gets its baseline first (:meth:`ModelHistory.record_baselines`).
         """
 
         history_model = self.model._meta.concrete_model or self.model
@@ -79,6 +80,7 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
             if not keys:
                 return 0
             current_changeset(required=True, record=True)
+            history.record_baselines(history_model, keys)
             with transaction.atomic(using=self.db, savepoint=False), write_group():
                 count = sum(super(HistoryQuerySet, rows).update(**kwargs) for rows in self.capture_batches(keys))
                 history.bulk_history_create(history_model, keys, "~")

@@ -1276,13 +1276,19 @@ def _handle_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
 def test_a_merge_revert_restores_every_moved_kind(
     composed_tables: None, django_capture_on_commit_callbacks: Any, model: Any, values: Any, references: Any,
 ) -> None:
-    """Every row a merge moves keeps history, so reverting the merge puts it back (``angee.E051``)."""
+    """Every row a merge moves keeps history, so reverting the merge puts it back (``angee.E051``).
+
+    The rows' history is wiped first, as for rows written before their model kept
+    history: the merge records each one's baseline in a changeset of its own.
+    """
 
     del composed_tables
     admin = create_platform_admin(f"merge-moved-{model._meta.model_name}")
     with system_context(reason="test merge moved kinds"):
         kept, merged = (model._base_manager.create(**values(name)) for name in ("kept", "merged"))
         rows = references(merged, admin)
+        for row, _field in rows:
+            type(row).history.filter(id=row.pk).delete()
 
     def pointed_at() -> set[Any]:
         return {type(row)._base_manager.values_list(field, flat=True).get(pk=row.pk) for row, field in rows}
@@ -1290,12 +1296,16 @@ def test_a_merge_revert_restores_every_moved_kind(
     with actor_context(admin), django_capture_on_commit_callbacks(execute=True):
         kept.with_actor(admin).merge(records=[merged.public_id])
     assert pointed_at() == {kept.pk}
+    boundary = model.history.filter(id=merged.pk).order_by("-history_id").first().changeset
+    baselines = [type(row).history.filter(id=row.pk).order_by("history_id").first() for row, _field in rows]
+    assert {(version.history_type, version.changeset.activity) for version in baselines} == {("~", "system")}
+    assert boundary.pk not in {version.changeset_id for version in baselines}
     if model is Handle:
         assert apps.get_model("posts", "Feed")._base_manager.filter(handle=merged).exists()
         # The feed's own post stays on the merged handle and still reads as channel-authored.
         assert Message._base_manager.get(sender=merged).reply_state()
     with actor_context(admin):
-        model.history.filter(id=merged.pk).order_by("-history_id").first().changeset.with_actor(admin).revert()
+        boundary.with_actor(admin).revert()
     assert pointed_at() == {merged.pk}
 
 

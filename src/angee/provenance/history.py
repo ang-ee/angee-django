@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
+from itertools import batched
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
-from django.db import models, router, transaction
+from django.db import connections, models, router, transaction
 from django.db.models.base import ModelBase
 from django.utils import timezone
 from django.utils.functional import classproperty
@@ -20,7 +21,7 @@ from simple_history.signals import pre_create_historical_record
 from simple_history.utils import get_change_reason_from_object, get_history_manager_for_model
 
 from angee.provenance.bases import ChangesetHistory as ChangesetHistory
-from angee.provenance.context import changeset_model_label, current_changeset, write_group
+from angee.provenance.context import changeset, changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
 
 UNLOADED = object()
@@ -320,6 +321,33 @@ class ModelHistory(HistoricalRecords):
                     )
         return captured
 
+    def record_baselines(self, model: type[models.Model], keys: Sequence[Any]) -> None:
+        """Snapshot the stored state of rows that have no history yet, before a tracked write changes them.
+
+        A row written before its model kept history (or whose history was
+        pruned) has no version a revert could restore. Its first tracked write
+        records the stored state first, in a system changeset of its own, never
+        the write's. A baseline is a ``~`` snapshot, not a creation: reverting it
+        is refused for want of a predecessor, so no revert removes a row that
+        predates its history. One existence query per database batch serves the
+        whole write; there is no backfill.
+        """
+
+        manager = get_history_manager_for_model(model)
+        key = model._meta.pk.attname
+        size = connections[manager.db].ops.bulk_batch_size([model._meta.pk], keys) or len(keys) or 1
+        known: set[Any] = set()
+        for chunk in batched(keys, size):
+            known.update(manager.filter(**{f"{key}__in": chunk}).values_list(key, flat=True).distinct())
+        missing = [pk for pk in keys if pk not in known]
+        if not missing:
+            return
+        with changeset(fresh=True, activity="system", change_reason="history.baseline"), write_group() as group:
+            pending = set(group.seen)
+            self.bulk_history_create(model, missing, "~")
+            # The baseline is not the native capture the following write still owes.
+            group.seen.intersection_update(pending)
+
     def create_historical_record(self, instance: models.Model, history_type: str, using: str | None = None) -> None:
         """Keep native signals and M2M capture on the same stored-snapshot writer."""
 
@@ -473,6 +501,8 @@ class HistoryMixin(models.Model):
                 history = model_history(type(self))
                 if history is not None and history.capture_enabled:
                     current_changeset(required=True, record=True)
+                    if not self._state.adding:
+                        history.record_baselines(type(self)._meta.concrete_model, [self.pk])
             super().save_base(raw, force_insert, force_update, alias, update_fields)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
