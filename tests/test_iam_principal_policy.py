@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.models import User as DjangoUser
 from django.test import override_settings
+from django.test.utils import isolate_apps
 from rebac import system_context
 
 from angee.iam.auth import ModelBackend, can_authenticate_user
@@ -14,12 +16,15 @@ from angee.iam.permissions import is_platform_admin
 from angee.workflows.testing.models import Workflow
 
 
-@pytest.mark.parametrize("kind,is_active,allowed", [
-    ("person", True, True),
-    ("person", False, False),
-    ("service", True, False),
-    ("service", False, False),
-])
+@pytest.mark.parametrize(
+    "kind,is_active,allowed",
+    [
+        ("person", True, True),
+        ("person", False, False),
+        ("service", True, False),
+        ("service", False, False),
+    ],
+)
 def test_login_requires_an_active_person(kind: str, is_active: bool, allowed: bool) -> None:
     user = get_user_model()(kind=kind, is_active=is_active)
     assert user.is_person is (kind == "person")
@@ -28,9 +33,28 @@ def test_login_requires_an_active_person(kind: str, is_active: bool, allowed: bo
 
 @pytest.mark.parametrize("user", [object(), AnonymousUser(), DjangoUser()])
 def test_login_rejects_non_iam_principals(user: object) -> None:
-    """Only the declared IAM owner can supply a login-capable principal."""
+    """Only the configured user model can supply a login-capable principal."""
 
     assert can_authenticate_user(user) is False
+
+
+@isolate_apps()
+def test_login_uses_configured_swapped_user_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real swapped Django model supplies its own person contract."""
+
+    class SwappedUser(AbstractBaseUser):
+        @property
+        def is_person(self) -> bool:
+            return True
+
+        class Meta:
+            app_label = "tests"
+
+    original_user = get_user_model()(kind="person", is_active=True)
+    monkeypatch.setattr("angee.iam.auth.get_user_model", lambda: SwappedUser)
+
+    assert can_authenticate_user(SwappedUser()) is True
+    assert can_authenticate_user(original_user) is False
 
 
 @override_settings(AUTHENTICATION_BACKENDS=["angee.iam.auth.ModelBackend"])

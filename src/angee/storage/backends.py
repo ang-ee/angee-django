@@ -38,7 +38,10 @@ class StorageBackend(Storage):
     do not implement authorization, byte hashing, or upload state; those live
     on ``File.objects`` and the REBAC schema.
     """
+
     registry_setting: ClassVar[str] = "ANGEE_STORAGE_BACKEND_CLASSES"
+    key: ClassVar[str] = ""
+    """Optional key assertion; native Storage backends otherwise use their registry key."""
 
     writable: ClassVar[bool] = True
     """Whether callers may create new objects through this backend."""

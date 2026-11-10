@@ -68,17 +68,14 @@ def test_user_pk_get_is_not_the_session_bypass(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.parametrize(
-    "is_active,kind,authenticated",
-    [(True, "person", True), (False, "person", False), (True, "service", False)],
+    "kind,is_active,allowed",
+    [("person", True, True), ("person", False, False), ("service", True, False)],
     ids=["person", "inactive", "service"],
 )
 def test_iam_model_backend_uses_named_session_lookup(
-    monkeypatch: pytest.MonkeyPatch,
-    is_active: bool,
-    kind: str,
-    authenticated: bool,
+    monkeypatch: pytest.MonkeyPatch, kind: str, is_active: bool, allowed: bool
 ) -> None:
-    """Session reload uses the named bypass and reapplies the real principal gate."""
+    """The named lookup reloads a configured user and reapplies the login gate."""
 
     from angee.iam.auth import ModelBackend
 
@@ -86,13 +83,13 @@ def test_iam_model_backend_uses_named_session_lookup(
     user = User(is_active=is_active, kind=kind)
     calls: list[object] = []
 
-    def get_for_session(user_id: object) -> object:
+    def get_for_session(self: object, user_id: object) -> AbstractBaseUser:
         calls.append(user_id)
         return user
 
-    monkeypatch.setattr(User.objects, "get_for_session", get_for_session)
+    monkeypatch.setattr(type(User.objects), "get_for_session", get_for_session)
 
-    assert ModelBackend().get_user("usr_123") is (user if authenticated else None)
+    assert ModelBackend().get_user("usr_123") is (user if allowed else None)
     assert calls == ["usr_123"]
 
 

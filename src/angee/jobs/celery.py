@@ -1,7 +1,6 @@
 """Native Celery application for Angee jobs.
 
-``ANGEE_CELERY_TASK_CLASS`` optionally selects Celery's app-wide task base by
-class path. Without that contribution Celery uses its native DjangoTask.
+Provenance owns the sole ``ANGEE_CELERY_TASK_CLASS`` scalar default; jobs falls back to Celery's native DjangoTask.
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ from angee.jobs.bootsteps import RequireProvisioned
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
 
 
-# Celery may load during Django app discovery before addon settings are composed.
 app = Celery("angee", task_cls=getattr(settings, "ANGEE_CELERY_TASK_CLASS", "celery.contrib.django.task:DjangoTask"))
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()

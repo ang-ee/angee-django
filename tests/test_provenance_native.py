@@ -10,9 +10,16 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("operation", [
-    "explicit-source", "separate-history", "bound-history", "failed-bulk", "protected-delete",
-])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "explicit-source",
+        "separate-history",
+        "bound-history",
+        "failed-bulk",
+        "protected-delete",
+    ],
+)
 def test_native_capture_preserves_history_without_host_imports(tmp_path: Path, operation: str) -> None:
     _capture_database_owner_contract(tmp_path, operation)
 
@@ -57,20 +64,30 @@ class Changeset(models.Model):
 class Container(models.Model):
     pass
 
+class CaptureDetails(models.Model):
+    capture_note = models.TextField(blank=True)
+
+    class Meta:
+        abstract = True
+
 class Row(HistoryMixin):
     value = models.CharField(max_length=40, unique=True)
     container = models.ForeignKey(Container, null=True, on_delete=models.CASCADE)
-    history = ModelHistory(inherit=True, use_base_model_db=False)
+    history = ModelHistory(inherit=True, use_base_model_db=False, bases=(CaptureDetails,))
 
 class RetainedRow(models.Model):
     row = models.ForeignKey(Row, on_delete=models.PROTECT)
 """)
     if angee_adapter:
         models_path = package / "models.py"
-        models_path.write_text(models_path.read_text().replace(
-            "from angee.provenance.history import HistoryMixin, ModelHistory",
-            "from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory",
-        ).replace("use_base_model_db=False", "use_base_model_db=True"))
+        models_path.write_text(
+            models_path.read_text()
+            .replace(
+                "from angee.provenance.history import HistoryMixin, ModelHistory",
+                "from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory",
+            )
+            .replace("use_base_model_db=False", "use_base_model_db=True")
+        )
     script = """
 import os
 import sys
@@ -141,6 +158,10 @@ with system_scope, changeset(fresh=True):
         assert row._state.db == "default"
         snapshot = Row.history.get(id=row.pk)
         assert snapshot.value == "explicit source"
+        assert snapshot.changeset_id is not None
+        assert snapshot.capture_note == ""
+        Row.objects.filter(pk=row.pk).update(value="captured update")
+        assert Row.history.filter(id=row.pk).count() == 2
     elif sys.argv[1] == "retained-reference":
         from angee.base.models.merge_references import ForeignKeyReference, MergePolicy
 

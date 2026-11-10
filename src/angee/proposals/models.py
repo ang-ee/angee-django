@@ -1369,7 +1369,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         """Record the immutable opening receipt."""
 
         self._stamp_opening_receipt()
-        self._transition_fields = {"opened_at", "opened_by"}
+        self.transition_fields = {"opened_at", "opened_by"}
 
     def _stamp_opening_receipt(self) -> None:
         """Record disclosure without changing a terminal lifecycle state."""
@@ -1386,7 +1386,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         self.closed_at = timezone.now()
         self.closed_by_id = _receipt_user_id(self.facilitator_id)
         self.allow_immutable_save("closed_at", "closed_by_id")
-        self._transition_fields = {"outcome", "closed_at", "closed_by"}
+        self.transition_fields = {"outcome", "closed_at", "closed_by"}
 
     @transition(
         status,
@@ -1401,7 +1401,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         self.closed_at = timezone.now()
         self.closed_by_id = _receipt_user_id(self.facilitator_id)
         self.allow_immutable_save("closed_at", "closed_by_id")
-        self._transition_fields = {"outcome", "closed_at", "closed_by"}
+        self.transition_fields = {"outcome", "closed_at", "closed_by"}
 
     def _validate_target(self) -> None:
         if (self.task_id is None) == (self.project_id is None):
@@ -2276,7 +2276,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         self.submitted_at = timezone.now()
         self.submitted_by_id = _receipt_user_id(fallback_user_id)
         self.allow_immutable_save("submitted_at", "submitted_by_id")
-        self._transition_fields = {"submitted_at", "submitted_by"}
+        self.transition_fields = {"submitted_at", "submitted_by"}
 
     @transition(state, source=ProposalState.SUBMITTED, target=ProposalState.ACCEPTED, on_success=save_state)
     def _mark_accepted(self, fallback_user_id: Any | None = None) -> None:
@@ -2311,7 +2311,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         self.decided_at = timezone.now()
         self.decided_by_id = _receipt_user_id(fallback_user_id)
         self.allow_immutable_save("decided_at", "decided_by_id")
-        self._transition_fields = {"decided_at", "decided_by"}
+        self.transition_fields = {"decided_at", "decided_by"}
 
     def _submit_locked(self, fallback_user_id: Any | None = None) -> None:
         if self.state == ProposalState.SUBMITTED:

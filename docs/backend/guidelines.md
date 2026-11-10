@@ -477,6 +477,12 @@ Use these owners instead of maintaining another contract in an addon:
   config parsing rejects non-empty values without a model; model-row validation
   still leaves undeclared legacy config alone. Generated choice metadata stays
   deterministic.
+- Autoconfig-declared settings are read directly; their defaults belong only to
+  the owning addon's autoconfig. Bare Django settings modules must declare the
+  capability inputs they use, including explicit empty values for disabled
+  capabilities. Module contribution readers compose
+  [`addon_contribution`](../../src/angee/base/addons.py) instead of probing
+  module attributes through runtime Protocols.
 - **Hooks are declared callable settings, separate from keyed registries.**
   The owning addon registers native Django checks for its specific callable
   settings. [`angee.base.hooks`](../../src/angee/base/hooks.py) supplies shared import and
@@ -1213,15 +1219,15 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   `transaction.on_commit(...)` or a post-commit phase.
   Save guards use `get_transition_save_field(instance)` to read the active save
   field's attname, or `None`, through the public contract.
+  Transition bodies assign companion field names to
+  `StateTransitionsMixin.transition_fields`; `save_state` writes them with the
+  state and resets the collection even on failure. Never delete this attribute.
   Guards follow Django's final concrete fields, including inherited and deferred
   columns. See [seeded transition state](#seeded-transition-state) for initialization.
   Reload committed state through `AngeeModel.refresh_from_db`, or copy loaded
   values from the owner's persisted copy of the same row through
   `StateTransitions.copy_persisted_state`; reload authorization stays private.
   Recovery writes outside the graph use `force_state` with a concrete reason.
-  Compose a custom final save through `persist(instance, *, update_fields)`;
-  the success hook must explicitly forward it to `save_state`, which retains the
-  concurrency guard and transaction.
 - **Give a model an opaque public id by mixing in `SqidMixin` and declaring
   `sqid_prefix = "abc_"`** — the one fact that varies per model. The shared
   `angee.base.fields.SqidField` reads that prefix in `contribute_to_class`; don't
