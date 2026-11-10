@@ -398,9 +398,8 @@ measurements.
 After changing export annotations, story owners or token CSS, regenerate with
 `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:generate`
 from the stack root.
-The UI catalog test exercises the generator's drift-check CLI; Storybook's
-`catalog:check` also verifies specimen reachability, guideline story links and
-the token deletion findings.
+Storybook's `catalog:check` verifies catalog and token-name drift, specimen
+reachability, guideline story links and the token deletion findings.
 
 For page or addon changes, run a primitive-drift scan and explain every hit
 outside `@angee/ui`. A hit is not automatically wrong, but it must either compose
