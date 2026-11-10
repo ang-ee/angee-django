@@ -237,13 +237,13 @@ BUDGETS = {
 }
 
 
-# SELECT count and total planner allocation rounded up to MiB. With REBAC 0.32.2's
-# compact aliases, PostgreSQL 18.6 measures person at 439,767 KiB used / 468,317 KiB
-# allocated, below the recorded PostgreSQL 17 allocation of 476,477 KiB: ceil = 458 MiB.
-# Its 18 SELECTs and two audit INSERTs retain the 20-statement document ceiling.
-# Projects: 115,169 KiB used / 142,513 KiB allocated across all 10 SELECTs on PostgreSQL
-# 18.6. Allocation equals the recorded PostgreSQL 17 value: ceil = 140 MiB.
-PLANNER_BUDGETS = {"person": (18, 458), "projects": (10, 140)}
+# SELECT count and total planner allocation rounded up to MiB, measured on PostgreSQL 17,
+# the CI server. REBAC 0.32.2's compact aliases shorten SQL text but leave planner
+# allocation unchanged: person allocates 476,477 KiB across 18 SELECTs (ceil = 466 MiB;
+# its two audit INSERTs keep the 20-statement document ceiling), projects 142,513 KiB
+# across all 10 SELECTs (ceil = 140 MiB). PostgreSQL 18 allocates slightly less and is not
+# the gate's reference.
+PLANNER_BUDGETS = {"person": (18, 466), "projects": (10, 140)}
 
 
 class ConsoleDocumentBudgetTests(TransactionTestCase):
