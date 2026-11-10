@@ -102,6 +102,7 @@ from angee.storage.uploads import (
     UPLOAD_TOKEN_SALT,
     BodyTooLarge,
     CappedReader,
+    DownloadTokenSigner,
     attachment_extension,
     detect_mime,
     require_image,
@@ -1532,14 +1533,16 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         ``NoActorResolvedError``. The claim uses the actor's public identity.
         The token remains a bearer capability; download lookup re-checks that
         actor's ``read`` permission on every request. Expiry rides on the
-        signature (``DOWNLOAD_TOKEN_MAX_AGE``).
+        signature (``DOWNLOAD_TOKEN_MAX_AGE``). Five-minute window alignment
+        keeps repeated reads identical, with 600–900 seconds of validity from
+        issue; ``for_download_token`` still owns expiry and read authorization.
         """
 
         subject = current_actor() if actor is None else to_subject_ref(actor)
         if subject is None:
             raise NoActorResolvedError("an actor is required to issue a download token")
-        return signing.dumps(
-            {"file": str(self.sqid), "actor": str(public_subject_ref(subject))}, salt=DOWNLOAD_TOKEN_SALT
+        return DownloadTokenSigner(salt=DOWNLOAD_TOKEN_SALT).sign_object(
+            {"file": str(self.sqid), "actor": str(public_subject_ref(subject))},
         )
 
     def download_url(self, request: Any | None = None) -> str:
@@ -1547,11 +1550,12 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
 
         The filename rides in the path (so the browser saves under it and the URL
         reads cleanly); the signed ``token`` identifies the row and the ambient
-        actor whose read permission is re-checked. Built absolute against
+        actor whose read permission is re-checked. The content digest versions
+        the browser cache independently of credential rotation. Built absolute against
         ``request`` when one is given, otherwise root-relative.
         """
 
-        query = urlencode({"token": self.issue_download_token()})
+        query = urlencode({"token": self.issue_download_token(), "version": self.content_hash})
         path = f"{reverse('storage_download', args=[self.filename])}?{query}"
         return request.build_absolute_uri(path) if request is not None else path
 

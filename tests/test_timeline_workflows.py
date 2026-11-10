@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from django.db import connection
@@ -15,8 +16,6 @@ from angee.base.signals import bulk_updated, change_published
 from angee.base.testing.queries import capture_planner_memory, statement_startswith
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.graphql import publishing
-from angee.graphql.testing import capture_broadcasts
 from angee.provenance.context import changeset
 from angee.timeline.reading import Timeline
 from angee.workflows.decision_steps import DecisionStep
@@ -283,10 +282,10 @@ def test_later_step_decision_link_folds_the_question_and_claims_are_silent(revie
 
 
 @pytest.mark.parametrize("assigned", [True, False])
-def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
-    execution, register_step, monkeypatch, assigned,
+def test_each_committed_workflow_wait_refreshes_the_inherited_timeline(
+    execution, register_step, assigned,
 ):
-    """Like the AP page: a canonical record has only a child's public feed."""
+    """Inherited timelines refresh without declaring a model change feed."""
 
     actor, sent = execution
     with system_context(reason="test.timeline.inherited_subject"):
@@ -307,19 +306,16 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
             ))
 
     register_step(Question)
-    monkeypatch.setitem(publishing._publisher_fields, MtiChild, frozenset())
     snapshots = []
 
-    def broadcast(model, payload):
-        if model is MtiChild:
+    def broadcast(group, payload):
+        if payload["model"] == MtiChild._meta.label:
             assert not connection.in_atomic_block
             assert payload["id"] == public_id_of(subject)
-            assert payload["resource_id"] == str(subject.pk)
-            assert payload["related_records"] == [{"model": MtiChild._meta.label, "id": public_id_of(subject)}]
             # Read exactly when a subscriber receives the committed invalidation.
             snapshots.append(read_timeline(subject, actor))
 
-    with capture_broadcasts(observer=broadcast):
+    with patch("angee.timeline.events.broadcast_group", side_effect=broadcast):
         workflow = load_workflow({
             "nodes": {
                 "first": {"step": Question.key, "label": "First review", "next": {"done": ["second"]}},
@@ -334,7 +330,7 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
             step = StepRun.system_queryset().get(run=run, node_key=node)
             event, = timeline_entries(subject, actor, kind="workflows.run")
             assert event.detail == f"Waiting · {step.node_label}"
-            assert snapshots, "The declared child feed must refresh after the source write commits."
+            assert snapshots, "The child timeline must refresh after the source write commits."
             page = snapshots[-1]
             assert page["timeline_attention"] == page["timeline"]["needs_me"] == 1
             (line,) = page["timeline"]["entries"]

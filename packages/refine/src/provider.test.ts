@@ -1214,3 +1214,59 @@ test("the shared GraphQL transport resolves its configured endpoint on each requ
   await client.request("query { ping }");
   expect(urls).toEqual(["https://daemon.example.test/ops/graphql", "https://replacement.example.test/graphql"]);
 });
+
+test("a dedicated timeline stream coalesces only its rail reads, leaving inbox model reads alone", async () => {
+  vi.useFakeTimers();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  const names = ["NexusInboxNavigator", "NexusInboxMessage", "NexusInboxRelatedTarget", "NexusInboxConnections", "timeline", "other-timeline"];
+  const reads = names.map(() => vi.fn(async () => ({})));
+  const keys = names.map(name => [name]);
+  const observers = keys.map((queryKey, index) => new QueryObserver(client, {
+    queryKey, queryFn: reads[index]!, meta: { angeeModels: ["integrate.Integration"] },
+  }));
+  const stops = observers.map(observer => observer.subscribe(() => undefined));
+  await vi.advanceTimersByTimeAsync(0);
+  let emit: (result: { data: { timelineChanged: boolean } }) => void = () => undefined;
+  const dispose = vi.fn();
+  const subscribe = vi.fn((_request, sink) => { emit = sink.next; return dispose; });
+  const provider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn(() => () => undefined) } as never, [], { queryClient: client });
+  const request = {
+    channel: "timeline", types: ["*"], callback: vi.fn(), params: { queryKey: keys[4] },
+    meta: { gqlSubscription: "subscription($model: String!, $id: ID!) { timelineChanged(model: $model, id: $id) }",
+      gqlVariables: { model: "integrate.Integration", id: "integration-1" } },
+  };
+  const header = provider.subscribe(request);
+  const rail = provider.subscribe(request);
+  try {
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(subscribe.mock.calls[0]?.[0]).toEqual({ query: request.meta.gqlSubscription, variables: request.meta.gqlVariables });
+    for (let index = 0; index < 10; index++) emit({ data: { timelineChanged: true } });
+    await vi.advanceTimersByTimeAsync(299);
+    expect(reads.map(read => read.mock.calls.length)).toEqual([1, 1, 1, 1, 1, 1]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads.map(read => read.mock.calls.length)).toEqual([1, 1, 1, 1, 2, 1]);
+    for (let elapsed = 0; elapsed < 2000; elapsed += 100) {
+      emit({ data: { timelineChanged: true } });
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(reads.map(read => read.mock.calls.length)).toEqual([1, 1, 1, 1, 3, 1]);
+    provider.setEnabled(false);
+    emit({ data: { timelineChanged: true } });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads[4]).toHaveBeenCalledTimes(3);
+    provider.setEnabled(true);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    provider.unsubscribe(header);
+    emit({ data: { timelineChanged: true } });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads[4]).toHaveBeenCalledTimes(4);
+    provider.unsubscribe(rail);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    emit({ data: { timelineChanged: true } });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads[4]).toHaveBeenCalledTimes(4);
+  } finally {
+    provider.unsubscribe(header); provider.unsubscribe(rail);
+    stops.forEach(stop => stop()); client.clear();
+  }
+});

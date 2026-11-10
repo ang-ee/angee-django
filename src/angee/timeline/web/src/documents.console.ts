@@ -1,5 +1,11 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+export const TimelineChangedDocument = graphql(`
+  subscription RecordTimelineChanged($model: String!, $id: ID!) {
+    timelineChanged(model: $model, id: $id)
+  }
+`);
+
 export const TimelineDocument = graphql(`
   query RecordTimelineRail($model: String!, $id: ID!, $kinds: [String!], $needsMe: Boolean = false, $before: String, $limit: Int = 25) {
     timeline(model: $model, id: $id, kinds: $kinds, needs_me: $needsMe, before: $before, limit: $limit) {

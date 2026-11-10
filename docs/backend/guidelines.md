@@ -1646,7 +1646,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
   `record_view_refs`. The
   [timeline observer](../../src/angee/timeline/events.py) captures affected
   record identities, including old membership before a save or delete, and
-  uses the declared record feeds to invalidate reads after commit. Django's
+  publishes to the dedicated `timelineChanged(model, id)` subscription after
+  commit. It shares the timeline read's record scope and rechecks access on
+  every delivery; timeline notifications never enter record change feeds. Django's
   callback queue owns rollback; no projection queue or source-row lock is needed.
   Observation never enables a private source's transport feed. Kinds name the
   source fields they read, so unrelated partial saves skip dependency discovery;
@@ -1660,7 +1662,7 @@ open fresh evaluator scopes for authorization and change-feed reads.
   unioned across named schemas with aliases and FK attnames preserved. Public
   resource JSON omits these field origins. Ordinary app `ready()` reads the
   native receipt-verified artifact and connects eager field sets; startup,
-  partial writes and related-record invalidations never discover addon schemas.
+  partial writes and timeline invalidations never discover addon schemas.
   Missing or stale output requires compose. Compose wires publishers only after
   all ready callbacks; bare source-model tests wire the same projection explicitly
   in their [session fixture](../../tests/conftest.py), without a serving fallback.

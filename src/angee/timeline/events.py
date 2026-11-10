@@ -1,21 +1,41 @@
-"""Invalidate record reads on source changes; no projection or background work."""
+"""Invalidate only timeline reads on source changes, after commit."""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from functools import partial
 from typing import Any
 
 from django.db import models, transaction
 from rebac import system_context
 
 from angee.base.models.merge import MergeableMixin
-from angee.base.refs import generic_pointer_model
+from angee.base.refs import RecordRef, generic_pointer_model, record_view_refs
 from angee.base.signals import ModelChange, changes_muted
-from angee.graphql.publishing import broadcast_related_records
+from angee.graphql.publishing import broadcast_group
 from angee.timeline.kinds import TimelineKind, timeline_kinds
 
 log = logging.getLogger(__name__)
+
+
+def timeline_group(record: RecordRef) -> str:
+    """One timeline stream per record view, independent of model change feeds."""
+
+    return f"angee.timeline.{record.model_label.lower()}.{record.public_id}"
+
+
+def broadcast_timeline_changes(records: Iterable[models.Model]) -> None:
+    """Invalidate each affected timeline, including inherited views, on commit.
+
+    No source details or synthetic record updates enter a model change feed.
+    Subscribers recheck the timeline read's record authorization on delivery.
+    """
+
+    for record in record_view_refs(*(RecordRef.from_instance(row) for row in records)):
+        transaction.on_commit(partial(
+            broadcast_group, timeline_group(record), {"model": record.model_label, "id": record.public_id},
+        ), robust=True)
 
 
 def kinds_for(model: type[models.Model]) -> tuple[TimelineKind, ...]:
@@ -61,16 +81,16 @@ def before_save(sender: Any, *, instance: Any, raw: bool = False, update_fields:
 
 
 def before_delete(sender: Any, *, instance: Any, **kwargs: Any) -> None:
-    broadcast_related_records(_records(instance))
+    broadcast_timeline_changes(_records(instance))
 
 
 def queue_change(sender: Any, *, payload: ModelChange, **kwargs: Any) -> None:
     if payload.action != "delete":
         previous = payload.instance.__dict__.pop("_timeline_previous_records", ())
-        broadcast_related_records((*previous, *_records(payload.instance, update_fields=payload.changed_fields)))
+        broadcast_timeline_changes((*previous, *_records(payload.instance, update_fields=payload.changed_fields)))
 
 
 def queue_updates(sender: Any, *, instances: Iterable[models.Model], update_fields: Iterable[str],
                   **kwargs: Any) -> None:
     for instance in instances:
-        broadcast_related_records(_records(instance, update_fields=update_fields))
+        broadcast_timeline_changes(_records(instance, update_fields=update_fields))

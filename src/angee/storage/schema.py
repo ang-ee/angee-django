@@ -161,7 +161,7 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     drive: strawberry.ID | None = actor_scoped_public_id("drive")
     folder: strawberry.ID | None = actor_scoped_public_id("folder")
 
-    @strawberry_django.field
+    @strawberry_django.field(only=["filename", "upload_state", "content_hash"])
     def url(self, info: strawberry.Info) -> str | None:
         """Return a READY row's download URL, empty when unready, null in previews.
 

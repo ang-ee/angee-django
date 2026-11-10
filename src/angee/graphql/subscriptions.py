@@ -116,10 +116,24 @@ async def subscribe(
     ``changes(...)`` declaration. Without a channel layer this raises immediately.
     """
 
+    async with contextlib.aclosing(subscribe_group(change_group(model), ready=ready)) as stream:
+        async for payload in stream:
+            yield ChangePayload.from_mapping(payload)
+
+
+async def subscribe_group(
+    group: str,
+    *,
+    ready: asyncio.Event | None = None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Own channel membership, lease renewal and cleanup for a change stream.
+
+    Payloads are unfiltered; the subscribing surface owns authorization.
+    """
+
     layer = change_channel_layer()
     if layer is None:
         raise RuntimeError("Model changes require a channel layer.")
-    group = change_group(model)
     channel = await layer.new_channel()
     await layer.group_add(group, channel)
 
@@ -141,7 +155,7 @@ async def subscribe(
             message = await layer.receive(channel)
             payload = message.get("payload")
             if payload:
-                yield ChangePayload.from_mapping(payload)
+                yield payload
     finally:
         # Stop renewing before leaving, so an in-flight renewal cannot re-add.
         renewal.cancel()

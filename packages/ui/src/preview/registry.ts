@@ -5,13 +5,15 @@ import { normaliseMime } from "./model";
 
 /**
  * The preview contract. A `PreviewFile` is a file reduced to what any renderer
- * needs (a URL + name + optional mime/size); addons adapt their domain model
+ * needs (content identity, URL, name and optional mime/size); addons adapt their domain model
  * (e.g. storage's `File`) into this shape before handing it to `PreviewPane`.
  * Renderers declare a mime pattern; `PreviewPane` resolves the highest-priority
  * match from the built-ins plus any addon-contributed providers (composed at
  * build time onto the runtime via the manifest `previews` field).
  */
 export interface PreviewFile {
+  /** Public file ID and content digest/version; credentials are not content identity. */
+  identity?: { id: string; version: string };
   /** Resolved display/fetch URL. */
   url: string;
   /** File name — drives extension detection and download. */

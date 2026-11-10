@@ -52,10 +52,12 @@ import sys
 from types import ModuleType
 from django.conf import settings
 from rebac import SubjectRef
+from angee.mcp.autoconfig import SETTINGS as MCP_SETTINGS
 verifier = ModuleType('native_mcp_verifier')
 verifier.resolve_actor = lambda token: SubjectRef.of('tests/actor', '1') if token == 'native-route-token' else None
 sys.modules[verifier.__name__] = verifier
 settings.configure(
+    **MCP_SETTINGS,
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee.base', 'angee.mcp'],
     SECRET_KEY='native-mcp-mount', ANGEE_MERGE_GUARDS=[], ANGEE_WEB_STATEMENT_TIMEOUT=0,
     ALLOWED_HOSTS=['localhost'], CSRF_TRUSTED_ORIGINS=['http://localhost'],
@@ -204,7 +206,6 @@ django.setup()
 from django.contrib.auth.models import Group
 from django.db import connection, transaction
 from angee.base.signals import change_published
-from angee.graphql import publishing
 assert 'angee.graphql.schema' not in sys.modules
 assert 'publisher_probe.schema' not in sys.modules
 with connection.schema_editor() as editor:
@@ -217,10 +218,9 @@ with transaction.atomic():
     row = Group.objects.create(name='before')
     row.name = 'after'
     row.save(update_fields=('name',))
-    publishing.broadcast_related_records((row,))
     assert len(observed) == 2
     assert observed[-1].changed_values == {'name': 'after'}
-    assert len(connection.run_on_commit) == 3
+    assert len(connection.run_on_commit) == 2
     transaction.set_rollback(True)
 assert not Group.objects.exists()
 assert 'angee.graphql.schema' not in sys.modules
