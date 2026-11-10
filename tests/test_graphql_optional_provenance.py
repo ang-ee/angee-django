@@ -43,6 +43,7 @@ schemas = {"public": {"query": [resource.query], "mutation": [resource.mutation]
     (addon / "tests.py").write_text('''import sys
 from types import SimpleNamespace
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.test import TransactionTestCase
 from rebac import system_context
@@ -52,6 +53,7 @@ from angee.mcp.graphql import _execute_sync
 class NativeCrudTests(TransactionTestCase):
     def test_native_crud_and_unsupported_claim(self):
         self.assertFalse(apps.is_installed("angee.provenance"))
+        self.assertFalse(hasattr(settings, "ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER"))
         schema = GraphQLSchemas.from_discovery().build("public")
         context = SimpleNamespace(request=SimpleNamespace(user=AnonymousUser()))
         def execute(query, variables=None):

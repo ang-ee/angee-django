@@ -22,11 +22,11 @@ from rebac import RebacMixin
 from rebac.schema.walker import field_gated_actions
 
 from angee.base.fields.state import StateField
-from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, public_id_for
 from angee.base.permissions import effective_rebac_definition, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.validators import SavedRow
+from angee.decisions.mixins import DecisionTargetMixin
 from angee.graphql.data.metadata import data_resource_contributions
 from angee.graphql.schema import schema_parts_for
 from angee.provenance.evidence import EvidenceFact, EvidenceReference
@@ -194,7 +194,7 @@ class RecordActions(BaseModel):
             resolved[name] = decoded
         if self.record:
             call = self.record.call
-            if call == "delete" or not isinstance(record, AngeeModel) or call not in record.decision_methods:
+            if call == "delete" or not isinstance(record, DecisionTargetMixin) or call not in record.decision_methods:
                 raise ValueError(f"Undeclared decision method: {call}.")
             bound = getattr(record, call, None)
             if not callable(bound):

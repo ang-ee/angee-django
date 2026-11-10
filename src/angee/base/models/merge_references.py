@@ -80,9 +80,6 @@ class MergeContractMixin(models.Model):
     as history, where its delete behaviour alone would move it.
     """
 
-    owned_reference_fields: ClassVar[tuple[str, ...]] = ()
-    """Keys to a record whose rows are its owned parts, rather than outside callers."""
-
     class Meta:
         abstract = True
 
@@ -211,17 +208,16 @@ class Reference:
 
         return not issubclass(self.model, MergeContractMixin) or self.model.blocks_target_delete(target)
 
-    @property
-    def is_owned(self) -> bool:
-        """Whether this pointer declares its rows as parts of the referenced record."""
+    def is_owned(self, target: type[models.Model]) -> bool:
+        """Whether this pointer holds document parts owned by the target."""
 
-        return issubclass(self.model, MergeContractMixin) and self.name in self.model.owned_reference_fields
+        return False
 
     def live_rows(self, record: models.Model, *, principal: SubjectRef | None = None) -> models.QuerySet[Any]:
         """Return outside callers through the reference's and row owner's contracts."""
 
         rows = self.rows(record)
-        if self.is_owned or not self.blocks_target_delete(type(record)):
+        if self.is_owned(type(record)) or not self.blocks_target_delete(type(record)):
             return rows.none()
         if issubclass(self.model, MergeContractMixin):
             rows = rows.filter(self.model.live_reference_filter(principal=principal))
@@ -289,6 +285,15 @@ class ForeignKeyReference(Reference):
     """Rows whose foreign key points at the record, or at a multi-table parent or child sharing its key."""
 
     field: models.ForeignObject[Any, Any]
+
+    def is_owned(self, target: type[models.Model]) -> bool:
+        """Compose the target's declared document collections through Django relations."""
+
+        return issubclass(target, PersistenceMixin) and any(
+            isinstance(relation := target._meta.get_field(name), models.ManyToOneRel)
+            and relation.field is self.field
+            for name in target.owned_relations
+        )
 
     @property
     def name(self) -> str:
@@ -469,7 +474,7 @@ def owned_reference_parts(record: models.Model) -> Iterator[models.Model]:
     while pending:
         owner = pending.pop()
         for reference in references(type(owner)):
-            if not reference.is_owned:
+            if not reference.is_owned(type(owner)):
                 continue
             for part in reference.rows(owner).order_by("pk"):
                 identity = (part._meta.concrete_model, part.pk)

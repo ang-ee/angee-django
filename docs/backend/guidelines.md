@@ -487,7 +487,9 @@ Use these owners instead of maintaining another contract in an addon:
   The owning addon registers native Django checks for its specific callable
   settings. [`angee.base.hooks`](../../src/angee/base/hooks.py) supplies shared import and
   validation with `check_hooks`, `resolve_hook` and ordered `resolve_hooks`.
-  Checks import providers without executing them. There is no second list of
+  An absent optional provider contributes no hook; this is resolved at the shared
+  hook owner, without inventing capability settings in callers. Checks import
+  declared providers without executing them. There is no second list of
   hook-setting names; each capability owns its validation and invocation.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.
@@ -1111,10 +1113,12 @@ operational identities; statement querysets use `applied()` for winning value
 assertions. Source-copy identity remains reversible pair evidence and never
 chooses a transport or moves channel occurrences.
 
-[`HistoryMixin.history_relations`](../../src/angee/provenance/contrib/angee/history.py) declares owned
+[`PersistenceMixin.owned_relations`](../../src/angee/base/models/persistence.py) declares owned
 reverse-FK collections, such as dashboard widgets or project milestones. These
 rows keep their own history and read gates; document history groups their deltas
-with record identity. `history_tables()` is the one concrete-table inventory.
+with record identity. Live-reference retirement uses those same owned collections
+and preserves outside callers of any part. `history_tables()` is the one
+concrete-table inventory.
 `ChangesetQuerySet.touching(record)` and its inverse `records_touched()` own
 document membership, including MTI, pairs and generated statements. Projections
 consume these scopes instead of rediscovering documents from history rows.
@@ -1968,8 +1972,8 @@ bridge advisory lock as polling and delivery settlement.
   that does not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload and dependency digest in `ApplyResult`; the driver takes the declared
-  mapping version from `RecordChange`, promotes the primary link and pins the history row written for that
-  application. Observation saves the source on the link without changing that
+  mapping version from the stream, promotes the primary link and pins the history
+  row written for that application. Observation saves the source on the link without changing that
   protected pointer. History is the observation log; inbound state retains
   simultaneous and closed failures, and refused writes retain link outbox state.
   Unlinked event failures belong to the stream's `inbound` state. Mapping or

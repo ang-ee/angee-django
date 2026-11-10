@@ -35,6 +35,7 @@ from angee.base.models.merge_references import (
     MergeContractMixin,
     has_live_references,
     named_in_relationships,
+    owned_reference_parts,
     references,
 )
 from angee.base.models.timestamps import TimestampMixin
@@ -61,9 +62,6 @@ class AngeeModel(
     Composable,
 ):
     """Abstract base model for Angee source and runtime models."""
-
-    decision_methods: ClassVar[tuple[str, ...]] = ()
-    """Model methods explicitly admitted for decision proposals; empty by default."""
 
     objects: ClassVar[RebacManager[Self]] = AngeeManager()
     """Default REBAC manager with Angee queryset conveniences."""
@@ -222,9 +220,12 @@ class AngeeModel(
 
         Native historical snapshots may outlive deleted targets. They retain a
         merge identity but do not prevent removal of its reverted creation.
+        Replay removes owned parts in the same boundary before their parent.
+        Any remaining part must block physical deletion, which would otherwise
+        cascade beyond that boundary; source retirement keeps those rows stored.
         """
 
-        if has_live_references(self):
+        if next(owned_reference_parts(self), None) is not None or has_live_references(self):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()
 

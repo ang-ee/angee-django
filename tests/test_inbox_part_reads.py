@@ -24,7 +24,7 @@ from rebac import (
 from rebac.models import SchemaOverride, SchemaPermission
 
 from angee.base.permissions import contextual_action_holds
-from angee.base.testing.queries import capture_planner_memory, statement_body
+from angee.base.testing.queries import capture_planner_memory, statement_body, supports_planner_memory
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.testing.models import Channel, Fragment, Message, Part, Thread
@@ -249,7 +249,7 @@ def test_inbox_parts_compile_the_message_graph_once(record_property) -> None:
                 sent_at=T0 + timedelta(minutes=index),
             )
             Part._base_manager.create(created_by=owner, message=message, name=f"{index}.pdf", position=index)
-    postgres = connection.vendor == "postgresql" and connection.pg_version >= 170000
+    postgres = supports_planner_memory()
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
         list(inbox.parts.order_by("pk")[:1])
@@ -263,25 +263,30 @@ def test_inbox_parts_compile_the_message_graph_once(record_property) -> None:
                 [plan] = plans
                 record_property(f"planner_memory_{size}_used_kib", plan.used_kib)
                 record_property(f"planner_memory_{size}_allocated_kib", plan.allocated_kib)
-                # PostgreSQL 17: 14,999 KiB used / 16,384 KiB allocated for both page sizes.
-                # The measured allocation rounds to a 16 MiB ceiling.
+                # REBAC 0.32.2's compact aliases: PostgreSQL 18.6 measures 14,531 KiB
+                # used / 16,384 KiB allocated for both page sizes. Allocation equals
+                # the recorded PostgreSQL 17 value: ceil(16,384 / 1,024) = 16 MiB.
                 assert 0 < plan.allocated_kib <= 16 * 1024, plan
     one, many = reads[1][-1], reads[25][-1]
-    # REBAC 0.32's content-hash id-set names lengthen this SQLite statement to
-    # 40,565 bytes: ceil(40,565 / 1,024) = 40 KiB. Sharing cuts PostgreSQL planning
-    # memory; the PostgreSQL planner gate remains the binding budget.
+    record_property("one_sql_bytes", len(one.encode()))
+    record_property("many_sql_bytes", len(many.encode()))
+    # REBAC 0.32.2 restores compact aliases inside shared id sets. The full SQLite
+    # 3.53.1 suite measures 33,690 / 33,691 bytes for 1 / 25 rows: ceil = 33 KiB.
     assert len(reads[1]) == len(reads[25]) == 1
     assert abs(len(one) - len(many)) <= 2
-    assert len(many) <= 40 * 1024
+    assert len(many.encode()) <= 33 * 1024
     # One actor scope: the part's read carries the message graph, and eligibility
     # joins the message without a second, separately scoped message subquery.
     assert many.count("rebac_schemageneration") <= 1
     body = statement_body(many)
     [message_scope] = re.findall(r'FROM "(rebac_ids_[0-9a-f]+)"', body)
     message_table = connection.ops.quote_name(Message._meta.db_table)
-    assert many.count(f'"{message_scope}" AS (SELECT {message_table}.') == 1
-    # REBAC 0.32.1 materializes five distinct message permission stages on SQLite;
+    message_stages = re.findall(
+        rf'"(rebac_ids_[0-9a-f]+)" AS \(SELECT [^()]* FROM {re.escape(message_table)} ', many,
+    )
+    assert message_stages.count(message_scope) == 1
+    # REBAC materializes five distinct message permission stages on SQLite;
     # PostgreSQL folds them into one. Bound every body, including unreferenced copies.
-    assert many.count(f"AS (SELECT {message_table}.") == (1 if connection.vendor == "postgresql" else 5)
+    assert len(message_stages) == (1 if connection.vendor == "postgresql" else 5)
     assert many.count(f'FROM "{message_scope}"') == 1
     assert f"FROM {message_table}" not in body

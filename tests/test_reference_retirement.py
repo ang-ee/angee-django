@@ -66,6 +66,14 @@ def test_history_written_only_by_includes_owned_lines_and_respects_queryset():
         with changeset(fresh=True, activity="pull", origin=owner):
             project = Project.objects.create(title="Imported", owner=owner)
             line = Milestone.objects.create(project=project, name="Delivery")
+        assert list(owned_reference_parts(project)) == [line]
+        assert not has_live_references(project)
+        edge = RecordRefSubjectEdge.objects.create(
+            subject_content_type=ContentType.objects.get_for_model(Milestone), subject_object_id=line.pk,
+        )
+        assert has_live_references(project)
+        edge.delete()
+        assert not has_live_references(project)
         matching = Q(activity="pull", origin_object_id=str(owner.pk))
         assert Changeset.objects.history_written_only_by(project, matching)
         assert not Changeset.objects.none().history_written_only_by(project, matching)

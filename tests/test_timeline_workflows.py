@@ -13,7 +13,7 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated, change_published
-from angee.base.testing.queries import capture_planner_memory, statement_startswith
+from angee.base.testing.queries import capture_planner_memory, statement_startswith, supports_planner_memory
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.provenance.context import changeset
@@ -44,8 +44,9 @@ def kinds(settings):
 @pytest.mark.parametrize("viewer", ["admin", "member"])
 def test_timeline_read_planner_memory(review, settings, viewer, record_property):
     """Budget the actual page statement, with a waiting run and folded and standalone decisions."""
-    if connection.vendor != "postgresql" or connection.pg_version < 170000:
-        pytest.skip("EXPLAIN MEMORY requires PostgreSQL 17 or later")
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL planner budget")
+    assert supports_planner_memory(), "EXPLAIN MEMORY requires PostgreSQL 17 or later"
     settings.ANGEE_TIMELINE_KINDS = [
         "angee.workflows.timeline.timeline_kinds", "angee.decisions.timeline.timeline_kinds",
     ]
@@ -78,11 +79,11 @@ def test_timeline_read_planner_memory(review, settings, viewer, record_property)
     record_property("sql_bytes", plan.sql_bytes)
     record_property("planner_memory_used_kib", plan.used_kib)
     record_property("planner_memory_allocated_kib", memory)
-    # pgvector/pgvector:pg17 with shared id sets: 34,681 SQL bytes,
-    # 10,653 KiB used / 16,384 KiB allocated for either actor.
-    # The 17 MiB ceiling allows 1 MiB (6.25%) headroom over that measured allocation.
-    assert 0 < memory <= 17 * 1024, (
-        f"Timeline planner allocated {memory} KiB; ceiling 17 MiB. "
+    # REBAC 0.32.2's compact aliases: PostgreSQL 18.6 measures 29,591 SQL bytes,
+    # 10,415 KiB used / 16,384 KiB allocated for either actor. Allocation equals the
+    # recorded PostgreSQL 17 value; ceil(16,384 / 1,024) = 16 MiB, with no headroom.
+    assert 0 < memory <= 16 * 1024, (
+        f"Timeline planner allocated {memory} KiB; ceiling 16 MiB. "
         "Ratchet downward when cost falls; never raise to admit a regression."
     )
 

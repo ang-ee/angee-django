@@ -104,6 +104,8 @@ class Party(
 
     rebac_grantable = {"reader": "write", "identity_reader": "write"}
 
+    owned_relations = ("addresses", "relationships")
+
     sqid_prefix = "pty_"
     history = ModelHistory(inherit=True, excluded_fields=("handle_count",))
     REVIEW_CONFIDENCE: ClassVar[float] = 0.5
@@ -336,8 +338,6 @@ class Party(
         if dirty:
             self.save(update_fields=[*dirty, "updated_at"])
 
-    decision_methods = ("apply_identity",)
-
     def apply_identity(
         self,
         *,
@@ -499,7 +499,7 @@ class Party(
         """
 
         def hint() -> models.Prefetch:
-            return cast(Any, reader_queryset(type(self), self.actor())).circle_members_prefetch()
+            return reader_queryset(type(self).objects.all(), self.actor()).circle_members_prefetch()
 
         memberships = prefetched(self, VISIBLE_CIRCLE_MEMBERS, hint)
         return list(dict.fromkeys(membership.circle.name for membership in memberships))

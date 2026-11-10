@@ -50,6 +50,7 @@ from angee.base.permissions import instance_actor, reader_queryset, require_reba
 from angee.base.prefetch import ReaderMemo
 from angee.base.querysets import by_key, query_batch_size
 from angee.base.validators import validate_value
+from angee.provenance.bases import ChangesetHistory
 from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryDocumentMixin, HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
@@ -61,7 +62,6 @@ from angee.provenance.evidence import (
     readable_evidence_records,
     readable_records,
 )
-from angee.provenance.history import ChangesetHistory
 
 
 def _statement_column(model: type[models.Model], name: str) -> models.Field:

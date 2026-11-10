@@ -349,12 +349,6 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
 
     history_revert_permission: ClassVar[str] = "write"
     """Permission admitting replay; immutable edges use their unlink/relink authority."""
-    history_relations: ClassVar[tuple[str, ...]] = ()
-    """Owned reverse foreign-key collections included in this document's history.
-
-    These are document parts, not arbitrary references or separately owned work.
-    Each child keeps its own capture and permission policy.
-    """
 
     @classmethod
     def retained_reference_exists(cls, lookup: Mapping[str, Any]) -> bool:
@@ -403,7 +397,7 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
         columns: dict[type[models.Model], tuple[str, ...]] = {
             table: (table._meta.pk.attname,) for table in self.history_tables()
         }
-        for name in self.history_relations:
+        for name in self.owned_relations:
             relation = self._meta.get_field(name)
             if not isinstance(relation, ManyToOneRel) or relation.field.remote_field.parent_link:
                 raise ImproperlyConfigured(f"{self._meta.label}.{name}: history requires an owned reverse FK.")

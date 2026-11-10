@@ -35,6 +35,9 @@ class RegistryBase(Protocol):
     registry_setting: ClassVar[str]
     key: ClassVar[str]
 
+    @classmethod
+    def matches_registry_key(cls, key: str) -> bool: ...
+
 
 class ImplBase:
     """Base for a keyed implementation selected by a field or rowless contract.
@@ -56,6 +59,12 @@ class ImplBase:
     """Render unsupported non-root config shapes through the JSON control."""
     check_config_form_spec: ClassVar[bool] = True
     """False for rowless contracts whose typed config is never offered as a FormSpec."""
+
+    @classmethod
+    def matches_registry_key(cls, key: str) -> bool:
+        """Keyed declarations must repeat their selected registry identity."""
+
+        return cls.key == key
 
     @classmethod
     def effective_defaults(cls, *, config_schema: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -186,7 +195,7 @@ def resolve_impl_class[T: RegistryBase](base_class: type[T], key: str) -> type[T
     if not (isinstance(impl, type) and issubclass(impl, base_class)):
         base_name = base_class.__name__
         raise ImproperlyConfigured(f"settings.{registry_setting}[{key!r}] = {dotted!r} is not a {base_name}.")
-    if impl.key != key and (issubclass(impl, ImplBase) or impl.key):
+    if not impl.matches_registry_key(key):
         raise ImproperlyConfigured(
             f"settings.{registry_setting}[{key!r}] resolves {impl.__name__} with key {impl.key!r}."
         )

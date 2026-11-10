@@ -599,7 +599,7 @@ class Project(
     """A bounded endeavor whose access is owned by direct ReBAC grants."""
 
     sqid_prefix = "prj_"
-    history_relations = ("milestones",)
+    owned_relations = ("milestones",)
     rebac_grantable = {"reader": "share", "editor": "share"}
 
     class ProjectStatus(models.TextChoices):
