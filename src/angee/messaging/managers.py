@@ -72,8 +72,8 @@ from angee.base.prefetch import InstancePrefetch, ReaderMemo
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
+from angee.base.signals import mute_changes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
-from angee.graphql.publishing import mute_changes
 from angee.integrate.errors import IntegrationError, doubling_backoff, safe_integration_failure
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
@@ -610,7 +610,7 @@ class FragmentManager[FragmentT: Fragment](AngeeManager[FragmentT]):
         text = strip_null_bytes(text).strip()
         encoded = text.encode("utf-8")
         digest = hashlib.sha256(encoded).hexdigest()
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             fragment, created = self.get_or_create(
                 hash=digest,
                 defaults={"text": text, "kind": kind, "created_by_id": created_by_id},
@@ -1011,7 +1011,7 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
         if existing is not None:
             return existing, False
         try:
-            with transaction.atomic(using=using):
+            with transaction.atomic():
                 thread.save(force_insert=True, using=using, ownerless=ownerless)
                 return thread, True
         except IntegrityError:
@@ -1037,7 +1037,7 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
         teardown paths; ``channel`` is a Channel (an MTI child of Integration whose pk is
         the Integration pk), so :meth:`MessageQuerySet.for_channel` /
         :meth:`ThreadQuerySet.for_channel` resolve against the shared FK. Both deletes run
-        under :func:`~angee.graphql.publishing.mute_changes`: each Message/Thread declares
+        under :func:`~angee.base.signals.mute_changes`: each Message/Thread declares
         ``changes()``, so without muting the ``post_delete`` publisher would fire once per
         row — an ``exists()`` thread probe plus a buffered ``group_send`` for every purged
         row — turning a 90k-message purge into ~180k queries and 90k broadcasts. The single
@@ -1245,7 +1245,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         # follows or posts: ownership is standing access the record does not grant.
         creator_id = getattr(record, "created_by_id", None) if role == self.model.AttachmentRole.CHATTER else None
         owned = {"owner_id": creator_id} if creator_id is not None else {}
-        with elevated, transaction.atomic(using=using):
+        with elevated, transaction.atomic():
             title_fragment = fragment_model.objects.db_manager(using).upsert(text=title_text) if title_text else None
             thread, _created = thread_model.objects.db_manager(using).get_or_create_by_external_id(
                 platform=Handle.Platform.OTHER,
@@ -1314,9 +1314,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         if target_model is None:
             return
         thread_model = self.model.thread.field.related_model
-        manager = self.db_manager(hints={"instance": target})
-        using = manager.db
-        with system_context(reason="messaging.record_thread.teardown"), transaction.atomic(using=using):
+        with system_context(reason="messaging.record_thread.teardown"), transaction.atomic():
             target_model._base_manager.db_manager(hints={"instance": target}).select_for_update(
                 of=row_lock_paths(target_model),
             ).filter(
@@ -1670,7 +1668,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         attachments = apps.get_model("messaging", "ThreadAttachment").objects.db_manager(
             using, hints={"instance": record},
         )
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             attachment = attachments.for_record(record, role=role)
             target = attachment.target if attachment is not None else record
             if target is None:
@@ -1780,7 +1778,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if message is not None and not thread.member_threads().filter(pk=message.thread_id).exists():
             raise ValueError("Receipt anchor does not belong to this thread.")
         target_key = target.chronological_key
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             # Lock only the follower row (`of=("self",)`): the receipt FK is
             # nullable, and Postgres refuses FOR UPDATE on the nullable side of
             # the select_related outer join. lock_if_supported keeps the SQLite
@@ -2898,7 +2896,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""
 
-        with system_context(reason="messaging.delivery.cancel"), transaction.atomic(using=self.db):
+        with system_context(reason="messaging.delivery.cancel"), transaction.atomic():
             row = self.sudo(reason="messaging.delivery.cancel").lock_if_supported().get(pk=message.pk)
             if row.direction == "outbound" and row.status != "uncertain" and (
                 row.delivery_needs_reconciliation
@@ -3510,7 +3508,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         notification_model = apps.get_model("messaging", "ThreadNotification")
         sent_at = timezone.now()
         claim_boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
-        with claim_boundary, transaction.atomic(using=using):
+        with claim_boundary, transaction.atomic():
             if idempotency_key is not None:
                 message = changeset_model().objects.db_manager(using).claim_created(
                     f"messaging.post:{actor}",

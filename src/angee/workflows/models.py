@@ -25,17 +25,16 @@ from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField, ModelLabelField
 from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
 from angee.base.models.base import AngeeDataModel
-from angee.base.models.identity import public_id_for
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.permissions import require_rebac_queryset
 from angee.base.prefetch import InstancePrefetch, ReaderMemo
-from angee.graphql.events import ChangeRelatedRecord
+from angee.base.refs import RecordRef
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.service_users import sync_service_user
+from angee.iam.models import ServiceUserMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -185,7 +184,7 @@ class _NodeFailureRoute(models.Func):
         )
 
 
-class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Workflow(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """Editable identity and draft, pointing to one immutable published version.
 
     A workflow is a grant root with transferable ownership
@@ -197,6 +196,7 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, conc
     resource_class = WorkflowDefinitionResource
     rebac_grantable = {"editor": "write", "viewer": "write", "starter": "write", "operator": "write"}
     sqid_prefix = "wfl_"
+    service_user_prefix = "workflow"
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
@@ -244,7 +244,7 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, conc
         with transaction.atomic():
             super().save(*args, **kwargs)
             if creating or (name_written and previous_name != self.name):
-                sync_service_user(self, prefix="workflow")
+                self.sync_service_user()
 
     def __str__(self) -> str:
         """Return the authored workflow name."""
@@ -337,7 +337,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
     _reader_cancel = _ReaderBatch("prepare_cancel")
     _policy_versions = _PolicyVersions()
 
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+    def change_related_records(self) -> tuple[RecordRef, ...]:
         """Invalidate the records this execution has worked on."""
         return self.records.all().change_related_records()
 
@@ -721,18 +721,18 @@ class StepRun(AngeeDataModel, concrete=True):
         ).defer("proposal", "context", "verdict", "verdict_values") if "decision_id" in update_fields else ()
         return decisions
 
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+    def change_related_records(self) -> tuple[RecordRef, ...]:
         """A step changes both its run graph and that run's record timelines."""
         run = self._meta.get_field("run").related_model
         evidence = self._meta.get_field("records").related_model
         assert run is not None and issubclass(run, WorkflowRun)
         assert evidence is not None and issubclass(evidence, StepRecord)
-        records = [ChangeRelatedRecord(run._meta.label, run.public_id_from_pk(self.run_id)),
+        records = [RecordRef.from_model(run, self.run_id),
                    *evidence.objects.filter(run_id=self.run_id).change_related_records()]
         if self.decision_id:
             decision = self._meta.get_field("decision").related_model
             assert decision is not None
-            records.append(ChangeRelatedRecord(decision._meta.label, public_id_for(decision, self.decision_id)))
+            records.append(RecordRef.from_model(decision, self.decision_id))
         return tuple(records)
     hold_states = {
         (StepRunStatus.FAILED, None): "error",

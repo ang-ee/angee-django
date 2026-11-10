@@ -13,6 +13,7 @@ _Settings = TypedDict(
         "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
         "ANGEE_INTEGRATE_OAUTH_CLIENTS": Sequence[Mapping[str, object]] | Mapping[str, Mapping[str, object]],
         "ANGEE_INTEGRATE_OAUTH_STATE_TTL": int,
+        "ANGEE_OIDC_DISCOVERY_TTL": int,
         "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES": dict[str, str],
         "ANGEE_RESOURCE_SOURCE_CLASSES.url": str,
         "ANGEE_GRAPHQL_RELATED_COUNTS:append": list[str],
@@ -33,10 +34,12 @@ SETTINGS: _Settings = {
     # OAuth connection substrate. Host-provided OAuth client registrations (secrets
     # included) are declared here and synced by ``manage.py oauth_clients``; the
     # public catalogue is seeded from install-tier resources instead. The TTL bounds
-    # the single-use redirect state record (shared by connect and OIDC login). OIDC
-    # discovery TTL belongs to the ``iam_integrate_oidc`` addon.
+    # the single-use redirect state record (shared by connect and OIDC login).
     "ANGEE_INTEGRATE_OAUTH_CLIENTS": (),
     "ANGEE_INTEGRATE_OAUTH_STATE_TTL": 600,
+    # Lifetime of a cached metadata discovery document; OAuth and OIDC registrations
+    # both discover through integrate (the key keeps its historical OIDC name).
+    "ANGEE_OIDC_DISCOVERY_TTL": 3600,
     "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES": {
         "generic_oauth2": "angee.integrate.oauth.providers.GenericOAuth2",
     },

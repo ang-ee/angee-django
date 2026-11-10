@@ -581,7 +581,7 @@ class Page(
         """Trash this page and, with the same stamp, every untrashed page below it."""
 
         db = self._state.db
-        with transaction.atomic(using=db):
+        with transaction.atomic():
             super().trash(reason=reason)
             type(self).system_queryset().using(db).subtree_of(self).exclude(pk=self.pk).trash(
                 reason=self.trash_reason, at=self.trashed_at,
@@ -595,7 +595,7 @@ class Page(
         """
 
         db = self._state.db
-        with transaction.atomic(using=db):
+        with transaction.atomic():
             pages = type(self).system_queryset(lock=("self",)).using(db)
             if self.parent_id is not None and pages.filter(pk=self.parent_id, is_trashed=True).exists():
                 raise ValidationError({"parent": "Restore the folder that contains this page first."})
@@ -637,7 +637,7 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         using = self._db or router.db_for_write(self.model, instance=target)
         bindings = self.db_manager(using, hints={"instance": target})
         boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
-        with boundary, transaction.atomic(using=using):
+        with boundary, transaction.atomic():
             reference = generic_target(target)
             claim_values = [reference.content_type.pk, reference.object_id, vault.pk, role, body]
             if idempotency_key is not None:
@@ -692,7 +692,7 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         target = self._saved(target, "target")
         using = self._db or router.db_for_write(self.model, instance=target)
         bindings = self.db_manager(using, hints={"instance": target})
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             reference = generic_target(target)
             with system_context(reason="knowledge.record_binding.lock"):
                 canonical = reference.content_type.model_class()
@@ -957,7 +957,7 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
         rows = self.with_actor(actor) if actor is not None else self.all()
         locked = rows.select_for_update()
         using = locked.db
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             markdown = locked.get(pk=page.pk)
             if expected_hash is not None and expected_hash != markdown.body_hash:
                 raise StaleBodyError("Body hash is stale; reload the page and retry.")
@@ -1342,7 +1342,7 @@ class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
         vault_ids = {body.vault_id for body in batch}
         using = self._db or router.db_for_write(self.model, instance=batch[0])
         links = self.model._base_manager.db_manager(using)
-        with system_context(reason="knowledge.backlinks"), transaction.atomic(using=using):
+        with system_context(reason="knowledge.backlinks"), transaction.atomic():
             resolved = {
                 (vault_id, title): pk
                 for vault_id, title, pk in page_model._base_manager.using(using).filter(

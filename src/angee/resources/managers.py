@@ -178,7 +178,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
 
         if instance.pk is None:
             raise ResourceLoadError("Installation identities require a saved target.")
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             resource = build_resource(
                 type(instance), ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source),
                 ledger_model=self.model, addon_aliases=self._addon_aliases(apps.get_app_configs()), using=self.db,
@@ -283,7 +283,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                     group.dataset.subset(rows=[index]),
                     [group.source_rows[index]],
                 )
-                with transaction.atomic(using=self.db):
+                with transaction.atomic():
                     resource = build_resource(
                         model, group.entry, ledger_model=self.model, addon_aliases=aliases, using=self.db,
                     )
@@ -360,7 +360,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
             with (
                 system_context(reason=reason),
                 ExitStack() as contexts,
-                transaction.atomic(using=self.db),
+                transaction.atomic(),
             ):
                 pre_load.send(sender=self.model, contexts=contexts, using=self.db)
                 resource_classes = {

@@ -32,10 +32,9 @@ from angee.base.models.identity import public_id_of
 from angee.base.models.locks import StaleRevisionError, require_revision
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
+from angee.base.refs import RecordRef, record_view_refs
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
-from angee.base.signals import bulk_updated
-from angee.graphql.events import ChangeRelatedRecord
-from angee.graphql.publishing import changes_muted, mute_changes, publish_change
+from angee.base.signals import bulk_updated, changes_muted, mute_changes, publish_change
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -575,14 +574,14 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
 class StepRecordQuerySet[T: StepRecord](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
     """Keep retained admission references immutable until their run is pruned."""
 
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
-        """Publish distinct concern identities without loading retained evidence rows.
+    def change_related_records(self) -> tuple[RecordRef, ...]:
+        """Publish distinct concern identities and their inherited views without loading evidence rows.
 
         The rows are read elevated, including through a run's ``records`` bound to a reader.
         """
         rows = self.system_context(reason="workflows.change_concerns")
         identities = rows.order_by().values_list("content_type_id", "object_id").distinct()
-        return ChangeRelatedRecord.for_records(*(
+        return record_view_refs(*(
             self.model(content_type_id=content_type_id, object_id=object_id).record_ref
             for content_type_id, object_id in identities
         ))
@@ -984,7 +983,7 @@ class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
                 target = generic_target(record)
             except ValueError:
                 return  # Unsaved or untyped records cannot have watches.
-            with transaction.atomic(using=record._state.db), system_context(reason="workflows.watch_capture"):
+            with transaction.atomic(), system_context(reason="workflows.watch_capture"):
                 model = target.content_type.model_class()
                 assert model is not None
                 rows = model._default_manager.filter(pk=target.object_id)
@@ -1003,7 +1002,7 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
     def _write_transition(self, **values: Any) -> int:
         """Publish affected targets after a conditional state write, retaining its fence."""
 
-        with transaction.atomic(using=self.db):
+        with transaction.atomic():
             keys = list(self.lock_if_supported().order_by("pk").values_list("pk", flat=True))
             changed = sum(batch.update(**values) for batch in by_key(self, keys))
             if changed and not changes_muted():

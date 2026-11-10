@@ -383,7 +383,7 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
             raise ValidationError("Only a successfully closed changeset can be reverted.")
         with (
             actor_context(actor) if actor is not None else nullcontext(),
-            transaction.atomic(using=using),
+            transaction.atomic(),
             changeset(fresh=True, activity="revert", origin=self, using=using),
         ):
             histories = []

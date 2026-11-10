@@ -8,6 +8,54 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — one database, base-owned observation and locks, model-owned lines and service users
+
+- One database is the contract. `transaction.atomic()` and `on_commit()` are
+  bare in owner verbs; an alias that Django or a library passes into an
+  override or hook (`save(using=)`, signal `using`) passes through unchanged.
+  System check `angee.E050` refuses a non-empty `DATABASE_ROUTERS`, and the
+  static placement test is retired. Recorded follow-up: the remaining placement
+  plumbing in `src` (140 `db_manager(`, 28 `router.db_for_*`, 194 `.using(`,
+  161 `using=`, 173 `_state.db`, 63 `hints=` lines) is swept under the same
+  rule in a later change.
+- Locks: `angee.jobs.locks` moves to `angee.base.locks` with unchanged names
+  (`task_lock`, `LockKey`, `record_lock_key`, `task_lock_is_held`,
+  `task_locks_are_cross_process`). `task_lock(key, blocking=True)` waits and
+  then adopts; on PostgreSQL it refuses a key the same session already holds,
+  as the local backend does.
+- Observation: write observation moves from `angee.graphql.publishing` to
+  `angee.base.signals` (`ModelChange`, `change_observed`, `change_published`,
+  `publish_change`, `mute_changes`, `connect_observers`). GraphQL keeps only
+  the transport adapter, which fires for models with a subscription feed.
+  `change_observed` receivers fail the write; `change_published` observers stay
+  robust. `ChangePayload` drops `instance`; the unread ingestion mark
+  (`during_ingestion`, `publication_ingestion_context`,
+  `angee.integrate.sync.bridge_sync_context`) is removed.
+- `change_related_records()` returns `angee.base.refs.RecordRef` values; the
+  hook owns any `record_view_refs` widening. `ChangeRelatedRecord.for_records`
+  is removed.
+- Lines: `AngeeModel.replace_lines(field, rows, *, position_field, replace,
+  permission="write")` owns line writes with native validation, temporary
+  fractional ranks, row locks and the parent's model-owned `lock_subject()`.
+  It always checks the parent permission; a GraphQL nested insert names
+  `permission="create"`. `AngeeModel.line_relation` refuses reverse relations
+  and other non-columns, at build time for `HasuraLines.writable`. Line writes
+  are audited as `base.replace_lines` (was `graphql.hasura.save.lines`).
+  `InputExtensionsMixin.pop_input_extensions` is the one input split.
+  `FractionalRankField.get_temporary_ranks` takes no `using`.
+- IAM: Agent and Workflow compose `ServiceUserMixin`; `UserManager` owns
+  `ensure_service_user`, `create_user_from_seed` and `get_for_session`, and
+  `UserQuerySet` owns `directory`, `colleagues` and `view_as_queryset`.
+  System check `angee.iam.E002` refuses a participant without its `user`
+  one-to-one. `angee.iam.service_users` and iam's `ROLE_SUFFIX`/`is_role_type`
+  are removed (use `rebac.roles`). The OIDC link and OAuth connect reloads are
+  audited as `iam.session`.
+- Integrate declares `ANGEE_OIDC_DISCOVERY_TTL` (key unchanged). `runserver`
+  closes its preflight connections before serving. FormSpec field annotations
+  are one `$defs` entry.
+- Consumers: arp, bridges and odoo re-import `angee.base.locks`,
+  `angee.base.signals.publish_change` and `RecordRef` hooks.
+
 ## Unreleased — run interrupts, identity sharing, annotation and delivery expiry
 
 - Workflows: `interrupted` joins `done`, `error` and `canceled` as a native run

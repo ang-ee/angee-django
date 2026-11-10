@@ -13,14 +13,18 @@ active-human filtering, search, ordering, and limits.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from collections.abc import Mapping
 from copy import copy
-from typing import Any, Self, cast
+from typing import Any, ClassVar, Self, cast
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.validators import UnicodeUsernameValidator
+from django.core import checks
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, router, transaction
 from django.db.models import Exists, F, OuterRef, Q, TextField
@@ -35,12 +39,14 @@ from rebac import (
     current_actor,
     resolve_subjects,
     system_context,
+    to_object_ref,
     to_subject_ref,
     user_subject_type,
 )
 from rebac.errors import MissingActorError
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
+from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
@@ -50,7 +56,7 @@ from angee.base.fields.state import StateField
 from angee.base.identity import canonical_subject_ref
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeDataModel
-from angee.base.models.identity import instance_from_public_id
+from angee.base.models.identity import PublicIdentity, instance_from_public_id
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.roles import role_anchor
 from angee.base.querysets import AngeeQuerySet
@@ -109,6 +115,23 @@ class Group(AngeeDataModel, concrete=True):
         """Return the group name used by subject-label resolution."""
 
         return self.name
+
+    def member_rows(self) -> models.QuerySet[Any]:
+        """Select this group's direct membership tuples, ordered by subject."""
+
+        ref = to_object_ref(self)
+        return active_relationship_model().objects.filter(
+            resource_type=ref.resource_type, resource_id=ref.resource_id, relation=ROLE_RELATION,
+        ).order_by_subject()
+
+    def binding_rows(self) -> models.QuerySet[Any]:
+        """Select the tuples bound to this group's member subject set, ordered by resource."""
+
+        subject = to_subject_ref(self)
+        return active_relationship_model().objects.filter(
+            subject_type=subject.subject_type, subject_id=subject.subject_id,
+            optional_subject_relation=subject.optional_relation,
+        ).order_by_resource()
 
     @staticmethod
     def member_subject(value: str, *, require_existing: bool = True) -> SubjectRef:
@@ -300,6 +323,30 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
 
         return self.active_people().unprotected(actor)
 
+    def directory(self, actor: Any) -> Self:
+        """Return the accounts ``actor`` lists in the people directory, scoped by ``auth/user#list``.
+
+        People managers list every account; anyone else lists nobody.
+        """
+
+        return cast(Self, self.with_actor(actor).with_action("list"))
+
+    def colleagues(self, actor: Any) -> Self:
+        """Return the accounts ``actor`` is offered in pickers, scoped by ``auth/user#colleague``.
+
+        People managers are offered every account; anyone else their own and
+        the arms identity owners contribute, such as the active people whose
+        identity they read through records.
+        """
+
+        return cast(Self, self.with_actor(actor).with_action("colleague"))
+
+    def view_as_queryset(self, actor: Any) -> Self:
+        """The single admission scope used by the picker and header lookup."""
+
+        subject = to_subject_ref(actor)
+        return cast(Self, self.with_actor(subject).with_action("view_as")).preview_candidates(subject)
+
     def without_direct_roles(self, grant_rows: Any, role_resource_types: set[str]) -> Self:
         """Return users without direct role memberships in the installed schema."""
 
@@ -448,7 +495,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         """Own validation, uniqueness, persistence and the transactional event."""
 
         using = self._db or router.db_for_write(self.model)
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             if self.db_manager(using)._person_email_matches(email).exists():
                 raise AccountExists
             user = self.model(
@@ -464,7 +511,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             user._state.db = using
             user.set_password(password)
             try:
-                with transaction.atomic(using=using):
+                with transaction.atomic():
                     with system_context(reason="iam.person.validate"):
                         user.full_clean()
                     user.sudo(reason=reason).save(using=using)
@@ -496,6 +543,36 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         return self._create_user(username, email, password, **extra_fields)
 
+    def create_user_from_seed(
+        self,
+        seed: str,
+        *,
+        fallback: str,
+        email: str = "",
+        first_name: str = "",
+        last_name: str = "",
+    ) -> UserT:
+        """Create a passwordless person from a trusted identity's proposed name.
+
+        A trusted, elevated system path (like :meth:`create_user`): the identity's
+        protocol admits it and handles a lost race. This factory owns username
+        sanitation, length and the first free numeric suffix, and never grants
+        staff or superuser flags.
+        """
+
+        maximum = cast(int, self.model._meta.get_field("username").max_length)
+        base = re.sub(r"[^\w.@+-]", "-", seed).strip("-")[: maximum - 10] or fallback
+        candidate = base
+        suffix = 1
+        while self.filter(username=candidate).exists():
+            suffix_text = f"-{suffix}"
+            candidate = f"{base[: maximum - len(suffix_text)]}{suffix_text}"
+            suffix += 1
+        return self.create_user(
+            candidate, email=email, password=None, first_name=first_name, last_name=last_name,
+            is_staff=False, is_superuser=False,
+        )
+
     def create_superuser(
         self,
         username: str,
@@ -514,6 +591,25 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         return self._create_user(username, email, password, **extra_fields)
 
+    def ensure_service_user(self, *, username: str, name: str, user_id: Any = None) -> UserT:
+        """Create or relabel a saved owner's stable, non-login principal.
+
+        The owner calls this after its own write admission and keeps its
+        foreign key and stable username; this factory owns every user write.
+        """
+
+        with system_context(reason="iam.service_user.sync"), transaction.atomic():
+            if user_id is None:
+                user, created = self.get_or_create(
+                    username=username, defaults=self.model.service_identity_values(username=username, name=name),
+                )
+                if created:
+                    return user
+            else:
+                user = self.get(pk=user_id)
+            user.update_service_identity(username=username, name=name)
+            return user
+
     def ensure_bootstrap_admin(
         self,
         username: str,
@@ -523,9 +619,8 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
     ) -> tuple[UserT, bool]:
         """Atomically create or promote the initial admin and grant its platform role.
 
-        Uses this manager's database for the account, REBAC schema, membership
-        and audit writes. Existing usable passwords and non-empty emails survive
-        repeated provisioning. A new account requires a password; an existing
+        Existing usable passwords and non-empty emails survive repeated
+        provisioning. A new account requires a password; an existing
         passwordless account receives one only when supplied.
         """
 
@@ -536,7 +631,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             raise ValueError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
         using = self._db or router.db_for_write(self.model)
         manager = self.db_manager(using)
-        with system_context(reason="iam.bootstrap_admin"), transaction.atomic(using=using):
+        with system_context(reason="iam.bootstrap_admin"), transaction.atomic():
             try:
                 user = manager.system_context(reason="iam.bootstrap_admin").get(
                     **{self.model.USERNAME_FIELD: username},
@@ -593,24 +688,6 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             user.unsudo()
         return user
 
-    def directory(self, actor: Any) -> UserQuerySet[UserT]:
-        """Return the accounts ``actor`` lists in the people directory, scoped by ``auth/user#list``.
-
-        People managers list every account; anyone else lists nobody.
-        """
-
-        return cast(UserQuerySet[UserT], self.with_actor(actor).with_action("list"))
-
-    def colleagues(self, actor: Any) -> UserQuerySet[UserT]:
-        """Return the accounts ``actor`` is offered in pickers, scoped by ``auth/user#colleague``.
-
-        People managers are offered every account; anyone else their own and
-        the arms identity owners contribute, such as the active people whose
-        identity they read through records.
-        """
-
-        return cast(UserQuerySet[UserT], self.with_actor(actor).with_action("colleague"))
-
     def visible_people(
         self,
         actor: Any,
@@ -633,12 +710,6 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         bounded = bounded_limit(limit, maximum=VIEWABLE_PEOPLE_MAX_LIMIT)
         return [copy(person) for person in self.view_as_queryset(actor).search_users(search).ordered_users()[:bounded]]
-
-    def view_as_queryset(self, actor: Any) -> UserQuerySet[UserT]:
-        """The single admission scope used by the picker and header lookup."""
-
-        subject = to_subject_ref(actor)
-        return self.with_actor(subject).with_action("view_as").preview_candidates(subject)
 
     def admit_view_as(self, actor: Any, public_id: str) -> UserT | None:
         """Admit a preview identity for both the picker and GraphQL header.
@@ -952,6 +1023,31 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         if update_fields:
             self.save(update_fields=[*sorted(update_fields), "updated_at"], expected_revision=expected_revision)
 
+    @staticmethod
+    def service_identity_values(*, username: str, name: str) -> dict[str, Any]:
+        """Return the user facts a service owner's identity and label determine."""
+
+        return {"username": username, "first_name": name, "last_name": "", "email": "", "kind": UserKind.SERVICE}
+
+    def update_service_identity(self, *, username: str, name: str) -> None:
+        """Save only the service identity facts that changed."""
+
+        values = self.service_identity_values(username=username, name=name)
+        changed = {field for field, value in values.items() if getattr(self, field) != value}
+        for field in changed:
+            setattr(self, field, values[field])
+        if changed:
+            self.save(update_fields=changed)
+
+    def deactivate_service(self) -> None:
+        """Keep a deleted service owner's principal for attribution while it can no longer act."""
+
+        if self.kind != UserKind.SERVICE:
+            raise ValidationError("Only service accounts are deactivated by their service owner.")
+        if self.is_active:
+            self.is_active = False
+            self.save(update_fields={"is_active"})
+
     def update_preferences(self, preferences: Mapping[str, Any]) -> None:
         """Replace this user's private UI preference object."""
 
@@ -976,3 +1072,68 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """Return the user's short display name."""
 
         return self.first_name
+
+
+class ServiceUserMixin(PublicIdentity, models.Model):
+    """A row that acts through its own stable, non-login user.
+
+    The row declares ``service_user_prefix`` and its ``user`` relation: a
+    nullable, protected one-to-one to the user model whose reverse name the row
+    chooses (a mixin-owned relation would deconstruct a templated reverse name
+    and alter every stored schema). Its user is named ``<prefix>-<public id>``
+    and labelled with the row's ``str()``. Call :meth:`sync_service_user` after
+    the row's own write and :meth:`deactivate_service_user` from its delete
+    receivers.
+    """
+
+    service_user_prefix: ClassVar[str]
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Require the participant's ``user`` relation: a one-to-one to the user model."""
+
+        errors = super().check(**kwargs)
+        if cls._meta.abstract:
+            return errors
+        field = next((field for field in cls._meta.get_fields() if field.name == "user"), None)
+        related = getattr(getattr(field, "related_model", None), "_meta", None)
+        if isinstance(field, models.OneToOneField) and related is not None:
+            if related.label_lower == settings.AUTH_USER_MODEL.lower():
+                return errors
+        errors.append(
+            checks.Error(
+                f"{cls._meta.label} composes ServiceUserMixin without a user one-to-one to {settings.AUTH_USER_MODEL}.",
+                hint="Declare user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, "
+                "null=True, blank=True, related_name=...).",
+                obj=cls,
+                id="angee.iam.E002",
+            )
+        )
+        return errors
+
+    def sync_service_user(self) -> Any:
+        """Create or relabel this saved row's user and link it."""
+
+        if self.pk is None:
+            raise ValueError("The service owner must be saved before syncing its user.")
+        owner: Any = self  # check() requires the participant's ``user`` relation.
+        with transaction.atomic():
+            user = get_user_model().objects.ensure_service_user(
+                username=f"{self.service_user_prefix}-{self.public_id}", name=str(self), user_id=owner.user_id,
+            )
+            if owner.user_id != user.pk:
+                type(owner)._base_manager.filter(pk=self.pk).update(user_id=user.pk)
+            owner.user = user
+        return user
+
+    def deactivate_service_user(self) -> None:
+        """Keep this deleted row's user for attribution while it can no longer act."""
+
+        owner: Any = self  # check() requires the participant's ``user`` relation.
+        if owner.user_id is None:
+            return
+        with system_context(reason="iam.service_user.deactivate"):
+            get_user_model()._base_manager.get(pk=owner.user_id).deactivate_service()

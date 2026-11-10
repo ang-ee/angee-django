@@ -7,7 +7,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.graphql.publishing import mute_changes
+from angee.base.signals import mute_changes
 from angee.messaging.models import AudienceMember, NotificationPolicy
 from angee.messaging.testing.models import Message, Party, Person, ThreadAttachment, ThreadNotification
 from angee.projects.testing.models import Project

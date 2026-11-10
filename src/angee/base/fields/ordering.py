@@ -242,8 +242,7 @@ class FractionalRankField(models.FloatField):
         Staging avoids all stored and final ranks, including an exhausted tail.
         """
 
-        using = rows.db
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             instances = list(rows.select_for_update(of=("self",)).order_by(self.name, "pk"))
             if not instances:
                 return 0
@@ -265,8 +264,6 @@ class FractionalRankField(models.FloatField):
         self,
         instances: Sequence[models.Model],
         requested: Iterable[Any],
-        *,
-        using: str,
     ) -> tuple[float, ...]:
         """Allocate a disjoint finite range for an atomic contextual reorder.
 
@@ -287,7 +284,7 @@ class FractionalRankField(models.FloatField):
         for context in distinct_contexts.values():
             contexts |= models.Q(**context)
         previous = (
-            self.model._base_manager.using(using).filter(contexts)
+            self.model._base_manager.filter(contexts)
             .order_by(f"-{self.name}").values_list(self.name, flat=True).first()
         )
         for value in requested:

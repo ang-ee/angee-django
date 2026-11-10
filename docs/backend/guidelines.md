@@ -162,39 +162,23 @@ Use these owners instead of maintaining another contract in an addon:
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
   promote it to a model or manager method.
-- **Database routing:** one deployment router in `DATABASE_ROUTERS` owns which
-  database each model lives on (static placement). Angee adds no
-  operation-scoped database selection: side effects follow Django routing, not
-  the database of the row that produced them, and tests run on one database. A
-  persisted row's database is `row._state.db`; bind a manager for an unsaved or
-  row-relative operation with
-  `Model._base_manager.db_manager(hints={"instance": row})` and use that
-  manager's `db`. Django does not route transactions, commit hooks or raw
-  connections. The target contract is that the owner that opens one names the
-  routed alias: the row's database, the manager's or queryset's `db`, or
-  `router.db_for_write` for a class-level owner, with `connections[alias]` for
-  raw SQL on that alias. It is not implemented yet: owners that open
-  `transaction.atomic()` or `transaction.on_commit` without an alias, or run raw
-  SQL on `django.db.connection`, are recorded debt and not placement-safe (264
-  bare `transaction.atomic()` sites in `src/`, for example
-  `src/angee/workflows/managers.py:95`; a bare commit hook at
-  `src/angee/jobs/enqueue.py:39`; raw SQL at `src/angee/posts/models.py:450`). Pass
-  Django- and library-supplied aliases (signal `using`, `Collector`,
-  `save(using=...)` in an override, a hook's `using` argument) through unchanged;
-  do not thread aliases through Angee helpers, managers, hooks or tasks. Use
+- **Database routing:** Angee runs on one database, Django's `default`. It
+  selects no database per operation, and the base system check `angee.E050`
+  refuses any `DATABASE_ROUTERS`. Owners open bare `transaction.atomic()` and
+  register bare `transaction.on_commit()`. An alias Django or a library hands in (signal
+  `using`, `Collector`, a hook's `using` argument, the `using` of an overridden
+  `save()` or `save_base()`, the `db` of an overridden queryset `update()`,
+  `delete()` or `bulk_create()`) passes through unchanged, to `super()` and to
+  the transaction that override opens, as Django's own implementations do; do
+  not thread aliases through Angee helpers, managers, hooks or tasks. Use
   native relation access, `refresh_from_db` when deferred or stale fields need
   reloading, and preserve locks and batching. A declared read-only external
-  import source may select its database explicitly.
-  [`test_static_placement.py`](../../tests/test_static_placement.py) is the one
-  router test: it places every model on a second alias and asserts that no query
-  reaches `default`. REBAC-managed models and their relationship store must
-  share a database alias. The upstream `rebac.checks.check_policy_models` check
-  owns that routing rule; run native checks for the aliases selected by the
-  deployment rather than imposing a second framework rule that requires the
-  literal `default` alias. Read replicas for permission data are unsupported: a
-  lagging replica serves grants already revoked on the primary. Before a replica
-  router is introduced, every REBAC model, the `contenttypes` and `auth` rows it
-  joins, and reads inside `transaction.atomic` must use the primary.
+  import source may select its database explicitly. REBAC-managed models and
+  their relationship store share that one alias; the upstream
+  `rebac.checks.check_policy_models` database check (run by `migrate` and
+  `check --database default`) verifies the co-location. Permission reads never
+  run on a replica: a lagging replica serves grants already revoked on the
+  primary.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
@@ -533,7 +517,7 @@ Use these owners instead of maintaining another contract in an addon:
   forwards extension values in the resource's write data. The default
   [`AngeeHasuraWriteBackend`](../../src/angee/graphql/data/hasura.py) writes
   values naming model fields with the row and, in the same transaction, passes
-  the rest to the written row's cooperative
+  the rest (the mixin's `pop_input_extensions` splits them) to the written row's cooperative
   [`InputExtensionsMixin.apply_input_extensions`](../../src/angee/base/models/inputs.py),
   composed by `AngeeModel`, with nested line rows included. Input-owning mixins
   also compose this fieldless terminal when they support plain Django hosts.
@@ -1537,15 +1521,21 @@ open fresh evaluator scopes for authorization and change-feed reads.
   present in the final schema.
 - **Lines are owned parts, written as the user.** Declare `HasuraLines` only for
   rows that exist as part of their parent and save with it; associated records
-  stay their own resource. The child writes run elevated because the parent
-  write authorizes them, which never makes them system work. A child whose
+  stay their own resource. The parent owns the write:
+  [`AngeeModel.replace_lines`](../../src/angee/base/models/base.py) requires the
+  parent's `write` in either mode, then runs the line writes natively and
+  elevated because that check authorizes them, which never makes them system
+  work; the Hasura backend only decodes the line input. A nested insert's
+  creation admits its own lines: since a creator may lack `write` on the row
+  it created, the backend names that admission explicitly
+  (`permission="create"`). A child whose
   invariants separate users from system writers composes
   [`RowLockMixin`](../../src/angee/base/models/locks.py): `locked_fields()` names what its
   state locks, user writes may not change those fields, delete the row or create
   one. Its default manager composes `RowLockQuerySet` so native collection
   writes enforce the same owner rule; the declared base manager retains that
   guard. A collector may remove locked children only through the model's explicit
-  owning-parent cascade contract. `HasuraLines` checks the same lock before each
+  owning-parent cascade contract. `replace_lines` checks the same lock before each
   intentionally elevated child write. Its node projects `locked_fields`, advertised as the lines' `lock_field`. Never
   guard a child on `is_sudo()` alone; [`Stage`](../../src/angee/work/models.py)
   is the reference. A nested insert only inserts beside children the parent's own
@@ -1617,8 +1607,14 @@ open fresh evaluator scopes for authorization and change-feed reads.
   queryset. There is no event projection table or backfill requirement. Folding
   hides a child only when a readable parent target occurs on the same record;
   counts and attention use that same scope, independent of the page's filters.
-  [`publish_change` / `change_published`](../../src/angee/graphql/publishing.py)
-  delivers owner observations inside the transaction. The
+  [`publish_change` / `change_published`](../../src/angee/base/signals.py)
+  delivers owner observations inside the transaction; transport adapters such
+  as [GraphQL's change feeds](../../src/angee/graphql/publishing.py) project them
+  on `change_observed`, after every local observer, so local commit effects
+  precede transport. A local observer's failure is logged; an adapter's
+  projection failure fails the write. A model's `change_related_records()` returns `RecordRef`
+  values, widened to inherited views only where the model calls
+  `record_view_refs`. The
   [timeline observer](../../src/angee/timeline/events.py) captures affected
   record identities, including old membership before a save or delete, and
   uses the declared record feeds to invalidate reads after commit. Django's
@@ -1707,7 +1703,7 @@ open fresh evaluator scopes for authorization and change-feed reads.
 
 ### Record write locking
 
-Generic proposal and Hasura writes delegate to
+Generic proposal and Hasura writes, and `AngeeModel.replace_lines`, delegate to
 [`PersistenceMixin.lock_subject`](../../src/angee/base/models/persistence.py)
 before acquiring subject rows. Domain overrides acquire prerequisite rows in
 stable order and return the persisted subject. `prepare_lock_subject` hydrates
@@ -2022,11 +2018,13 @@ bridge advisory lock as polling and delivery settlement.
   baked into the opencode image (the `OPENCODE_ANTHROPIC_AUTH_PLUGIN` build arg) and using a
   Pro/Max token there violates Anthropic's ToS — enabling it without the plugin silently drops
   Anthropic from OpenCode's model list.
-- **Task locks are advisory, row locks are authoritative.** Celery task bodies may
-  use `angee.jobs.locks.task_lock()` to prevent duplicate workers from doing the
-  same external work, but persisted state transitions still use model/queryset row
-  locks, constraints, and idempotent managers. Do not hold row locks during network
-  IO.
+- **Task locks are advisory, row locks are authoritative.** Task bodies, live
+  sessions and model verbs may use [`angee.base.locks.task_lock()`](../../src/angee/base/locks.py)
+  to prevent duplicate workers from doing the same external work; `blocking=True`
+  makes a second consumer wait for the holder and adopt its persisted result.
+  Persisted state transitions still use model/queryset row locks, constraints, and
+  idempotent managers. Do not hold row locks during network IO, and do not wait on
+  an advisory lock while holding row locks its holder may need.
 - **A long-lived session task stops within one reconciler tick.** A task that
   outlives the tick (a live connection) runs on a dedicated queue consumed by a
   threads-pool worker, so queue isolation — not a time limit — is its

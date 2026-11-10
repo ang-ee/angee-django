@@ -68,6 +68,42 @@ def test_inner_run_serves_resolved_app(monkeypatch: pytest.MonkeyPatch, settings
     assert captured["ran"] is True
 
 
+@pytest.mark.parametrize("fails", [False, True])
+def test_inner_run_releases_preflight_connections(monkeypatch: pytest.MonkeyPatch, fails: bool) -> None:
+    """The boot checks' connections close before serving, and when a check fails."""
+
+    module = "angee.server.management.commands.runserver"
+    closed: list[str] = []
+    monkeypatch.setattr(f"{module}.connections.close_all", lambda: closed.append("closed"))
+    monkeypatch.setattr(f"{module}.import_string", lambda path: object())
+
+    class _FakeServer:
+        def __init__(self, config: Any) -> None:
+            del config
+
+        def run(self) -> None:
+            closed.append("served")
+
+    monkeypatch.setattr("uvicorn.Server", _FakeServer)
+
+    command = Command()
+    command.addr, command.port = "127.0.0.1", "8123"
+
+    def check_migrations() -> None:
+        if fails:
+            raise RuntimeError("migrations unavailable")
+
+    monkeypatch.setattr(command, "check", lambda **kwargs: None)
+    monkeypatch.setattr(command, "check_migrations", check_migrations)
+    if fails:
+        with pytest.raises(RuntimeError):
+            command.inner_run()
+        assert closed == ["closed"]
+    else:
+        command.inner_run()
+        assert closed == ["closed", "served"]
+
+
 def test_native_reload_closes_lifespan_work_after_unhandled_change() -> None:
     """Native handled-file semantics survive, and reload closes ASGI-owned threads."""
 

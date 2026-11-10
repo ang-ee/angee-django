@@ -1752,7 +1752,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
             if not model.system_queryset().using(using).filter(drive_id=drive_id, storage_path=key).exists():
                 storage.discard(key, context="purge")
 
-        transaction.on_commit(discard_unreferenced, using=using)
+        transaction.on_commit(discard_unreferenced)
 
     def _fail(self, *, reason: str) -> None:
         """Transition this row to FAILED, recording why for audit surfaces."""

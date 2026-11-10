@@ -711,11 +711,11 @@ def test_fractional_reordering_reserves_the_complete_context_and_destinations() 
         ReorderedItem.objects.create(lane="other", rank=math.nextafter(math.inf, 0.0))
         field = ReorderedItem._meta.get_field("rank")
         before = list(ReorderedItem.objects.order_by("pk").values_list("pk", "rank"))
-        allocated = field.get_temporary_ranks([first, second], [20000, None], using=connection.alias)
+        allocated = field.get_temporary_ranks([first, second], [20000, None])
         assert len(set(allocated)) == 2
         assert all(math.isfinite(rank) and rank > 20000 for rank in allocated)
         with pytest.raises(FractionalRankExhausted):
-            field.get_temporary_ranks([first, second], [math.nextafter(math.inf, 0.0)], using=connection.alias)
+            field.get_temporary_ranks([first, second], [math.nextafter(math.inf, 0.0)])
         assert list(ReorderedItem.objects.order_by("pk").values_list("pk", "rank")) == before
 
 
@@ -894,7 +894,7 @@ def test_fractional_rank_allocation_on_create_save_and_bulk_create() -> None:
             stored = AliasRank.objects.filter(pk__in=[row.pk for row in rows]).order_by("lane")
             assert list(stored.values_list("rank", flat=True)) == [expected, FractionalRankField.STEP + 200.0, 7.0]
             field = AliasRank._meta.get_field("rank")
-            temporary = field.get_temporary_ranks([created, saved], [0, 1], using=alias)
+            temporary = field.get_temporary_ranks([created, saved], [0, 1])
             assert min(temporary) > expected
             AliasRank.objects.create(lane="exhausted", rank=math.nextafter(math.inf, 0.0))
             exhausted = AliasRank(lane="exhausted")

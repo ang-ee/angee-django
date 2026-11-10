@@ -686,8 +686,7 @@ class ThreadedModelMixin(models.Model):
         through :meth:`_message_post`, which adds the post gate and autofollow policy.
         """
 
-        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             bound_actor = self.actor() if isinstance(self, RebacMixin) else None
             scope_actor = idempotency_actor or bound_actor or current_actor()
             attachment = self.message_thread_attachment(create=True)
@@ -2244,7 +2243,7 @@ class Message(
         """Trash and cancel unsent delivery; restoring never re-arms a send."""
 
         manager = type(self).objects.db_manager(hints={"instance": self})
-        with transaction.atomic(using=manager.db):
+        with transaction.atomic():
             manager.cancel_delivery(self)
             super().trash(reason=reason)
             if recount:
@@ -2253,8 +2252,7 @@ class Message(
     def restore(self) -> None:
         """Restore this message and recount its thread with it."""
 
-        manager = type(self)._base_manager.db_manager(hints={"instance": self})
-        with transaction.atomic(using=manager.db):
+        with transaction.atomic():
             super().restore()
             self._recount_thread()
 
