@@ -1056,6 +1056,11 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
 class StatementHistory(ModelHistory):
     """Retained stance replay and subject admission on statement history."""
 
+    def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:
+        """Declare the readable link projection populated by a record-history page."""
+
+        return {**super().get_extra_fields(model, fields), "_readable_statement_link": None}
+
     def subjects(self, first: Any, last: Any, previous: Any) -> Iterable[Any]:
         model = type(first.instance).statement_subject_model
         ids = sorted({version.subject_id for version in (first, last, previous) if version is not None})

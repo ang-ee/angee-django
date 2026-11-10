@@ -3,6 +3,7 @@
 import pytest
 from rebac import PermissionDenied, system_context
 
+from angee.base.testing.queries import statement_startswith
 from angee.messaging.testing.models import Handle
 
 
@@ -71,9 +72,9 @@ def test_handle_reidentify_dry_run_uses_kept_display_carry_without_domain_writes
                     value=target.value, display_name="Resolved", dry_run=True)
             assert not events
             writes = [query["sql"] for query in queries
-                      if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
+                      if statement_startswith(query["sql"].lstrip().upper(), ("INSERT", "UPDATE", "DELETE"))]
             audit = connection.ops.quote_name(apps.get_model("rebac", "PermissionAuditEvent")._meta.db_table)
-            assert writes and all(sql.startswith(f"INSERT INTO {audit}") for sql in writes)
+            assert writes and all(statement_startswith(sql, f"INSERT INTO {audit}") for sql in writes)
             source.refresh_from_db()
             target.refresh_from_db()
             assert source.merged_into_id is None and source.value == "old@example.com"

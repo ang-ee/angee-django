@@ -12,6 +12,7 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated, change_published
+from angee.base.testing.queries import statement_startswith
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql import publishing
@@ -145,8 +146,8 @@ def test_run_invalidation_reuses_its_audited_scope_and_reloads_relations(executi
             assert tuple(kind.targets(row)) == (run,)
             assert tuple(kind.records(run)) == ()
     queries = [query["sql"] for query in captured]
-    assert sum(sql.startswith('INSERT INTO "rebac_permissionauditevent"') for sql in queries) == 1
-    assert sum(sql.startswith("SELECT") for sql in queries) == 2
+    assert sum(statement_startswith(sql, 'INSERT INTO "rebac_permissionauditevent"') for sql in queries) == 1
+    assert sum(statement_startswith(sql, "SELECT") for sql in queries) == 2
     assert sum(f'FROM "{run._meta.db_table}"' in sql for sql in queries) == 1
 
 

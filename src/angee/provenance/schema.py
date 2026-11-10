@@ -307,7 +307,7 @@ def _history_reference(record: models.Model, *, pointer: str = "", label: str | 
 def _statement_source_reference(version: Any, actor: Any) -> HistoryReferenceType | None:
     """Prefer a readable retained link; otherwise name the readable principal."""
 
-    link = getattr(version, "_readable_statement_link", None)
+    link = version._readable_statement_link
     if link is not None:
         return _history_reference(link, label=link.statement_source_label)
     source = readable_statement_read(version, actor)[1]

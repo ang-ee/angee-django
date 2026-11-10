@@ -6,6 +6,7 @@ from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
+from angee.base.testing.queries import statement_startswith
 from angee.iam.models import AccountExists, AmbiguousAccountEmail
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.iam_campaign import legacy_person_emails as legacy_person_emails
@@ -54,7 +55,7 @@ def test_partial_password_save_neither_loads_nor_rewrites_deferred_legacy_email(
         partial.save(update_fields=["password"])
     user_queries = [q["sql"] for q in captured if User._meta.db_table in q["sql"]]
     assert len(user_queries) == 1
-    assert user_queries[0].startswith("UPDATE")
+    assert statement_startswith(user_queries[0], "UPDATE")
     assert '"email"' not in user_queries[0]
     assert "email" in partial.get_deferred_fields()
     assert User._base_manager.get(pk=user.pk).email == " Legacy@EXAMPLE.COM "
@@ -75,7 +76,8 @@ def test_person_email_lookup_includes_every_person_and_duplicate_creation_refuse
     existing = User.objects.create_user("existing", "Ä@EXAMPLE.COM", **attrs)
     with CaptureQueriesContext(connection) as captured:
         assert User.objects.person_for_email("\u2003Ä@EXAMPLE.COM\u00a0") == existing
-    selects = [q["sql"] for q in captured if q["sql"].startswith("SELECT") and User._meta.db_table in q["sql"]]
+    selects = [q["sql"] for q in captured
+               if statement_startswith(q["sql"], "SELECT") and User._meta.db_table in q["sql"]]
     assert len(selects) == 1
     assert "LIMIT 2" in selects[0]
     assert "LOWER(" not in selects[0].upper()

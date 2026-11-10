@@ -41,6 +41,9 @@ from angee.base.permissions import user_subject_ref as user_subject_ref
 from angee.base.refs import generic_pointer_model
 
 if TYPE_CHECKING:
+    from django.contrib.auth.base_user import AbstractBaseUser
+    from django.contrib.auth.models import AnonymousUser
+
     from angee.messaging.managers import MessageQuerySet, ThreadFollowerQuerySet
     from angee.messaging.models import Message, Thread, ThreadAttachment, ThreadFollower
 
@@ -751,7 +754,7 @@ class ThreadedModelMixin(models.Model):
             .sudo(reason="messaging suggested recipients follower suppression")
             .values_list("party__person__user_id", flat=True)
         }
-        current_user_id = getattr(user, "pk", None)
+        current_user_id = user.pk if user is not None else None
         suggestions: list[dict[str, Any]] = []
         seen: set[str] = set()
 
@@ -838,17 +841,17 @@ class ThreadedModelMixin(models.Model):
                         role=apps.get_model("messaging", "ThreadAttachment").AttachmentRole.CHATTER,
                     )
 
-    def can_post(self, user: Any = None) -> bool:
+    def can_post(self, user: AbstractBaseUser | AnonymousUser | None = None) -> bool:
         """Return whether the actor may post or react through the declared permission."""
 
-        if user is not None and getattr(user, "is_authenticated", True) is False:
+        if user is not None and not user.is_authenticated:
             return False
         return self._message_post_allowed()
 
-    def can_moderate(self, user: Any = None) -> bool:
+    def can_moderate(self, user: AbstractBaseUser | AnonymousUser | None = None) -> bool:
         """Return whether the actor may moderate comments as a record writer."""
 
-        if user is not None and getattr(user, "is_authenticated", True) is False:
+        if user is not None and not user.is_authenticated:
             return False
         return self.has_access("write") if isinstance(self, RebacMixin) else True
 

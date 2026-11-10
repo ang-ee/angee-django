@@ -8,6 +8,7 @@ from django.db import connection
 from django.http import HttpRequest
 from django.test.utils import CaptureQueriesContext
 
+from angee.base.testing.queries import statement_startswith
 from angee.iam import identity as identity_module
 from angee.iam.identity import (
     user_display_label,
@@ -97,7 +98,7 @@ def test_user_display_labels_resolve_mixed_principal_and_public_ids_in_one_batch
     with CaptureQueriesContext(connection) as captured:
         labels = user_display_labels(ids)
 
-    assert [query["sql"].split()[0] for query in captured.captured_queries if "SELECT" in query["sql"]] == ["SELECT"]
+    assert sum(statement_startswith(query["sql"], "SELECT") for query in captured.captured_queries) == 1
 
     assert labels == {
         users[0].pk: "Batch 0",

@@ -14,6 +14,7 @@ from rebac import SubjectRef, actor_context, system_context
 from rebac.errors import PermissionDenied
 from rebac.models import PermissionAuditEvent
 
+from angee.base.testing.queries import statement_startswith
 from tests.conftest import Vault, create_user
 from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow, OwnershipContainer, ownership_tables  # noqa: F401
 from tests.core_seam_models import (
@@ -172,11 +173,11 @@ def test_transfer_refuses_hidden_constraint_conflicts_before_save_and_keeps_tran
     assert saves == []
     writes = [
         query["sql"] for query in queries
-        if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+        if statement_startswith(query["sql"].lstrip().upper(), ("INSERT", "UPDATE", "DELETE"))
     ]
     # Native REBAC records elevation even when the enclosing write is refused.
     audit_insert = f'INSERT INTO "{PermissionAuditEvent._meta.db_table}" '
-    assert [sql for sql in writes if not sql.startswith(audit_insert)] == []
+    assert [sql for sql in writes if not statement_startswith(sql, audit_insert)] == []
     assert list(Vault.history.order_by("history_id").values()) == history_before
     with system_context(reason="test.constraints.inspect"):
         assert list(model.objects.filter(pk=row.pk).values()) == before

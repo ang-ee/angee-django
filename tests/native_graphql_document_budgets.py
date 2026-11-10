@@ -225,10 +225,11 @@ BUDGETS = {
     # through the relation guard; 0.31 compiles both graphs inline instead of deciding their sets.
     ("member", "transcript"): (3, 32, 2600),  # 0.31: 250 -> 32 statements (3 witnesses), 2505 -> 2593 KB;
     # identity_reader: 2593 -> 2600 KB
-    ("member", "person"): (2, 20, 805),  # 0.31: 174 -> 20 statements (2 witnesses), 1036 -> 791 KB;
-    # identity_reader: 791 -> 805 KB
-    ("member", "projects"): (3, 10, 251),  # 0.31: 89 -> 10 statements (2 witnesses), 538 -> 247 KB;
-    # identity_reader: 247 -> 251 KB
+    # REBAC 0.32's content-hash id-set names lengthen SQL while sharing reduces
+    # PostgreSQL planning memory; the PostgreSQL planner gate is the binding budget.
+    # SQLite measurements rounded up to KiB: person 847,914 -> 829; projects 264,912 -> 259.
+    ("member", "person"): (2, 20, 829),
+    ("member", "projects"): (3, 10, 259),
     ("member", "identity"): (1, 1, 2),
 }
 

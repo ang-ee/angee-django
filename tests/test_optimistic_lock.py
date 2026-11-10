@@ -12,6 +12,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils.connection import ConnectionDoesNotExist
 
 from angee.base.models.locks import StaleRevisionError, require_revision
+from angee.base.testing.queries import statement_startswith
 from tests.core_persistence import RenamedRevisionRow, RevisionChild, RevisionRow
 
 pytestmark = pytest.mark.django_db
@@ -158,7 +159,7 @@ def test_parent_compare_and_swap_keeps_revision_predicate_on_one_update():
     row.detail = "updated"
     with CaptureQueriesContext(connection) as captured:
         row.save(update_fields=["detail"], expected_revision=1)
-    updates = [q["sql"] for q in captured if q["sql"].startswith("UPDATE")]
+    updates = [q["sql"] for q in captured if statement_startswith(q["sql"], "UPDATE")]
     cas = [sql for sql in updates if '"revision" = (' in sql]
     assert len(cas) == 1
     assert '"scopedemo_revisionrow"' in cas[0]

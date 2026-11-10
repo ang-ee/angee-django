@@ -333,7 +333,7 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
             cached = root._state.fields_cache.get(field.name, _UNCACHED)
             if cached is None:
                 return None
-            if cached is not _UNCACHED and getattr(cached, "_rebac_actor", None) == actor:
+            if cached is not _UNCACHED and cached.actor() == actor:
                 return cached
 
         related_model = field.related_model
@@ -402,7 +402,7 @@ def actor_scoped_to_many(field_name: str) -> Any:
         actor = current_actor()
         rows = prefetched_objects(root, field_name)
         if actor is not None and rows is not None:
-            if all(getattr(row, "_rebac_actor", None) == actor for row in rows):
+            if all(row.actor() == actor for row in rows):
                 # Returning an evaluated list preserves the prefetch; a queryset
                 # would be cloned by Strawberry's relation ordering machinery.
                 return rows

@@ -18,6 +18,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, system_context
 
+from angee.base.testing.queries import statement_startswith
 from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHandler
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -722,7 +723,7 @@ def test_ensure_fresh_uses_plain_select_on_sqlite(monkeypatch: pytest.MonkeyPatc
     with system_context(reason="test sqlite refresh run"), CaptureQueriesContext(connection) as captured:
         credential.ensure_fresh()
 
-    assert any(query["sql"].upper().startswith("SELECT") for query in captured.captured_queries)
+    assert any(statement_startswith(query["sql"].upper(), "SELECT") for query in captured.captured_queries)
     assert all("FOR UPDATE" not in query["sql"].upper() for query in captured.captured_queries)
     assert credential.secret_value() == "sqlite-access"
     reloaded = Credential.objects.sudo(reason="test sqlite refresh persisted").get(pk=credential.pk)

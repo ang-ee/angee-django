@@ -6,6 +6,7 @@ from django.db import connection
 from django.db.models.signals import post_save
 from rebac import actor_context, to_subject_ref
 
+from angee.base.testing.queries import statement_startswith
 from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import StepWatch, Trigger, TriggerEvent
 from tests.conftest import Page, Vault
@@ -53,7 +54,7 @@ def test_clone_native_batch_delivers_all_receivers_triggers_and_new_watches(
     def enforce_budget(execute, sql, params, many, context):
         # Start after the ordinary receiver has installed its real watches.
         # Emulate a driver's declared bound only for observation SELECTs.
-        if budget_active and sql.lstrip().upper().startswith("SELECT"):
+        if budget_active and statement_startswith(sql.lstrip().upper(), "SELECT"):
             if Page._meta.db_table in sql or StepWatch._meta.db_table in sql:
                 assert len(params or ()) <= parameter_budget, "Observation exceeded the native query parameter budget."
         return execute(sql, params, many, context)

@@ -24,6 +24,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.base.querysets import AngeeQuerySet
+from angee.base.testing.queries import statement_startswith
 from tests.hierdemo.models import HierNode, PlainManagerHierNode, ScopedHierNode
 from tests.scopedemo.models import Scope
 
@@ -232,7 +233,7 @@ def test_reparent_cascades_subtree_in_one_update() -> None:
         cascade = [
             query["sql"]
             for query in ctx.captured_queries
-            if query["sql"].lstrip().upper().startswith("UPDATE") and "REPLACE" in query["sql"].upper()
+            if statement_startswith(query["sql"].lstrip().upper(), "UPDATE") and "REPLACE" in query["sql"].upper()
         ]
         assert len(cascade) == 1, "the whole subtree must cascade in exactly one UPDATE"
 

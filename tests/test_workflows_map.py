@@ -12,6 +12,7 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 
 from angee.base.models.identity import public_id_of
 from angee.base.refs import RecordRef, record_view_refs
+from angee.base.testing.queries import statement_startswith
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql.testing.documents import execute_schema, result_data
@@ -95,9 +96,9 @@ def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(e
         for model in (MtiParent, MtiChild) for child in children
     }
     assert set(concerns) == expected and len(concerns) == len(expected)
-    selects = [query["sql"] for query in captured if query["sql"].startswith("SELECT")]
+    selects = [query["sql"] for query in captured if statement_startswith(query["sql"], "SELECT")]
     assert len(selects) == 2, captured.captured_queries
-    assert any(sql.startswith("SELECT DISTINCT") and '"content_type_id"' in sql for sql in selects)
+    assert any(statement_startswith(sql, "SELECT DISTINCT") and '"content_type_id"' in sql for sql in selects)
     assert not any(f'FROM "{run._meta.db_table}"' in sql for sql in selects)
     assert "run" not in item._state.fields_cache
     with CaptureQueriesContext(connection) as captured:

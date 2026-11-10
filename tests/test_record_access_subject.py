@@ -10,6 +10,7 @@ from rebac.errors import PermissionDenied
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
 from angee.base.exceptions import DomainError, RecordAccessSubjectRefused
+from angee.base.testing.queries import statement_startswith
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, ownership_tables  # noqa: F401
 from tests.core_seam_models import SubjectGuardedRow, subject_tables  # noqa: F401
@@ -21,8 +22,8 @@ def _non_audit_writes(queries):
     audit_insert = f"INSERT INTO {connection.ops.quote_name(PermissionAuditEvent._meta.db_table)} "
     return [
         query["sql"] for query in queries
-        if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
-        and not query["sql"].lstrip().startswith(audit_insert)
+        if statement_startswith(query["sql"].lstrip().upper(), ("INSERT", "UPDATE", "DELETE"))
+        and not statement_startswith(query["sql"].lstrip(), audit_insert)
     ]
 
 
