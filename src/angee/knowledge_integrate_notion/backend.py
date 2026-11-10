@@ -448,7 +448,6 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                     target=target,
                     mapped_payload=self._projection(target),
                     dependency_digest=record.dependency_digest,
-                    mapping_version=record.mapping_version,
                 )
             mapped = record.mapped_payload
             parent = pages.with_actor(owner).get(pk=mapped["parent"], vault=vault) if mapped["parent"] else None
@@ -475,7 +474,6 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                 target=target,
                 mapped_payload=mapped,
                 dependency_digest=record.dependency_digest,
-                mapping_version=record.mapping_version,
             )
 
     def source_url(self, link: Any) -> str:

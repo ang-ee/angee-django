@@ -178,8 +178,9 @@ class LocalChange:
 class ApplyResult:
     """Applied evidence returned to the sole primary promoter: the driver.
 
-    Adapters return the evidence actually applied, including mapping/dependency
-    facts learned during apply. They must not promote the primary link themselves.
+    Adapters return the evidence actually applied, including dependency facts
+    learned during apply. The driver stamps the observation's declared mapping
+    version; adapters must not promote the primary link themselves.
     Omitted target preserves its binding; explicit None withdraws it.
     """
 
@@ -187,7 +188,6 @@ class ApplyResult:
     mapped_payload: Any = UNSET
     count: int = 1
     dependency_digest: str = ""
-    mapping_version: int = 1
 
     @property
     def bound_target(self) -> Any:
@@ -365,7 +365,7 @@ def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: s
         source_payload=record.source_payload,
         source_hash=record.source_hash,
         mapped_payload=outcome.mapped_payload,
-        mapping_version=outcome.mapping_version,
+        mapping_version=record.mapping_version,
         dependency_digest=outcome.dependency_digest,
         target=outcome.target,
         remote_version=record.remote_version,

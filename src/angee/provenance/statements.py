@@ -1177,6 +1177,15 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
         rebac_resource_type = None
 
     @classmethod
+    def live_reference_filter(cls, *, principal: SubjectRef | None) -> Q:
+        """Retain current non-withdrawn claims and every other principal's claim."""
+
+        if principal is None:
+            return Q()
+        current = cls._base_manager.current().exclude(status=cls.StatementStatus.WITHDRAWN)
+        return ~Q(asserted_by=str(principal)) | Q(pk__in=current.values("pk"))
+
+    @classmethod
     def stance_constraint(cls) -> models.CheckConstraint:
         return models.CheckConstraint(
             condition=Q(confidence__gte=0, confidence__lte=1)

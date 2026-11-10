@@ -387,8 +387,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     def apply_record(self, stream: Any, record: RecordChange) -> ApplyResult:
         """Revalidate under domain locks, then use the single contact ingest verb.
 
-        The fixed contact projection has mapping version 1 and no dependency
-        digest; ApplyResult's defaults are the evidence actually applied.
+        The fixed contact projection has no dependency digest. The driver stamps
+        the observation's mapping version independently of the apply result.
         """
 
         parties = apps.get_model("parties", "Party").objects

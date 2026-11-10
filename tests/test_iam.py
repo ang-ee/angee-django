@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import pytest
-from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY, authenticate, get_user
+from django.contrib.auth import (
+    BACKEND_SESSION_KEY,
+    HASH_SESSION_KEY,
+    SESSION_KEY,
+    authenticate,
+    get_user,
+    get_user_model,
+)
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
@@ -60,79 +67,38 @@ def test_user_pk_get_is_not_the_session_bypass(monkeypatch: pytest.MonkeyPatch) 
     ]
 
 
-def test_iam_model_backend_uses_named_session_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The IAM auth backend owns the session reload bypass."""
+@pytest.mark.parametrize(
+    "is_active,kind,authenticated",
+    [(True, "person", True), (False, "person", False), (True, "service", False)],
+    ids=["person", "inactive", "service"],
+)
+def test_iam_model_backend_uses_named_session_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    is_active: bool,
+    kind: str,
+    authenticated: bool,
+) -> None:
+    """Session reload uses the named bypass and reapplies the real principal gate."""
 
     from angee.iam.auth import ModelBackend
 
+    User = get_user_model()
+    user = User(is_active=is_active, kind=kind)
     calls: list[object] = []
 
-    class User:
-        is_active = True
-        kind = "person"
-        is_person = True
+    def get_for_session(user_id: object) -> object:
+        calls.append(user_id)
+        return user
 
-    class Manager:
-        def get_for_session(self, user_id: object) -> object:
-            calls.append(user_id)
-            return User()
+    monkeypatch.setattr(User.objects, "get_for_session", get_for_session)
 
-    class UserModel:
-        objects = Manager()
-
-    monkeypatch.setattr("angee.iam.auth.get_user_model", lambda: UserModel)
-
-    assert isinstance(ModelBackend().get_user("usr_123"), User)
+    assert ModelBackend().get_user("usr_123") is (user if authenticated else None)
     assert calls == ["usr_123"]
-
-
-def test_iam_model_backend_rejects_inactive_session_user(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The IAM auth backend re-applies Django's session authentication gate."""
-
-    from angee.iam.auth import ModelBackend
-
-    class User:
-        is_active = False
-
-    class Manager:
-        def get_for_session(self, user_id: object) -> object:
-            return User()
-
-    class UserModel:
-        objects = Manager()
-
-    monkeypatch.setattr("angee.iam.auth.get_user_model", lambda: UserModel)
-
-    assert ModelBackend().get_user("usr_123") is None
-
-
-def test_iam_model_backend_rejects_non_person_session_user(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The IAM backend rejects service users through the same session gate."""
-
-    from angee.iam.auth import ModelBackend
-
-    class User:
-        is_active = True
-        kind = "service"
-        is_person = False
-
-    class Manager:
-        def get_for_session(self, user_id: object) -> object:
-            return User()
-
-    class UserModel:
-        objects = Manager()
-
-    monkeypatch.setattr("angee.iam.auth.get_user_model", lambda: UserModel)
-
-    assert ModelBackend().get_user("usr_123") is None
 
 
 @pytest.mark.django_db
 def test_inactive_session_reload_yields_anonymous_user() -> None:
     """Deactivating a user kills an already-issued session on the next reload."""
-
-    from django.contrib.auth import get_user_model
 
     user = get_user_model().objects.create_user("session-user", password="secret")
     request = RequestFactory().get("/")
@@ -152,8 +118,6 @@ def test_inactive_session_reload_yields_anonymous_user() -> None:
 def test_service_session_reload_yields_anonymous_user() -> None:
     """A service row cannot remain logged in through an already-issued session."""
 
-    from django.contrib.auth import get_user_model
-
     user = get_user_model().objects.create_user("session-service", password="secret")
     request = RequestFactory().get("/")
     request.session = {
@@ -171,8 +135,6 @@ def test_service_session_reload_yields_anonymous_user() -> None:
 @pytest.mark.django_db
 def test_kind_mutation_to_service_clears_password_and_blocks_auth() -> None:
     """The User row owns service non-login semantics even after creation."""
-
-    from django.contrib.auth import get_user_model
 
     user = get_user_model().objects.create_user("mutated-service", password="secret")
     user.kind = "service"
@@ -212,8 +174,6 @@ def test_overview_requires_swappable_user_role_scope(monkeypatch: pytest.MonkeyP
 def test_create_user_restores_ambient_actor_after_elevated_insert() -> None:
     """UserManager returns a scoped instance after the sudo create insert."""
 
-    from django.contrib.auth import get_user_model
-
     actor = get_user_model().objects.create_user("creator")
     with actor_context(actor):
         created = get_user_model().objects.create_user("created")
@@ -225,8 +185,6 @@ def test_create_user_restores_ambient_actor_after_elevated_insert() -> None:
 @pytest.mark.django_db
 def test_create_user_clears_insert_sudo_without_ambient_actor() -> None:
     """Actorless creates must not leak the insert sudo flag to callers."""
-
-    from django.contrib.auth import get_user_model
 
     user = get_user_model().objects.create_user("actorless")
 

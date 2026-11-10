@@ -121,7 +121,6 @@ class MemoryAdapter(BridgeImpl):
         return ApplyResult(
             target=row,
             mapped_payload=payload,
-            mapping_version=record.mapping_version if isinstance(record, RecordChange) else 1,
             dependency_digest=record.dependency_digest if isinstance(record, RecordChange) else "",
         )
 
@@ -507,6 +506,25 @@ def test_mapping_evidence_change_reapplies_unchanged_source(
     revision = applied_history().order_by("-history_date").first()
     for name, expected in changed_evidence.items():
         assert getattr(revision, name) == expected
+
+
+def test_driver_promotes_declared_mapping_without_apply_result_echo(stream_bridge: Channel) -> None:
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, mapping_version=7)
+    record = RecordChange(
+        "person:1",
+        {"name": "Ada"},
+        "source",
+        mapped_payload={"name": "Ada"},
+        mapping_version=7,
+    )
+    adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})])
+    assert advance_stream(stream, adapter).count == 1
+    link = RecordLink.objects.get(stream=stream)
+    assert link.mapping_version == 7
+    adapter.pages = [StreamPage((replace(record, projection={"name": "Ada"}),), {"page": 2})]
+    assert advance_stream(stream, adapter).count == 0
+    assert adapter.applied == ["person:1"]
+    assert applied_history().count() == 1
 
 
 @pytest.mark.parametrize("snapshot", [False, True])

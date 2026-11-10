@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
@@ -34,18 +34,41 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
         return self.filter(self.touching_filter(record))
 
     @staticmethod
+    def _history_rows(scopes: Mapping[type[models.Model], Q]) -> Iterator[models.QuerySet[Any]]:
+        for table, predicate in scopes.items():
+            yield get_history_manager_for_model(table).filter(predicate).order_by()
+
+    @staticmethod
     def touching_filter(record: HistoryMixin) -> Q:
         """Structural document membership, shared by history reads and existence probes."""
 
         rows = [
-            get_history_manager_for_model(table)
-            .filter(predicate, changeset_id__isnull=False)
-            .order_by()
-            .values_list("changeset_id", flat=True)
-            for table, predicate in record.history_scopes().items()
+            history.filter(changeset_id__isnull=False).values_list("changeset_id", flat=True)
+            for history in ChangesetQuerySet._history_rows(record.history_scopes())
         ]
         membership = Q(pk__in=models.Subquery(rows[0].union(*rows[1:]))) if rows else Q(pk__in=())
         return membership | ChangesetQuerySet._merge_touching(record)
+
+    def history_written_only_by(self, record: models.Model, predicate: Q) -> bool:
+        """Whether a created history document was written only by matching changesets.
+
+        Compose the record's ``history_scope`` (concrete tables and owned lines),
+        using the same history-row owner as ``touching_filter``. At least one
+        creation snapshot is required; any row with a missing changeset or one
+        outside this queryset and predicate refuses. Statement authorship is a
+        separate live-reference contract, not part of this document predicate.
+        A record without history refuses.
+        """
+
+        if not isinstance(record, HistoryMixin):
+            return False
+        matching = self.filter(predicate).order_by().values("pk")
+        created = False
+        for history in self._history_rows(record.history_scope()):
+            if history.exclude(changeset_id__in=matching).exists():
+                return False
+            created = created or history.filter(history_type="+").exists()
+        return created
 
     def closed_for_record(self, record: HistoryMixin) -> Self:
         """Return the closed changesets touching an admitted record's document.

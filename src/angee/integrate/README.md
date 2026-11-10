@@ -43,6 +43,10 @@ with the local projection so the driver recognizes its next pull echo. The link
 checks its complete retained reflection precondition beside the transport's
 remote-version fence. Neither makes the two systems atomic.
 Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
+`ApplyResult` has no `mapping_version` argument. Promotion takes the declared
+mapping version carried by `RecordChange`; an apply cannot accidentally reset it
+to a default and replay the same link forever. Adapters keep the version on their
+stream declaration and observations, and return only the evidence apply learned.
 
 Each applied record retains the observe row and the application-evidence row;
 a record delivered again unchanged retains only its observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and

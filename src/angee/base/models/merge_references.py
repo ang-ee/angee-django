@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
+from itertools import chain
 from typing import Any, ClassVar
 
 from django.apps import apps
@@ -18,7 +19,7 @@ from django.db.models import DO_NOTHING, Exists, OuterRef, Q
 from django.db.models.deletion import get_candidate_relations_to_delete
 from django.db.models.functions import Cast
 from django.utils import timezone
-from rebac import model_identities
+from rebac import SubjectRef, model_identities
 from rebac.actors import model_can_resolve_subject
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
@@ -79,6 +80,9 @@ class MergeContractMixin(models.Model):
     as history, where its delete behaviour alone would move it.
     """
 
+    owned_reference_fields: ClassVar[tuple[str, ...]] = ()
+    """Keys to a record whose rows are its owned parts, rather than outside callers."""
+
     class Meta:
         abstract = True
 
@@ -99,6 +103,13 @@ class MergeContractMixin(models.Model):
 
         del target
         return True
+
+    @classmethod
+    def live_reference_filter(cls, *, principal: SubjectRef | None) -> Q:
+        """Select live callers; owners of retained evidence may narrow their rows."""
+
+        del principal
+        return Q()
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
@@ -199,6 +210,22 @@ class Reference:
         """Ask the reference model whether this pointer represents a live blocker."""
 
         return not issubclass(self.model, MergeContractMixin) or self.model.blocks_target_delete(target)
+
+    @property
+    def is_owned(self) -> bool:
+        """Whether this pointer declares its rows as parts of the referenced record."""
+
+        return issubclass(self.model, MergeContractMixin) and self.name in self.model.owned_reference_fields
+
+    def live_rows(self, record: models.Model, *, principal: SubjectRef | None = None) -> models.QuerySet[Any]:
+        """Return outside callers through the reference's and row owner's contracts."""
+
+        rows = self.rows(record)
+        if self.is_owned or not self.blocks_target_delete(type(record)):
+            return rows.none()
+        if issubclass(self.model, MergeContractMixin):
+            rows = rows.filter(self.model.live_reference_filter(principal=principal))
+        return rows
 
 
     def move(self, rows: models.QuerySet[Any], *, survivor: models.Model) -> None:
@@ -408,7 +435,7 @@ def references(model: type[models.Model]) -> tuple[Reference, ...]:
     return tuple(_references(model))
 
 
-def named_in_relationships(record: models.Model) -> bool:
+def named_in_relationships(record: models.Model, *, exclude: Collection[str] = ()) -> bool:
     """Return whether stored REBAC relationships name any row retiring ``record`` deletes.
 
     The delete takes the record's multi-table parents and children with it, and
@@ -426,7 +453,53 @@ def named_in_relationships(record: models.Model) -> bool:
         row = owner._base_manager.filter(pk=record.pk).first()
         if row is not None:
             identities.update(model_identities(owner, row))
-    return rows.referencing(identities).exists()
+    return rows.referencing(identities).exclude(relation__in=exclude).exists()
+
+
+def owned_reference_parts(record: models.Model) -> Iterator[models.Model]:
+    """Yield the record's declared owned parts recursively, once per concrete row.
+
+    Parts remain stored for reversible retirement. Their history and outside
+    callers still matter; callers need no knowledge of the declaring addon types.
+    The root record itself is not yielded.
+    """
+
+    seen = {(record._meta.concrete_model, record.pk)}
+    pending = [record]
+    while pending:
+        owner = pending.pop()
+        for reference in references(type(owner)):
+            if not reference.is_owned:
+                continue
+            for part in reference.rows(owner).order_by("pk"):
+                identity = (part._meta.concrete_model, part.pk)
+                if identity not in seen:
+                    seen.add(identity)
+                    yield part
+                    pending.append(part)
+
+
+def has_live_references(
+    record: models.Model,
+    *,
+    principal: SubjectRef | None = None,
+    exclude_relations: Collection[str] = (),
+) -> bool:
+    """Whether outside live rows or stored grants name a record or its owned parts.
+
+    Historical and nonblocking references follow their declared deletion policy.
+    Evidence owners define which rows remain live for ``principal``; omitting it
+    grants no authorship exclusion. ``exclude_relations`` names only stored REBAC
+    relations to disregard, on both the record and its parts. This structural
+    check is unscoped; the caller owns admission and locking before retirement.
+    """
+
+    for current in chain((record,), owned_reference_parts(record)):
+        if named_in_relationships(current, exclude=exclude_relations) or any(
+            reference.live_rows(current, principal=principal).exists() for reference in references(type(current))
+        ):
+            return True
+    return False
 
 
 def _state(row: models.Model, identity: tuple[str, ...]) -> dict[str, Any]:

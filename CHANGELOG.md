@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Source retirement: `ChangesetQuerySet.history_written_only_by(record, predicate)`
+  shares document history selection with `touching_filter`, requires a creation
+  snapshot and refuses unmatched or unattributed writes. The reference owner adds
+  `owned_reference_parts` and `has_live_references`; Statement declares retained
+  authorship/current-state policy and PartyAspectMixin declares its owned party
+  edge. Stored relationship exclusions compose `named_in_relationships(exclude=...)`.
+  Creation undo uses the same live-reference owner without an authorship exclusion.
+- Stream apply contract: `ApplyResult.mapping_version` is removed. The driver
+  promotes `RecordChange.mapping_version`, supplied by the declared mapping,
+  so adapters no longer echo a version in every apply result. Notion and the
+  framework's adapter fixtures use this contract.
 - Integration branding: the existing public vendor projection carries slug and
   display name together. Unnamed integration and inbox channel labels fall back
   to that branding; stable labels and connection selection compose the same

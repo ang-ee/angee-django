@@ -1959,8 +1959,8 @@ bridge advisory lock as polling and delivery settlement.
   on its next pull. The link checks its complete retained reflection precondition;
   that does not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
-  payload, mapping version and dependency digest in `ApplyResult`; the driver
-  alone promotes the primary link and pins the history row written for that
+  payload and dependency digest in `ApplyResult`; the driver takes the declared
+  mapping version from `RecordChange`, promotes the primary link and pins the history row written for that
   application. Observation saves the source on the link without changing that
   protected pointer. History is the observation log; inbound state retains
   simultaneous and closed failures, and refused writes retain link outbox state.

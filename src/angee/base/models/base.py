@@ -31,7 +31,12 @@ from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.identity import PublicIdentity, SqidMixin, public_id_of
 from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.locks import RowLockMixin
-from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
+from angee.base.models.merge_references import (
+    MergeContractMixin,
+    has_live_references,
+    named_in_relationships,
+    references,
+)
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.transitions import StateTransitionsMixin
 from angee.base.permissions import DirectRecordAccess, declared_grants, declared_rebac_definition, instance_actor
@@ -213,14 +218,7 @@ class AngeeModel(
         merge identity but do not prevent removal of its reverted creation.
         """
 
-        live_references = (
-            reference
-            for reference in references(type(self))
-            if reference.blocks_target_delete(type(self))
-        )
-        if named_in_relationships(self) or any(
-            reference.rows(self).exists() for reference in live_references
-        ):
+        if has_live_references(self):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()
 
