@@ -38,9 +38,12 @@ from angee.messaging.testing.models import (
     Relationship,
     RelationshipKind,
     Thread,
+    ThreadFollower,
 )
 from angee.parties.backends import ManualDirectoryBackend, ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from angee.projects.testing.models import Participant as ProjectParticipant
+from angee.projects.testing.models import Project
 from angee.provenance.statements import (
     SourceKind,
     StatementSourceMixin,
@@ -1192,6 +1195,69 @@ def test_merge_rejects_reversal_and_database_rejects_self_merge(composed_tables:
         a.merged_into = a
         with pytest.raises(IntegrityError), transaction.atomic():
             a.save(update_fields=["merged_into"])
+
+
+def test_a_party_merge_moves_what_points_at_the_merged_party_and_revert_restores_it(
+    composed_tables: None, django_capture_on_commit_callbacks: Any
+) -> None:
+    """Handles, addresses, relationships both ways, follows and participations move; revert restores the tracked."""
+
+    del composed_tables
+    owner = _user("merge-mover")
+    with system_context(reason="test party merge"):
+        kept, merged, other = (
+            Party._base_manager.create(display_name=name, created_by=owner) for name in ("Ada", "Ada K", "Charles")
+        )
+        handle = Handle._base_manager.create(platform="email", value="ada@example.com", created_by=owner)
+        Party.objects.assert_handle(merged, handle, asserted_by=owner)
+        kind = RelationshipKind._base_manager.create(slug="peer", name="Peer", inverse_name="Peer")
+        project = Project._base_manager.create(title="Engine", created_by=owner)
+        rows = (
+            (Address, "party", {"street": "1 Main St"}),
+            (Relationship, "party", {"other_party": other, "kind": kind}),
+            (Relationship, "other_party", {"party": other, "kind": kind}),
+            (ProjectParticipant, "party", {"project": project}),
+        )
+        tracked = [(handle, "party")] + [
+            (model._base_manager.create(**{field: merged}, **values, created_by=owner), field)
+            for model, field, values in rows
+        ]
+        follow = ThreadFollower._base_manager.create(thread=Thread._base_manager.create(created_by=owner), party=merged)
+
+    def pointed_at(pointers: list[tuple[Any, str]]) -> set[Any]:
+        return {type(row)._base_manager.values_list(field, flat=True).get(pk=row.pk) for row, field in pointers}
+
+    # The merge's changeset closes on commit; only a closed changeset reverts.
+    with actor_context(owner), django_capture_on_commit_callbacks(execute=True):
+        kept.with_actor(owner).merge(records=[merged.public_id])
+    with actor_context(owner):
+        assert pointed_at([*tracked, (follow, "party")]) == {kept.pk}
+        assert Party._base_manager.get(pk=merged.pk).merged_into_id == kept.pk
+        boundary = Party.history.filter(id=merged.pk).order_by("-history_id").first().changeset
+        boundary.with_actor(owner).revert()
+    assert pointed_at(tracked) == {merged.pk}
+    assert Party._base_manager.get(pk=merged.pk).merged_into_id is None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Defect: a merge revert restores only history-tracked references; untracked MOVE references "
+    "(ThreadFollower, CircleMember, spaces Membership, proposals, nexus) stay on the survivor.",
+)
+def test_a_party_merge_revert_restores_an_untracked_follow(
+    composed_tables: None, django_capture_on_commit_callbacks: Any
+) -> None:
+    del composed_tables
+    owner = _user("merge-follow")
+    with system_context(reason="test party merge follow"):
+        kept, merged = (Party._base_manager.create(display_name=name, created_by=owner) for name in ("Ada", "Ada K"))
+        follow = ThreadFollower._base_manager.create(thread=Thread._base_manager.create(created_by=owner), party=merged)
+    with actor_context(owner), django_capture_on_commit_callbacks(execute=True):
+        kept.with_actor(owner).merge(records=[merged.public_id])
+    with actor_context(owner):
+        Party.history.filter(id=merged.pk).order_by("-history_id").first().changeset.with_actor(owner).revert()
+    follow.refresh_from_db()
+    assert follow.party_id == merged.pk
 
 
 @pytest.mark.django_db(transaction=True)
