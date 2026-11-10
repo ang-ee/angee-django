@@ -1250,19 +1250,19 @@ def _party_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
 
 
 def _handle_references(merged: Any, actor: Any) -> list[tuple[Any, str]]:
-    """One row of each kind a handle merge moves; messages and recipients stay (KEEP)."""
+    """One row of each kind a handle merge moves; messages, recipients and feeds stay (KEEP)."""
 
     del actor
 
     feed = make_integration("merge-feed", model=apps.get_model("posts", "Feed"), backend_class="feed",
                             feed_backend_class="stub", handle=merged)
-    message = Message._base_manager.create(thread=Thread._base_manager.create(), sender=merged)
+    message = Message._base_manager.create(thread=Thread._base_manager.create(), channel=feed, sender=merged)
     rows = (
         (Reaction, {"message": message, "reaction": "+1"}),
         (apps.get_model("posts", "FeedFollow"), {"feed": feed}),
     )
     moved = [(kind._base_manager.create(handle=merged, **values), "handle") for kind, values in rows]
-    return [(feed, "handle"), *moved]
+    return moved
 
 
 @pytest.mark.parametrize(
@@ -1290,11 +1290,13 @@ def test_a_merge_revert_restores_every_moved_kind(
     with actor_context(admin), django_capture_on_commit_callbacks(execute=True):
         kept.with_actor(admin).merge(records=[merged.public_id])
     assert pointed_at() == {kept.pk}
+    if model is Handle:
+        assert apps.get_model("posts", "Feed")._base_manager.filter(handle=merged).exists()
+        # The feed's own post stays on the merged handle and still reads as channel-authored.
+        assert Message._base_manager.get(sender=merged).reply_state()
     with actor_context(admin):
         model.history.filter(id=merged.pk).order_by("-history_id").first().changeset.with_actor(admin).revert()
     assert pointed_at() == {merged.pk}
-    if model is Handle:
-        assert Message._base_manager.filter(sender=merged).exists()
 
 
 @pytest.mark.django_db(transaction=True)

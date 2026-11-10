@@ -39,11 +39,12 @@ from rebac.mixins import RebacModelBase
 from angee.base.fields.implementation import ImplClassField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
+from angee.base.models.merge_references import MergePolicy
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.trash import TrashQuerySet
 from angee.base.querysets import MergeableQuerySet
 from angee.integrate.models import IntegrationCreateMode
-from angee.messaging.managers import ChannelManager, MessageQuerySet
+from angee.messaging.managers import MessageQuerySet
 from angee.posts.backends import FeedBackend, ParsedPost
 from angee.posts.managers import (
     FeedFollowManager,
@@ -69,9 +70,7 @@ def validate_reply_hold(hours: float | None) -> None:
             raise ValidationError("Reply hold is too large.") from error
 
 
-class Feed(  # type: ignore[misc]  # HistoryMixin and the untracked Channel lineage type _base_manager apart.
-    HistoryMixin, Composable, metaclass=RebacModelBase, inherits="messaging.Channel"
-):
+class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
     """A connected public-content source that polls an external platform for posts.
 
     A ``messaging.Channel`` child (identity, bridge state and message access from
@@ -82,11 +81,13 @@ class Feed(  # type: ignore[misc]  # HistoryMixin and the untracked Channel line
     A *paused* feed carries a NULL ``next_sync_at`` (not scheduled); activating it
     schedules the first poll. ``handle`` is the ``parties.Handle`` the feed monitors
     and posts as (its OAuth token lives on the handle / the integration credential).
+    A handle merge keeps the feed on its handle; the feed posts as, and recognises
+    its own comments by, that handle's merge survivor.
     """
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
     live_impl_field = None
-    objects = ChannelManager()
+    merge_policies = {"handle": MergePolicy.KEEP}
 
     feed_backend_class = ImplClassField(
         FeedBackend,
@@ -512,8 +513,7 @@ class MessagePublic(Composable, extends="messaging.Message"):
         """
 
         message = cast("Message", self)
-        # A handle merge keeps messages on the handle they were sent from and moves
-        # the feed's handle: both compare as their survivors.
+        # A handle merge keeps messages and the feed on their handles: both compare as survivors.
         sender = MergeableQuerySet.survivor_id("sender__")
         with system_context(reason="posts.reply.evidence"):
             sender_id, channel_id = (
@@ -527,7 +527,7 @@ class MessagePublic(Composable, extends="messaging.Message"):
                 ._base_manager.filter(
                     pk=channel_id,
                 )
-                .values_list("handle_id", flat=True)
+                .values_list(MergeableQuerySet.survivor_id("handle__"), flat=True)
                 .first()
             )
             if handle_id is not None and sender_id == handle_id:
@@ -576,8 +576,9 @@ class MessagePublic(Composable, extends="messaging.Message"):
             if parent.channel_id is None:
                 raise ValidationError("The comment's feed has no publishing identity.")
             feed = apps.get_model("posts", "Feed").objects.with_actor(actor).filter(pk=parent.channel_id).first()
-            if feed is None or feed.handle_id is None:
+            if feed is None or feed.handle is None:
                 raise ValidationError("The comment's feed has no publishing identity.")
+            handle = feed.handle.canonical()
 
             def admit(comment: Any) -> None:
                 if comment.reply_state():
@@ -586,7 +587,7 @@ class MessagePublic(Composable, extends="messaging.Message"):
             return apps.get_model("messaging", "Message").objects.compose_reply(
                 parent,
                 body=body,
-                sender=feed.handle,
+                sender=handle,
                 actor=actor,
                 local=local,
                 idempotency_key=idempotency_key,

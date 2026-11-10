@@ -368,6 +368,9 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
     def revert(self) -> Any:
         """Undo the first-to-last boundary atomically as a new changeset.
 
+        Authorization is per row: the actor needs every touched row's
+        ``history_revert_permission``, so one row it may not write (another
+        user's cadence a merge moved) refuses the whole revert.
         Native version IDs settle equal timestamps. Statements retain their
         identities, including merge collisions. Canonical aspect fields rederive
         after restoration. HTTP effects remain remote; ordinary local-change
