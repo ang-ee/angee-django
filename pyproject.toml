@@ -89,7 +89,7 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 dev = [
     "angee-base[testing]==3.0.0",
     "daphne>=4.0",
-    "django-zed-rebac[caveats]>=0.32.2,<0.33",
+    "django-zed-rebac[caveats]>=0.33.0,<0.34",
     "faker>=30.0",
     "hypothesis>=6.100",
     "import-linter>=2.1",
