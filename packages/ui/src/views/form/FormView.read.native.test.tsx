@@ -95,7 +95,7 @@ test("a failed refresh preserves the cached record and dirty draft while offerin
   expect(getOne).toHaveBeenCalledTimes(3);
 });
 
-test("a live change replaces an in-flight old snapshot and record actions use the latest clean revision", async () => {
+test("a live change during an in-flight read rereads once it settles and record actions use the latest clean revision", async () => {
   let finishOldRead!: (response: { data: Row }) => void;
   const getOne = vi.fn<() => Promise<{ data: Row }>>()
     .mockResolvedValueOnce({ data: { id: "note-1", title: "Loaded", revision: 1 } })
@@ -105,9 +105,14 @@ test("a live change replaces an in-flight old snapshot and record actions use th
   await screen.findByRole("textbox", { name: "Title" });
   act(() => { void f.client.invalidateQueries(); });
   await waitFor(() => expect(getOne).toHaveBeenCalledTimes(2));
+  // Live changes coalesce without cancelling: the read in flight commits its snapshot,
+  // then a read that started after the change replaces it.
   await act(async () => { f.change(); });
-  await waitFor(() => expect(getOne).toHaveBeenCalledTimes(3));
   await act(async () => { finishOldRead({ data: { id: "note-1", title: "Loaded", revision: 1 } }); });
+  await waitFor(() => expect(getOne).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(f.client.getQueryCache().getAll().some(
+    (query) => (query.state.data as { data?: Row } | undefined)?.data?.revision === 2,
+  )).toBe(true));
   fireEvent.click(screen.getByRole("button", { name: "Archive" }));
   await waitFor(() => expect(f.archive).toHaveBeenCalledWith(expect.objectContaining({
     record: expect.objectContaining({ revision: 2 }),
