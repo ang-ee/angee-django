@@ -350,7 +350,7 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
                 created_by=admin,
             )
             _replace_with_nested_part_tree(message, admin)
-            file = StorageFile.objects.ingest_bytes(f"Attachment {index}".encode(), filename=f"{index}.txt")
+            file, _created = StorageFile.objects.ingest_bytes(f"Attachment {index}".encode(), filename=f"{index}.txt")
             assert file.mime_type_id is not None
             messaging_models.Part.objects.create(
                 message=message, position=4, type="text/plain", disposition="attachment", file=file, created_by=admin
@@ -2504,7 +2504,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
     with system_context(reason="test.messaging.record_attachment.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 404")
         _storage_drive(tmp_path, owner=admin)
-        file = StorageFile.objects.ingest_bytes(b"Attachment body", filename="brief.txt", owner_id=admin.pk)
+        file, _created = StorageFile.objects.ingest_bytes(b"Attachment body", filename="brief.txt", owner_id=admin.pk)
     schema = _schema()
 
     posted = _data(
@@ -2566,6 +2566,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
     ]
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_chatter_follow_toggle(composed_tables: None) -> None:
     """The custom record follower mutation mirrors Odoo's follow/unfollow contract."""
 

@@ -11,7 +11,6 @@ from rebac import system_context
 
 from angee.integrate.constants import DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.models import Bridge
-from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import models_with
 from angee.jobs.enqueue import enqueue_task
 
@@ -78,7 +77,7 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
                     if not was_queued:
                         bridge.claim_sync(now=timestamp)
                 try:
-                    queue_bridge_sync(bridge, now=timestamp, persist=False)
+                    bridge.request_sync(now=timestamp, persist=False)
                 except Exception:
                     with transaction.atomic():
                         reset = model._default_manager.lock_if_supported().filter(pk=pk).first()

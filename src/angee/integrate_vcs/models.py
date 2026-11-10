@@ -143,6 +143,18 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
 class RepositoryManager(AngeeManager):
     """Manager owning the upsert/reconcile of repository rows from a host listing."""
 
+    descriptor_fields = (
+        "org",
+        "remote",
+        "ssh_remote",
+        "remote_id",
+        "default_branch",
+        "visibility",
+        "web_url",
+        "archived",
+    )
+    """Mutable repository metadata a host descriptor carries under the same names."""
+
     def reconcile(self, vcs_bridge: Any, descriptors: Iterable[Any]) -> int:
         """Upsert one repository row per descriptor and prune rows that vanished.
 
@@ -162,17 +174,7 @@ class RepositoryManager(AngeeManager):
                 ],
                 update_conflicts=True,
                 unique_fields=["vcs_bridge", "name"],
-                update_fields=[
-                    "org",
-                    "remote",
-                    "ssh_remote",
-                    "remote_id",
-                    "default_branch",
-                    "visibility",
-                    "web_url",
-                    "archived",
-                    "updated_at",
-                ],
+                update_fields=[*self.descriptor_fields, "updated_at"],
             )
             self.filter(vcs_bridge=vcs_bridge).exclude(name__in=descriptors_by_name).delete()
         return len(descriptor_list)
@@ -181,26 +183,12 @@ class RepositoryManager(AngeeManager):
         """Inventory one repository (no prune) — the typeahead "add this repo" path."""
 
         with system_context(reason="integrate.repository.add"), transaction.atomic():
-            return self._upsert(vcs_bridge, descriptor)
-
-    def _upsert(self, vcs_bridge: Any, descriptor: Any) -> Any:
-        """Create or update one repository row from a host descriptor."""
-
-        repository, _created = self.update_or_create(
-            vcs_bridge_id=vcs_bridge.pk,
-            name=descriptor.name,
-            defaults={
-                "org": descriptor.org,
-                "remote": descriptor.remote,
-                "ssh_remote": descriptor.ssh_remote,
-                "remote_id": descriptor.remote_id,
-                "default_branch": descriptor.default_branch,
-                "visibility": descriptor.visibility,
-                "web_url": descriptor.web_url,
-                "archived": descriptor.archived,
-            },
-        )
-        return repository
+            repository, _created = self.update_or_create(
+                vcs_bridge_id=vcs_bridge.pk,
+                name=descriptor.name,
+                defaults=self._descriptor_values(descriptor),
+            )
+            return repository
 
     def _row_from_descriptor(self, vcs_bridge: Any, descriptor: Any, *, now: datetime) -> Any:
         """Return an unsaved repository row projected from one host descriptor."""
@@ -208,17 +196,15 @@ class RepositoryManager(AngeeManager):
         return self.model(
             vcs_bridge_id=vcs_bridge.pk,
             name=descriptor.name,
-            org=descriptor.org,
-            remote=descriptor.remote,
-            ssh_remote=descriptor.ssh_remote,
-            remote_id=descriptor.remote_id,
-            default_branch=descriptor.default_branch,
-            visibility=descriptor.visibility,
-            web_url=descriptor.web_url,
-            archived=descriptor.archived,
+            **self._descriptor_values(descriptor),
             created_at=now,
             updated_at=now,
         )
+
+    def _descriptor_values(self, descriptor: Any) -> dict[str, Any]:
+        """Project a host descriptor's mutable metadata identically for single and bulk writes."""
+
+        return {name: getattr(descriptor, name) for name in self.descriptor_fields}
 
 
 class Repository(AuditMixin, AngeeDataModel, concrete=True):
@@ -305,6 +291,12 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
 
         return f"{self.kind}:{self.path or '/'}"
 
+    def complete_sync(self, *, now: datetime | None = None) -> None:
+        """Stamp a successful output reconciliation inside its caller's transaction."""
+
+        self.last_synced_at = now or timezone.now()
+        self.save(update_fields=["last_synced_at", "updated_at"])
+
     @classmethod
     def kind_models(cls) -> tuple[type[registry.VcsOutput], ...]:
         """Return the output models that declare a ``source_kind`` (e.g. ``Template``).
@@ -380,8 +372,7 @@ class TemplateManager(AngeeManager, registry.VcsOutputManager):
                 update_fields=["name", "kind", "inputs", "updated_at"],
             )
             self.filter(source=source).exclude(path__in=descriptors_by_path).delete()
-            source.last_synced_at = now
-            source.save(update_fields=["last_synced_at", "updated_at"])
+            source.complete_sync(now=now)
         return len(descriptors)
 
     def _row_from_descriptor(self, source: Any, descriptor: dict[str, Any], *, now: datetime) -> Any:

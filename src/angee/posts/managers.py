@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Self
 from zoneinfo import ZoneInfo
@@ -60,6 +61,21 @@ class FeedFollowManager[FollowT: FeedFollow](_FeedFollowManagerBase[FollowT]):
 
 class PostMetricsManager[MetricsT: PostMetrics](AngeeManager[MetricsT]):
     """Owns the one-to-one engagement-counter upsert for a message."""
+
+    def reply_counts(self, *, channel: Any, platform: str, external_ids: Sequence[str]) -> dict[str, int]:
+        """Return the known reply count of each selected source message on ``channel``, in one query.
+
+        A message without metrics stays absent, so a provider can tell an unseen
+        post from a measured zero.
+        """
+
+        return dict(
+            self.filter(
+                message__channel_id=channel.pk,
+                message__platform=platform,
+                message__external_id__in=external_ids,
+            ).values_list("message__external_id", "reply_count")
+        )
 
     def upsert(self, *, message: Any, metrics: Any, created_by_id: Any = None) -> MetricsT:
         """Write the rolled-up engagement counters for ``message`` (idempotent).

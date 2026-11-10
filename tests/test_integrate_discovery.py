@@ -302,7 +302,7 @@ def test_retry_discovery_refuses_states_outside_its_admission(bridge, state):
 
 
 def test_oauth_connect_admission_requires_the_owner_and_does_not_compete_with_retry(bridge, monkeypatch):
-    monkeypatch.setattr(type(bridge), "is_oauth_connectable", lambda row: True)
+    monkeypatch.setattr(type(bridge), "is_oauth_connectable", lambda row, **_kwargs: True)
     with system_context(reason="test connect admission"):
         # A healthy attached grant uses discovery recovery, never new consent.
         bridge.config = {"discovery": "refusal"}

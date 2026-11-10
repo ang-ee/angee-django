@@ -17,7 +17,9 @@ domain adapters own protocol parsing and ingest policy.
 Manual requests and scheduled polls share `Bridge.mark_sync_queued` admission.
 A live sync lock or retained workflow run keeps its progress and declines a new
 task. A stale syncing marker without either owner remains recoverable. Callers
-use `queue_bridge_sync`'s result to report whether they queued work.
+use `Bridge.request_sync`'s result to report whether they queued work.
+`Integration.request_sync` requests every bridge capability of one integration
+and counts the syncs it queued.
 
 Event feeds are append-only and compose their domain's idempotent ingest verb.
 They create no replica links. Their unlinked failures belong to the stream's
@@ -31,8 +33,8 @@ their protected `applied_base`, a snapshot in the link's own native history.
 Observation never advances that base. Remote-only changes apply locally;
 local-only changes may write back with a remote version fence. Divergent edits
 and remote deletion against a local edit require an explicit choice. Identical
-edits converge. Adapters revalidate
-their local projection under domain locks before applying.
+edits converge. Adapters revalidate their local projection under domain locks
+before applying.
 
 A conditional write returns authoritative source evidence and version, retained
 with the local projection so the driver recognizes its next pull echo. The link
@@ -40,9 +42,8 @@ checks its complete retained reflection precondition beside the transport's
 remote-version fence. Neither makes the two systems atomic.
 Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
 
-Each applied record retains the observe row and the application-evidence row
-(commit 8 review ruling); a record delivered again unchanged retains only its
-observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
+Each applied record retains the observe row and the application-evidence row;
+a record delivered again unchanged retains only its observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
 the snapshots from generation changes, when retained links follow the new epoch.
 The Streams tab's link history drill-down is the provenance
 [History timeline](../provenance/README.md#history-surface) for the link: one
@@ -73,7 +74,7 @@ Several inbound problems can coexist. For one record link, new source or mapping
 evidence closes older versions of the same non-conflict problem while retaining
 their history. Stream-level event failures remain independent.
 Semantic failures use bounded backoff;
-conflicts await an explicit remote/local choice. Due replica failures re-read
+conflicts await an explicit remote/local choice (`RecordLink.resolve_conflict`). Due replica failures re-read
 identity through `BridgeImpl.read_keys`; unsupported identity reads fall back to
 a baseline with the reason retained in failure details. Refused writes retry
 through the outbox. A due refusal with no remaining local candidate closes.
@@ -124,14 +125,17 @@ through `OAuthClientProtocol.confidential_client_secret()`; public clients are
 refused before secret storage is accessed; confidential clients without a secret
 are refused too. `OAuthClient.is_public_client` owns that classification.
 
-`OAuthClient.configuration_state` is the readiness rule used by the picker,
-connect and the operation-local [registration snapshot](oauth/registrations.py).
-The snapshot reads public configuration fields, never client secrets. OIDC
+`OAuthClient.configuration_state` is the readiness rule;
+`OAuthClientQuerySet.ready_registrations` applies it to each slug's preferred
+registration for the picker, connect and the operation-local
+[registration snapshot](oauth/registrations.py), which the console projections
+pass to `Integration.is_oauth_connectable`. Readiness reads public
+configuration fields, never client secrets. OIDC
 metadata discovery resolves OAuth endpoints independently of connection
 discovery. Host
 settings are applied through `oauth_clients` after resources load.
 `Credential.is_reconnect_required` uses status, failed refresh and expiry.
-Refreshability is derived by its kind handler from the current client and grant
+`Credential.refreshable` derives refreshability from the current client and grant
 material; it is never stored as a copy of client policy. Ordinary access-token
 expiry with a refresh grant does not ask for new consent.
 

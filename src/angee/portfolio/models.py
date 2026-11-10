@@ -9,7 +9,7 @@ upstream rows only when this addon is composed.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -28,6 +28,7 @@ from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
+from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
@@ -62,8 +63,8 @@ class InitiativeStatus(models.TextChoices):
     DROPPED = "dropped", "Dropped"
 
 
-class InitiativeHealth(models.TextChoices):
-    """Latest reported health denormalized onto an Initiative."""
+class Health(models.TextChoices):
+    """Health asserted by every report and projected onto its Project or Initiative target."""
 
     ON_TRACK = "on_track", "On track"
     AT_RISK = "at_risk", "At risk"
@@ -78,14 +79,6 @@ class InitiativeDateResolution(models.TextChoices):
     QUARTER = "quarter", "Quarter"
     HALF_YEAR = "half_year", "Half year"
     YEAR = "year", "Year"
-
-
-class UpdateHealth(models.TextChoices):
-    """Health assertion required from every portfolio Update."""
-
-    ON_TRACK = "on_track", "On track"
-    AT_RISK = "at_risk", "At risk"
-    OFF_TRACK = "off_track", "Off track"
 
 
 class ReleaseStatus(models.TextChoices):
@@ -196,7 +189,7 @@ class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concr
     body = models.TextField(blank=True, default="")
     status = StateField(choices_enum=InitiativeStatus, default=InitiativeStatus.PROPOSED)
     health = StateField(
-        choices_enum=InitiativeHealth,
+        choices_enum=Health,
         null=True,
         blank=True,
         editable=False,
@@ -400,7 +393,35 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=
                 report.sudo(reason="portfolio.demo.report").save(using=placement._state.db)
 
 
-class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
+class UpdateQuerySet[UpdateT: Update](AngeeHistoryQuerySet[UpdateT]):
+    """Reports in projection order; bulk writes that would bypass the target projection are refused."""
+
+    def for_target(self, target: models.Model) -> Self:
+        """Select ``target``'s reports, latest first, in the order the health projection reads."""
+
+        return self.filter(**generic_target(target).lookups(self.model, "target")).order_by(
+            "-updated_at", "-created_at", "-pk"
+        )
+
+    def update(self, **kwargs: Any) -> int:
+        """Require an instance save for writes that change projected health, order or target."""
+
+        if {"health", "created_at", "updated_at", "content_type", "content_type_id", "object_id"} & kwargs.keys():
+            raise ValidationError("Report health and target changes require an instance save.")
+        return super().update(**kwargs)
+
+    def bulk_create(self, objs: Iterable[UpdateT], *args: Any, **kwargs: Any) -> list[UpdateT]:
+        """Reports require row validation and the serialized target projection of an instance save."""
+
+        if rows := tuple(objs):
+            raise ValidationError("Report creation requires an instance save.")
+        return super().bulk_create(rows, *args, **kwargs)
+
+
+_UpdateManagerBase = AngeeHistoryManager.from_queryset(UpdateQuerySet)
+
+
+class UpdateManager[UpdateT: Update](_UpdateManagerBase[UpdateT]):
     """Own target validation and health-report creation.
 
     ``permissions.zed`` backs the update's ``project`` and ``initiative``
@@ -413,7 +434,7 @@ class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
         self,
         *,
         target: Project | Initiative,
-        health: str | UpdateHealth,
+        health: str | Health,
         body: str = "",
     ) -> UpdateT:
         """Create one report on a Project or Initiative; its ``create`` requires write on the target."""
@@ -421,23 +442,25 @@ class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
         if target.pk is None:
             raise ValidationError({"target": "A saved project or initiative is required."})
         self.model.validate_target(target)
-        with transaction.atomic():
-            locked_target = type(target).system_queryset(lock=("self",)).get(pk=target.pk)
-            report = self.model(health=health, body=body, **generic_target(locked_target).lookups(self.model, "target"))
-            report.full_clean(validate_unique=False, validate_constraints=False)
-            return self.insert(report)
+        report = self.model(health=health, body=body, **generic_target(target).lookups(self.model, "target"))
+        report.full_clean(validate_unique=False, validate_constraints=False)
+        return self.insert(report)
 
 
-class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
-    """A required-health report on a Project or Initiative, never a Product."""
+class Update(ImmutableFieldsMixin, HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
+    """A required-health report on a Project or Initiative, never a Product.
 
-    merge_policy = MergePolicy.MOVE
+    Its target is write-once, so merging the target refuses rather than moving the report.
+    """
+
+    merge_policy = MergePolicy.BLOCK
     sqid_prefix = "upd_"
+    immutable_fields = ("content_type_id", "object_id")
 
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
-    health = StateField(choices_enum=UpdateHealth)
+    health = StateField(choices_enum=Health)
     body = models.TextField(blank=True, default="")
 
     objects = UpdateManager()
@@ -461,12 +484,15 @@ class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=
         self.validate_target(self.target)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the report and the target's latest-health denorm.
+        """Persist the report under its target's row lock, then project the target's latest committed health.
 
-        The target is stored at :func:`rebac.generic_target` and is immutable:
-        the denormalized health belongs to the target the report was made on.
+        The target is stored at :func:`rebac.generic_target` and is write-once. The
+        projection reads persisted reports, so a partial save never carries an
+        unsaved value onto the target.
         """
 
+        if kwargs.get("update_fields") is not None and not kwargs["update_fields"]:
+            return
         if self.health in (None, ""):
             raise ValidationError({"health": "A portfolio update must assert health."})
         target = self.target
@@ -476,52 +502,31 @@ class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=
         canonical = generic_target(target)
         self.content_type = canonical.content_type
         self.object_id = canonical.object_id
-        if not self._state.adding:
-            persisted = type(self)._base_manager.filter(pk=self.pk).values_list("content_type_id", "object_id").first()
-            if persisted is not None and persisted != (self.content_type_id, self.object_id):
-                raise ValidationError({"target": "An update's target is immutable."})
         with transaction.atomic():
+            # Target before report: saves and deletes on one target serialize in the same order.
+            type(target).system_queryset(lock=("self",)).get(pk=target.pk)
             super().save(*args, **kwargs)
-            # Django QuerySet.update() bypasses save-path re-denormalization by nature;
-            # the API routes through instance saves, and internal bulk writers are on their honor.
-            type(target)._base_manager.filter(pk=target.pk).update(
-                health=self.health,
-                health_updated_at=self.updated_at,
-            )
-        target.health = self.health
-        target.health_updated_at = self.updated_at
+            type(self).refresh_target_health(target)
 
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Delete the report and restore its target's surviving latest health."""
+    def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
+        """Lock the report's target before the report, the order its saves take."""
 
-        target = self.target
-        content_type_id = self.content_type_id
-        object_id = self.object_id
-        with transaction.atomic():
-            if target is not None:
-                with system_context(reason="portfolio.update.delete.target"):
-                    target = type(target).objects.lock_if_supported().get(pk=target.pk)
-            result = super().delete(*args, **kwargs)
-            if target is not None:
-                with system_context(reason="portfolio.update.delete.latest"):
-                    latest = next(
-                        iter(
-                            type(self)
-                            ._base_manager.filter(content_type_id=content_type_id, object_id=object_id)
-                            .order_by("-updated_at", "-created_at")
-                            .values("health", "updated_at")[:1]
-                        ),
-                        None,
-                    )
-                health = latest["health"] if latest is not None else None
-                health_updated_at = latest["updated_at"] if latest is not None else None
-                type(target)._base_manager.filter(pk=target.pk).update(
-                    health=health,
-                    health_updated_at=health_updated_at,
-                )
-                target.health = health
-                target.health_updated_at = health_updated_at
-        return result
+        if (target := self.target) is not None:
+            type(target).system_queryset(lock=("self",)).filter(pk=target.pk).first()
+        return super().lock_for_delete(queryset=queryset)
+
+    @classmethod
+    def refresh_target_health(cls, target: Project | Initiative) -> None:
+        """Project the target's latest persisted report onto it, or clear the projection when none survives."""
+
+        latest = cls.system_queryset().for_target(target).values("health", "updated_at").first()
+        target.health = latest["health"] if latest is not None else None
+        target.health_updated_at = latest["updated_at"] if latest is not None else None
+        # A projection write, not an edit of the target: it bypasses the target's save path.
+        type(target)._base_manager.filter(pk=target.pk).update(
+            health=target.health,
+            health_updated_at=target.health_updated_at,
+        )
 
     def __str__(self) -> str:
         """Return a readable target-qualified health assertion."""
@@ -594,7 +599,7 @@ class ProjectPortfolio(Composable, extends="projects.Project"):
         related_name="projects",
     )
     health = StateField(
-        choices_enum=InitiativeHealth,
+        choices_enum=Health,
         null=True,
         blank=True,
         editable=False,

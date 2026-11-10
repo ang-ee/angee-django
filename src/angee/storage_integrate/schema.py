@@ -16,14 +16,10 @@ from angee.graphql.ids import PublicID, public_id_field
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
-from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.schema import BridgeTypeMixin
 from angee.storage_integrate.connect import create_local_folder_mount
 from angee.storage_integrate.models import MountMode
-from angee.storage_integrate.mounts import (
-    MountBrowseResult,
-    browse_mount_source,
-)
+from angee.storage_integrate.mounts import MountBrowseResult
 
 Mount = apps.get_model("storage_integrate", "Mount")
 Credential = apps.get_model("integrate", "Credential")
@@ -120,7 +116,7 @@ class StorageIntegrateQuery:
             if credential_id is not None
             else None
         )
-        result: MountBrowseResult = browse_mount_source(
+        result: MountBrowseResult = Mount.objects.browse_source(
             backend_class,
             credential=credential,
             token=token,
@@ -155,7 +151,7 @@ class StorageIntegrateMutation:
         """Queue an immediate reconciliation of one Mount."""
 
         with action_target(Mount, id, reason="storage_integrate.graphql.sync_mount") as mount:
-            queued = queue_bridge_sync(mount, now=timezone.now())
+            queued = mount.request_sync(now=timezone.now())
         return ActionResult(ok=True, message="Queued mount sync." if queued else "Sync already running.")
 
 

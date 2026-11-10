@@ -334,7 +334,7 @@ class WorkRemovedTaskQuery:
             if owner is None:
                 return []
             scope[name] = owner
-        rows = list(Task.removed_for(user, **scope)[: clamp_page_size(limit)])
+        rows = list(Task.work.removed_for(user, **scope)[: clamp_page_size(limit)])
         labels = user_display_labels(
             (row.trashed_by_id for row in rows),
             request=get_request(info),

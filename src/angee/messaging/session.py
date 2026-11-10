@@ -189,9 +189,20 @@ class AsyncioLiveSession(LiveChannelSession, ABC):
                     self.bridge.sqid,
                 )
             finally:
-                if not loop.is_closed():
-                    loop.close()
-                self.events.put(("disconnected", None))
+                try:
+                    if not loop.is_closed():
+                        # Background tasks the vendor left behind finish their own
+                        # cleanup before the loop closes, even when teardown failed.
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            task.cancel()
+                        if pending:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                finally:
+                    asyncio.set_event_loop(None)
+                    if not loop.is_closed():
+                        loop.close()
+                    self.events.put(("disconnected", None))
 
     def _shutdown(self, connection: threading.Thread) -> bool:
         """Stop the vendor main task and join its thread within one shared bound."""

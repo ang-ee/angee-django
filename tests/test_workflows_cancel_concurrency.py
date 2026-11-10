@@ -10,8 +10,8 @@ from angee.workflows import tasks
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
+from tests.lock_waits import submit, wait_for_lock
 from tests.test_workflows_cancel import cancellations
-from tests.test_workflows_review_concurrency import submit, wait_for_lock
 from tests.workflow_steps import Echo, document
 
 pytestmark = [

@@ -127,10 +127,11 @@ def composed_tables(composed_tables: None) -> None:
 
 @pytest.fixture
 def activity_catalog(composed_tables: None) -> None:
-    """Declare the activity types record tasks use in these scenarios."""
+    """Load projects' completion subtype and declare the activity types record tasks use."""
 
     del composed_tables
     with system_context(reason="tests.projects.activity_catalog"):
+        Resource.objects.load_xref("angee.projects.activity_done", model=messaging_models.MessageSubtype)
         projects_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
         projects_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
 
@@ -669,6 +670,7 @@ from angee.operator.testing import models as operator_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
 from angee.projects.testing import models as projects_models  # noqa: E402, F401
 from angee.provenance.testing import load_statement_sources  # noqa: E402
+from angee.resources.testing.models import Resource  # noqa: E402
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
 from angee.uom.testing import models as uom_models  # noqa: E402, F401

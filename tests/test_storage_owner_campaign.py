@@ -148,7 +148,7 @@ def test_container_defaults_do_not_change_folder_ownership_or_explicit_ingest_ow
 
     post_save.connect(capture, sender=File)
     try:
-        ingested = File.objects.ingest_bytes(
+        ingested, _created = File.objects.ingest_bytes(
             PNG_BYTES, filename="explicit.png", owner_id=owner.pk, drive_id=str(drive.sqid),
         )
     finally:

@@ -43,7 +43,7 @@ from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.trash import TrashQuerySet
 from angee.integrate.models import IntegrationCreateMode
 from angee.messaging.managers import MessageQuerySet
-from angee.posts.backends import FeedBackend
+from angee.posts.backends import FeedBackend, ParsedPost
 from angee.posts.managers import (
     FeedFollowManager,
     PostMetricsManager,
@@ -338,6 +338,13 @@ class ThreadPublic(Composable, extends="messaging.Thread"):
 
         abstract = True
 
+    def set_public_subject_url(self, subject_url: str) -> None:
+        """Record this public thread's canonical post URL when the source supplies a new one."""
+
+        if subject_url and self.subject_url != subject_url:
+            self.subject_url = subject_url
+            self.save(update_fields=("subject_url", "updated_at"))
+
 
 class CommentAnswered(ValidationError):
     """The comment already has an answer; a new reply is unnecessary."""
@@ -355,6 +362,43 @@ class MessagePublic(Composable, extends="messaging.Message"):
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("is_original_post",)
 
     is_original_post = models.BooleanField(default=False)
+
+    PROVIDER_TRASH_REASON: ClassVar[str] = "Hidden by the source."
+    """Trash reason stamped when the source platform hides a post or comment."""
+
+    def apply_public_post(self, post: ParsedPost) -> None:
+        """Fold the parsed public-post facts posts owns onto this landed message and its thread."""
+
+        message = cast("Message", self)
+        if self.is_original_post != post.is_original_post:
+            self.is_original_post = post.is_original_post
+            message.save(update_fields=("is_original_post", "updated_at"))
+        thread = message.thread
+        if thread is not None and post.is_original_post:
+            thread.set_public_subject_url(post.subject_url)
+
+    def apply_provider_visibility(self, *, hidden: bool) -> None:
+        """Mirror the source's hidden flag, restoring only trash the provider itself stamped.
+
+        An operator's independent removal survives a provider unhide; the stamp
+        records which trash the provider owns.
+        """
+
+        message = cast("Message", self)
+        with system_context(reason="posts.ingest.moderation"):
+            local = message.local_metadata
+            if hidden and not message.is_trashed:
+                message.trash(reason=self.PROVIDER_TRASH_REASON)
+                local = message.local_metadata
+                local["provider_hidden"] = cast(datetime, message.trashed_at).isoformat()
+            elif not hidden and self.provider_hidden:
+                message.restore()
+                local = message.local_metadata
+            if not hidden:
+                local.pop("provider_hidden", None)
+            if local != message.local_metadata:
+                message.metadata = {**(message.metadata or {}), "local": local}
+                message.save(update_fields=("metadata", "updated_at"))
 
     @property
     def provider_hidden(self) -> bool:

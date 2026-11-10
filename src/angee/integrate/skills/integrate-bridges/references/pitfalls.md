@@ -52,7 +52,7 @@ to the `jobs-tasks` skill.
   enqueues directly; lose that (worker down, queue saturated, a restart) and the
   reconciler skips the row forever. The
   [latching-gate contract](../../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
-  makes the verb clear the error itself: `resume_channel_pairing` reports OK
+  makes the verb clear the error itself: `Channel.resume_pairing` reports OK
   unconditionally for this reason. A private health key is a further axis the
   generic verbs cannot clear, so it reintroduces the same latch on the generic
   path.

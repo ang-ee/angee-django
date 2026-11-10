@@ -84,7 +84,7 @@ How the ontology maps to this addon.
   `context` and `proposal` currently share that row visibility. Restricting them
   to assignees, requesters and administrators requires native field permissions,
   nullable GraphQL fields and redaction of the proposal-derived `verdict_label`.
-- **Answering:** `Decision.objects.decide(decision, chosen keys, actor)` is the one entry, for humans and agents
+- **Answering:** `decision.decide(actor=actor, chosen=keys)` is the one entry, for humans and agents
   alike, with optional `values={record_id: {field: value}}`. It records those values once in `verdict_values`
   alongside the verdict; it applies nothing itself. The asker applies `choose` from the stored value exactly
   as `set`, through `RecordActions.resolve(..., values=decision.verdict_values[record_id])`, and applies the

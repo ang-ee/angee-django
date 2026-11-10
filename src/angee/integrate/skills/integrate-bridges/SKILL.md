@@ -27,7 +27,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 | `models.py` | `Integration`, `Bridge` (scheduling, locks, live state), `SyncStream` + manager, `RecordLink` + manager, `Credential`, `OAuthClient` | `src/angee/integrate/models.py` |
 | `states.py`, `streams.py` | `StreamDefinition` knobs; `StreamPage`, `RecordChange`, `ApplyResult`, errors, driver verbs | `src/angee/integrate/states.py`; `CursorInvalid`, `SemanticError`, `open_stream`, `advance_stream`, `reconcile_stream`, `sync_bridge` in `src/angee/integrate/streams.py` |
 | `credentials.py`, `oauth/providers.py` | `CredentialKind` handlers; `OAuthProviderType` presets via `ANGEE_OAUTH_PROVIDER_TYPE_CLASSES` | `CredentialKind`, `CredentialKindHandler` in `src/angee/integrate/credentials.py`, `src/angee/integrate/oauth/providers.py` |
-| `tasks.py`, `scheduler.py`, `queue.py`, `constants.py` | Due-bridge and discovery dispatch, `run_bridge_session`, task names and tick constants | `discover_connection`, `sync_bridge_now`, `sync_due_bridges`, `run_bridge_session`, `ensure_bridge_sessions` in `src/angee/integrate/tasks.py`; `enqueue_pending_discoveries`, `enqueue_due_bridges` in `src/angee/integrate/scheduler.py` |
+| `tasks.py`, `scheduler.py`, `constants.py` | Due-bridge and discovery dispatch, `run_bridge_session`, task names and tick constants; a manual request is `Bridge.request_sync` | `discover_connection`, `sync_bridge_now`, `sync_due_bridges`, `run_bridge_session`, `ensure_bridge_sessions` in `src/angee/integrate/tasks.py`; `enqueue_pending_discoveries`, `enqueue_due_bridges` in `src/angee/integrate/scheduler.py` |
 | `session.py`, `session_runner.py`, `session_process.py`, `live.py` | Worker-only loop, outcome handling, fresh-interpreter host, console-safe pairing facts | `LiveSession` in `src/angee/integrate/session.py`, `run_bridge_session_job` in `src/angee/integrate/session_runner.py`, `BridgeSessionProcess` in `src/angee/integrate/session_process.py`, `PairingState` and `session_store_path` in `src/angee/integrate/live.py` |
 | The capability's donor | The concrete bridge model a source extends (`messaging.Channel`, `parties.Directory`, `integrate_vcs.VcsBridge`) and its `ImplClassField` | `Channel` and its `backend_class` in `src/angee/messaging/models.py`, `ChannelBackend.registry_setting` in `src/angee/messaging/backends.py` |
 | `testing/`, `tests/integrate_fixtures.py`, `tests/conftest.py` | Concrete `Integration`, `SyncStream`, `RecordLink`; `ConnectionAdapter`/`LiveConnectionAdapter`; `make_integration`, `current_stream` | `Integration`, `SyncStream`, `RecordLink` in `src/angee/integrate/testing/`; `ConnectionAdapter`, `LiveConnectionAdapter`, `ConnectionBridge` in `tests/integrate_fixtures.py`; `tests/conftest.py` |
@@ -41,8 +41,8 @@ source addon contributes one adapter class, its registry key and its tests. Refe
   and parallelism; an adapter extracts and applies only.
 - `Bridge.run_sync`, `claim_sync`, `record_sync_error`, `update_live_state`, `claim_live_account`
   (`src/angee/integrate/models.py`) own lifecycle, telemetry and locks.
-- `Credential.auth_headers`, `ensure_fresh`, `Integration.fresh_credential` (`src/angee/integrate/models.py`)
-  own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin.
+- `Credential.auth_headers`, `ensure_fresh`, `Integration.fresh_credential` and `load_connection_credential`
+  (`src/angee/integrate/models.py`) own token material and refresh; `HttpClientMixin`/`angee.integrate.http` own outbound HTTP with the SSRF pin.
 - `IntegrationError(public_message, transient=, retry_after=)` (`src/angee/integrate/errors.py`) is the only
   exception an operator sees; `RequestNotSentError` marks safe retries.
 - `LiveSession` (`src/angee/integrate/session.py`) owns the wake loop, QR reporting and cooperative stop;

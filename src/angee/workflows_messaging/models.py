@@ -1,8 +1,9 @@
 """Channel scope belongs to the messaging contribution, not the workflow engine."""
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import models
 from django_compose.models import Composable
 
@@ -21,6 +22,12 @@ class TriggerMessaging(Composable, extends="workflows.Trigger"):
 
     class Meta:
         abstract = True
+
+    def require_channel_id(self) -> Any:
+        """Return the required grant-scope channel's identity without loading its guarded row."""
+        if self.channel_id is None:
+            raise ValidationError("Message triggers require a channel grant scope.")
+        return self.channel_id
 
 
 class ChannelWorkflowTriggers(Composable, extends="messaging.Channel"):

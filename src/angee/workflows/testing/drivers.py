@@ -126,9 +126,7 @@ def start_run(workflow: Any, *, actor: Any, **kwargs: Any) -> Any:
 
 def decide(decision: Any, *, actor: Any, chosen: Sequence[str]) -> Any:
     """Submit the caller's observed revision through the real decisions owner."""
-    return type(decision).objects.decide(
-        decision.pk, actor=actor, revision=decision.revision, chosen=chosen,
-    )
+    return decision.decide(actor=actor, revision=decision.revision, chosen=chosen)
 
 
 def run_until(run: Any, *, node: str | None = None, max_steps: int = 100) -> Any:

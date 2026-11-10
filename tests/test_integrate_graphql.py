@@ -33,7 +33,6 @@ from angee.base.models.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
-from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
 from angee.integrate.states import StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
@@ -1435,19 +1434,11 @@ def test_sync_integration_queues_bridge_for_an_admin(
     console_schema = _schema()
     admin = _platform_admin("sync-queue-admin")
     bridge = make_integration("sync-queue", backend_class="stub", model=VcsBridge)
-    queued: list[tuple[int, Any]] = []
-
-    def fake_queue_bridge_sync(queued_bridge: VcsBridge, *, now: Any = None) -> bool:
-        queued.append((queued_bridge.pk, now))
-        queued_bridge.sync_stage = queued_bridge.SyncStage.QUEUED
-        queued_bridge.sync_error = ""
-        queued_bridge.sync_progress = {"stage": queued_bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
-        queued_bridge.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"])
-        return True
-
-    monkeypatch.setattr(integrate_queue, "queue_bridge_sync", fake_queue_bridge_sync)
-    monkeypatch.setattr("angee.integrate.schema.queue_bridge_sync", fake_queue_bridge_sync)
-    monkeypatch.setattr("angee.integrate_vcs.schema.queue_bridge_sync", fake_queue_bridge_sync)
+    queued: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "angee.integrate.models.enqueue_task",
+        lambda _task_name, *, kwargs, **_options: queued.append(kwargs),
+    )
 
     result = _data(
         execute_schema(
@@ -1460,10 +1451,10 @@ def test_sync_integration_queues_bridge_for_an_admin(
 
     assert result["ok"] is True
     assert result["message"] == "Queued 1 bridge sync(s)."
-    assert len(queued) == 1
-    assert queued[0][0] == bridge.pk
+    assert [kwargs["pk"] for kwargs in queued] == [bridge.pk]
     bridge.refresh_from_db()
     assert bridge.sync_stage == VcsBridge.SyncStage.QUEUED
+    assert bridge.sync_progress["queued_at"] == queued[0]["timestamp"]
 
     projected = _data(
         execute_schema(

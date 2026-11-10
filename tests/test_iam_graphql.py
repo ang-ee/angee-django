@@ -51,6 +51,7 @@ from angee.graphql.testing.documents import result_data as _data
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.oauth import discovery as oauth_discovery
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
@@ -61,8 +62,8 @@ from tests import (
 from tests.conftest import Credential, ExternalAccount, OAuthClient, addon_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.iam_models import Group as IAMGroup
+from tests.lock_waits import submit, wait_for_lock
 from tests.tables import model_tables
-from tests.test_decisions_concurrency import submit, wait_for_lock
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -836,6 +837,39 @@ def test_reveal_credential_returns_the_secret_and_is_admin_only(
 
     # A non-admin cannot reveal another principal's secret.
     assert _execute(console_schema, reveal, {"id": credential_id}, user=plain).errors is not None
+
+
+def test_admin_refresh_of_a_revoked_credential_is_refused(
+    iam_connection_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A forced refresh asks to reconnect a revoked grant instead of reporting it refreshed."""
+
+    user = User.objects.create_user(username="refresh-revoked", email="refresh-revoked@example.com")
+    admin = _platform_admin("refresh-revoked-admin")
+    oauth_client = _oauth_client("refresh-revoked", is_oidc=False, supports_refresh=True)
+    material = {"access_token": "revoked-access", "refresh_token": "revoked-refresh", "expires_in": 3600}
+    credential = Credential.objects.upsert_for_user(user, oauth_client, CredentialKind.OAUTH, material)
+    refreshed_at = credential.last_refresh_at
+    with system_context(reason="test.integrate.credential.revoke"):
+        Credential.objects.filter(pk=credential.pk).update(status="revoked")
+    monkeypatch.setattr(
+        OAuthClientProtocol,
+        "refresh_token",
+        lambda *args, **kwargs: pytest.fail("A revoked grant must not reach the provider."),
+    )
+
+    refresh = "mutation Refresh($id: ID!) { refresh_credential(id: $id) { ok message } }"
+    result = _data(_execute(_schema("console"), refresh, {"id": str(credential.sqid)}, user=admin))
+
+    assert result["refresh_credential"] == {
+        "ok": False,
+        "message": "The credential cannot be refreshed; reconnect it.",
+    }
+    with system_context(reason="test.integrate.credential.verify"):
+        credential.refresh_from_db()
+    assert (credential.status, credential.reveal()) == ("revoked", material)
+    assert credential.last_refresh_at == refreshed_at
 
 
 def test_user_hasura_delete_reports_related_blockers(iam_connection_tables: None) -> None:
@@ -2014,6 +2048,42 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
     result = _data(_execute(console_schema, discover, {"id": oauth_client_id}, user=admin))["discover_oauth_endpoints"]
     assert result["ok"] is False
     assert "discovery url" in result["message"].lower()
+
+
+def test_discover_oauth_endpoints_persists_the_filled_endpoints(
+    iam_connection_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client row saves the endpoints discovery filled; the action only reports the issuer."""
+
+    admin = _platform_admin("discover-persist-admin")
+    client = _oauth_client(
+        "discover-persist",
+        is_oidc=False,
+        discovery_url="https://persisted.example/.well-known/openid-configuration",
+        authorize_endpoint="",
+        token_endpoint="",
+    )
+    document = {
+        "issuer": "https://persisted.example",
+        "authorization_endpoint": "https://persisted.example/authorize",
+        "token_endpoint": "https://persisted.example/token",
+    }
+    monkeypatch.setattr(oauth_discovery, "_get_json", lambda url, **kwargs: document)
+    discover = "mutation($id: ID!){ discover_oauth_endpoints(id: $id){ ok message } }"
+
+    result = _data(_execute(_schema("console"), discover, {"id": str(client.sqid)}, user=admin))
+
+    assert result["discover_oauth_endpoints"] == {
+        "ok": True,
+        "message": "Discovered endpoints for https://persisted.example.",
+    }
+    with system_context(reason="test.integrate.discovery.verify"):
+        client.refresh_from_db()
+    assert (client.authorize_endpoint, client.token_endpoint) == (
+        "https://persisted.example/authorize",
+        "https://persisted.example/token",
+    )
 
 
 def test_view_as_target_has_no_pinned_admitting_actor(

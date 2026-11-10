@@ -1,12 +1,11 @@
 """MCP server — the generic seam that mounts one FastMCP server for the process.
 
-Mounts a single StreamableHTTP ASGI app at ``/mcp`` (via the ``http_mounts``
-seam in :mod:`angee.mcp.asgi`, which :mod:`angee.asgi` discovers and gives a
-lifespan), authenticates the bearer to a REBAC actor with a FastMCP token
-verifier, and authorizes each tool with rebac. It generates a bounded, read-only
-catalogue from the console GraphQL resource registry; other addons contribute
-curated tools by adding an ``mcp_tools.py`` with a ``register(server)`` callable
-(the conventional ``mcp_tools`` seam, inferred from the file; an ``pyproject.toml``
-``[tool.angee.mcp].tools`` entry overrides the dotted reference). The catalogue owner supplies
-the bearer→actor verifier through ``ANGEE_MCP_ACTOR_VERIFIER``.
+``angee.mcp.asgi`` contributes the StreamableHTTP mount at ``/mcp`` and its native
+lifespan to ``angee.server.asgi``. A FastMCP token verifier resolves the bearer to
+a REBAC actor through ``ANGEE_MCP_ACTOR_VERIFIER``, which the catalogue owner
+supplies, and every tool runs under that actor. The server generates a bounded,
+read-only catalogue from the console GraphQL resource registry; other addons
+contribute curated tools through a conventional ``mcp_tools.py`` with a
+``register(server)`` callable. Built-in tools declare actor-only execution in
+native ``Tool.meta`` so the in-process agent runtime can admit them.
 """

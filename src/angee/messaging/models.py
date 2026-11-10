@@ -26,7 +26,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -45,6 +45,7 @@ from django.db.models.functions import MD5, Coalesce, JSONArray
 from django.db.models.sql.compiler import SQLCompiler
 from django.utils import timezone
 from django.utils.text import capfirst
+from django.views.decorators.debug import sensitive_variables
 from django_compose.models import Composable
 from rebac import (
     CheckItem,
@@ -66,6 +67,7 @@ from angee.base.fields import ModelLabelField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
+from angee.base.locks import task_locks_are_cross_process
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.identity import instance_from_public_id
@@ -79,8 +81,24 @@ from angee.base.prefetch import prefetched
 from angee.base.refs import RecordRef, generic_pointer_model
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
-from angee.integrate.models import Bridge, IntegrationCreateMode
-from angee.messaging.backends import ChannelBackend
+from angee.integrate.impl import LiveBridgeImpl
+from angee.integrate.live import (
+    PairingProjection,
+    armed_material_key,
+    await_session_exit,
+    reset_session_store,
+    skipped_password_marker,
+)
+from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationRuntimeStatus
+from angee.messaging.backends import (
+    ChannelBackend,
+    PairingActionError,
+    ParsedHandle,
+    ParsedMessage,
+    ParsedPart,
+    ParsedThread,
+)
+from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
     ChannelManager,
@@ -90,6 +108,7 @@ from angee.messaging.managers import (
     MessagePointers,
     MessageQuerySet,
     MessageStarManager,
+    MessageSubtypeManager,
     PartManager,
     ReactionManager,
     ThreadAttachmentManager,
@@ -100,7 +119,7 @@ from angee.messaging.managers import (
 )
 from angee.messaging.resources import MessageResource
 from angee.messaging.source_copies import SourceCopyMixin
-from angee.messaging.webforms import WebformSpec, default_webform_schema
+from angee.messaging.webforms import WebformChanged, WebformSpec, WebformUnavailable, default_webform_schema
 from angee.parties.models import Handle
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
@@ -1085,6 +1104,13 @@ class Channel(Bridge, inherits="integrate.Integration"):
             return cast(timedelta, capability.delivery_visibility_delay())
         return self.get_backend_class_impl().delivery_visibility_delay
 
+    def outbound_sender(self) -> tuple[str, str]:
+        """Return this connected channel's backend-owned default email sender."""
+
+        if self.lifecycle != self.Lifecycle.CONNECTED:
+            raise ValidationError("Select a connected email channel.")
+        return self.backend.outbound_sender()
+
     def validate_webform_answers(self, answers: dict[str, Any]) -> None:
         """Validate domain meaning after the public form's scalar validation.
 
@@ -1114,6 +1140,101 @@ class Channel(Bridge, inherits="integrate.Integration"):
                 models.Q(left__channel_id=self.pk) | models.Q(right__channel_id=self.pk),
             ).order_by("pk"))
         return blockers
+
+    def require_live_backend(self) -> LiveBridgeImpl:
+        """Return the selected live implementation or reject a poll-only channel."""
+
+        impl = self.live_impl
+        if not isinstance(impl, LiveBridgeImpl):
+            raise PairingActionError("This action requires a live channel.")
+        return impl
+
+    def pairing(self) -> PairingProjection:
+        """Return this live channel's vendor-neutral pairing projection."""
+
+        return self.require_live_backend().pairing()
+
+    def resume_pairing(self) -> None:
+        """Start this live channel, clearing its runtime error but retaining identity.
+
+        A stale pairing report (a dead QR, a rejected account) is dropped only when
+        no session provably runs: a running session owns the report it is showing,
+        and a process-local lock backend cannot see a worker's session at all.
+        """
+
+        impl = self.require_live_backend()
+        with system_context(reason="messaging.resume_channel_pairing"):
+            self.refresh_from_db(from_queryset=type(self)._base_manager.select_related("credential"))
+            if task_locks_are_cross_process() and not self.is_syncing:
+                self.update_live_state(identity_key=impl.state_identity_key, drop_pairing_report=True)
+            self.set_lifecycle(IntegrationLifecycle.CONNECTED)
+            self.report_status(IntegrationRuntimeStatus.OK)
+            self.start_live()
+
+    @sensitive_variables("password", "material")
+    def submit_pairing_password(self, password: str) -> None:
+        """Store one transient secret under the armed material key and signal readiness."""
+
+        self.require_live_backend()
+        if not password:
+            raise PairingActionError("A channel password is required.")
+        with system_context(reason="messaging.submit_channel_password"):
+            self.refresh_from_db(from_queryset=type(self)._base_manager.select_related("credential"))
+            material_key = armed_material_key(self.subscription_state)
+            if not material_key:
+                raise PairingActionError("This channel is not awaiting a password.")
+            credential = self.credential
+            if credential is None:
+                raise PairingActionError("This channel has no credential for password input.")
+            credential.update_material(**{material_key: password})
+            # See ``LiveSession._mark_awaiting_password`` for the awaiting tri-state.
+            self.merge_subscription_state(awaiting="")
+
+    def skip_pairing_password(self) -> None:
+        """Skip one armed optional secret round and signal that choice to the session."""
+
+        impl = self.require_live_backend()
+        with system_context(reason="messaging.skip_channel_password"):
+            self.refresh_from_db(from_queryset=type(self)._base_manager.select_related("credential"))
+            material_key = armed_material_key(self.subscription_state)
+            if not material_key:
+                raise PairingActionError("This channel is not awaiting a password.")
+            if not impl.pairing().can_skip:
+                raise PairingActionError("This channel password cannot be skipped.")
+            self.merge_subscription_state(awaiting=skipped_password_marker(material_key))
+
+    def reset_pairing(self) -> None:
+        """Stop this live channel, wipe its released session store, and restart pairing.
+
+        The store is wiped only after the session provably exited; an unproven
+        shutdown keeps it intact and refuses, so the caller can retry shortly.
+        """
+
+        impl = self.require_live_backend()
+        with system_context(reason="messaging.reset_channel_pairing"):
+            self.stop_live()
+            try:
+                await_session_exit(self)
+            except TimeoutError as error:
+                raise PairingActionError("The channel is still shutting down; try again shortly.") from error
+            except ImproperlyConfigured as error:
+                raise PairingActionError(
+                    "Resetting this channel requires a cross-process task lock backend.",
+                ) from error
+            self.refresh_from_db(from_queryset=type(self)._base_manager.select_related("credential"))
+            if self.credential is not None:
+                self.credential.update_material(**dict.fromkeys(impl.transient_material_keys))
+            reset_session_store(self)
+            impl.mark_disconnected(clear_identity=True)
+        self.resume_pairing()
+
+    def disconnect_pairing(self) -> None:
+        """Stop this live channel and release its account while retaining pairing material."""
+
+        impl = self.require_live_backend()
+        with system_context(reason="messaging.disconnect_channel"):
+            self.stop_live()
+            impl.mark_disconnected(clear_identity=False)
 
     def start_live(self) -> None:
         """Mark this channel live-desired, then dispatch the backend's live ingest.
@@ -1216,6 +1337,26 @@ class ChannelWebform(Composable, extends="messaging.Channel"):
         if is_webform:
             self.webform_spec()
 
+    def submit_webform(self, parsed: Any) -> None:
+        """Ingest one validated submission only while this observed form is still current.
+
+        The published row is re-read under its lock, so an unpublish or a
+        configuration change committed after the caller validated the answers
+        refuses the submission instead of landing it against a stale form.
+        """
+
+        with system_context(reason=f"public form {self.slug}"), transaction.atomic():
+            locked = (
+                type(self).objects.published_webforms(self.slug).filter(pk=self.pk).lock_if_supported().first()
+            )
+            if locked is None:
+                raise WebformUnavailable
+            if any(getattr(locked, name) != getattr(self, name) for name in (
+                "form_schema_version", "form_schema", "max_body_bytes", "max_field_bytes",
+            )):
+                raise WebformChanged
+            apps.get_model("messaging", "Message").objects.ingest([parsed], channel=locked, quote_edges=False)
+
     def webform_spec(self) -> WebformSpec:
         """Return this row's server-validated versioned form spec."""
 
@@ -1231,13 +1372,6 @@ class ChannelWebform(Composable, extends="messaging.Channel"):
         answers: dict[str, Any],
     ) -> Any:
         """Map one validated answer envelope to messaging's neutral ingest DTO."""
-
-        from angee.messaging.backends import (
-            ParsedHandle,
-            ParsedMessage,
-            ParsedPart,
-            ParsedThread,
-        )
 
         spec = self.webform_spec()
         email_field = spec.email_field
@@ -1757,10 +1891,9 @@ class MessageSubtype(AuditMixin, AngeeDataModel, concrete=True):
         ("note", "Note", "Internal note"),
         ("record_created", "Record created", "Record created"),
         ("record_updated", "Record updated", "Record updated"),
-        # Named debt: the key names a done record task (projects' completion post).
-        # Renaming it means migrating stored subtypes and follower choices.
-        ("activity_done", "Activity done", "Activity done"),
     )
+
+    objects = MessageSubtypeManager()
 
     sqid_prefix = "mst_"
     key = models.CharField(max_length=128)
@@ -2475,6 +2608,56 @@ class Message(
         )
         fragment = title_part.fragment if title_part is not None else None
         return fragment.text if fragment is not None else ""
+
+    def reserve_delivery(self) -> Self | None:
+        """Reserve a due draft/queue or eligible uncertain recovery under its row lock.
+
+        Returns the locked row stamped with a bounded dispatch lease, or ``None``
+        when nothing is due. FAILED rows require the explicit operator retry verb.
+        Uncertain rows retain their status and revision; recovery reserves only a
+        possibly accepted send. This reservation fences broker submission; the
+        worker's ``MessageManager.claim_delivery`` is the separate effect claim.
+        """
+
+        if self.pk is None:
+            raise ValidationError("Cannot deliver an unsaved message.")
+        with system_context(reason="messaging.delivery.queue"), transaction.atomic():
+            row = type(self).objects.sudo(reason="messaging.delivery.queue").lock_if_supported().get(pk=self.pk)
+            if row.status != row.MessageStatus.UNCERTAIN:
+                row.validate_delivery()
+            now = timezone.now()
+            if (
+                row.status not in (row.MessageStatus.DRAFT, row.MessageStatus.QUEUED, row.MessageStatus.UNCERTAIN)
+                or row.delivery_blocked or row.delivery_held
+                or (row.status == row.MessageStatus.QUEUED and row.delivery_claim is not None)
+                or (row.scheduled_at is None and row.delivery_lease_until is not None
+                    and row.delivery_lease_until > now)
+            ):
+                return None
+            if row.status == row.MessageStatus.UNCERTAIN:
+                if row.delivery_operator_only or not row.delivery_possibly_accepted:
+                    return None
+                if row.scheduled_at is not None and row.scheduled_at > now:
+                    return None
+                if row.delivery_lease_until is not None and row.delivery_lease_until > now:
+                    return None
+                # scheduled_at retains the due recovery horizon until a worker claims
+                # it; a lease alongside it fences a still-pending broker submission.
+                row.scheduled_at = row.scheduled_at or now
+                row.delivery_lease_until = now + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+                type(row)._base_manager.filter(pk=row.pk).update(
+                    scheduled_at=row.scheduled_at, delivery_lease_until=row.delivery_lease_until,
+                )
+            else:
+                row.status = row.MessageStatus.QUEUED
+                row.scheduled_at = None
+                row.delivery_lease_until = now + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+                row.save(update_fields=("status", "scheduled_at", "delivery_lease_until", "updated_at"))
+        self.status = row.status
+        self.scheduled_at = row.scheduled_at
+        self.delivery_lease_until = row.delivery_lease_until
+        self.revision = row.revision
+        return row
 
     def deliver(self) -> bool:
         """Queue this outbound message through messaging's fenced delivery owner.

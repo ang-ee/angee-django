@@ -3,24 +3,33 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Mapping
-from dataclasses import dataclass
-from pathlib import PurePosixPath
-from typing import Any, ClassVar, cast
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
+from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
-from django.db import DataError, models
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import DataError, models, transaction
+from django.utils.text import slugify
 from rebac import system_context
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
-from angee.integrate.models import Bridge, IntegrationCreateMode
+from angee.base.implementations import resolve_impl_class
+from angee.integrate.models import (
+    Bridge,
+    IntegrationCreateMode,
+    IntegrationLifecycle,
+    IntegrationManager,
+    IntegrationQuerySet,
+)
 from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions
-from angee.storage_integrate.mounts import MountBackend, MountEntry
+from angee.storage_integrate.mounts import MountBackend, MountBrowseResult, MountEntry, MountLocation
 
 _PROGRESS_BATCH_SIZE = 200
+_LOCAL_VENDOR_SLUG = "local"
 
 
 @dataclass(frozen=True)
@@ -41,12 +50,152 @@ class MountMode(models.TextChoices):
     REFERENCE = "reference", "Leave files in place"
 
 
+class MountQuerySet[MountT: Mount](IntegrationQuerySet[MountT]):
+    """Mount selections by their persisted source identity."""
+
+    def for_roots(self, roots: Iterable[str]) -> Self:
+        """Return the mounts of these source roots; one root is one mount across modes and source kinds."""
+
+        return self.filter(config__root__in=tuple(roots))
+
+
+_MountManagerBase = IntegrationManager.from_queryset(MountQuerySet)
+
+
+class MountManager[MountT: Mount](_MountManagerBase[MountT]):
+    """Provision mounts together with the drive their source synchronizes into."""
+
+    def browse_source(self, backend_class: str, *, credential: Any | None = None, token: str = "") -> MountBrowseResult:
+        """List one bounded level of a configured mount backend's source tree, before a Mount exists.
+
+        A location some mount already roots at is offered blocked as already
+        mounted, unless the backend already blocked it for its own reason.
+        """
+
+        try:
+            impl = cast(type[MountBackend], resolve_impl_class(MountBackend, backend_class))
+        except ImproperlyConfigured as error:
+            raise ValidationError({"backend_class": str(error)}) from error
+        listing = impl.browse(credential=credential, token=token)
+        tokens = (location.token for location in (listing.location, *listing.entries))
+        with system_context(reason="storage_integrate.browse_mount_source"):
+            mounted = set(self.for_roots(tokens).values_list("config__root", flat=True))
+
+        def admitted(location: MountLocation) -> MountLocation:
+            if location.token not in mounted or location.blocked_reason:
+                return location
+            return replace(location, is_mountable=False, blocked_reason="Already mounted")
+
+        return replace(listing, location=admitted(listing.location), entries=tuple(map(admitted, listing.entries)))
+
+    def provision(
+        self,
+        user: Any,
+        *,
+        name: str,
+        root: Path,
+        mode: MountMode | str,
+        backend_class: str,
+        already_mounted_message: str,
+        slug_default: str,
+        reason: str,
+    ) -> MountT:
+        """Provision one pre-validated external-source Mount and its drive, then queue its first sync.
+
+        A reference mount gets its own storage backend serving the source in
+        place; a copy mount stores under a key prefix of the configured default
+        drive's backend. ``reason`` names the caller's system scope.
+        """
+
+        display_name = str(name).strip()
+        if not display_name:
+            raise ValidationError({"name": "A mount name is required."})
+        try:
+            mount_mode = MountMode(str(getattr(mode, "value", mode)).strip().lower())
+        except ValueError as error:
+            raise ValidationError({"mode": f"Unsupported mount mode: {mode}"}) from error
+
+        backend_model = apps.get_model("storage", "Backend")
+        drive_model = apps.get_model("storage", "Drive")
+        mount_config = {"root": str(root)}
+        storage_backend_spec: tuple[str, dict[str, Any]] | None = None
+        if mount_mode == MountMode.REFERENCE:
+            source = self.model(backend_class=backend_class, config=mount_config)
+            storage_backend_spec = source.backend.storage_backend_spec()
+
+        with system_context(reason=reason), transaction.atomic():
+            if self.for_roots((str(root),)).exists():
+                raise ValidationError({"path": already_mounted_message})
+            slug = self._available_slug(
+                display_name,
+                slug_default=slug_default,
+                backend_model=backend_model,
+                drive_model=drive_model,
+            )
+            drive_slug = f"mount-{slug}"
+            if storage_backend_spec is not None:
+                storage_backend_key, storage_backend_config = storage_backend_spec
+                storage_backend = backend_model.objects.create(
+                    slug=drive_slug,
+                    label=f"{display_name} (external)",
+                    backend_class=storage_backend_key,
+                    backend_config=storage_backend_config,
+                    created_by_id=user.pk,
+                )
+                prefix = ""
+            else:
+                default = drive_model.objects.configured_default()
+                if default is None:
+                    raise ImproperlyConfigured("The configured default storage drive is missing.")
+                storage_backend = default.backend
+                prefix = f"mounts/{slug}"
+            drive = drive_model.objects.create(
+                backend_id=storage_backend.pk,
+                slug=drive_slug,
+                name=display_name,
+                prefix=prefix,
+                owner_id=user.pk,
+                created_by_id=user.pk,
+            )
+            mount = self.create(
+                vendor_id=apps.get_model("integrate", "Vendor").objects.seeded(_LOCAL_VENDOR_SLUG).pk,
+                owner_id=user.pk,
+                display_name=display_name,
+                backend_class=backend_class,
+                drive_id=drive.pk,
+                mode=mount_mode,
+                lifecycle=IntegrationLifecycle.DISCONNECTED,
+                config=mount_config,
+                created_by_id=user.pk,
+            )
+            mount.connect()
+        mount.request_sync()
+        return mount
+
+    @staticmethod
+    def _available_slug(name: str, *, slug_default: str, backend_model: Any, drive_model: Any) -> str:
+        """Return a slug whose mount-prefixed backend and drive slugs are unused."""
+
+        base = slugify(name) or slug_default
+        suffix = 1
+        candidate = base
+        while (
+            backend_model.objects.filter(slug=f"mount-{candidate}").exists()
+            or drive_model.objects.filter(slug=f"mount-{candidate}").exists()
+        ):
+            suffix += 1
+            candidate = f"{base}-{suffix}"
+        return candidate
+
+
 class Mount(Bridge, inherits="integrate.Integration"):
     """An external storage source synchronized into a dedicated drive.
 
     Per-file freshness lives on the synchronized File rows, so each source run
     reads those current facts.
     """
+
+    objects = MountManager()
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
     live_impl_field = "backend_class"
@@ -89,12 +238,17 @@ class Mount(Bridge, inherits="integrate.Integration"):
         return super()._next_sync_at(now=now)
 
     def sync(self) -> int:
-        """Reconcile the external source into this mount's storage drive."""
+        """Reconcile the external source into this mount's storage drive, then close the backend's readers."""
 
         drive = self.drive
         if drive is None:
             raise ValidationError({"drive": "The mount requires a storage drive."})
-        backend = self.backend
+        with contextlib.closing(self.backend) as backend:
+            return self._reconcile(backend, drive)
+
+    def _reconcile(self, backend: MountBackend, drive: Any) -> int:
+        """Mirror the source tree and files into ``drive`` and return the changed-file count."""
+
         backend.check_source()
         file_model = apps.get_model("storage", "File")
         folder_model = apps.get_model("storage", "Folder")

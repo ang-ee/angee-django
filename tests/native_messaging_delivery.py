@@ -45,7 +45,7 @@ from angee.integrate.signals import discovery_finished
 from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import StreamPage
 from angee.jobs.enqueue import celery_app
-from angee.messaging import delivery
+from angee.messaging import constants, delivery
 from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.events import message_ingested
@@ -287,13 +287,13 @@ class DeliveryContracts(DeliveryFixtures):
         row = self.outbound()
         self.backend.deliver.side_effect = IntegrationError(transient=True, retry_after=None)
         with system_context(reason="delivery retries"):
-            for attempt in range(1, delivery.MAX_DELIVERY_ATTEMPTS + 1):
+            for attempt in range(1, constants.MAX_DELIVERY_ATTEMPTS + 1):
                 Message.objects.filter(pk=row.pk).update(scheduled_at=None, delivery_lease_until=None)
                 row.deliver()
                 self.run_delivery(row)
                 row.refresh_from_db()
                 self.assertEqual(row.local_metadata["delivery_attempts"], attempt)
-                if attempt < delivery.MAX_DELIVERY_ATTEMPTS:
+                if attempt < constants.MAX_DELIVERY_ATTEMPTS:
                     self.assertEqual(row.status, "queued")
                     self.assertGreater(row.scheduled_at, timezone.now())
             self.assertEqual(row.status, "failed")
@@ -1185,7 +1185,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
             provider.lookup_error = IntegrationError(retry_after=timedelta(seconds=1))
             row.refresh_from_db()
             revision = row.revision
-            for attempt in range(1, delivery.MAX_RECONCILE_ATTEMPTS + 1):
+            for attempt in range(1, constants.MAX_RECONCILE_ATTEMPTS + 1):
                 at = timezone.now()
                 Message.objects.filter(pk=row.pk).update(delivery_lease_until=at, scheduled_at=at)
                 with patch("django.utils.timezone.now", return_value=at):
@@ -1194,9 +1194,9 @@ class FeedDeliveryContracts(DeliveryFixtures):
                 self.assertEqual(row.revision, revision)
                 self.assertEqual(row.delivery_reconcile_attempts, attempt)
                 self.assertEqual(row.status, "uncertain")
-                if attempt < delivery.MAX_RECONCILE_ATTEMPTS:
+                if attempt < constants.MAX_RECONCILE_ATTEMPTS:
                     self.assertEqual(
-                        row.scheduled_at, at + delivery.RECONCILE_BACKOFF * 2 ** (attempt - 1),
+                        row.scheduled_at, at + constants.RECONCILE_BACKOFF * 2 ** (attempt - 1),
                     )
                     self.assertEqual(Message.objects.release_held_messages(now=at), 0)
             self.assertTrue(row.delivery_operator_only)
@@ -1718,7 +1718,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.assertEqual(self.broker.call_args.kwargs["queue"], "prefork")
         router = Router(routes=[MapRoute({"messaging.*": {"queue": "whatsapp"}})],
                         queues=celery_app.amqp.queues, app=celery_app)
-        route = router.route({"queue": "prefork"}, delivery.DELIVER_MESSAGE_TASK, kwargs={})
+        route = router.route({"queue": "prefork"}, constants.DELIVER_MESSAGE_TASK, kwargs={})
         self.assertEqual(route["queue"].name, "prefork")
 
     def test_lost_reconcile_claims_use_the_same_attempt_cap_as_settled_failures(self):
@@ -1727,7 +1727,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         provider.publish_error = DeliveryUncertain("Acknowledgement lost.")
         self.run_delivery(row)
         with system_context(reason="repeated recovery worker loss"):
-            for attempt in range(1, delivery.MAX_RECONCILE_ATTEMPTS + 1):
+            for attempt in range(1, constants.MAX_RECONCILE_ATTEMPTS + 1):
                 claimed = Message.objects.claim_delivery(row.pk, token=row.external_id, reconcile=True)
                 self.assertIsNotNone(claimed)
                 self.assertEqual(claimed.delivery_reconcile_attempts, attempt)

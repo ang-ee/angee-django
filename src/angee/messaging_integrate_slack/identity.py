@@ -40,7 +40,7 @@ def parsed_message(
 ) -> ParsedMessage | None:
     """Map one Slack history/reply item onto a flat conversation thread."""
 
-    current, event_subtype = _current_message(raw)
+    current, event_subtype = current_message(raw)
     subtype = str(current.get("subtype") or "")
     if event_subtype != "message_changed" and (subtype in _NOISE_SUBTYPES or subtype not in _ALLOWED_SUBTYPES):
         return None
@@ -127,8 +127,12 @@ def handle_for_user(
     )
 
 
-def _current_message(raw: Mapping[str, Any]) -> tuple[Mapping[str, Any], str]:
-    """Unwrap a future live-layer edit event; polling already returns current text."""
+def current_message(raw: Mapping[str, Any]) -> tuple[Mapping[str, Any], str]:
+    """Unwrap a live-layer ``message_changed`` event to its current message and event subtype.
+
+    Polling already returns current messages, which come back unchanged with an
+    empty event subtype.
+    """
 
     subtype = str(raw.get("subtype") or "")
     current = raw.get("message")

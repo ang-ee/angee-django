@@ -215,6 +215,34 @@ def test_circle_subtree_and_ancestor_scopes(composed_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_circle_reads_follow_the_queryset_actor_not_the_ambient_one(composed_tables: None) -> None:
+    """Circle names, member counts and unassigned people read through one actor's memberships."""
+
+    del composed_tables
+    with system_context(reason="test per-actor circles"):
+        owner, reader = _user("circle-actor-owner"), _user("circle-actor-reader")
+        shared = Person._base_manager.create(display_name="Shared", created_by=owner)
+        loose = Person._base_manager.create(display_name="Loose", created_by=owner)
+        friends = Circle._base_manager.create(name="Friends", created_by=owner)
+        climbing = Circle._base_manager.create(name="Climbing", created_by=reader)
+        CircleMember._base_manager.create(circle=friends, party=shared, created_by=owner)
+        for member in (shared, loose):
+            CircleMember._base_manager.create(circle=climbing, party=member, created_by=reader)
+        for member in (shared, loose):
+            _grant(Party._base_manager.get(pk=member.pk), "identity_reader", reader)
+
+    with actor_context(owner):
+        prefetched = Party.objects.with_actor(reader).filter(pk=shared.pk).with_circle_names().get()
+        assert prefetched.circle_names() == ["Climbing"]
+        assert Party.objects.with_actor(reader).get(pk=shared.pk).circle_names() == ["Climbing"]
+        assert Party.objects.get(pk=shared.pk).circle_names() == ["Friends"]
+        counts = Circle.objects.with_actor(reader).with_member_counts().values_list("name", "_member_count")
+        assert dict(counts) == {"Climbing": 2}
+        assert not Party.objects.with_actor(reader).filter(pk=loose.pk).unassigned().exists()
+        assert Party.objects.filter(pk=loose.pk).unassigned().exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_circle_tree_never_straddles_owners(composed_tables: None) -> None:
     """hierarchy_scope_fields=("owner",): a parent from another owner is rejected."""
 
@@ -383,7 +411,7 @@ def _name(link: Any, name: str) -> None:
 
 
 def _resolved_owner(handle: Any) -> Any:
-    Handle.objects.resolve(handle)
+    handle.resolve()
     handle.refresh_from_db()
     return handle.party_id
 

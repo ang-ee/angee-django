@@ -335,7 +335,7 @@ def test_human_and_agent_answers_close_without_applying_proposals(records, kind)
     }
     before = vaults[0].name
     decision = admit(records, [vaults[0], drives[0]], proposal=proposal)
-    answered = Decision.objects.decide(decision.pk, actor=reviewer, revision=decision.revision, chosen=["confirm"])
+    answered = decision.decide(actor=reviewer, revision=decision.revision, chosen=["confirm"])
     assert not answered.is_open
     assert answered.answered_by_id == reviewer.pk and answered.answered_at is not None
     assert answered.verdict == ["confirm"]
@@ -353,7 +353,7 @@ def test_invalid_answers_and_record_edits_leave_the_question_open(records):
     reviewer = records[1]
     for _ in range(4):
         with pytest.raises(ValidationError):
-            Decision.objects.decide(decision.pk, actor=reviewer, revision=decision.revision, chosen=["unknown"])
+            decision.decide(actor=reviewer, revision=decision.revision, chosen=["unknown"])
     record.with_actor(reviewer).name = "Direct edit"
     record.save(update_fields={"name"})
     decision.refresh_from_db()
@@ -367,7 +367,7 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
     targets = vaults if owner == "vault" else drives
     admit(records, [targets[0]])
     closed = admit(records, [targets[1]])
-    Decision.objects.decide(closed.pk, actor=reviewer, revision=closed.revision, chosen=["confirm"])
+    closed.decide(actor=reviewer, revision=closed.revision, chosen=["confirm"])
     # An actor can read a record without being allowed to read its question.
     hidden = admit(records, [targets[2]], assignees=(issuer,))
     model = type(targets[0])

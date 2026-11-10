@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Self, TypedDict
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import PermissionDenied, SubjectRef, check_new, current_actor, permission_expression, to_subject_ref
+from rebac.actors import is_sudo
 from rebac.errors import MissingActorError
 from rebac.resources import model_resource_type
 
@@ -14,10 +15,12 @@ from angee.base.fields.state import enum_member_for
 from angee.base.managers import AngeeManager
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.querysets import AngeeQuerySet
+from angee.messaging.managers import ThreadManager, ThreadQuerySet
 
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
+    from angee.messaging.models import Thread
     from angee.spaces.models import Group, Membership
 
 
@@ -104,6 +107,18 @@ class MembershipManager[MembershipT: Membership](_MembershipManagerBase[Membersh
         group/party key.
         """
 
+        return self._confirm(group=group, party=party, role=role)
+
+    def provision_confirmed(self, *, group: Group, party: Any, role: Any, provisioned_by: Any) -> MembershipT:
+        """Provision one confirmed seat from a trusted system context, attributed to ``provisioned_by``."""
+
+        if not is_sudo():
+            raise PermissionDenied("System context is required to provision a roster seat.")
+        return self._confirm(group=group, party=party, role=role, provisioned_by=provisioned_by)
+
+    def _confirm(self, *, group: Group, party: Any, role: Any, provisioned_by: Any = None) -> MembershipT:
+        """Persist one confirmed seat for authorized admission or system provisioning."""
+
         role_member = enum_member_for(self.model.MembershipRole, role)
         if role_member is None:
             raise ValidationError({"role": ["Select a valid membership role."]})
@@ -112,19 +127,26 @@ class MembershipManager[MembershipT: Membership](_MembershipManagerBase[Membersh
             memberships = self.get_queryset().lock_if_supported().filter(group=group, party=party)
             membership = memberships.first()
             if membership is not None:
-                if not membership.has_access("write"):
+                if provisioned_by is None and not membership.has_access("write"):
                     raise PermissionDenied("write access to this membership is required")
-                update_fields = ["confidence", "is_confirmed", "is_dismissed", "updated_at"]
+                confirmed = {"confidence": 1.0, "is_confirmed": True, "is_dismissed": False}
+                if (
+                    provisioned_by is not None
+                    and membership.role == role_member
+                    and all(getattr(membership, name) == value for name, value in confirmed.items())
+                ):
+                    # Provisioning is idempotent; a manual confirmation always records its write.
+                    return membership
+                update_fields = [*confirmed, "updated_at"]
                 if membership.role != role_member:
                     membership.role = role_member
                     update_fields.append("role")
-                membership.confidence = 1.0
-                membership.is_confirmed = True
-                membership.is_dismissed = False
+                for name, value in confirmed.items():
+                    setattr(membership, name, value)
                 membership.save(update_fields=update_fields)
                 return membership
 
-            actor = self.check_role_create(group=group, role=role_member)
+            actor = self.check_role_create(group=group, role=role_member) if provisioned_by is None else None
             membership = self.model(
                 group=group,
                 party=party,
@@ -133,9 +155,29 @@ class MembershipManager[MembershipT: Membership](_MembershipManagerBase[Membersh
                 is_confirmed=True,
                 is_dismissed=False,
             )
+            if provisioned_by is not None:
+                membership.created_by_id = provisioned_by.pk
+                membership.updated_by_id = provisioned_by.pk
             membership.full_clean(validate_unique=False, validate_constraints=False)
-            membership.sudo(reason="spaces.membership.add_confirmed")
+            if actor is not None:
+                membership.sudo(reason="spaces.membership.add_confirmed")
             membership.save()
             if actor is not None:
                 membership.with_actor(actor)
             return membership
+
+
+class ThreadSpaceQuerySet[ThreadT: Thread](ThreadQuerySet[ThreadT]):
+    """Thread selections Spaces contributes through its group audience."""
+
+    def bound_to_groups(self) -> Self:
+        """Select group conversations bound to at least one governed group audience."""
+
+        return self.filter(modality=self.model.Modality.GROUP, groups__isnull=False).distinct()
+
+
+_ThreadSpaceManagerBase = ThreadManager.from_queryset(ThreadSpaceQuerySet)
+
+
+class ThreadSpaceManager[ThreadT: Thread](_ThreadSpaceManagerBase[ThreadT]):
+    """Spaces' thread manager, composed onto ``messaging.Thread`` as ``Thread.spaces``."""

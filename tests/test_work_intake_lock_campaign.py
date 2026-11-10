@@ -9,10 +9,10 @@ from rebac import actor_context
 
 from angee.base.models.locks import StaleRevisionError
 from angee.projects.testing.models import Task
+from tests.lock_waits import submit
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
-from tests.test_decisions_concurrency import submit
 from tests.test_projects_wave3_campaign import project_case as project_case
 
 pytestmark = [

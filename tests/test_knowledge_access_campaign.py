@@ -199,6 +199,23 @@ def test_binding_writes_require_both_ends_and_are_role_keyed(composed_permission
         assert list(RecordBinding.objects.values_list("pk", flat=True)) == [other_role.pk]
 
 
+def test_binding_selections_chain_on_a_selected_population_and_keep_its_actor(composed_permissions):
+    author, stranger = create_user("binding-chain-author"), create_user("binding-chain-stranger")
+    knowledge = vault_for(author, name="Chain knowledge")
+    record = vault_for(author, name="Chain record")
+    with actor_context(author):
+        page = Page.objects.create_in(knowledge, title="Chained")
+        RecordBinding.objects.upsert(page=page, target=record)
+        reference = RecordBinding.objects.upsert(page=page, target=record, role="reference")
+        vault_reference = RecordBinding.objects.upsert(vault=knowledge, target=record, role="reference")
+
+    selected = RecordBinding.objects.with_actor(author).filter(role="reference")
+    assert set(selected.for_record(record).values_list("pk", flat=True)) == {reference.pk, vault_reference.pk}
+    assert list(selected.pages_for_record(record).values_list("pk", flat=True)) == [reference.pk]
+    assert list(selected.for_knowledge(page).values_list("pk", flat=True)) == [reference.pk]
+    assert not RecordBinding.objects.with_actor(stranger).filter(role="reference").for_record(record).exists()
+
+
 def test_binding_refuses_undeclared_and_untyped_targets(composed_permissions):
     author = create_user("binding-target-owner")
     knowledge = vault_for(author, name="Knowledge")

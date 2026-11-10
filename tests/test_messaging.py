@@ -1558,7 +1558,7 @@ def test_threaded_model_post_accepts_storage_attachments(composed_tables: None, 
     with system_context(reason="test threaded model attachment setup"):
         user = user_model.objects.create_user(username="attach-author", email="attach-author@example.com")
         _storage_drive(tmp_path, owner=user)
-        file = StorageFile.objects.ingest_bytes(b"Attachment body", filename="brief.txt", owner_id=user.pk)
+        file, _created = StorageFile.objects.ingest_bytes(b"Attachment body", filename="brief.txt", owner_id=user.pk)
         ticket = ThreadedTicket.objects.create(title="Attachment case")
 
     with actor_context(user):
@@ -3074,6 +3074,24 @@ def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) 
     assert titles[f"{prefix}g-2"] == "Kept"
     assert titles[f"{prefix}g-3"] is None
     assert titles[f"{Thread.objects.chat_key_prefix(other)}g-1"] is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_name_untitled_names_only_the_selected_threads(channel: Any) -> None:
+    """The queryset verb never titles a thread the caller's selection excludes."""
+
+    with system_context(reason="test name untitled selection"):
+        selected = Thread.objects.create(channel=channel, external_id="selected")
+        excluded = Thread.objects.create(channel=channel, external_id="excluded")
+        named = Thread.objects.filter(pk=selected.pk).name_untitled(
+            {selected.pk: "Selected", excluded.pk: "Excluded"},
+        )
+        selected.refresh_from_db()
+        excluded.refresh_from_db()
+
+    assert named == 1
+    assert selected.title.text == "Selected"
+    assert excluded.title_id is None
 
 
 @pytest.mark.django_db(transaction=True)

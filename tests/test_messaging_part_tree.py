@@ -230,7 +230,7 @@ def test_part_database_load_eagerly_fetches_content_without_creating_a_cache(
     message, parts = part_tree
     with system_context(reason="messaging part file setup"), mute_changes():
         _storage_drive(tmp_path, owner=None)
-        file = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
+        file, _created = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
         Part.objects.filter(pk=parts["attachment"].pk).update(file_id=file.pk)
     with CaptureQueriesContext(connection) as queries:
         ordered = Part.objects.reading_order_for_message(message)
@@ -259,7 +259,7 @@ def test_prefetched_tree_reloads_incomplete_fields_and_content(
     message, parts = part_tree
     with system_context(reason="messaging cached content setup"), mute_changes():
         _storage_drive(tmp_path, owner=None)
-        file = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
+        file, _created = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
         Part.objects.filter(pk=parts["attachment"].pk).update(file_id=file.pk)
         queryset = Part._base_manager.select_related("fragment", "file", "file__mime_type")
         if cache_state == "deferred_parent":
@@ -278,3 +278,27 @@ def test_prefetched_tree_reloads_incomplete_fields_and_content(
         assert loaded[attachment.pk].file.filename == "note.txt"
         assert loaded[attachment.pk].file.mime_type.mime_type == "text/plain"
     assert len(queries) == (0 if cache_state == "complete" else 1)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_attach_file_appends_one_part_per_file_and_returns_it_again(
+    part_tree: tuple[Message, dict[str, Part]], tmp_path: Path
+) -> None:
+    """A replayed attachment returns the existing part instead of adding a second one."""
+
+    message, parts = part_tree
+    with system_context(reason="messaging attach file"), mute_changes():
+        _storage_drive(tmp_path, owner=None)
+        file, _created = File.objects.ingest_bytes(b"Attached text", filename="note.txt")
+        attached = Part.objects.attach_file(message, file)
+        again = Part.objects.attach_file(message, file, name="renamed.txt", position=9)
+    assert again.pk == attached.pk
+    assert Part._base_manager.filter(message=message, file=file).count() == 1
+    assert attached.position == max(part.position for part in parts.values()) + 1
+    assert (attached.type, attached.name, attached.disposition, attached.role) == (
+        "text/plain",
+        "note.txt",
+        "attachment",
+        "body",
+    )
+    assert attached.created_by_id == message.created_by_id

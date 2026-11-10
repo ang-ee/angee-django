@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import sqlite3
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,6 +18,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.graphql.testing.documents import execute_schema
+from angee.integrate_iphone.backup import SQLITE_HEADER, SQLITE_HEADER_LENGTH, IosBackup
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate_iphone.connect import create_iphone_backup_mount
 from angee.storage_integrate_iphone.mounts import IphoneBackupMountBackend
@@ -32,7 +34,6 @@ from tests.test_integrate_iphone import (
     build_iphone_backup,
 )
 
-storage_integrate_connect = importlib.import_module("angee.storage_integrate.connect")
 storage_integrate_iphone_schema = importlib.import_module(
     "angee.storage_integrate_iphone.schema"
 )
@@ -103,11 +104,7 @@ def queued_mounts(monkeypatch: pytest.MonkeyPatch) -> list[Mount]:
     """Capture eager first-sync dispatches at the shared provisioning owner."""
 
     queued: list[Mount] = []
-    monkeypatch.setattr(
-        storage_integrate_connect,
-        "queue_bridge_sync",
-        lambda mount, **_kwargs: queued.append(mount),
-    )
+    monkeypatch.setattr(Mount, "request_sync", lambda mount, **_kwargs: queued.append(mount))
     return queued
 
 
@@ -308,3 +305,60 @@ def test_connect_iphone_backup_graphql_denies_non_admin(
 
     assert result.errors is not None
     assert queued_mounts == []
+
+
+def test_iphone_backend_close_releases_the_manifest_reader(tmp_path: Path, settings: Any) -> None:
+    """Closing the cycle's backend closes the manifest connection and forgets its blob paths; twice is harmless."""
+
+    root = build_iphone_backup(tmp_path / "backup")
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    settings.ANGEE_DATA_DIR = str(tmp_path / "data")
+    backend = IphoneBackupMountBackend(Mount(config={"root": str(root)}))
+    reader = backend.backup
+    assert list(backend.iter_entries())
+    assert backend._blob_by_path
+
+    backend.close()
+    assert backend._backup_reader is None
+    assert backend._blob_by_path == {}
+    with pytest.raises(sqlite3.ProgrammingError):
+        reader._manifest.execute("SELECT 1")
+    backend.close()
+
+
+def test_iphone_backup_sqlite_probe_reads_only_the_fixed_header(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A backed-up file is a SQLite store by its header alone; a missing or other file is not."""
+
+    root = build_iphone_backup(tmp_path / "backup")
+    backup = IosBackup(root)
+    try:
+        blob = backup.blob_path(CAMERA_DOMAIN, CAMERA_PATH)
+        assert blob is not None
+        assert not backup.has_sqlite_file(CAMERA_DOMAIN, CAMERA_PATH)
+        assert not backup.has_sqlite_file(NOTES_DOMAIN, "Library/Notes/absent.db")
+        blob.write_bytes(SQLITE_HEADER + b"x" * 100_000)
+        reads: list[int] = []
+        open_path = Path.open
+
+        class CountedStream:
+            def __init__(self, path: Path) -> None:
+                self.stream = open_path(path, "rb")
+
+            def __enter__(self) -> CountedStream:
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                self.stream.close()
+
+            def read(self, size: int = -1) -> bytes:
+                reads.append(size)
+                return self.stream.read(size)
+
+        monkeypatch.setattr(Path, "open", lambda path, *args, **kwargs: CountedStream(path))
+        assert backup.has_sqlite_file(CAMERA_DOMAIN, CAMERA_PATH)
+        assert reads == [SQLITE_HEADER_LENGTH]
+    finally:
+        backup.close()

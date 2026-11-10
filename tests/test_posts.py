@@ -14,6 +14,7 @@ table) and feed backend live in ``tests.conftest``.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -157,9 +158,10 @@ def test_due_feed_is_queued_once_as_feed(posts_tables: None, monkeypatch: pytest
         feed.next_sync_at = _AT
         feed.save(update_fields=["next_sync_at"])
     queued: list[tuple[str, int]] = []
+    # Patched on the Channel ancestor so a separate ancestor enqueue would be recorded too.
     monkeypatch.setattr(
-        scheduler,
-        "queue_bridge_sync",
+        Channel,
+        "request_sync",
         lambda bridge, **kwargs: queued.append((bridge._meta.label, bridge.pk)),
     )
 
@@ -453,6 +455,55 @@ def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None) -> No
     assert message.thread.modality == Thread.Modality.PUBLIC_THREAD
     assert message.thread.visibility == Thread.Visibility.PUBLIC
     assert message.is_original_post is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reply_counts_report_measured_posts_of_one_channel_and_omit_unmeasured_ones(posts_tables: None) -> None:
+    """A measured zero is reported; a post without metrics and another channel's post are absent."""
+
+    del posts_tables
+    feed = _feed("reply-counts")
+    other = _feed("reply-counts-other")
+    with system_context(reason="test reply counts"):
+        land_posts(
+            feed,
+            [
+                _post("measured", metrics=ParsedMetrics(reply_count=3)),
+                _post("zero", metrics=ParsedMetrics(reply_count=0)),
+                _post("unmeasured"),
+            ],
+            owner_id=feed.owner_id,
+        )
+        land_posts(other, [_post("elsewhere", metrics=ParsedMetrics(reply_count=9))], owner_id=other.owner_id)
+        counts = PostMetrics.objects.reply_counts(
+            channel=feed,
+            platform="youtube",
+            external_ids=["measured", "zero", "unmeasured", "elsewhere"],
+        )
+    assert counts == {"measured": 3, "zero": 0}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_provider_visibility_restores_only_provider_stamped_trash(posts_tables: None) -> None:
+    """A provider unhide restores the trash it stamped, never an operator's later removal."""
+
+    del posts_tables
+    feed = _feed("provider-moderation")
+    with system_context(reason="test provider moderation"):
+        land_posts(feed, [replace(_post("moderated"), hidden=True)], owner_id=feed.owner_id)
+        message = Message._base_manager.get(external_id="moderated")
+        assert message.is_trashed and message.provider_hidden
+        assert message.trash_reason == Message.PROVIDER_TRASH_REASON
+
+        message.apply_provider_visibility(hidden=False)
+        message.refresh_from_db()
+        assert not message.is_trashed
+        assert "provider_hidden" not in message.local_metadata
+
+        message.trash(reason="Removed by an operator")
+        message.apply_provider_visibility(hidden=False)
+        message.refresh_from_db()
+        assert message.is_trashed and not message.provider_hidden
 
 
 def test_thread_public_extension_has_no_json_tags_column() -> None:

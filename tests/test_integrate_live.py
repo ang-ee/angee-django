@@ -365,7 +365,6 @@ def test_live_session_hands_off_submitted_password_and_consumes_it_once(
 
     from angee.integrate import session as session_module
     from angee.integrate.sync import BridgeProgressReporter
-    from angee.messaging.connect import submit_channel_password
 
     monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
     channel = _live_channel("fake-live-password")
@@ -381,7 +380,7 @@ def test_live_session_hands_off_submitted_password_and_consumes_it_once(
         _wait_until(lambda: session.pairing is PairingState.AWAITING_PASSWORD)
         with system_context(reason="test live password operator"):
             operator_channel = type(channel).objects.get(pk=channel.pk)
-            submit_channel_password(operator_channel, password)
+            operator_channel.submit_pairing_password(password)
             submitted_material.append(operator_channel.credential.reveal()["password"])
 
     operator_thread = threading.Thread(target=submit_password, daemon=True)
@@ -445,7 +444,6 @@ def test_optional_material_round_skips_without_touching_durable_password(
 
     from angee.integrate import session as session_module
     from angee.integrate.sync import BridgeProgressReporter
-    from angee.messaging.connect import skip_channel_password
 
     monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
     channel = _live_channel("fake-live-recovery-skip")
@@ -464,7 +462,7 @@ def test_optional_material_round_skips_without_touching_durable_password(
                 operator_channel = type(channel).objects.get(pk=channel.pk)
                 assert operator_channel.subscription_state["awaiting"] == "recovery_key"
                 assert operator_channel.live_impl.pairing().can_skip is True
-                skip_channel_password(operator_channel)
+                operator_channel.skip_pairing_password()
         except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
             operator_failures.append(error)
 
@@ -578,7 +576,6 @@ def test_second_round_resubmit_delivers_the_new_password(
 
     from angee.integrate import session as session_module
     from angee.integrate.sync import BridgeProgressReporter
-    from angee.messaging.connect import submit_channel_password
 
     monkeypatch.setattr(session_module, "AWAITING_PASSWORD_WAKE_SECONDS", 0.01)
     channel = _live_channel("fake-live-password-round2")
@@ -602,7 +599,7 @@ def test_second_round_resubmit_delivers_the_new_password(
             )
             with system_context(reason="test first password operator"):
                 first_operator_channel = type(channel).objects.get(pk=channel.pk)
-                submit_channel_password(first_operator_channel, "wrong-password-1")
+                first_operator_channel.submit_pairing_password("wrong-password-1")
             assert session.first_password_received.wait(timeout=0.5)
             _wait_until(
                 lambda: (
@@ -612,7 +609,7 @@ def test_second_round_resubmit_delivers_the_new_password(
             )
             with system_context(reason="test second password operator"):
                 second_operator_channel = type(channel).objects.get(pk=channel.pk)
-                submit_channel_password(second_operator_channel, "correct-password-2")
+                second_operator_channel.submit_pairing_password("correct-password-2")
                 assert second_operator_channel.credential.reveal()["password"] == "correct-password-2"
         except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
             operator_failures.append(error)
@@ -933,7 +930,6 @@ def test_ensure_bridge_sessions_latches_runtime_error_until_resume(
     """A failed handshake stays quiet until the operator's resume clears it."""
 
     from angee.integrate import tasks as tasks_module
-    from angee.messaging.connect import resume_channel_pairing
 
     sent: list[str] = []
     monkeypatch.setattr(
@@ -948,7 +944,7 @@ def test_ensure_bridge_sessions_latches_runtime_error_until_resume(
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 0}
     assert sent == []
 
-    resume_channel_pairing(channel)
+    channel.resume_pairing()
 
     channel.refresh_from_db()
     assert channel.runtime_status == IntegrationRuntimeStatus.OK
@@ -1664,8 +1660,6 @@ def test_a_transient_failure_drops_the_dead_sessions_pairing_report(live_tables:
 def test_operator_start_and_repair_end_a_retry_streak(live_tables: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """An explicit start is never deferred and restarts the backoff; so does the generic connect."""
 
-    from angee.messaging.connect import resume_channel_pairing
-
     sent: list[Any] = []
     monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
     channel = _live_channel("fake-live-operator-start")
@@ -1679,7 +1673,7 @@ def test_operator_start_and_repair_end_a_retry_streak(live_tables: Any, monkeypa
         assert channel.live_retry_attempts == 2 and channel.live_retry_at is not None
 
     fail_twice()
-    resume_channel_pairing(channel)
+    channel.resume_pairing()
     channel.refresh_from_db()
     assert len(sent) == 1
     assert channel.live_retry_at is None and channel.live_retry_attempts == 0

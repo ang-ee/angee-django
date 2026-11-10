@@ -1,61 +1,21 @@
 """PostgreSQL first-answer concurrency through independent connections."""
 
 from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
-from queue import Queue
-from time import monotonic, sleep
 
 import pytest
-from django.db import close_old_connections, connection, connections, transaction
+from django.db import connection, transaction
 from rebac import system_context
 
 from angee.base.models.locks import StaleRevisionError
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision
 from tests.conftest import create_user, vault_for
+from tests.lock_waits import submit, wait_for_lock
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
-
-
-def submit(pool, call):
-    """Start an independent database connection and return its real backend pid."""
-
-    started = Queue()
-
-    def invoke():
-        close_old_connections()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT pg_backend_pid()")
-                started.put(cursor.fetchone()[0])
-            return call()
-        finally:
-            connections.close_all()
-
-    # The worker runs in a copy of the caller's context: the test's attribution boundary
-    # and actor reach its captured writes the way the framework pool carries them.
-    future = pool.submit(copy_context().run, invoke)
-    return future, started.get(timeout=10)
-
-
-def wait_for_lock(pid, future):
-    """Prove a worker is blocked in PostgreSQL before releasing the held row."""
-
-    deadline = monotonic() + 10
-    while monotonic() < deadline:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT pg_stat_clear_snapshot()")
-            cursor.execute("SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s", [pid])
-            state = cursor.fetchone()
-        if state == ("Lock",):
-            return
-        if future.done():
-            pytest.fail(f"Worker finished before waiting on a row lock: {future.result()!r}")
-        sleep(0.01)
-    pytest.fail(f"PostgreSQL backend {pid} did not report wait_event_type='Lock'.")
 
 
 def test_competing_assignees_cannot_replace_the_first_answer(composed_tables):
@@ -71,12 +31,10 @@ def test_competing_assignees_cannot_replace_the_first_answer(composed_tables):
             Decision.system_queryset().select_for_update().get(pk=decision.pk)
             contender, pid = submit(
                 pool,
-                lambda: Decision.objects.decide(
-                    decision, actor=reviewer, chosen=["reject"], revision=decision.revision
-                ),
+                lambda: decision.decide(actor=reviewer, chosen=["reject"], revision=decision.revision),
             )
             wait_for_lock(pid, contender)
-            Decision.objects.decide(decision, actor=requester, chosen=["accept"], revision=decision.revision)
+            decision.decide(actor=requester, chosen=["accept"], revision=decision.revision)
         with pytest.raises(StaleRevisionError):
             contender.result(timeout=10)
     retained = Decision.system_queryset().get(pk=decision.pk)

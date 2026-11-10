@@ -22,7 +22,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count, Prefetch
-from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
 from rebac import PermissionDenied, check_new, generic_target, system_context, to_subject_ref
@@ -71,9 +70,7 @@ from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationManager
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
-from angee.integrate.oauth.registrations import OAuthRegistrationExtension
-from angee.integrate.queue import queue_bridge_sync
-from angee.integrate.registry import models_with
+from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
@@ -812,17 +809,15 @@ class ConnectionMutation:
             id,
             reason="integrate.graphql.discover_oauth_endpoints",
         ) as oauth_client:
-            if not str(getattr(oauth_client, "discovery_url", "") or ""):
-                return ActionResult(ok=False, message="Set an OIDC metadata discovery URL first.")
             try:
-                discovery = oauth_client.discover_endpoints()
+                discovery = oauth_client.discover_endpoints(persist=True)
+            except ValidationError as error:
+                return ActionResult(ok=False, message=exception_text(error))
             except OAuthFlowError as error:
                 return ActionResult(ok=False, message=error.public_message)
             except Exception:  # noqa: BLE001 — provider diagnostics stay outside the action payload.
                 return ActionResult(ok=False, message="OIDC metadata discovery failed.")
-            oauth_client.save()
-        issuer = discovery.get("issuer") if isinstance(discovery, dict) else None
-        return ActionResult(ok=True, message=f"Discovered endpoints for {issuer or 'provider'}.")
+        return ActionResult(ok=True, message=f"Discovered endpoints for {discovery.get('issuer') or 'provider'}.")
 
     @strawberry.mutation
     def connect_account_complete(
@@ -1068,7 +1063,12 @@ class IntegrationConnectionMixin:
     def can_connect(self) -> bool:
         """Project the model's owner-scoped OAuth Connect admission."""
 
-        return bool(cast(Any, self).can_connect(write_access="write" in held_permissions(cast(Any, self), ("write",))))
+        return bool(
+            cast(Any, self).can_connect(
+                write_access="write" in held_permissions(cast(Any, self), ("write",)),
+                ready_slugs=operation_registration_slugs(),
+            )
+        )
 
     @strawberry_django.field(
         only=[
@@ -1153,7 +1153,7 @@ class IntegrationOAuthMixin:
     def is_oauth_connectable(self) -> bool:
         """Read public registration readiness without resolving protected relations."""
 
-        return bool(cast(Any, self).is_oauth_connectable())
+        return bool(cast(Any, self).is_oauth_connectable(ready_slugs=operation_registration_slugs()))
 
 
 @strawberry.type
@@ -1568,10 +1568,7 @@ def _authorized_failure(
         if linked.stream_id != epoch.pk:
             raise ValidationError("The failure link does not belong to the selected stream.")
         owner = linked
-    for failure in owner.failures():
-        if failure.slot == slot:
-            return failure
-    raise ValidationError("The retained sync failure no longer exists.")
+    return owner.failure_at(slot)
 
 
 @strawberry.type
@@ -1843,13 +1840,8 @@ class IntegrationActionMutation:
     def sync_integration(self, id: PublicID) -> ActionResult:
         """Queue every bridge of one integration for sync now."""
 
-        queued = 0
         with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
-            now = timezone.now()
-            for model in models_with(base=Bridge):
-                for bridge in model._default_manager.of_concrete_type().filter(pk=integration.pk).order_by("pk"):
-                    if queue_bridge_sync(bridge, now=now):
-                        queued += 1
+            queued = integration.request_sync()
         if queued == 0:
             return ActionResult(ok=True, message="No bridges need a new sync.")
         return ActionResult(ok=True, message=f"Queued {queued} bridge sync(s).")

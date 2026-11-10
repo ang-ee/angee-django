@@ -6,10 +6,11 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from rebac import system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
-from angee.messaging.testing.models import Handle, Party
+from angee.messaging.testing.models import Handle, Party, Person
 
 
 def _same_as_pair(owner: Any) -> set[Any]:
@@ -48,3 +49,18 @@ def test_same_as_pairs_run_under_system_context_without_an_actor(composed_tables
         candidates = Party.objects.same_as_pairs()
 
     assert [{candidate.left.pk, candidate.right.pk} for candidate in candidates] == [pair]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_merge_scalar_fields_admit_person_choices_only_between_people(composed_tables: None) -> None:
+    """Merge validation and its GraphQL metadata share the row's declared scalar choices."""
+
+    del composed_tables
+    with system_context(reason="test.parties.merge_fields"):
+        party = Party.objects.create(display_name="Plain")
+        person = Person.objects.create(display_name="Person")
+        assert party.merge_scalar_fields == ("display_name", "notes", "first_met_note")
+        assert set(party.merge_scalar_fields) < set(person.merge_scalar_fields)
+        assert "birthday" in person.merge_scalar_fields
+        with pytest.raises(ValidationError, match="Unsupported merge field"):
+            party.apply_merge_field_overrides(person, {"birthday": "2000-01-01"})

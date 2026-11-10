@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
-from queue import Queue
-from time import monotonic, sleep
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import close_old_connections, connection, connections, transaction
+from django.db import connection, transaction
 from rebac import actor_context, system_context
 from strawberry import Schema
 from strawberry.types import ExecutionResult
@@ -18,6 +15,7 @@ from strawberry.types import ExecutionResult
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project, Task
+from tests.lock_waits import submit, wait_for_lock
 from tests.proposals_campaign import ProposalCampaign, as_actor
 from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
@@ -30,42 +28,6 @@ pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
-
-
-def _submit_operation[T](pool: ThreadPoolExecutor, call: Callable[[], T]) -> tuple[Future[T], int]:
-    """Run a real operation on its own connection and identify its PostgreSQL backend."""
-
-    started: Queue[int] = Queue()
-
-    def invoke() -> T:
-        close_old_connections()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SET lock_timeout TO '5s'")
-                cursor.execute("SELECT pg_backend_pid()")
-                started.put(cursor.fetchone()[0])
-            return call()
-        finally:
-            connections.close_all()
-
-    operation = pool.submit(invoke)
-    return operation, started.get(timeout=10)
-
-
-def _wait_for_lock[T](pid: int, operation: Future[T]) -> None:
-    """Prove the operation waits on a row lock before its competitor submits."""
-
-    deadline = monotonic() + 10
-    while monotonic() < deadline:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT pg_stat_clear_snapshot()")
-            cursor.execute("SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s", [pid])
-            if cursor.fetchone() == ("Lock",):
-                return
-        if operation.done():
-            pytest.fail(f"Operation finished before waiting on the round: {operation.result()!r}")
-        sleep(0.01)
-    pytest.fail("Operation did not wait for the held round lock.")
 
 
 @pytest.mark.parametrize("path", ("instance", "queryset", "round_cascade", "task_cascade", "project_cascade"))
@@ -101,8 +63,8 @@ def test_proposal_delete_waits_for_round_without_blocking_submission(
             Round.system_queryset(lock=("self",)).get(pk=round.pk)
             with connection.cursor() as cursor:
                 cursor.execute("SET LOCAL lock_timeout TO '5s'")
-            deletion, pid = _submit_operation(pool, delete)
-            _wait_for_lock(pid, deletion)
+            deletion, pid = submit(pool, delete)
+            wait_for_lock(pid, deletion)
             submitted = Proposal._base_manager.get(pk=proposal.pk).submit()
         with pytest.raises(ValidationError, match="Only an untouched draft proposal can be deleted"):
             deletion.result(timeout=10)
@@ -137,8 +99,8 @@ def test_hasura_proposal_delete_waits_for_round_without_blocking_concurrent_subm
             Round.system_queryset(lock=("self",)).get(pk=round.pk)
             with connection.cursor() as cursor:
                 cursor.execute("SET LOCAL lock_timeout TO '5s'")
-            deletion, pid = _submit_operation(pool, delete)
-            _wait_for_lock(pid, deletion)
+            deletion, pid = submit(pool, delete)
+            wait_for_lock(pid, deletion)
             with actor_context(responder):
                 submitted = as_actor(proposal, responder).submit()
         result = deletion.result(timeout=10)
@@ -166,11 +128,12 @@ def test_direct_grant_waits_for_requester_change_and_revalidates_the_fresh_round
             as_actor(proposal, manager).grant_record_access("reader", requester)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        with transaction.atomic(), system_context(reason="tests.proposals.concurrent_requester.change"):
+        with transaction.atomic():
             locked = Round.system_queryset(lock=("self",)).get(pk=round.pk)
-            operation, pid = _submit_operation(pool, grant)
-            _wait_for_lock(pid, operation)
-            locked.requester_party = party
-            locked.save(update_fields=("requester_party",))
+            operation, pid = submit(pool, grant)
+            wait_for_lock(pid, operation)
+            with system_context(reason="tests.proposals.concurrent_requester.change"):
+                locked.requester_party = party
+                locked.save(update_fields=("requester_party",))
         with pytest.raises(RecordAccessSubjectRefused):
             operation.result(timeout=10)
